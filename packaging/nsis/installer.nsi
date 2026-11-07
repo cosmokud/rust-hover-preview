@@ -197,7 +197,7 @@ Var EnginesWinget
 Var EnginesIntro
 Var EnginesBusy
 Var EnginesId
-Var EnginesCheck
+Var EnginesProbe
 Var EnginesScript
 Var EnginesRc
 Var EnginesCode
@@ -1177,7 +1177,7 @@ FunctionEnd
 Function EnginesInstallMpv
   Pop $0
   StrCpy $EnginesId "shinchiro.mpv"
-  StrCpy $EnginesCheck "MPVInstalled"
+  GetFunctionAddress $EnginesProbe MPVInstalled
   StrCpy $EnginesRowLabel $EnginesMpvLabel
   StrCpy $EnginesRowPos $EnginesMpvPos
   StrCpy $EnginesRowInstall $EnginesMpvInstall
@@ -1188,7 +1188,7 @@ FunctionEnd
 Function EnginesInstallFFmpeg
   Pop $0
   StrCpy $EnginesId "Gyan.FFmpeg"
-  StrCpy $EnginesCheck "FFmpegInstalled"
+  GetFunctionAddress $EnginesProbe FFmpegInstalled
   StrCpy $EnginesRowLabel $EnginesFFmpegLabel
   StrCpy $EnginesRowPos $EnginesFFmpegPos
   StrCpy $EnginesRowInstall $EnginesFFmpegInstall
@@ -1199,7 +1199,7 @@ FunctionEnd
 Function EnginesInstallLibreOffice
   Pop $0
   StrCpy $EnginesId "TheDocumentFoundation.LibreOffice"
-  StrCpy $EnginesCheck "LibreOfficeInstalled"
+  GetFunctionAddress $EnginesProbe LibreOfficeInstalled
   StrCpy $EnginesRowLabel $EnginesLibreOfficeLabel
   StrCpy $EnginesRowPos $EnginesLibreOfficePos
   StrCpy $EnginesRowInstall $EnginesLibreOfficeInstall
@@ -1210,7 +1210,7 @@ FunctionEnd
 Function EnginesInstallImageMagick
   Pop $0
   StrCpy $EnginesId "ImageMagick.ImageMagick"
-  StrCpy $EnginesCheck "ImageMagickInstalled"
+  GetFunctionAddress $EnginesProbe ImageMagickInstalled
   StrCpy $EnginesRowLabel $EnginesImageMagickLabel
   StrCpy $EnginesRowPos $EnginesImageMagickPos
   StrCpy $EnginesRowInstall $EnginesImageMagickInstall
@@ -1221,7 +1221,7 @@ FunctionEnd
 Function EnginesInstallPeaZip
   Pop $0
   StrCpy $EnginesId "Giorgiotani.Peazip"
-  StrCpy $EnginesCheck "PeaZipInstalled"
+  GetFunctionAddress $EnginesProbe PeaZipInstalled
   StrCpy $EnginesRowLabel $EnginesPeaZipLabel
   StrCpy $EnginesRowPos $EnginesPeaZipPos
   StrCpy $EnginesRowInstall $EnginesPeaZipInstall
@@ -1232,7 +1232,7 @@ FunctionEnd
 Function EnginesInstallCalibre
   Pop $0
   StrCpy $EnginesId "calibre.calibre"
-  StrCpy $EnginesCheck "CalibreInstalled"
+  GetFunctionAddress $EnginesProbe CalibreInstalled
   StrCpy $EnginesRowLabel $EnginesCalibreLabel
   StrCpy $EnginesRowPos $EnginesCalibrePos
   StrCpy $EnginesRowInstall $EnginesCalibreInstall
@@ -1243,7 +1243,7 @@ FunctionEnd
 Function EnginesInstallF3D
   Pop $0
   StrCpy $EnginesId "f3d-app.f3d"
-  StrCpy $EnginesCheck "F3DInstalled"
+  GetFunctionAddress $EnginesProbe F3DInstalled
   StrCpy $EnginesRowLabel $EnginesF3DLabel
   StrCpy $EnginesRowPos $EnginesF3DPos
   StrCpy $EnginesRowInstall $EnginesF3DInstall
@@ -1358,26 +1358,12 @@ Function EnginesInstallTick
   ${EndIf}
 
   ; The row is asked again rather than trusted: a package's installer reporting success and the
-  ; engine standing where this page looks for it are two different claims.
-  StrCmp $EnginesCheck "MPVInstalled" 0 +3
-    Call MPVInstalled
-    Goto engines_install_probed
-  StrCmp $EnginesCheck "FFmpegInstalled" 0 +3
-    Call FFmpegInstalled
-    Goto engines_install_probed
-  StrCmp $EnginesCheck "LibreOfficeInstalled" 0 +3
-    Call LibreOfficeInstalled
-    Goto engines_install_probed
-  StrCmp $EnginesCheck "ImageMagickInstalled" 0 +3
-    Call ImageMagickInstalled
-    Goto engines_install_probed
-  StrCmp $EnginesCheck "PeaZipInstalled" 0 +3
-    Call PeaZipInstalled
-    Goto engines_install_probed
-  StrCmp $EnginesCheck "CalibreInstalled" 0 +3
-    Call CalibreInstalled
-    Goto engines_install_probed
-  engines_install_probed:
+  ; engine standing where this page looks for it are two different claims. Which detector asks is
+  ; the address the row's own `Install` link left in `$EnginesProbe`, not a name looked up in a
+  ; chain here — a chain is one more place a new engine has to be added, and the one that was
+  ; forgotten is why an f3d installed from this page never turned into `Detected`.
+  Call $EnginesProbe
+
 
   ${If} $0 != 1
     ${NSD_SetText} $EnginesIntro "$(enginesInstallNotFound)"
