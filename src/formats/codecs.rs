@@ -411,10 +411,9 @@ pub fn engines() -> Vec<Row> {
             link: Some(CALIBRE_PAGE),
             winget: Some(CALIBRE_WINGET),
         },
-        // Last of the installable engines, and the one whose install the app cannot probe: f3d is
-        // asked where it is by a lookup of its own, cached for the process and cleared by
-        // `refresh`, so an install from the menu is a program this run can draw with (see
-        // `f3d_render::installations`).
+        // f3d is the engine whose answer is cached apart from the configuration, and the one cache
+        // `refresh` clears: an install from this menu is a program the next hover draws with rather
+        // than one the next start finds (see `f3d_render::installations`).
         Row {
             name: "f3d",
             available: crate::formats::f3d_render::available() || installed_by_winget(F3D_WINGET),
