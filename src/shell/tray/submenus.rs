@@ -1332,7 +1332,7 @@ pub(super) fn append_engine_idle_menu(
     let _ = unsafe { AppendMenuW(parent, flags, menu.0 as usize, label) };
 }
 
-/// The `Codecs` submenu: what this machine has of everything a preview leans on, grouped
+/// The `Components` submenu: what this machine has of everything a preview leans on, grouped
 /// by what each thing is for.
 ///
 /// A row that is there is marked and reads as any other item does, and picking it does
@@ -1380,12 +1380,12 @@ pub(super) fn append_codecs_menu(menu: HMENU) {
             menu,
             MF_STRING | MF_POPUP,
             codecs_menu.0 as usize,
-            w!("Codecs"),
+            w!("Components"),
         )
     };
 }
 
-/// The `Codecs → Install` submenu: one row per engine this app can install with `winget`, listing
+/// The `Components → Install` submenu: one row per engine this app can install with `winget`, listing
 /// the engines this machine is missing.
 ///
 /// Its ids are positions in `codecs::installable`, a table of what can be installed rather than of
@@ -1434,7 +1434,7 @@ fn append_install_menu(parent: HMENU) {
     let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Install")) };
 }
 
-/// What one row of the `Codecs → Install` submenu reads as, and whether it can be picked: the
+/// What one row of the `Components → Install` submenu reads as, and whether it can be picked: the
 /// engine being installed says so, and while one is nothing can be picked — one install at a time
 /// is the whole of the guard.
 ///
@@ -1448,7 +1448,7 @@ pub(super) fn install_row(name: &str, package: &str, in_flight: Option<&str>) ->
     }
 }
 
-/// The click on a row of the `Codecs → Install` submenu: ask whether to install the engine, and set
+/// The click on a row of the `Components → Install` submenu: ask whether to install the engine, and set
 /// the install going where the answer is yes.
 ///
 /// The row is read from the table again rather than kept from the menu build, the same way a page's
@@ -1472,7 +1472,7 @@ pub(super) fn install_engine(index: u16) {
     }
 }
 
-/// One group of the `Codecs` submenu, with a row per engine or codec in it.
+/// One group of the `Components` submenu, with a row per engine or codec in it.
 ///
 /// `base` is where this group's commands begin in the numbering above. The row named `MPV` is
 /// the one that can open a submenu of its own (see `is_mpv_row` and `append_mpv_row`).
@@ -1638,7 +1638,7 @@ pub(super) fn mpv_row_label(path: &Path) -> String {
     format!("\u{2026}\\{}", tail.join("\\"))
 }
 
-/// What one row of the `Codecs` submenu is written as: the mark that says whether it is
+/// What one row of the `Components` submenu is written as: the mark that says whether it is
 /// there, and the name of the engine or format.
 ///
 /// The mark is a glyph in the label rather than the checkmark column a menu item can carry,
@@ -1658,7 +1658,7 @@ fn codec_row_label(row: &Row) -> String {
     }
 }
 
-/// The click on a row of the `Codecs` submenu: ask whether to open the page the thing is
+/// The click on a row of the `Components` submenu: ask whether to open the page the thing is
 /// installed from, and open it where the answer is yes.
 ///
 /// The row is read again from the machine rather than kept from the menu build, which is
@@ -1687,7 +1687,7 @@ pub(super) fn open_codec_page(index: u16) {
     }
 }
 
-/// The row the `Codecs` submenu lists at `index`: the groups read as one list, in the order
+/// The row the `Components` submenu lists at `index`: the groups read as one list, in the order
 /// they are listed, which is the order their commands were handed out in.
 fn codec_row(index: usize) -> Option<Row> {
     let mut rows = codecs::video();

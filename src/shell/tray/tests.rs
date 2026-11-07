@@ -1204,7 +1204,7 @@ fn the_renamed_rows_say_what_they_do() {
 }
 
 /// The `Audio` range sits in the stretch between the volume
-/// toggles and the `Codecs` commands, and every id of it answers as a
+/// toggles and the `Components` commands, and every id of it answers as a
 /// share of the display and nothing else: the range overlaps no other
 /// id the app hands out — not another scale's range, not the avoid
 /// ways, the reset rows, the volume switches, the engine-idle times,
@@ -1337,13 +1337,13 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         (ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_IMAGE_CACHE_BASE),
         // The codec rows, wider than the list is long.
         (ID_TRAY_CODEC_BASE, ID_TRAY_CODEC_BASE + CODEC_COMMANDS),
-        // And the `Codecs → Install` rows, one id per engine this app can install with
+        // And the `Components → Install` rows, one id per engine this app can install with
         // `winget`, in a table of what can be installed rather than of what is missing.
         (
             ID_TRAY_INSTALL_BASE,
             ID_TRAY_INSTALL_BASE + INSTALL_COMMANDS,
         ),
-        // And the mpv installs the `Codecs → Videos → MPV` submenu lists, wider than any
+        // And the mpv installs the `Components → Videos → MPV` submenu lists, wider than any
         // machine's install list is likely to be.
         (ID_TRAY_MPV_BASE, ID_TRAY_MPV_BASE + MPV_COMMANDS),
         // The video-engine rows, a base plus one id per engine: the run is now as wide as the
@@ -1879,7 +1879,7 @@ fn mpv_labels_keep_the_tail_and_shorten_from_the_front() {
     );
 }
 
-/// The `Codecs → Install` submenu says which engine it is installing and offers nothing else while
+/// The `Components → Install` submenu says which engine it is installing and offers nothing else while
 /// it does: one install at a time is the guard, and a row that could be picked while one is in
 /// flight is a second worker and a second prompt.
 #[test]
@@ -1887,7 +1887,7 @@ fn the_install_rows_name_the_one_in_flight_and_offer_nothing_while_it_is() {
     assert_eq!(
         install_row("Calibre", "calibre.calibre", None),
         ("Calibre".to_string(), true),
-        "with nothing installing, every row is the name the `Codecs` group lists and is pickable"
+        "with nothing installing, every row is the name the `Components` group lists and is pickable"
     );
     assert_eq!(
         install_row("Calibre", "calibre.calibre", Some("calibre.calibre")),

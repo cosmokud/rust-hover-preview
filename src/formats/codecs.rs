@@ -123,7 +123,7 @@ const IMAGEMAGICK_WINGET: &str = "ImageMagick.ImageMagick";
 const PEAZIP_WINGET: &str = "Giorgiotani.Peazip";
 const CALIBRE_WINGET: &str = "calibre.calibre";
 
-/// One row of the tray's `Codecs` submenu: what the engine or codec is called, whether this
+/// One row of the tray's `Components` submenu: what the engine or codec is called, whether this
 /// machine has it, and where it is got from where it does not.
 pub struct Row {
     pub name: &'static str,
@@ -134,7 +134,7 @@ pub struct Row {
     /// for the two picture formats that arrive in two packages, the page of whichever package
     /// this machine is missing.
     pub link: Option<&'static str>,
-    /// The `winget` package that installs it, where this app knows of one: what the `Codecs →
+    /// The `winget` package that installs it, where this app knows of one: what the `Components →
     /// Install` submenu offers, and the only rows that submenu lists. `None` for a codec or a
     /// component this app cannot install itself — the Store's extensions and Windows' own parts
     /// alike.
@@ -577,7 +577,7 @@ pub fn mf_started() -> bool {
 /// Treating that refusal as a failure is the wrong turn to make here. What the callers
 /// hold is the library's started flag rather than this request's result, so a refusal read
 /// as "this machine has no media engine" and every decoder dropped out of the tray's
-/// `Codecs` submenu — on every machine, not the odd one, because the tray's own thread is
+/// `Components` submenu — on every machine, not the odd one, because the tray's own thread is
 /// always a single-threaded apartment. Enumerating decoders from it works.
 fn initialize_apartment() {
     thread_local! {
@@ -721,7 +721,7 @@ pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
 /// ask (see `find_program`).
 ///
 /// The one question the tray asks before it offers to install anything: no `winget`, no row, and
-/// the `Codecs` rows stay the links they have always been.
+/// the `Components` rows stay the links they have always been.
 pub fn winget() -> Option<PathBuf> {
     let alias = std::env::var_os("LOCALAPPDATA").map(|root| {
         Path::new(&root)
@@ -738,7 +738,7 @@ pub fn winget() -> Option<PathBuf> {
 /// The engines this app knows how to install with `winget`, in the order the tray lists them: the
 /// video rows that carry a package id, then the engine rows that do.
 ///
-/// A table of what *can* be installed rather than of what *is* missing, because the `Codecs →
+/// A table of what *can* be installed rather than of what *is* missing, because the `Components →
 /// Install` rows are addressed by their position in this list: a list that changed with what the
 /// machine has would make an id mean one engine when the menu was built and another when it was
 /// clicked (see `submenus::install_engine`).
@@ -1086,7 +1086,7 @@ mod tests {
                 "PeaZip",
                 "Calibre",
             ],
-            "one row per engine, in the order the `Codecs` groups list them"
+            "one row per engine, in the order the `Components` groups list them"
         );
 
         for row in &rows {

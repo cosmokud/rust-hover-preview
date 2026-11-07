@@ -359,7 +359,7 @@ pub const DEFAULT_VIDEO_ENGINE: VideoEngine = VideoEngine::Best;
 /// Whether an explicitly chosen engine that cannot play a file falls through to the others:
 /// on, so a film no media-engine decoder reaches is still played rather than shown as nothing.
 pub const DEFAULT_VIDEO_ENGINE_FALLBACK: bool = true;
-/// The mpv a launch runs, by the path the user picked in the tray's `Codecs → Videos → MPV`
+/// The mpv a launch runs, by the path the user picked in the tray's `Components → Videos → MPV`
 /// submenu. It is empty until one is picked, which means the first install `codecs::mpv_installs`
 /// finds — the one the router would have used anyway (see `codecs::resolve_mpv`).
 ///

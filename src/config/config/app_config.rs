@@ -544,7 +544,7 @@ pub struct AppConfig {
     /// draws a small film here and hands a large one over where FFmpeg is installed — and the other
     /// three name an engine, or a rule between two, plainly. See `video_hw::resolve_video_engine`.
     pub video_engine: VideoEngine,
-    /// The `mpv.exe` a launch runs, which is what the tray's `Codecs → Videos → MPV` submenu picks
+    /// The `mpv.exe` a launch runs, which is what the tray's `Components → Videos → MPV` submenu picks
     /// between when this machine has more than one.
     ///
     /// It is the only setting that holds a path — every other one is a value of this app's own —

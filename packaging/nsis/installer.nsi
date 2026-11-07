@@ -166,7 +166,7 @@ Var AppStartMenuFolder
 ; Download` one.
 ;
 ; `Install` runs `winget` in a console window of its own, from a batch script written here into
-; `%TEMP%` — the same script, character for character, that the app's own `Codecs → Install` rows
+; `%TEMP%` — the same script, character for character, that the app's own `Components → Install` rows
 ; run (see `src/app/winget.rs`), so the two doors install the same thing the same way and both
 ; leave the retry, and the reason a failure is readable, to the window. Nothing is elevated:
 ; `installMode = "currentUser"` above gives `RequestExecutionLevel user`, so `winget` installs
@@ -179,7 +179,7 @@ Var AppStartMenuFolder
 ; functions). A row an engine is present for offers nothing, since there is nothing to offer.
 ;
 ; What is asked about each engine is what the app itself asks before it drives one, so a page
-; that says a name is missing and the app's own `Codecs` row agree: the folders each installer
+; that says a name is missing and the app's own `Components` row agree: the folders each installer
 ; writes to, beside the app or the `PATH` for FFmpeg's player, the two folders mpv's own
 ; installers write to and the three places winget puts one (its `Links` shim, `…\Local\Programs`
 ; and the portable package under `…\WinGet\Packages`), the console archiver inside a PeaZip
@@ -290,7 +290,7 @@ FunctionEnd
 ; `enginesLibreOffice` is the name a machine with no Office sees and `enginesLibreNiche` the one
 ; a machine with it does: the Office formats are covered there already, and what LibreOffice
 ; adds is the formats beside them. `enginesMPV` names the formats `enginesFFmpeg` does: mpv plays
-; what FFmpeg's player plays, and the app's own `Codecs` row for it carries no list of its own.
+; what FFmpeg's player plays, and the app's own `Components` row for it carries no list of its own.
 ;
 ; The checkmark is a square root sign, which is a fact about the font rather than a choice: the
 ; dialog font these pages are drawn with carries `√` and has no glyph at all for `✔` or `✓`,
@@ -1096,7 +1096,7 @@ Function EnginesShow
   !insertmacro EnginesRow Calibre 102 CalibreInstalled $(enginesCalibre) calibre.calibre EnginesLinkCalibre
 
   ; f3d has no winget package, so its row is the manual download alone — the same page the app's
-  ; own `Codecs` row opens, and the one its releases are taken from by hand.
+  ; own `Components` row opens, and the one its releases are taken from by hand.
   !insertmacro EnginesRow F3D 116 F3DInstalled $(enginesF3D) - EnginesLinkF3D
 
   ; Office's row offers no Install either: it is not a free package, so what it carries is the page
@@ -1244,7 +1244,7 @@ FunctionEnd
 !define ENGINES_INSTALL_TICKS 7200
 
 ; The install itself, shared by every engine's `Install` link: the same batch script the app's own
-; `Codecs → Install` rows write — one text and two doors, so the flags and the retry cannot drift
+; `Components → Install` rows write — one text and two doors, so the flags and the retry cannot drift
 ; apart — started in a console window the user watches, with the exit code read back out of the
 ; `.rc` the script leaves beside itself before it waits for a key.
 ;
@@ -1262,7 +1262,7 @@ Function EnginesInstallStart
   ${EndIf}
 
   StrCpy $EnginesBusy 1
-  ; The same two names the app's own `Codecs → Install` writes (see `src/app/winget.rs`), which is
+  ; The same two names the app's own `Components → Install` writes (see `src/app/winget.rs`), which is
   ; what makes the two doors one install rather than two that resemble each other.
   StrCpy $EnginesScript "$TEMP\rust-hover-preview-winget-$EnginesId.cmd"
   StrCpy $EnginesRc "$TEMP\rust-hover-preview-winget-$EnginesId.rc"

@@ -22,7 +22,7 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::WM_USER;
 
 pub(super) const WM_TRAYICON: u32 = WM_USER + 1;
-/// What the tray window is told when an engine install its `Codecs → Install` rows started has
+/// What the tray window is told when an engine install its `Components → Install` rows started has
 /// finished: the worker has already re-probed and recorded what it installed, and what is left for
 /// this thread is the slot that said one install was in flight (see `winget::settle`).
 pub(super) const WM_TRAY_INSTALL_FINISHED: u32 = WM_USER + 2;
@@ -106,7 +106,7 @@ pub(super) const ID_TRAY_VECTOR_BACKGROUND_BASE: u16 = 1054;
 /// own and so has a backdrop of its own, the same way a document does.
 ///
 /// It sits beside the texture's half and the design document's, in the slack the pin's
-/// `End of File` ranges leave before the `Codecs` commands begin: 1582 to 1591 is a run of
+/// `End of File` ranges leave before the `Components` commands begin: 1582 to 1591 is a run of
 /// ten ids free at every one of them, and the three halves want ten between them. It began
 /// at 1204, inside the stretch the `theme` folder's own items are handed out from — 1100 up
 /// to 1300, one id per name — where a folder with more than a hundred names in it was
@@ -128,7 +128,7 @@ pub(super) const ID_TRAY_DDS_BACKGROUND_BASE: u16 = 1582;
 /// container holds — and that picture's transparency is the document's own, so what stands
 /// behind one is a question of its own.
 ///
-/// It is the last of the three, four wide, ending at 1591 — eight ids short of the `Codecs`
+/// It is the last of the three, four wide, ending at 1591 — eight ids short of the `Components`
 /// commands at 1600, which is the slack that run has left. It began at 1208, inside the
 /// `theme` folder's stretch, where the folder's hundred-and-ninth name was answered as this
 /// backdrop (see `ID_TRAY_THEME_CUSTOM_BASE`).
@@ -357,7 +357,7 @@ pub(super) const PIN_END_OF_FILE_CHOICES: [PinEndOfFile; 3] = [
 /// the first puts every setting back at what this build recommends and leaves the extension
 /// lists alone, the second puts the lists back and leaves every other setting alone.
 ///
-/// They sit between every range the submenus share and the `Codecs` commands above them, so
+/// They sit between every range the submenus share and the `Components` commands above them, so
 /// neither can be read as a click on one of those.
 pub(super) const ID_TRAY_RESET_SETTINGS: u16 = 1520;
 pub(super) const ID_TRAY_RESET_LISTS: u16 = 1521;
@@ -369,20 +369,20 @@ pub(super) const ID_TRAY_RESET_LISTS: u16 = 1521;
 /// id of its own — the one the reset rows beside it leave free, where a row of
 /// the same submenu belongs and no range the app hands out reaches.
 pub(super) const ID_TRAY_CHECK_UPDATES: u16 = 1522;
-/// The rows of the `Codecs` submenu, numbered as one list across its three groups: only the
+/// The rows of the `Components` submenu, numbered as one list across its three groups: only the
 /// rows this machine is missing and has a page for are given an id at all, and this is where
 /// those ids begin. The range is wider than the list is long, so that a row added to any of
 /// the three groups is still inside it.
 pub(super) const ID_TRAY_CODEC_BASE: u16 = 1600;
 pub(super) const CODEC_COMMANDS: u16 = 64;
-/// The `Codecs → Videos → MPV` row's installs, where this machine has more than one to pick
+/// The `Components → Videos → MPV` row's installs, where this machine has more than one to pick
 /// between: one command per install, in the order `codecs::mpv_installs` finds them, so a click
 /// re-enumerates the same list in the same order rather than remembering the menu (see
-/// `set_mpv_path`). It sits in the run the `Codecs` commands end at — past every id the app hands
+/// `set_mpv_path`). It sits in the run the `Components` commands end at — past every id the app hands
 /// out — and is wider than any machine's install list is likely to be.
 pub(super) const ID_TRAY_MPV_BASE: u16 = 1664;
 pub(super) const MPV_COMMANDS: u16 = 8;
-/// The rows of the `Codecs → Install` submenu, one per engine this app can install with `winget`, in
+/// The rows of the `Components → Install` submenu, one per engine this app can install with `winget`, in
 /// the order `codecs::installable` lists them — a table of what *can* be installed rather than of
 /// what is missing, so an id means the same engine on both sides of a click. It sits past every id
 /// the app hands out (the `… TTL` ranges end at 1726) and is wider than the list is long.
@@ -679,7 +679,7 @@ pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
 /// The `Audio` submenu under `Scaling`: one command per share of the display a
 /// sound's card is laid out over, in the order it lists them. It sits in
 /// the stretch between the volume toggles, which end at 1528, and the
-/// `Codecs` commands, which begin at 1600 — the first run in it six ids
+/// `Components` commands, which begin at 1600 — the first run in it six ids
 /// wide, the reset rows and the toggles owning the ids below it — so a
 /// click on a share is never read as a row of another submenu's.
 pub(super) const ID_TRAY_AUDIO_SCALE_BASE: u16 = 1529;

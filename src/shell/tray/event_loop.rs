@@ -155,7 +155,7 @@ unsafe extern "system" fn tray_window_proc(
                 }
                 LRESULT(0)
             }
-            // An install the `Codecs → Install` rows started has finished. The worker has already
+            // An install the `Components → Install` rows started has finished. The worker has already
             // re-probed the machine and recorded what it installed, so what is left is the slot
             // that kept a second install from starting — and the menu is built when it is opened,
             // so the next opening is the one that lists the new answer.
@@ -420,7 +420,7 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_OPEN_CONFIG => open_config_file(),
                     ID_TRAY_RESET_SETTINGS => reset_settings_from_tray(),
                     ID_TRAY_RESET_LISTS => reset_lists_from_tray(),
-                    // A row of the `Codecs` submenu, by the position it was listed at. Only the
+                    // A row of the `Components` submenu, by the position it was listed at. Only the
                     // rows this machine is missing and has a page for carry an id, and the row an
                     // id stands for is read again from the machine rather than kept from the menu
                     // build, so nothing has to be remembered between the click and the row (see
@@ -430,7 +430,7 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         open_codec_page(cmd - ID_TRAY_CODEC_BASE)
                     }
-                    // A row of the `Codecs → Install` submenu, by the position it was listed at: the
+                    // A row of the `Components → Install` submenu, by the position it was listed at: the
                     // table is what this app can install rather than what is missing, so the id means
                     // the same engine on both sides of the click (see `install_engine`).
                     cmd if (ID_TRAY_INSTALL_BASE..ID_TRAY_INSTALL_BASE + INSTALL_COMMANDS)
@@ -438,7 +438,7 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         install_engine(cmd - ID_TRAY_INSTALL_BASE)
                     }
-                    // An mpv in the `Codecs → Videos → MPV` submenu, by the position its install
+                    // An mpv in the `Components → Videos → MPV` submenu, by the position its install
                     // was listed at: the installs are re-enumerated in the same order the menu
                     // listed them, so the id means the same thing on both sides (see
                     // `set_mpv_path`).

@@ -23,7 +23,7 @@ The still-or-moving question is settled from the head of the file, and `ARCHITEC
 
 ## Unsupported Audio Formats
 
-A sound is played by the engine Windows has where its decoders reach the format and by an installed FFmpeg where they do not, so what is below is not "this machine cannot play it" — that is the question `Codecs → Audio` answers per machine, and a format neither engine reaches on the machine in hand is a card that never appears rather than a broken one. What is here is what *no* installation reaches. Beside each name is the one thing that would change it.
+A sound is played by the engine Windows has where its decoders reach the format and by an installed FFmpeg where they do not, so what is below is not "this machine cannot play it" — that is the question `Components → Audio` answers per machine, and a format neither engine reaches on the machine in hand is a card that never appears rather than a broken one. What is here is what *no* installation reaches. Beside each name is the one thing that would change it.
 
 **A format neither engine decodes at all**
 
@@ -36,7 +36,7 @@ A sound is played by the engine Windows has where its decoders reach the format 
 - **The playlists** (`.m3u`, `.m3u8`, `.pls`, `.wpl`, `.asx`, `.cue`). They are text that *names* other files, so what a preview of one could show is the list rather than a sound — and the text preview already reads them as the text they are, which is a better answer than a card with nothing behind it. Adding one to `[audio]` is a line, and the answer it buys is a card for a file with no audio in it.
 - **A CD audio track** (`.cda`). Forty-four bytes naming a track on a disc, with no audio in the file at all: an honest preview is a card with the disc's name on it, and there is no disc to read here.
 
-**And the two that are a question about the machine rather than about the format.** A name whose decoder is missing is a name that shows nothing until the codec is installed — the `Codecs → Audio` menu is where that is seen, and the **Web Media Extensions** package is what Vorbis and Opus are waiting for. A name whose engine is missing is the same question one level up: a `.flac` on a machine with no Media Foundation and no FFmpeg is a file with no preview at all, which is the answer every engine-drawn kind gives when its engine is gone.
+**And the two that are a question about the machine rather than about the format.** A name whose decoder is missing is a name that shows nothing until the codec is installed — the `Components → Audio` menu is where that is seen, and the **Web Media Extensions** package is what Vorbis and Opus are waiting for. A name whose engine is missing is the same question one level up: a `.flac` on a machine with no Media Foundation and no FFmpeg is a file with no preview at all, which is the answer every engine-drawn kind gives when its engine is gone.
 
 ## Unsupported LibreOffice Format
 
