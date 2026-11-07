@@ -951,12 +951,17 @@ FunctionEnd
     EnableWindow $Engines${NAME}Label 0
     StrCpy $Engines${NAME}Pos "${POS}u"
     StrCpy $Engines${NAME}Install ""
-    ${If} "${PKG}" != "-"
-    ${AndIf} $EnginesWinget != ""
-      ${NSD_CreateLink} 54% ${POS}u 16% 12u '<a id="i">$(enginesInstall)</a>'
-      Pop $Engines${NAME}Install
-      ${NSD_OnNotify} $Engines${NAME}Install EnginesInstall${NAME}
-    ${EndIf}
+    ; `!if` and not `${If}`: the package being `-` has to keep the handler's name out of the
+    ; compiled page, because there is no `EnginesInstallF3D` or `EnginesInstallOffice` function to
+    ; resolve and a runtime branch would still name one. Whether winget was found is the runtime
+    ; half, and it needs no name of its own.
+    !if "${PKG}" != "-"
+      ${If} $EnginesWinget != ""
+        ${NSD_CreateLink} 54% ${POS}u 16% 12u '<a id="i">$(enginesInstall)</a>'
+        Pop $Engines${NAME}Install
+        ${NSD_OnNotify} $Engines${NAME}Install EnginesInstall${NAME}
+      ${EndIf}
+    !endif
     ${NSD_CreateLink} 71% ${POS}u 29% 12u '<a id="d">$(enginesManualDownload)</a>'
     Pop $Engines${NAME}Download
     ${NSD_OnNotify} $Engines${NAME}Download ${LINK}
