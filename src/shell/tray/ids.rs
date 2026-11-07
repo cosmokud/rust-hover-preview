@@ -387,7 +387,7 @@ pub(super) const MPV_COMMANDS: u16 = 8;
 /// what is missing, so an id means the same engine on both sides of a click. It sits past every id
 /// the app hands out (the `… TTL` ranges end at 1726) and is wider than the list is long.
 pub(super) const ID_TRAY_INSTALL_BASE: u16 = 1730;
-pub(super) const INSTALL_COMMANDS: u16 = 6;
+pub(super) const INSTALL_COMMANDS: u16 = 7;
 /// The `Pin Mode → Navigation` rows: four anchors — Image, Video, Audio, Others — in menu
 /// order, each with All and Same Category. They sit past every id the app hands out, so no click
 /// is read as another submenu's item (see `PinNavFileTypes`). The old single-pair ids

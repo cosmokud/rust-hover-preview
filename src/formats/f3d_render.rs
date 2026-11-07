@@ -29,6 +29,7 @@ use crate::formats::codecs;
 use once_cell::sync::Lazy;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// The program inside an installation that draws a model. Also the image name a model's process
 /// is recorded and verified under, beside `ffplay.exe` and `mpv.exe`.
@@ -167,12 +168,7 @@ pub fn available() -> bool {
 pub fn available_in(config: &AppConfig) -> bool {
     let (on_path, installed) = installations();
 
-    resolve(
-        Some(Path::new(&config.f3d_path)),
-        on_path.clone(),
-        installed.clone(),
-    )
-    .is_some()
+    resolve(Some(Path::new(&config.f3d_path)), on_path, installed).is_some()
 }
 
 /// Whether f3d has already turned `path` down.
@@ -199,8 +195,12 @@ pub fn program() -> Option<PathBuf> {
 
     let (on_path, installed) = installations();
 
-    resolve(chosen.as_deref(), on_path.clone(), installed.clone())
+    resolve(chosen.as_deref(), on_path, installed)
 }
+
+/// Where this machine's f3d copies are: the one a `PATH` lookup found, and the one the installer
+/// wrote.
+type Installs = (Option<PathBuf>, Option<PathBuf>);
 
 /// The two installations this machine has, found once: what a `PATH` lookup answers and what the
 /// installer wrote.
@@ -208,17 +208,39 @@ pub fn program() -> Option<PathBuf> {
 /// Cached apart from the chosen path because they are facts about the machine rather than about
 /// the configuration, and the one caller that must not take that configuration's lock is the one
 /// asking whether there is an engine at all (see `available_in`).
-fn installations() -> &'static (Option<PathBuf>, Option<PathBuf>) {
-    static FOUND: Lazy<(Option<PathBuf>, Option<PathBuf>)> = Lazy::new(|| {
-        (
-            // The two places `Command::new` looks in, which f3d is found by on most machines.
-            codecs::find_program(F3D_NAME),
-            install_folder(std::env::var_os("ProgramFiles").as_deref())
-                .filter(|program| program.is_file()),
-        )
-    });
+static INSTALLATIONS: Lazy<Mutex<Option<Installs>>> = Lazy::new(|| Mutex::new(None));
 
-    &FOUND
+/// Ask where f3d is again, which is what the tray's menu build does before it lists the engines.
+///
+/// The two probes above are the only half of the answer that can change under a running app: an
+/// f3d installed from the menu is a file after that install and before any restart, and without
+/// this the rows would read present — that install is recorded in `codecs` — while every hover
+/// went on answering from the folder list the process started with (see `codecs::refresh`).
+pub(crate) fn refresh() {
+    if let Ok(mut cached) = INSTALLATIONS.lock() {
+        *cached = None;
+    }
+}
+
+fn installations() -> Installs {
+    if let Ok(cached) = INSTALLATIONS.lock() {
+        if let Some(answer) = cached.as_ref() {
+            return answer.clone();
+        }
+    }
+
+    let answer = (
+        // The two places `Command::new` looks in, which f3d is found by on most machines.
+        codecs::find_program(F3D_NAME),
+        install_folder(std::env::var_os("ProgramFiles").as_deref())
+            .filter(|program| program.is_file()),
+    );
+
+    if let Ok(mut cached) = INSTALLATIONS.lock() {
+        *cached = Some(answer.clone());
+    }
+
+    answer
 }
 
 /// Which of the three answers to run, in the order they are preferred: the chosen path while it is

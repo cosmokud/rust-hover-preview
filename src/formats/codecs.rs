@@ -110,6 +110,9 @@ const LIBREOFFICE_PAGE: &str = "https://www.libreoffice.org/download/";
 const IMAGEMAGICK_PAGE: &str = "https://imagemagick.org/download/";
 const PEAZIP_PAGE: &str = "https://peazip.github.io/peazip-64bit.html";
 const CALIBRE_PAGE: &str = "https://calibre-ebook.com/download_windows";
+/// f3d's releases page, which is where its Windows installer is downloaded from rather than a
+/// download page of its own.
+const F3D_PAGE: &str = "https://github.com/f3d-app/f3d/releases";
 
 /// The `winget` package id of each engine this app can install itself, kept beside the pages for
 /// the same reason those are: one table says where a missing engine is got from, along both roads
@@ -122,6 +125,7 @@ const LIBREOFFICE_WINGET: &str = "TheDocumentFoundation.LibreOffice";
 const IMAGEMAGICK_WINGET: &str = "ImageMagick.ImageMagick";
 const PEAZIP_WINGET: &str = "Giorgiotani.Peazip";
 const CALIBRE_WINGET: &str = "calibre.calibre";
+const F3D_WINGET: &str = "f3d-app.f3d";
 
 /// One row of the tray's `Components` submenu: what the engine or codec is called, whether this
 /// machine has it, and where it is got from where it does not.
@@ -407,6 +411,16 @@ pub fn engines() -> Vec<Row> {
             link: Some(CALIBRE_PAGE),
             winget: Some(CALIBRE_WINGET),
         },
+        // Last of the installable engines, and the one whose install the app cannot probe: f3d is
+        // asked where it is by a lookup of its own, cached for the process and cleared by
+        // `refresh`, so an install from the menu is a program this run can draw with (see
+        // `f3d_render::installations`).
+        Row {
+            name: "f3d",
+            available: crate::formats::f3d_render::available() || installed_by_winget(F3D_WINGET),
+            link: Some(F3D_PAGE),
+            winget: Some(F3D_WINGET),
+        },
         // The Office applications are the one group here with no page to open: they are not
         // free downloads, so a row that is missing one stays a row that cannot be picked.
         Row {
@@ -456,6 +470,8 @@ pub fn refresh() {
     if let Ok(mut cached) = NORMALIZE.lock() {
         *cached = None;
     }
+
+    crate::formats::f3d_render::refresh();
 }
 
 /// Whether `ffplay.exe` is on this machine, and so whether a video preview is played by
@@ -1085,6 +1101,7 @@ mod tests {
                 "ImageMagick",
                 "PeaZip",
                 "Calibre",
+                "f3d",
             ],
             "one row per engine, in the order the `Components` groups list them"
         );
@@ -1109,6 +1126,29 @@ mod tests {
                     .link
                     .is_some_and(|link| link.contains("apps.microsoft.com"))),
             "the Store's codec rows are still rows no install is offered for"
+        );
+    }
+
+    /// Every engine the app can install is named by the table whatever door put it there, and
+    /// nothing else is: the ids are what `winget` is run with, so a new engine can be given a row
+    /// and forgotten by one of the two doors only if it is missing here.
+    #[test]
+    fn every_engine_the_app_can_install_is_named_by_the_table() {
+        let mut ids: Vec<&str> = installable().iter().filter_map(|row| row.winget).collect();
+        ids.sort_unstable();
+
+        assert_eq!(
+            ids,
+            [
+                "Giorgiotani.Peazip",
+                "Gyan.FFmpeg",
+                "ImageMagick.ImageMagick",
+                "TheDocumentFoundation.LibreOffice",
+                "calibre.calibre",
+                "f3d-app.f3d",
+                "shinchiro.mpv",
+            ],
+            "the engines installed are the seven, by package id"
         );
     }
 
