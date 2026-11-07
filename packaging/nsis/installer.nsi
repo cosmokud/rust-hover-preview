@@ -201,7 +201,7 @@ Var EnginesCheck
 Var EnginesScript
 Var EnginesRc
 Var EnginesCode
-Var EnginesWaited
+Var EnginesTicks
 Var EnginesLabelText
 Var EnginesRowLabel
 Var EnginesRowPos
@@ -301,7 +301,7 @@ LangString enginesIntro ${LANG_ENGLISH} "These engines are optional: without one
 LangString enginesDetected ${LANG_ENGLISH} "Detected"
 LangString enginesInstall ${LANG_ENGLISH} "Install"
 LangString enginesManualDownload ${LANG_ENGLISH} "Manual Download"
-LangString enginesInstallRunning ${LANG_ENGLISH} "Installing in the console window that just opened. This page waits until it finishes: closing that window aborts the install."
+LangString enginesInstallRunning ${LANG_ENGLISH} "Installing in the console window that just opened. This page stays usable: closing that window aborts the install, and leaving this page does not stop it."
 LangString enginesInstallFailed ${LANG_ENGLISH} "The install did not succeed. The console window it opened says why, and the row is unchanged."
 LangString enginesInstallCode ${LANG_ENGLISH} "Exit code:"
 LangString enginesInstallTimedOut ${LANG_ENGLISH} "The install did not finish within half an hour. Its console window may still be running, and the row is unchanged."
@@ -963,15 +963,18 @@ FunctionEnd
 ; `Manual Download` link that opens the page the engine is installed from. `-` for `PKG` means no
 ; package, which is f3d's row and Office's.
 ;
-; The link is a control of the `LINK` class — an owner-drawn control of nsDialogs' own, not a
-; comctl32 SysLink — and three things follow from that, each of which this macro got wrong once.
-; Its text is drawn as it is written, so it must be the plain string: anchor markup is not parsed
-; and `<a id="i">Install</a>` is what a reader sees. It is drawn in the control's own colour
-; rather than the theme's link colour, so `SetCtlColors` is what makes it read as a link at all —
-; the same navy and page background MUI's own Finish page gives its link. And it answers with
-; `WM_COMMAND`, so `${NSD_OnClick}` is its notification: `${NSD_OnNotify}` waits for a `WM_NOTIFY`
-; this control never sends, which is why clicking one did nothing. (MUI's Finish page is the
-; precedent for all three: `${NSD_CreateLink}`, `${NSD_OnClick}`, `SetCtlColors`.)
+; The link control is a `LINK`-class control of nsDialogs' own, not a comctl32 SysLink, and three
+; things follow from that — each of which this page got wrong once:
+;
+; Its text is drawn as it is written, so it must be the plain string: anchor markup is not parsed,
+; and `<a id="i">Install</a>` is what a reader sees. It draws in the control's own colour rather
+; than the theme's link colour, so `SetCtlColors` is what makes it read as a link at all: the navy
+; MUI's own Finish page gives its link, and **no background colour**. The second half is not an
+; omission — with a background the control paints that rectangle opaquely, which is white boxes
+; around the words on a page whose background is the dialog's own, while with the colour alone it
+; draws the text and lets the page show through. And it answers a click with `WM_COMMAND`, so
+; `${NSD_OnClick}` is its notification: `${NSD_OnNotify}` waits for a `WM_NOTIFY` this control never
+; sends, which is why clicking one did nothing at all.
 ;
 ; `NAME` names the globals this row keeps its own controls in, so that the row can be redrawn
 ; detected in place once an install has put the engine there (see `EnginesInstallStart`). They are
@@ -998,13 +1001,13 @@ FunctionEnd
       ${If} $EnginesWinget != ""
         ${NSD_CreateLink} 54% ${POS}u 16% 12u "$(enginesInstall)"
         Pop $Engines${NAME}Install
-        SetCtlColors $Engines${NAME}Install "000080" "${MUI_BGCOLOR}"
+        SetCtlColors $Engines${NAME}Install "000080"
         ${NSD_OnClick} $Engines${NAME}Install EnginesInstall${NAME}
       ${EndIf}
     !endif
     ${NSD_CreateLink} 71% ${POS}u 29% 12u "$(enginesManualDownload)"
     Pop $Engines${NAME}Download
-    SetCtlColors $Engines${NAME}Download "000080" "${MUI_BGCOLOR}"
+    SetCtlColors $Engines${NAME}Download "000080"
     ${NSD_OnClick} $Engines${NAME}Download ${LINK}
   ${EndIf}
 !macroend
@@ -1091,6 +1094,11 @@ FunctionEnd
 ; none — which is why this function is empty rather than absent, since a page is declared with
 ; both of its functions.
 Function EnginesLeave
+  ; The page's timer dies with the page, but not before it can fire once more on a dialog being
+  ; taken down, and the row it would redraw is gone by then.
+  ${If} $EnginesBusy == 1
+    ${NSD_KillTimer} EnginesInstallTick
+  ${EndIf}
 FunctionEnd
 
 ; The page's links, a function each, so that the address a row opens is written by the row rather
@@ -1214,22 +1222,20 @@ Function EnginesInstallCalibre
   Call EnginesInstallStart
 FunctionEnd
 
-; Half an hour of 250 ms polls. winget's own LibreOffice download is minutes of that; what
+; Half an hour of 250 ms timer ticks. winget's own LibreOffice download is minutes of that; what
 ; outlasts it is answered as not finished, and the console window is left to finish on its own.
-!define ENGINES_INSTALL_POLLS 7200
+!define ENGINES_INSTALL_TICKS 7200
 
 ; The install itself, shared by every engine's `Install` link: the same batch script the app's own
 ; `Codecs → Install` rows write — one text and two doors, so the flags and the retry cannot drift
 ; apart — started in a console window the user watches, with the exit code read back out of the
 ; `.rc` the script leaves beside itself before it waits for a key.
 ;
-; This function sleeps while the window works, so the page answers nothing until the install is
-; done and the console window is the whole of the progress display; that is deliberate, and the
-; status line is written before the wait and forced out with `UpdateWindow` because nothing the
-; dialog manager would deliver is processed here while the loop runs.
-;
-; Nothing is timed out of its work: the cap below only ends this page's wait, and a row that was
-; not re-probed detected is left exactly as it was rather than claimed.
+; Nothing here waits. NSIS has no threads, but it does not need one for this: the install already
+; runs in a process of its own — the console — and what a thread would be for is keeping the
+; dialog's message loop running, which a timer does without a thread. So the page is answered the
+; whole time: it can be dragged, Back and Cancel work, and the row says what is happening. The
+; `.rc` is read by `EnginesInstallTick`, which is the rest of this install.
 Function EnginesInstallStart
   ${If} $EnginesBusy == 1
     Return
@@ -1272,7 +1278,6 @@ Function EnginesInstallStart
   FileClose $0
 
   ${NSD_SetText} $EnginesIntro "$(enginesInstallRunning)"
-  System::Call 'USER32::UpdateWindow(p $EnginesIntro)'
 
   ClearErrors
   Exec '"$SYSDIR\cmd.exe" /c ""$EnginesScript""'
@@ -1283,34 +1288,40 @@ Function EnginesInstallStart
     Return
   ${EndIf}
 
-  EnableWindow $HWNDPARENT 0
   StrCpy $EnginesCode ""
-  StrCpy $EnginesWaited 0
+  StrCpy $EnginesTicks 0
+  ${NSD_CreateTimer} EnginesInstallTick 250
+FunctionEnd
 
-  engines_install_wait:
-    Sleep 250
-    IntOp $EnginesWaited $EnginesWaited + 1
-    ${If} ${FileExists} "$EnginesRc"
-      ClearErrors
-      FileOpen $1 "$EnginesRc" r
-      ${IfNot} ${Errors}
-        FileRead $1 $2
-        FileClose $1
-        StrCpy $EnginesCode $2 -2
-      ${EndIf}
-    ${EndIf}
-    ${If} $EnginesCode == ""
-    ${AndIf} $EnginesWaited < ${ENGINES_INSTALL_POLLS}
-      Goto engines_install_wait
-    ${EndIf}
+; The wait, one tick at a time: the `.rc` the script leaves is the only thing that ends it, and the
+; cap below only ends this page's interest in it — the install itself is timed out of nothing and
+; keeps running in its window. Reading the file is cheap and idempotent, so a half-written code is
+; simply read again on the next tick.
+Function EnginesInstallTick
+  IntOp $EnginesTicks $EnginesTicks + 1
 
-  EnableWindow $HWNDPARENT 1
-  StrCpy $EnginesBusy 0
+  ${If} ${FileExists} "$EnginesRc"
+    ClearErrors
+    FileOpen $1 "$EnginesRc" r
+    ${IfNot} ${Errors}
+      FileRead $1 $2
+      FileClose $1
+      StrCpy $EnginesCode $2 -2
+    ${EndIf}
+  ${EndIf}
 
   ${If} $EnginesCode == ""
+    ${If} $EnginesTicks < ${ENGINES_INSTALL_TICKS}
+      Return
+    ${EndIf}
+    ${NSD_KillTimer} EnginesInstallTick
+    StrCpy $EnginesBusy 0
     ${NSD_SetText} $EnginesIntro "$(enginesInstallTimedOut)"
     Return
   ${EndIf}
+
+  ${NSD_KillTimer} EnginesInstallTick
+  StrCpy $EnginesBusy 0
 
   ${If} $EnginesCode != "0"
     ${NSD_SetText} $EnginesIntro "$(enginesInstallFailed) $(enginesInstallCode) $EnginesCode"
