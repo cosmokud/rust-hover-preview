@@ -843,6 +843,30 @@ mod tests {
             "and a padded sheet is still the render engine's, as the unpadded one is"
         );
 
+        // A BOM is not a group code: the front steps over one, so the body is read from the code
+        // behind it and the drawing is answered as it would be without it.
+        let bom_mesh = folder.join("a-bom-mesh.dxf");
+        std::fs::write(
+            &bom_mesh,
+            "\u{feff}0\r\nSECTION\r\n2\r\nENTITIES\r\n0\r\n3DFACE\r\n8\r\n0\r\n0\r\nENDSEC\r\n",
+        )
+        .expect("a drawing");
+        assert!(
+            claims_content(&bom_mesh, None),
+            "a face behind a BOM is the model the drawing holds"
+        );
+
+        let bom_sheet = folder.join("a-bom-sheet.dxf");
+        std::fs::write(
+            &bom_sheet,
+            "\u{feff}0\r\nSECTION\r\n2\r\nENTITIES\r\n0\r\nLWPOLYLINE\r\n90\r\n2\r\n0\r\nENDSEC\r\n",
+        )
+        .expect("a drawing");
+        assert!(
+            !claims_content(&bom_sheet, None),
+            "and a sheet behind one is the render engine's too"
+        );
+
         // A pad is the few columns a code is written in, not an indent of any depth.
         assert!(
             !matcher("dxf")(b"        0\r\nSECTION", 0),

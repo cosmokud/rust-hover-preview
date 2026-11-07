@@ -42,6 +42,9 @@ pub(crate) fn is_3d(path: &Path) -> bool {
         return false;
     };
     let mut reader = BufReader::new(file.take(SCAN_BYTES));
+    if strip_bom(&mut reader).is_none() {
+        return false;
+    }
     let mut line = Vec::new();
 
     // What a group code of 0 names is an entity or a structural marker, and only two of the file's
@@ -91,6 +94,21 @@ pub(crate) fn is_3d(path: &Path) -> bool {
     }
 
     false
+}
+
+/// Steps over a UTF-8 BOM in front of the first group code, which is not one — the front accepts a
+/// drawing that opens with it (`ascii_dxf`), and left in place the first line parses as no code at
+/// all, so a 3D drawing would be answered as a sheet. Once, at the window's start: no later line can
+/// hold a BOM.
+fn strip_bom(reader: &mut impl BufRead) -> Option<()> {
+    const BOM: &[u8] = b"\xEF\xBB\xBF";
+
+    let head = reader.fill_buf().ok()?;
+    if head.starts_with(BOM) {
+        reader.consume(BOM.len());
+    }
+
+    Some(())
 }
 
 /// The next group code, or nothing at the end of the window: a line that is not a number is not a
@@ -299,6 +317,27 @@ mod tests {
                 "  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\nPOLYLINE\r\n 70\r\n1\r\n"
             ),
             "and a padded 2D polyline is still the sheet's"
+        );
+    }
+
+    /// **A BOM is not a group code**: the front steps over one (`ascii_dxf`), so the scan reads the
+    /// code behind it, and what the drawing holds is the same answer it would be without it.
+    #[test]
+    fn a_drawing_that_opens_with_a_bom_is_read_from_the_code_behind_it() {
+        assert!(
+            is_3d_of(
+                "bom-face.dxf",
+                "\u{feff}0\r\nSECTION\r\n2\r\nENTITIES\r\n0\r\n3DFACE\r\n8\r\n0\r\n0\r\nENDSEC\r\n"
+            ),
+            "the face behind a BOM is the entity the importer reads"
+        );
+
+        assert!(
+            !is_3d_of(
+                "bom-sheet.dxf",
+                "\u{feff}0\r\nSECTION\r\n2\r\nENTITIES\r\n0\r\nLWPOLYLINE\r\n90\r\n2\r\n0\r\nENDSEC\r\n"
+            ),
+            "and a sheet behind one is still the render engine's"
         );
     }
 
