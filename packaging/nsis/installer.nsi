@@ -1192,8 +1192,10 @@ Function EnginesInstallStart
   ${EndIf}
 
   StrCpy $EnginesBusy 1
-  StrCpy $EnginesScript "$TEMP\r-hover-preview-winget-$EnginesId.cmd"
-  StrCpy $EnginesRc "$TEMP\r-hover-preview-winget-$EnginesId.rc"
+  ; The same two names the app's own `Codecs → Install` writes (see `src/app/winget.rs`), which is
+  ; what makes the two doors one install rather than two that resemble each other.
+  StrCpy $EnginesScript "$TEMP\rust-hover-preview-winget-$EnginesId.cmd"
+  StrCpy $EnginesRc "$TEMP\rust-hover-preview-winget-$EnginesId.rc"
 
   ; An exit code an earlier run left would be read as this install's the moment it appeared.
   Delete "$EnginesRc"
