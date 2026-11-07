@@ -974,12 +974,17 @@ FunctionEnd
 ; actions keep nsDialogs' `LINK` control, because that is what draws the **hand cursor** over
 ; itself — a static draws an arrow and NSIS has no per-control cursor to give it — and a `LINK`
 ; control draws its text hard against its left edge and honours no centring style at all (measured:
-; `BS_CENTER` on it changes nothing). So its centring is geometry instead of style: the control's
-; rectangle is the word's own width plus a pixel either side, and against a page 399 px across the
-; measured words are 84 px (`Manual Download`, 22%), 29 px (`Install`, 8%) and 44 px (`Detected`,
-; 11%) — the same fractions at every dpi, since the font scales with the page. `Detected` is given
-; exactly `Manual Download`'s rectangle, so its centre is that word's centre and a row with nothing
-; to do sits in the column of a row with two things.
+; `BS_CENTER` on it changes nothing). So its centring is geometry instead of style: its rectangle
+; is its own word's width, so the word fills it and reads centred. Measured through the control's
+; own font, those words are 56u (`Manual Download`), 19u (`Install`) and 29u (`Detected`) — in `u`
+; rather than `%` so the box tracks the font at every dpi, and long enough not to clip.
+; `Detected` is given exactly `Manual Download`'s rectangle, so the two share one centre whatever
+; the page's width is, and a row with nothing to do sits centred in the column of a row with two
+; things.
+;
+; A percentage box cannot do that: a word narrower than its box is drawn against the box's left
+; edge, so the slack all falls on one side and the word reads off-centre by half of it — which is
+; what a `22%` box around an `84 px` word looked like.
 ;
 ; What a `LINK` control must keep is both halves of a link's look, and neither is default: the plain
 ; string as its text — it parses no anchor markup, so `<a id="i">Install</a>` is what a reader
@@ -996,7 +1001,7 @@ FunctionEnd
   ${If} $0 == 1
     ${NSD_CreateLabel} 0 ${POS}u 63% 12u "√ ${LABEL}"
     Pop $0
-    ${NSD_CreateLabel} 74% ${POS}u 22% 12u "$(enginesDetected)"
+    ${NSD_CreateLabel} 74% ${POS}u 58u 12u "$(enginesDetected)"
     Pop $0
     ${NSD_AddStyle} $0 ${SS_CENTER}
   ${Else}
@@ -1011,13 +1016,13 @@ FunctionEnd
     ; half, and it needs no name of its own.
     !if "${PKG}" != "-"
       ${If} $EnginesWinget != ""
-        ${NSD_CreateLink} 65% ${POS}u 8% 12u "$(enginesInstall)"
+        ${NSD_CreateLink} 65% ${POS}u 21u 12u "$(enginesInstall)"
         Pop $Engines${NAME}Install
         SetCtlColors $Engines${NAME}Install "000080"
         ${NSD_OnClick} $Engines${NAME}Install EnginesInstall${NAME}
       ${EndIf}
     !endif
-    ${NSD_CreateLink} 74% ${POS}u 22% 12u "$(enginesManualDownload)"
+    ${NSD_CreateLink} 74% ${POS}u 58u 12u "$(enginesManualDownload)"
     Pop $Engines${NAME}Download
     SetCtlColors $Engines${NAME}Download "000080"
     ${NSD_OnClick} $Engines${NAME}Download ${LINK}
@@ -1379,7 +1384,7 @@ Function EnginesInstallTick
   ${EndIf}
   ${NSD_CreateLabel} 0 $EnginesRowPos 63% 12u "√ $EnginesLabelText"
   Pop $0
-  ${NSD_CreateLabel} 74% $EnginesRowPos 22% 12u "$(enginesDetected)"
+  ${NSD_CreateLabel} 74% $EnginesRowPos 58u 12u "$(enginesDetected)"
   Pop $0
   ${NSD_AddStyle} $0 ${SS_CENTER}
   ; The style is set after this control was created, and unlike the rows above — which are painted
