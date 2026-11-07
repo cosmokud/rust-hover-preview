@@ -444,7 +444,10 @@ pub(super) fn get_media_dimensions_of(hover: &HoverFacts, path: &Path) -> Option
     // A model is measured where the content question above measures it, and this is the road a file
     // whose *name* no list claims takes: a `.stl` is binary and its bytes name no kind, so the
     // router's answer is the name's and the box is this app's own (see `media_dimensions_of_kind`).
-    if previewed_as(path, PreviewType::Models) {
+    // It is the hover's own answer rather than the list's, because a name can be a model's and be
+    // drawn as something else: a `dxf` is the viewer's only where the drawing holds 3D geometry,
+    // and the render engine's sheet is measured at its own box (see `claim_libre`).
+    if hover.is_a_model() {
         return media_dimensions_of_kind(PreviewType::Models, path);
     }
 

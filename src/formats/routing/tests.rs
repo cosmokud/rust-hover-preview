@@ -155,6 +155,12 @@ const SHARED: &[(&str, PreviewType)] = &[
     // name ends in. The archive list is asked first, which is what keeps a tarball out of
     // the engine's hands (see `peazip_formats::is_peazip_file`).
     ("preview.tar.gz", PreviewType::Archives),
+    // A `.dxf` is a drawing the render engine imports and a scene the viewer reads the 3D half
+    // of, and the two are told apart by what the file holds rather than by the name: the one
+    // written down here is a sheet, which is what a file of the name that holds no mesh is
+    // (`preview.dxf` is not there at all, so this is the answer both reach). See `claim_libre`
+    // for the split and `model_formats::dxf` for the geometry that settles it.
+    ("preview.dxf", PreviewType::Libre),
 ];
 
 /// Every name this app ships reaches the kind its list is written for, and a name two
@@ -584,6 +590,161 @@ fn a_model_is_the_kind_its_own_head_confirms_and_no_other() {
         kind_of_with_facts(&mesh, &config, None),
         Some(PreviewType::Models),
         "an ascii mesh is a model by its name and by its front together"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// **A drawing is the one file two kinds can draw, and what settles it is the geometry it holds.**
+/// The viewer reads only the 3D half of the DXF format — a `3DFACE`, and a `POLYLINE` whose flag
+/// word says it is a 3D one, a mesh or a polyface — while the render engine beside it imports the
+/// 2D drafting sheet whole. So a file of the name is claimed by its own group codes rather than by
+/// the name, which is also why a `3DFACE` written as a label is still a sheet (see
+/// `model_formats::dxf`), and the one thing beyond the file that the answer needs is the machine:
+/// with no viewer here to draw it, the file stays the drawing it always was.
+#[test]
+fn a_drawing_is_the_kind_of_geometry_its_own_group_codes_name() {
+    // A drawing of one entity list, in the sections a real file carries in front of it.
+    fn drawing(entities: &str) -> String {
+        format!(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n0\nENDSEC\n\
+             0\nSECTION\n2\nENTITIES\n{entities}0\nENDSEC\n0\nEOF\n"
+        )
+    }
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-dxf-route");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    // A machine with the viewer on it, without one being installed: the setting names a file, and
+    // what the claim asks is whether there is one to run (`f3d_render::available_in`), which
+    // nothing in the routing ever begins.
+    let program = folder.join("f3d.exe");
+    std::fs::write(&program, b"not a viewer, and never begun").expect("a program");
+    let config = AppConfig {
+        f3d_path: program.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    assert!(
+        f3d_render::available_in(&config),
+        "the faked machine is one with the viewer on it"
+    );
+
+    let written = |name: &str, body: &str| {
+        let path = folder.join(name);
+        std::fs::write(&path, body).expect("a drawing");
+
+        path
+    };
+
+    // The geometry the viewer imports, an entity at a time, so a name that stopped being the
+    // viewer's says which one did.
+    for (name, entities) in [
+        ("a-face.dxf", "0\n3DFACE\n8\n0\n10\n0\n11\n1\n"),
+        ("a-3d-polyline.dxf", "0\nPOLYLINE\n66\n1\n70\n8\n"),
+        ("a-mesh.dxf", "0\nPOLYLINE\n66\n1\n70\n16\n"),
+        ("a-polyface.dxf", "0\nPOLYLINE\n66\n1\n70\n64\n"),
+        // Mixed geometry and annotations is still the viewer's: the labels are dropped rather
+        // than the scene.
+        (
+            "a-labelled-solid.dxf",
+            "0\nMTEXT\n1\nplate 3\n0\n3DFACE\n8\n0\n0\nDIMENSION\n70\n32\n",
+        ),
+    ] {
+        let path = written(name, &drawing(entities));
+
+        assert_eq!(
+            kind_of_with_facts(&path, &config, None),
+            Some(PreviewType::Models),
+            "`{name}` holds geometry the viewer reads, so it is a model"
+        );
+        assert_eq!(
+            chain(PreviewType::Models),
+            &[Reader::F3d],
+            "and what draws a model is the viewer or nothing"
+        );
+    }
+
+    for (name, entities) in [
+        (
+            "a-sheet.dxf",
+            "0\nLWPOLYLINE\n90\n4\n70\n0\n0\nARC\n10\n0\n0\nTEXT\n1\nplate 3\n",
+        ),
+        // The ACIS bodies, which the viewer's importer cannot read at all.
+        ("an-acis-body.dxf", "0\n3DSOLID\n70\n1\n0\nREGION\n70\n1\n"),
+        // A name written as a value, which is a label rather than an entity.
+        ("a-labelled-sheet.dxf", "0\nTEXT\n8\n3DFACE\n1\n3DFACE\n"),
+        // A 2D polyline: the flags say the entity the viewer would read nothing of.
+        ("a-flat-polyline.dxf", "0\nPOLYLINE\n70\n1\n"),
+        // Past the bound the scan is bounded to, so the answer is the sheet's.
+        (
+            "a-sheet-past-the-bound.dxf",
+            &format!(
+                "{}{}",
+                "0\nTEXT\n1\nfiller\n".repeat(40_000),
+                "0\n3DFACE\n8\n0\n"
+            ),
+        ),
+    ] {
+        let path = written(name, &drawing(entities));
+
+        assert_eq!(
+            kind_of_with_facts(&path, &config, None),
+            Some(PreviewType::Libre),
+            "`{name}` holds nothing the viewer draws, so it is the render engine's sheet"
+        );
+        assert_eq!(
+            chain(PreviewType::Libre),
+            &[Reader::LibreOffice],
+            "and what draws a sheet is the render engine"
+        );
+    }
+
+    // The binary spelling is the render engine's whatever it holds: the viewer's importer reads
+    // the ASCII one only.
+    let binary = written(
+        "a-binary-face.dxf",
+        "AutoCAD Binary DXF\r\n\u{1a}\u{0}0\u{0}3\u{0}D\u{0}F\u{0}A\u{0}C\u{0}E\u{0}",
+    );
+    assert_eq!(
+        kind_of_with_facts(&binary, &config, None),
+        Some(PreviewType::Libre),
+        "a drawing written as binary is the render engine's"
+    );
+
+    // And the same file through the whole of a route: what its bytes say is no opinion, since the
+    // name it carries is the one the signature named, so the kind the loader draws it as is the
+    // router's — which is what a 3D drawing reaching the viewer depends on. A content tier that
+    // answered the render engine's kind here would hand the file to the engine that draws nothing
+    // of it (see `content_type::classify`).
+    let mesh = folder.join("a-face.dxf");
+    let probe = crate::formats::content_type::Probe::read(&mesh);
+    let route = resolve(&mesh, &config, &probe);
+    assert_eq!(
+        route.content,
+        crate::formats::content_type::Content::Unknown,
+        "a drawing under its own name is the router's to settle"
+    );
+    assert_eq!(route.named, Some(PreviewType::Models));
+
+    // And the machine's half: with no viewer installed there is nothing to claim the scene, so
+    // the drawing is the sheet's — which is the answer it had before the viewer was asked at all.
+    let mesh = folder.join("a-face.dxf");
+    assert_eq!(
+        kind_of_with_facts(&mesh, &AppConfig::default(), None),
+        if f3d_render::available() {
+            Some(PreviewType::Models)
+        } else {
+            Some(PreviewType::Libre)
+        },
+        "a drawing of a mesh is the viewer's where one is installed and the sheet's where none is"
+    );
+
+    // A name alone is answered without the file being read, which is the form `content_type`
+    // asks: the 2D/3D split is the body's question, and a name has no body.
+    assert_eq!(
+        kind_of_name(&mesh, &config),
+        Some(PreviewType::Libre),
+        "a name with no file read behind it is the render engine's"
     );
 
     let _ = std::fs::remove_dir_all(&folder);

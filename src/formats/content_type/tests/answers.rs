@@ -63,6 +63,16 @@ fn agreement_is_no_opinion() {
         Content::Unknown,
         "a motion JPEG is a video by name as well as a picture by content"
     );
+    // A drawing is the one name whose answer is neither the content's nor the name's: the viewer
+    // reads the 3D half of the format and the render engine the 2D sheet, so a file of the name is
+    // left to the router rather than answered as the engine's here (see `routing::claim_libre`).
+    // Answered as a kind, this side would hand every 3D drawing to the engine that draws nothing
+    // of one.
+    assert_eq!(
+        classified("drawing.dxf", b"0\r\nSECTION\r\n"),
+        Content::Unknown,
+        "a DXF under its own name is the router's to settle"
+    );
 }
 
 /// A box is not an answer, which is the half of the signature tables that is

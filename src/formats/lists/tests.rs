@@ -139,7 +139,10 @@ fn a_section_that_arrived_with_its_kind_is_not_walked() {
         );
     }
 
-    for name in ["font", "audio", "office", "ebook", "text", "f3d"] {
+    // The model list is not one of them any more: a `dxf` was put into it after it had been
+    // written to files, so the list of before that is written down on the row (see
+    // `F3D_EXTENSIONS_BEFORE_DXF`).
+    for name in ["font", "audio", "office", "ebook", "text"] {
         assert!(
             LISTS
                 .iter()
@@ -149,14 +152,19 @@ fn a_section_that_arrived_with_its_kind_is_not_walked() {
     }
 }
 
-/// The model list is new with its kind and is the one list of the seventeen a reader here can never
-/// read: every entry is a name an installed f3d was measured to open, and no entry is one another
-/// list already claims — a name in two lists is a file whose preview depends on the order the rows
-/// are asked in rather than on the name (see `DEFAULT_F3D_EXTENSIONS`).
+/// The model list is the one list of the seventeen a reader here can never read: every entry is a
+/// name an installed f3d was measured to open, and — `dxf` aside — no entry is one another list
+/// already claims, because a name in two lists is a file whose preview depends on the order the
+/// rows are asked in rather than on the name (see `DEFAULT_F3D_EXTENSIONS`).
+///
+/// The drawing is the exception, and it is written down here rather than left to the rule: the
+/// viewer reads the 3D half of the format and the render engine the 2D sheet, so a name in two
+/// lists is settled by what the file holds — which is a question neither the name nor the order
+/// can answer (see `model_formats::dxf`).
 ///
 /// What is held here is the shape the subtraction left: alphabetical, deduplicated, lowercase, no
 /// single-character name — too broad a claim for a file manager — and not one entry shared with
-/// the row of any other kind.
+/// the row of any other kind, `dxf` alone.
 #[test]
 fn the_model_list_is_sorted_and_holds_no_name_another_list_claims() {
     let config = AppConfig::default();
@@ -172,6 +180,11 @@ fn the_model_list_is_sorted_and_holds_no_name_another_list_claims() {
     sorted.dedup();
     assert_eq!(models, &sorted[..], "the list is written unsorted or twice");
 
+    assert!(
+        models.iter().any(|entry| entry == "dxf"),
+        "the drawing is a name the viewer is asked about"
+    );
+
     for entry in models {
         assert!(
             entry.len() > 1,
@@ -185,6 +198,16 @@ fn the_model_list_is_sorted_and_holds_no_name_another_list_claims() {
             .filter(|other| other.built_in().iter().any(|held| held == entry))
             .map(|other| other.section)
             .collect();
+
+        if entry == "dxf" {
+            assert_eq!(
+                claiming,
+                vec!["libre"],
+                "the drawing is the one name in two lists, and the render engine's is the other"
+            );
+            continue;
+        }
+
         assert!(
             claiming.is_empty(),
             "`{entry}` is in `[{}]` and in {claiming:?}, so which kind claims it is the order's \

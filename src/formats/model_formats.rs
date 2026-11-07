@@ -43,9 +43,17 @@
 //! A front that cannot be read at all — a file on a cloud volume, a file that has just gone — is
 //! trusted too, for the same reason: what the viewer says about it is the answer, and it is the
 //! one it gave before.
+//!
+//! **One name is asked of its body rather than of its front.** A DXF is a drawing, and the viewer
+//! reads only the 3D half of the format — the meshes — while the render engine beside it imports the
+//! 2D sheet whole; the two are told apart by which entities the file holds, which the front says
+//! nothing about (see `dxf`). It is also the one name of this list a second kind can draw, so what
+//! the routing does with a file of it is asked of both readers (see `routing::claim_models`).
 
 use crate::formats::head::{self, Facts};
 use std::path::Path;
+
+mod dxf;
 
 /// Whether the front of `path` is the model its own name says it is.
 ///
@@ -68,8 +76,11 @@ pub(crate) fn claims_content(path: &Path, facts: Option<&Facts>) -> bool {
         Some(facts) => head::of_with_facts(path, facts),
         None => head::of(path),
     };
+    // A front that cannot be read at all is trusted, since what the viewer says about it is the
+    // answer — except a drawing's, whose question is its body rather than its front: a file that is
+    // not there holds no geometry, and the render engine has the sheet.
     let Some(head) = head else {
-        return true;
+        return !is_a_dxf(path);
     };
     // Asked of the entry the walk has already read where there is one, and of the file only where
     // there is none: two of the matchers need a length, and nothing else does.
@@ -78,7 +89,22 @@ pub(crate) fn claims_content(path: &Path, facts: Option<&Facts>) -> bool {
         Facts::len,
     );
 
-    matches(head.bytes(), len)
+    if !matches(head.bytes(), len) {
+        return false;
+    }
+
+    // A DXF's front says the file is one and nothing about whether it is a three-dimensional one,
+    // which is the only half of the format the viewer draws: its body is scanned for the entities
+    // the importer reads (see `dxf`). Answering the front is the table's — a matcher is handed a
+    // window — and the body is asked beside it.
+    extension != "dxf" || dxf::is_3d(path)
+}
+
+/// Whether `path` is a DXF, which is the one name of the model list a second kind can draw as well:
+/// the render engine imports the 2D sheet the viewer draws nothing of (see `dxf` and
+/// `routing::claim_libre`).
+pub(crate) fn is_a_dxf(path: &Path) -> bool {
+    extension_of(path).is_some_and(|extension| extension == "dxf")
 }
 
 /// The lowercased extension `path` carries, with no dot in front of it.
@@ -109,6 +135,9 @@ const MODEL_FORMATS: &[(&str, Option<Matcher>)] = &[
     ("cdf", Some(netcdf_or_hdf5)),
     ("csd", Some(optech)),
     ("dae", Some(collada)),
+    // The front of a drawing, which is the section code every ASCII one opens with; what makes it
+    // a model is asked of its body afterwards (see `is_a_dxf`).
+    ("dxf", Some(ascii_dxf)),
     ("ex2", Some(netcdf_or_hdf5)),
     ("exo", Some(netcdf_or_hdf5)),
     ("fbx", Some(fbx)),
@@ -210,6 +239,12 @@ const ZIP_MAGICS: [&[u8]; 3] = [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"];
 
 fn zip(front: &[u8], _len: u64) -> bool {
     ZIP_MAGICS.iter().any(|magic| front.starts_with(magic))
+}
+
+/// An AutoCAD interchange drawing in the ASCII spelling the viewer's importer reads. The binary one
+/// opens with a sentinel of its own, and is the render engine's alone.
+fn ascii_dxf(front: &[u8], _len: u64) -> bool {
+    front.starts_with(b"0\r\nSECTION") || front.starts_with(b"0\nSECTION")
 }
 
 /// The eight bytes every HDF5 file opens with.
@@ -733,6 +768,57 @@ mod tests {
             !claims_content(&renamed, None),
             "and a file of that name which is neither solid nor a mesh whose count fits it is not"
         );
+
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A drawing is the one name whose body is asked as well as its front: the viewer imports the
+    /// 3D half of the format and nothing of the 2D sheet, so the geometry the file holds is what
+    /// the claim is answered by (see `dxf`).
+    #[test]
+    fn a_drawing_is_a_model_only_where_it_holds_geometry_the_viewer_reads() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-model-formats-dxf");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let sheet = folder.join("a-sheet.dxf");
+        std::fs::write(
+            &sheet,
+            b"0\nSECTION\n2\nENTITIES\n0\nLWPOLYLINE\n90\n2\n0\nENDSEC\n0\nEOF\n",
+        )
+        .expect("a drawing");
+        assert!(
+            !claims_content(&sheet, None),
+            "a sheet of 2D geometry is the render engine's, not a model"
+        );
+
+        let mesh = folder.join("a-mesh.dxf");
+        std::fs::write(
+            &mesh,
+            b"0\nSECTION\n2\nENTITIES\n0\n3DFACE\n8\n0\n0\nENDSEC\n0\nEOF\n",
+        )
+        .expect("a drawing");
+        assert!(
+            claims_content(&mesh, None),
+            "a drawing holding a face is the model the name promises"
+        );
+
+        // The binary spelling has the front `is_dxf` names and no head the importer can read:
+        // the claim is the front's first, and the body's after it.
+        let binary = folder.join("a-binary.dxf");
+        std::fs::write(
+            &binary,
+            b"AutoCAD Binary DXF\r\n\x1a\x00\x000\x00S\x00E\x00C\x00T",
+        )
+        .expect("a binary drawing");
+        assert!(
+            !claims_content(&binary, None),
+            "a drawing written as binary is one the viewer cannot open"
+        );
+
+        // And a name that is not a drawing is still its own front's answer alone.
+        let mesh_of_another_name = folder.join("mesh.stl");
+        std::fs::write(&mesh_of_another_name, b"solid cube\nendsolid cube\n").expect("a mesh");
+        assert!(claims_content(&mesh_of_another_name, None));
 
         let _ = std::fs::remove_dir_all(&folder);
     }

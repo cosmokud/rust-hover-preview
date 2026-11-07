@@ -35,7 +35,8 @@
 
 use crate::config::config::{AppConfig, PreviewType, TransparentBackground};
 use crate::formats::{
-    archive_formats, audio_formats, lists, model_formats, native_formats::NativeJob, video_formats,
+    archive_formats, audio_formats, f3d_render, lists, model_formats, native_formats::NativeJob,
+    video_formats,
 };
 use crate::readers::pdf_preview;
 use crate::readers::svg_preview;
@@ -522,8 +523,9 @@ pub fn named_as(path: &Path, config: &AppConfig, kind: PreviewType) -> bool {
         PreviewType::Design => lists::DESIGN.claims(path, config),
         PreviewType::Vector => lists::VECTOR.claims(path, config),
         PreviewType::Fonts => lists::FONT.claims(path, config),
-        // The names an installed f3d reads and no other list has already claimed, so a file of
-        // one is a model and nothing else (see `DEFAULT_F3D_EXTENSIONS`).
+        // The names an installed f3d reads and no other list has already claimed — `dxf` aside,
+        // which is the one name two kinds can draw and is settled by what the file holds rather
+        // than by the name (see `claim_libre`).
         PreviewType::Models => lists::F3D.claims(path, config),
         PreviewType::Images => lists::IMAGE.claims(path, config),
     }
@@ -757,15 +759,31 @@ fn claim_document(
 
 /// A document only a render engine draws, asked after the Office list because a name can sit
 /// in both: what such a file keeps of itself is a thumbnail, and a thumbnail is not a preview.
+///
+/// **A DXF of 3D geometry is the one file this entry turns down**, because it is the one name its
+/// list shares with another kind's: the viewer reads the meshes of a drawing and draws nothing of
+/// the 2D sheet, and the render engine is the other way round. Which of the two a file is, is what
+/// it holds (see `model_formats::dxf`), so a drawing of a mesh is left to [`claim_models`] and a
+/// drafting sheet is claimed here. It is only left where that claim can actually draw it — the
+/// engine installed, and the name still in its list — because a file turned down here and claimed
+/// by nothing is a sheet nothing shows. A name the caller has only a name for is the render
+/// engine's, since the body that settles it is not read (see [`Asked`]).
 fn claim_libre(
     path: &Path,
     config: &AppConfig,
-    _asked: Asked,
-    _entry: Option<&crate::formats::head::Facts>,
+    asked: Asked,
+    entry: Option<&crate::formats::head::Facts>,
 ) -> Option<PreviewType> {
-    lists::LIBRE
-        .claims(path, config)
-        .then_some(PreviewType::Libre)
+    if !lists::LIBRE.claims(path, config) {
+        return None;
+    }
+
+    let the_viewers = asked == Asked::File
+        && lists::F3D.claims(path, config)
+        && f3d_render::available_in(config)
+        && model_formats::claims_content(path, entry);
+
+    (!the_viewers).then_some(PreviewType::Libre)
 }
 
 /// A picture an image converter develops — a camera raw above all — asked before the design
@@ -885,6 +903,12 @@ pub fn drawing_of(path: &Path) -> Drawing {
 /// the master bucket for pictures, and a name in two of them would be drawn as whichever was
 /// asked first. What the subtraction in `DEFAULT_F3D_EXTENSIONS` leaves behind is a name no image
 /// list holds, so this entry and that one cannot both claim a file.
+///
+/// **`dxf` is the one name a second kind also claims**, and the one place this entry is asked what
+/// the machine has: the viewer draws the 3D half of a drawing and the render engine the 2D sheet,
+/// so a file of the name is [`claim_libre`]'s until that entry has turned it down — which it does
+/// only where this viewer is installed. Asked with no engine here, the claim answers nothing, and
+/// the file stays the drawing it was.
 fn claim_models(
     path: &Path,
     config: &AppConfig,
@@ -895,6 +919,12 @@ fn claim_models(
         return None;
     }
     if asked == Asked::File && !model_formats::claims_content(path, entry) {
+        return None;
+    }
+    // A drawing is the one name here a second kind can draw as well — the render engine imports
+    // the sheet the viewer has no reader for — so it is claimed only where that viewer is here to
+    // draw it (see `claim_libre`, which is where the sheet is answered instead).
+    if asked == Asked::File && model_formats::is_a_dxf(path) && !f3d_render::available_in(config) {
         return None;
     }
 
