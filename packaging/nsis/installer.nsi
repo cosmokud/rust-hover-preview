@@ -711,8 +711,22 @@ FunctionEnd
 ; package that ships its own tree puts it.
 ;
 ; Answers in `$0`, like every detector here, and uses `$4`/`$5` for the walk.
+; One folder of `winget`'s own, walked for `$3`: `$1` is the root, `$2` a prefix of the package
+; folder's name (winget names it `<id>_<source>_<hash>`), and the file is looked for where a
+; package of each shape puts it — at the folder's root, one level down in `bin`, and — a portable
+; package, which is Gyan's FFmpeg — two levels down, in a build folder named for its version.
+;
+; `FindFirst` matches wildcards in the last part of the path only, so the deeper level is a
+; second listing rather than `*\bin\$3`: the middle-`*` form matches nothing at all.
+;
+; Every listing here ends with the error flag cleared, and every `SearchPath` in the detectors
+; clears it first. That is not tidiness: `FindFirst` on a folder that is not there leaves the
+; flag set, NSIS's `SearchPath` does not clear it on success, and a stale flag read by the next
+; detector's `${IfNot} ${Errors}` is an engine that is installed and reported missing. That is
+; exactly what made FFmpeg read missing beside a detector whose `SearchPath` had found it.
 Function EnginesWinGetScan
   StrCpy $0 0
+  ClearErrors
   FindFirst $4 $5 "$1\$2*"
   engines_winget_scan:
     StrCmp $5 "" engines_winget_scan_done
@@ -724,10 +738,26 @@ Function EnginesWinGetScan
       StrCpy $0 1
       Goto engines_winget_scan_done
     ${EndIf}
+    ClearErrors
+    FindFirst $6 $7 "$1\$5\*"
+    engines_winget_scan_deeper:
+      StrCmp $7 "" engines_winget_scan_deeper_done
+      ${If} ${FileExists} "$1\$5\$7\bin\$3"
+        StrCpy $0 1
+        Goto engines_winget_scan_deeper_done
+      ${EndIf}
+      FindNext $6 $7
+      Goto engines_winget_scan_deeper
+    engines_winget_scan_deeper_done:
+    FindClose $6
+    ${If} $0 == 1
+      Goto engines_winget_scan_done
+    ${EndIf}
     FindNext $4 $5
     Goto engines_winget_scan
   engines_winget_scan_done:
   FindClose $4
+  ClearErrors
 FunctionEnd
 
 ; mpv is asked for where the app asks for it (see `codecs::mpv_installs`): beside the app, in a
@@ -745,6 +775,9 @@ Function MPVInstalled
     StrCpy $0 1
     Return
   ${EndIf}
+  ; Cleared first: `SearchPath` leaves the flag as it found it on success (see
+  ; `EnginesWinGetScan`), and the row before this one may have left it set.
+  ClearErrors
   SearchPath $1 "mpv.exe"
   ${IfNot} ${Errors}
     StrCpy $0 1
@@ -788,6 +821,7 @@ Function FFmpegInstalled
     StrCpy $0 1
     Return
   ${EndIf}
+  ClearErrors
   SearchPath $1 "ffplay.exe"
   ${IfNot} ${Errors}
     StrCpy $0 1
@@ -885,6 +919,7 @@ Function F3DInstalled
     StrCpy $0 1
     Return
   ${EndIf}
+  ClearErrors
   SearchPath $1 "f3d.exe"
   ${IfNot} ${Errors}
     StrCpy $0 1
@@ -928,11 +963,15 @@ FunctionEnd
 ; `Manual Download` link that opens the page the engine is installed from. `-` for `PKG` means no
 ; package, which is f3d's row and Office's.
 ;
-; Every link's text carries anchor markup, and that is not decoration: `${NSD_CreateLink}` makes a
-; SysLink, and a SysLink whose text is plain draws itself as a link but holds no link at all — it
-; never sends `NM_CLICK`, so a function hung off `NSD_OnNotify` is one that never runs. The `id`
-; names the anchor within `NMLINK`; a click on a row's two links is two controls and so two
-; callbacks, because a WM_NOTIFY does not say which anchor of one control was hit.
+; The link is a control of the `LINK` class — an owner-drawn control of nsDialogs' own, not a
+; comctl32 SysLink — and three things follow from that, each of which this macro got wrong once.
+; Its text is drawn as it is written, so it must be the plain string: anchor markup is not parsed
+; and `<a id="i">Install</a>` is what a reader sees. It is drawn in the control's own colour
+; rather than the theme's link colour, so `SetCtlColors` is what makes it read as a link at all —
+; the same navy and page background MUI's own Finish page gives its link. And it answers with
+; `WM_COMMAND`, so `${NSD_OnClick}` is its notification: `${NSD_OnNotify}` waits for a `WM_NOTIFY`
+; this control never sends, which is why clicking one did nothing. (MUI's Finish page is the
+; precedent for all three: `${NSD_CreateLink}`, `${NSD_OnClick}`, `SetCtlColors`.)
 ;
 ; `NAME` names the globals this row keeps its own controls in, so that the row can be redrawn
 ; detected in place once an install has put the engine there (see `EnginesInstallStart`). They are
@@ -957,14 +996,16 @@ FunctionEnd
     ; half, and it needs no name of its own.
     !if "${PKG}" != "-"
       ${If} $EnginesWinget != ""
-        ${NSD_CreateLink} 54% ${POS}u 16% 12u '<a id="i">$(enginesInstall)</a>'
+        ${NSD_CreateLink} 54% ${POS}u 16% 12u "$(enginesInstall)"
         Pop $Engines${NAME}Install
-        ${NSD_OnNotify} $Engines${NAME}Install EnginesInstall${NAME}
+        SetCtlColors $Engines${NAME}Install "000080" "${MUI_BGCOLOR}"
+        ${NSD_OnClick} $Engines${NAME}Install EnginesInstall${NAME}
       ${EndIf}
     !endif
-    ${NSD_CreateLink} 71% ${POS}u 29% 12u '<a id="d">$(enginesManualDownload)</a>'
+    ${NSD_CreateLink} 71% ${POS}u 29% 12u "$(enginesManualDownload)"
     Pop $Engines${NAME}Download
-    ${NSD_OnNotify} $Engines${NAME}Download ${LINK}
+    SetCtlColors $Engines${NAME}Download "000080" "${MUI_BGCOLOR}"
+    ${NSD_OnClick} $Engines${NAME}Download ${LINK}
   ${EndIf}
 !macroend
 
@@ -1007,6 +1048,7 @@ Function EnginesShow
     engines_winget_folder_done:
     FindClose $0
     ${If} $EnginesWinget == ""
+      ClearErrors
       SearchPath $1 "winget.exe"
       ${IfNot} ${Errors}
         StrCpy $EnginesWinget $1
