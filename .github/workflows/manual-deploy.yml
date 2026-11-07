@@ -140,9 +140,11 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2 (2.9.2)
 
       # The same gate deploy.yml runs, for the same reason: this workflow publishes a release
-      # from a tag by hand, and an immutable release is one that cannot be taken back.
+      # from a tag by hand, and an immutable release is one that cannot be taken back. It is
+      # asked for in the profile the installer is built in, so the dependency graph it pulls
+      # in is the one the packaging step reuses, not a second one of its own.
       - name: Path leaks
-        run: cargo test --test no_path_leaks
+        run: cargo test --profile github --test no_path_leaks
 
       - name: Install cargo-packager
         shell: pwsh

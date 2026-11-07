@@ -1,4 +1,22 @@
 include = [{ path = "target-dir.local.toml", optional = true }]
 
+# What everything compiled from source in this tree is built for: SSE4.2, SSSE3, POPCNT
+# and CMPXCHG16B, rather than the 2003 baseline an executable of this target otherwise
+# carries. The precompiled `std` is not rebuilt, so nothing inside the standard library
+# gains them; what does is this crate, every dependency compiled here and their build
+# scripts — the decoders (`image`, `jxl-oxide`), the Markdown parser, the syntax highlighter's
+# own scan and the picture scaling this app does itself. The C engines built beside them
+# are compiled by `cc` and never see a Rust flag; libwebp asks the CPU what it has at run
+# time instead.
+#
+# v2 and not the AVX2 a Haswell (2013) or an Excavator (2015) has: that is the level no
+# machine is left out by. Every processor Windows 11 supports is above it, and the ones
+# below it cannot run the OS at all — while v3 would exclude an ARM64 Windows device, which
+# runs this executable under emulation that reaches AVX2 only from 24H2. What v2 buys is
+# 128-bit vectors and POPCNT; what it gives up is the 256-bit vectors the decoders would
+# use on a modern desktop, so this is the compatible choice rather than the fastest one.
+# A `RUSTFLAGS` in the environment would replace this list rather than add to it, which is
+# why neither workflow sets one.
 [target.x86_64-pc-windows-msvc]
 linker = "rust-lld.exe"
+rustflags = ["-C", "target-cpu=x86-64-v2"]

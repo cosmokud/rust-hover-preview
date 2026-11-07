@@ -34,9 +34,9 @@ $($_.Exception.Message)
 Write-Host "Using cargo-packager tool cache:"
 Write-Host $packagerToolsRoot
 
-# The `github` profile is what ships: fat LTO over one codegen unit rather than the thin
-# LTO the local `cargo build --release` uses, and it puts its binary in `target/github`
-# — which is where the packaging metadata looks for it.
+# The `github` profile is what ships: fat LTO across the whole dependency graph rather
+# than the thin LTO the local `cargo build --release` uses, and it puts its binary in
+# `target/github` — which is where the packaging metadata looks for it.
 Write-Host "Building NSIS installer..."
 
 # The packaging pipeline stays with this checkout: `binaries-dir` and `out-dir` in Cargo.toml
