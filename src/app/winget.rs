@@ -12,10 +12,15 @@
 //! are the two slow ones — so it runs on a thread of its own, and what comes back is one `WM_APP`
 //! message on the tray window rather than a blocked message pump.
 //!
-//! **One retry, and only over the sources.** A failure `winget` blames on its sources is answered by
-//! `winget source update` and the same install once more: that is the per-user failure a stale index
-//! causes, and it is what the README walks a user through. Nothing is removed and nothing is
-//! retried with interactivity — a second prompt-driven install is a window nobody asked for.
+//! **The install is visible, and the retry lives in the batch script.** What runs is a batch script
+//! written to `%TEMP%`, started in a console window of its own: the user watches `winget` download
+//! and install, and the second attempt — `winget source update` and the same install once more,
+//! the answer to the stale index the README walks a user through — is that same window's. Nothing
+//! is removed and nothing is retried interactively. Capturing the output instead was the thing
+//! this replaced: a silent, minutes-long download is a menu row saying `installing…` and a window
+//! nobody can read, and the one time an install matters is the time it fails. The script is the
+//! installer's engines page's script too (`packaging/nsis/installer.nsi`), so the two run the same
+//! flags and the same retry — keeping them identical is the point of the text being one function.
 //!
 //! **The `PATH` is re-read from the registry before the re-probe.** `winget` broadcasts an
 //! environment change, and a process that was already running does not see it: without this the
@@ -23,35 +28,27 @@
 //! missing — the one answer installing it was for.
 
 use crate::app::dialogs;
-use crate::app::engine_processes::hidden_command;
 use crate::formats::codecs::{self, Row};
 use once_cell::sync::Lazy;
-use std::os::windows::io::AsRawHandle;
-use std::path::Path;
-use std::process::{Child, Output, Stdio};
+use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HANDLE, WAIT_TIMEOUT};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER,
     HKEY_LOCAL_MACHINE, KEY_READ, REG_EXPAND_SZ,
 };
-use windows::Win32::System::Threading::WaitForSingleObject;
 
-/// How long one `winget install` is given. The two slow engines are minutes rather than seconds —
-/// LibreOffice's installer alone is a download of a few hundred megabytes — and the wait is a
-/// background thread's rather than a hover's, so it is generous. What outlasts it is killed and
-/// reported rather than waited on.
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// `CREATE_NEW_CONSOLE`: the flag that makes the script's console a window of its own rather than
+/// one borrowed from whatever started it — which, for a process with no console at all, there is
+/// none of. `engine_processes::hidden_command` is the opposite flag and other callers' business.
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
-/// How long the `winget source update` that answers a source-flavoured failure is given: it is the
-/// index being downloaded rather than a package, so it is minutes of the same kind but fewer.
-const SOURCE_UPDATE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-
-/// How much of winget's output a failed install shows: its errors are the last lines of it, and the
-/// whole of a build log is not a box anybody reads.
-const TAIL_LINES: usize = 12;
+/// How often the worker looks for the exit code the script leaves beside itself. The window, and
+/// with it the user, is the progress display: this only has to notice a file appear.
+const POLL: Duration = Duration::from_millis(250);
 
 /// The two keys a process's environment is composed from, machine first and user over it.
 const MACHINE_ENVIRONMENT: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
@@ -109,116 +106,110 @@ pub(crate) fn install(row: &Row) {
     });
 }
 
-/// The worker: install, retry once over the sources, re-probe, and report what went wrong.
+/// The worker: run the script, re-probe, and report what the exit code says went wrong.
+///
+/// Nothing is reported where the window was closed before the script left its exit code: a window
+/// closed that early takes the install with it, and there is no failure to hand the user that the
+/// window did not already say.
 fn started(winget: &Path, name: &'static str, id: &'static str) {
-    let (installed, said) = match attempt(winget, id) {
-        // A failure that names the sources is answered once, by rebuilding them: that is the
-        // per-user failure a stale index causes, and it is what the README walks a user through.
-        // Removing a source is not part of it — that is the user's call.
-        (false, said) if source_flavoured(&said) => {
-            let _ = run(winget, &["source", "update"], SOURCE_UPDATE_TIMEOUT);
-            attempt(winget, id)
-        }
-        answer => answer,
-    };
+    let code = run(winget, id);
 
     // Before the re-probe, and not after it: the shim `winget` just wrote is on a `PATH` this
     // process was not told about (see the module's own note).
     refresh_path();
     codecs::refresh();
 
-    if installed {
-        codecs::note_installed(id);
-    } else {
-        dialogs::report_install_failure(name, &tail(&said));
+    match code {
+        Some(0) => codecs::note_installed(id),
+        Some(code) => dialogs::report_install_failure(name, code),
+        None => {}
     }
 }
 
-/// One `winget install`, answered with whether it succeeded and with what it said.
-fn attempt(winget: &Path, id: &str) -> (bool, String) {
-    run(
-        winget,
-        &[
-            "install",
-            "-e",
-            "--id",
-            id,
-            "--silent",
-            "--accept-package-agreements",
-            "--accept-source-agreements",
-            "--disable-interactivity",
-            "--source",
-            "winget",
-        ],
-        INSTALL_TIMEOUT,
+/// The two files an install leaves in `%TEMP%`, under the package id: the script run in the
+/// console window, and the `.rc` that carries the exit code back here — the same two paths the
+/// installer's engines page writes, so the two can never be running different installs.
+fn paths(id: &str) -> (PathBuf, PathBuf) {
+    let stem = format!("rust-hover-preview-winget-{id}");
+    let temp = std::env::temp_dir();
+
+    (
+        temp.join(format!("{stem}.cmd")),
+        temp.join(format!("{stem}.rc")),
     )
 }
 
-/// One `winget` run, waited on for at most `timeout`: whether it succeeded, and stdout and stderr
-/// together — which of the two `winget` writes an error to is not something to lean on.
-fn run(winget: &Path, args: &[&str], timeout: Duration) -> (bool, String) {
-    let child = hidden_command(winget)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
+/// The batch text, as one string from one function: the app runs it and the installer's engines
+/// page writes it, and the parity between them is what the text being here buys.
+///
+/// The retry is inside it rather than in either caller, and so is the reason it is a console
+/// window's business: `winget` prints why it failed, and only a window that stays up long enough
+/// to be read says it. `%ERRORLEVEL%` is read after the `if` block rather than inside it, where
+/// batch would have expanded it before the block ran. The redirect comes before the `echo`
+/// because `echo %ERRORLEVEL%> file` is a handle-`0` redirect with no output at all the moment
+/// the code is a single digit.
+fn script(winget: &Path, id: &str, rc: &Path) -> String {
+    let install = format!(
+        " install -e --id {id} --source winget --silent --accept-package-agreements \
+         --accept-source-agreements --disable-interactivity"
+    );
 
-    let Ok(child) = child else {
-        return (
-            false,
-            format!("winget could not be started: {}", winget.display()),
-        );
-    };
-
-    let Some(output) = wait_bounded(child, timeout) else {
-        return (
-            false,
-            "winget did not finish within the time it was given and was ended.".to_string(),
-        );
-    };
-
-    let mut said = String::from_utf8_lossy(&output.stdout).into_owned();
-    said.push_str(&String::from_utf8_lossy(&output.stderr));
-
-    (output.status.success(), said)
+    [
+        "@echo off".to_string(),
+        format!("title Rust Hover Preview - installing {id}"),
+        format!("\"{}\"{install}", winget.display()),
+        "if errorlevel 1 (".to_string(),
+        "    echo.".to_string(),
+        "    echo First attempt failed. Updating the winget sources and retrying once.".to_string(),
+        "    echo.".to_string(),
+        format!("    \"{}\" source update", winget.display()),
+        format!("    \"{}\"{install}", winget.display()),
+        ")".to_string(),
+        format!("> \"{}\" echo %ERRORLEVEL%", rc.display()),
+        "echo.".to_string(),
+        "echo Finished. This window can be closed.".to_string(),
+        "pause >nul".to_string(),
+    ]
+    .join("\r\n")
+        + "\r\n"
 }
 
-/// Wait for a child, giving up after `timeout` — the same wait `video_probe` makes for a probe, for
-/// a program whose deadline is measured in minutes: a child still running at the deadline is killed
-/// before anything is read of it, and what it left behind is not read at all.
-fn wait_bounded(mut child: Child, timeout: Duration) -> Option<Output> {
-    let handle = HANDLE(child.as_raw_handle());
-    let waited = unsafe { WaitForSingleObject(handle, timeout.as_millis() as u32) };
+/// Start the script in a console of its own, and answer with the exit code it left behind — or
+/// nothing where the window went before it wrote one.
+///
+/// There is no deadline of this side's: the user is watching the install, closing the window is
+/// the way to end it, and a timeout would end an install nobody wanted ended.
+fn run(winget: &Path, id: &str) -> Option<i32> {
+    let (path, rc) = paths(id);
 
-    if waited == WAIT_TIMEOUT {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
+    // A stale `.rc` would be read as this install's answer the moment it appeared.
+    let _ = std::fs::remove_file(&rc);
+    std::fs::write(&path, script(winget, id, &rc)).ok()?;
+
+    let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+
+    let mut child = Command::new(comspec)
+        .arg("/c")
+        .arg(&path)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+        .ok()?;
+
+    loop {
+        // A code that does not read back yet is a file still being written, and one more look is
+        // cheaper than a failure read off half of it.
+        if let Ok(text) = std::fs::read_to_string(&rc) {
+            if let Ok(code) = text.trim().parse() {
+                return Some(code);
+            }
+        }
+
+        if let Ok(Some(_)) = child.try_wait() {
+            return None;
+        }
+
+        std::thread::sleep(POLL);
     }
-
-    child.wait_with_output().ok()
-}
-
-/// Whether winget's own words say the sources are what failed — a code from the source half of its
-/// `0x8a1500xx` range, or a line naming a source. Loose on purpose: what a false positive costs is
-/// one `source update` and one more attempt, where a false negative costs the retry that would have
-/// repaired a stale index.
-fn source_flavoured(said: &str) -> bool {
-    let said = said.to_ascii_lowercase();
-
-    said.contains("source") || said.contains("0x8a150")
-}
-
-/// The end of what `winget` said, which is where its errors are.
-fn tail(said: &str) -> String {
-    let lines: Vec<&str> = said
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.trim().is_empty())
-        .collect();
-
-    lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n")
 }
 
 /// Point this process's `PATH` at the one the machine has now, machine values first and this user's
@@ -428,33 +419,37 @@ mod tests {
         assert_eq!(expand("%unterminated", &named), "%unterminated");
     }
 
-    /// What is shown for an install that failed is the end of what winget said, which is where its
-    /// errors are.
+    /// The script is the whole contract this app has with the installer's engines page, which
+    /// writes the same text: the package, both attempts, the source, and where the exit code is
+    /// left. Admin rights, elevation and interactivity are the package's own business.
     #[test]
-    fn the_output_tail_keeps_the_last_lines_that_say_anything() {
-        let said: String = (1..=20)
-            .map(|line| format!("line {line}\r\n"))
-            .collect::<String>()
-            + "0x8a15000f : no source\n";
+    fn the_script_carries_the_package_both_installs_and_where_the_code_is_left() {
+        let winget = Path::new("S:\\winget\\winget.exe");
+        let rc = Path::new("S:\\temp\\rust-hover-preview-winget-Gyan.FFmpeg.rc");
 
-        let shown = tail(&said);
-        let lines: Vec<&str> = shown.lines().collect();
+        let script = script(winget, "Gyan.FFmpeg", rc);
+        let written = script.to_ascii_lowercase();
 
-        assert_eq!(lines.len(), TAIL_LINES);
-        assert_eq!(lines.last(), Some(&"0x8a15000f : no source"));
-        assert_eq!(tail(""), "", "an install that said nothing shows nothing");
-    }
-
-    /// A failure over the sources is the one that is retried, and it is recognised by winget's own
-    /// words: that retry is what repairs a stale index without elevation or a source being removed.
-    #[test]
-    fn a_failure_winget_blames_on_its_sources_is_the_one_that_is_retried() {
-        assert!(source_flavoured(
-            "Failed when searching source; results will not be included"
-        ));
-        assert!(source_flavoured("0x8a15000F : the source data is missing"));
-        assert!(!source_flavoured(
-            "Installer failed with exit code: 1603 (the package is already installed)"
-        ));
+        assert_eq!(written.matches("--id gyan.ffmpeg").count(), 2);
+        assert_eq!(written.matches("--source winget").count(), 2);
+        assert_eq!(
+            written
+                .matches("\"s:\\winget\\winget.exe\" install")
+                .count(),
+            2
+        );
+        assert!(
+            written.contains("if errorlevel 1"),
+            "the retry is the script's"
+        );
+        assert!(
+            written.contains("source update"),
+            "and so is the source update"
+        );
+        assert!(written.contains("s:\\temp\\rust-hover-preview-winget-gyan.ffmpeg.rc"));
+        assert!(
+            script.is_ascii(),
+            "cmd reads a batch file in its own codepage"
+        );
     }
 }
