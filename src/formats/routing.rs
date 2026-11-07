@@ -765,9 +765,9 @@ fn claim_document(
 /// the 2D sheet, and the render engine is the other way round. Which of the two a file is, is what
 /// it holds (see `model_formats::dxf`), so a drawing of a mesh is left to [`claim_models`] and a
 /// drafting sheet is claimed here. It is only left where that claim can actually draw it — the
-/// engine installed, and the name still in its list — because a file turned down here and claimed
-/// by nothing is a sheet nothing shows. A name the caller has only a name for is the render
-/// engine's, since the body that settles it is not read (see [`Asked`]).
+/// engine installed, the name still in its list, and the tray's `3D` gate open — because a file
+/// turned down here and claimed by nothing is a sheet nothing shows. A name the caller has only a
+/// name for is the render engine's, since the body that settles it is not read (see [`Asked`]).
 fn claim_libre(
     path: &Path,
     config: &AppConfig,
@@ -778,9 +778,13 @@ fn claim_libre(
         return None;
     }
 
+    // The tray's own `3D` gate is the fourth term, which no other claim asks: a drawing the gate
+    // has switched off is still a sheet the render engine can draw, and the viewer's half of it is
+    // a preview nobody asked for.
     let the_viewers = asked == Asked::File
         && lists::F3D.claims(path, config)
         && f3d_render::available_in(config)
+        && PreviewType::Models.enabled_in(config)
         && model_formats::claims_content(path, entry);
 
     (!the_viewers).then_some(PreviewType::Libre)
