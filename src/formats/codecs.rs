@@ -76,6 +76,17 @@ const PDF_ENGINE_CLASS: &str =
 const HEIF_MIME_TYPES: &[&str] = &["image/heic", "image/heif"];
 const AVIF_MIME_TYPES: &[&str] = &["image/avif"];
 const JXL_MIME_TYPES: &[&str] = &["image/jxl"];
+const WEBP_MIME_TYPES: &[&str] = &["image/webp"];
+
+/// The names the Raw Image Extension claims its decoders under. The extension answers for the
+/// extensions of a file rather than for one MIME type per camera — a `.nef` and a `.cr3` are the
+/// same decoder to it — so a raw is asked about by the names the raws in `[image]` are written
+/// with, which is the list the picture codec's own file-extension answer is matched against.
+const RAW_EXTENSIONS: &[&str] = &[
+    "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "k25", "kdc", "mef",
+    "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw",
+    "x3f",
+];
 
 /// What a decoder may be registered as. The transcode-only and post-process flags are
 /// left out: neither is a decoder a preview could play a file through.
@@ -106,6 +117,9 @@ const AV1_PAGE: &str = "https://apps.microsoft.com/detail/9MVZQVXJBQ9V";
 const THEORA_PAGE: &str = "https://apps.microsoft.com/detail/9N5TDP8VCMHS";
 const HEIF_PAGE: &str = "https://apps.microsoft.com/detail/9PMMSR1CGPWG";
 const JXL_PAGE: &str = "https://apps.microsoft.com/detail/9MZPRTH5C0TB";
+const WEBP_PAGE: &str = "https://apps.microsoft.com/detail/9PG2DK419DRG";
+/// The one Store package that decodes every camera raw, from `3fr` to `x3f`.
+const RAW_PAGE: &str = "https://apps.microsoft.com/detail/9NCTDW2W1BH8";
 const LIBREOFFICE_PAGE: &str = "https://www.libreoffice.org/download/";
 const IMAGEMAGICK_PAGE: &str = "https://imagemagick.org/download/";
 const PEAZIP_PAGE: &str = "https://peazip.github.io/peazip-64bit.html";
@@ -314,10 +328,17 @@ pub fn audio() -> Vec<Row> {
 /// what the two do not share is the compression inside it — HEVC for one, AV1 for the
 /// other — which is why each asks for the container *and* its own decoder. It is the
 /// two-package answer the README gives, asked of the machine rather than told to it.
+///
+/// WebP and the camera raws are the two rows the README calls optional, and the two the app
+/// could preview without: a still WebP is decoded by the libwebp in the binary and a raw by an
+/// installed ImageMagick. They are rows all the same, because a row is a fact about the machine
+/// rather than about the app, and a missing one carries the page its extension is installed from.
 pub fn images() -> Vec<Row> {
     let heif = image_codec(HEIF_MIME_TYPES);
     let hevc = video_decoder(&MFVideoFormat_HEVC);
     let av1 = video_decoder(&MFVideoFormat_AV1);
+    let webp = image_codec(WEBP_MIME_TYPES);
+    let raw = image_codec_extension(RAW_EXTENSIONS);
 
     let heif_available = heif && hevc;
     let avif_available = image_codec(AVIF_MIME_TYPES) || (heif && av1);
@@ -358,15 +379,26 @@ pub fn images() -> Vec<Row> {
             link: Some(JXL_PAGE),
             winget: None,
         },
-        // The one picture here that needs nothing: this app carries its own libwebp,
-        // which is what plays an animated one and what decodes a still one where the
-        // codec is missing. The row stands for an engine that is in the binary, so it is
-        // always there — and it is listed so that the group reads as the whole of what a
-        // picture can be.
+        // The one picture here this app could show without any codec at all: it carries its
+        // own libwebp, which plays an animated one and decodes a still one where the codec is
+        // missing. The row still asks the machine rather than answering for itself, because
+        // what the group is a list of is what the machine has — and the README names the
+        // extension as optional, which is what a missing row's page says (see `WEBP_PAGE`).
         Row {
             name: "WebP",
-            available: true,
-            link: None,
+            available: webp,
+            link: Some(WEBP_PAGE),
+            winget: None,
+        },
+        // One row for every camera raw, because one package decodes them all: the Raw Image
+        // Extension answers for the whole list from `3fr` to `x3f`. Like WebP it is optional —
+        // an installed ImageMagick develops a raw without it, and is the reader the app leans
+        // on where the codec is missing (see `imagemagick_render`) — and a row that is missing
+        // is offered the page the extension is installed from.
+        Row {
+            name: "Camera Raw (3FR\u{2013}X3F)",
+            available: raw,
+            link: Some(RAW_PAGE),
             winget: None,
         },
     ]
@@ -914,14 +946,37 @@ fn image_codec(mime_types: &'static [&'static str]) -> bool {
         return answer;
     }
 
-    let answer = enumerate_image_codec(mime_types);
+    let answer =
+        any_image_component(|info| mime_types.iter().any(|mime| component_reports(info, mime)));
     remember_probed_codec(key, answer);
     answer
 }
 
-/// The walk of the imaging factory's components itself, asked of the machine where
-/// the answer the process keeps does not already hold it.
-fn enumerate_image_codec(mime_types: &'static [&'static str]) -> bool {
+/// Whether a WIC codec claims one of `extensions`, asked the way the MIME question above is and
+/// kept the same way.
+///
+/// It is a second question rather than a second list of MIME types because the Raw Image
+/// Extension does not name a raw by its MIME type alone: what it answers with is the file
+/// extensions it decodes, one decoder covering every camera's own container. Asking it that way
+/// answers for a machine with the extension installed and for one without, and asks nothing of
+/// any file.
+fn image_codec_extension(extensions: &'static [&'static str]) -> bool {
+    let key = ProbedCodec::ImageExtensions(extensions.first().copied().unwrap_or(""));
+    if let Some(answer) = probed_codec(&key) {
+        return answer;
+    }
+
+    let answer = any_image_component(|info| component_claims_any(info, extensions));
+    remember_probed_codec(key, answer);
+    answer
+}
+
+/// The walk of the imaging factory's components itself, asking each one whether it is the codec
+/// that was asked for, and stopping at the first that is.
+///
+/// It is the walk the MIME question and the file-extension question share: what they disagree
+/// about is which field of a component answers, not how the components are listed.
+fn any_image_component(claims: impl Fn(&IWICBitmapCodecInfo) -> bool) -> bool {
     // The imaging factory is a COM object, so the thread asking for it has to be in an
     // apartment. This is asked here rather than left to whichever probe ran first: the
     // three groups are three calls, and a caller is free to ask for this one alone.
@@ -953,7 +1008,7 @@ fn enumerate_image_codec(mime_types: &'static [&'static str]) -> bool {
                 continue;
             };
 
-            if mime_types.iter().any(|mime| component_reports(&info, mime)) {
+            if claims(&info) {
                 return true;
             }
         }
@@ -974,20 +1029,52 @@ fn component_reports(info: &IWICBitmapCodecInfo, mime: &str) -> bool {
         return false;
     }
 
+    reported_list(&buffer, written)
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(mime))
+}
+
+/// Whether one component's own file extensions include any of `extensions`, dot and all or
+/// neither — the Raw Image Extension writes them as `.nef,.cr3,…` while the question here is
+/// asked with the bare name a file is called by. The list is read once per component rather than
+/// once per name, since a raw is asked about by every name its cameras write.
+fn component_claims_any(info: &IWICBitmapCodecInfo, extensions: &[&str]) -> bool {
+    let mut buffer = [0u16; 1024];
+    let mut written: u32 = 0;
+
+    if unsafe { info.GetFileExtensions(&mut buffer, &mut written) }.is_err() {
+        return false;
+    }
+
+    let reported = reported_list(&buffer, written);
+
+    reported.iter().any(|entry| {
+        let entry = entry.trim_start_matches('.');
+        extensions
+            .iter()
+            .any(|extension| entry.eq_ignore_ascii_case(extension))
+    })
+}
+
+/// The entries one component reported, out of the buffer it wrote them into: one comma-separated
+/// list whose end is the terminator the codec wrote.
+///
+/// A component reports what it claims as one comma-separated list — the HEIF extension answers
+/// with `image/heic,image/heif,image/avci,…` and a JPEG one with `image/jpeg,image/jpe,image/jpg`
+/// — so a match is against a whole entry rather than against the string. The comparison is
+/// case-insensitive because the names are not written the same way twice: the JPEG XL codec
+/// reports `image/JXL`.
+fn reported_list(buffer: &[u16], written: u32) -> Vec<String> {
     let end = buffer
         .iter()
         .position(|unit| *unit == 0)
-        .unwrap_or(buffer.len());
-    let reported = String::from_utf16_lossy(&buffer[..end]);
+        .unwrap_or(buffer.len())
+        .min(written as usize);
 
-    // A component reports the types it claims as one comma-separated list — the HEIF
-    // extension answers with `image/heic,image/heif,image/avci,…` and a JPEG one with
-    // `image/jpeg,image/jpe,image/jpg` — so a match is against a whole entry rather than
-    // against the string. The comparison is case-insensitive because the names are not
-    // written the same way twice: the JPEG XL codec reports `image/JXL`.
-    reported
+    String::from_utf16_lossy(&buffer[..end])
         .split(',')
-        .any(|entry| entry.trim().eq_ignore_ascii_case(mime))
+        .map(|entry| entry.trim().to_string())
+        .collect()
 }
 
 /// Whether an application that answers to `prog_id` is registered, which is the same
@@ -1054,6 +1141,10 @@ enum ProbedCodec {
     /// A picture codec, named by the first of the MIME types it is asked about — the
     /// one each set asked of it begins with, and the one no other set does.
     Image(&'static str),
+    /// A picture codec asked about by the file extensions it claims, named by the first of
+    /// them for the same reason — kept apart from the MIME answer above, since the two are
+    /// two questions about the same component.
+    ImageExtensions(&'static str),
 }
 
 /// The answers the machine's media stack has already given, for the rest of the
@@ -1125,6 +1216,34 @@ mod tests {
                     .link
                     .is_some_and(|link| link.contains("apps.microsoft.com"))),
             "the Store's codec rows are still rows no install is offered for"
+        );
+    }
+
+    /// The picture group is the whole of what the README says a still leans on: every row is a
+    /// Store extension the app cannot install itself, so a row a machine is missing has the page
+    /// it is installed from — the camera raws and WebP included, optional as they are.
+    #[test]
+    fn every_picture_row_a_machine_is_missing_offers_its_page() {
+        let rows = images();
+
+        for row in &rows {
+            assert!(row.winget.is_none(), "{} is no engine", row.name);
+            assert!(
+                row.available || row.link.is_some(),
+                "{} is missing with nowhere to get it from",
+                row.name
+            );
+        }
+
+        assert!(
+            rows.iter()
+                .any(|row| row.name.starts_with("Camera Raw") && row.link == Some(RAW_PAGE)),
+            "the camera raws are one row, and it opens the Raw Image Extension's page"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.name == "WebP" && row.link == Some(WEBP_PAGE)),
+            "the WebP row asks the machine and opens its own extension's page"
         );
     }
 
