@@ -292,9 +292,14 @@ The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its ins
 `dxf` is the one name in two lists, and the file itself says which: a drawing holding 3D geometry — a `3DFACE`, or a `POLYLINE` marked as a 3D one, a mesh or a polyface — is drawn here, and every other drawing is a 2D sheet this app hands to LibreOffice, which imports it whole where f3d would draw nothing. A drawing whose 3D geometry sits past the first 256 KB of the file stays the sheet's, so a hover stays fast. Without f3d installed, `dxf` is LibreOffice's alone.
 
 > [!WARNING]
-> If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
+> `winget` keeps its sources and its state in your own profile — `%LOCALAPPDATA%\Microsoft\WinGet` — so every step below is run from your own Terminal, and none of them as an administrator: an elevated window belongs to whichever administrator account it was opened from, so it repairs that account's sources rather than yours, or finds none at all.
 >
-> If that is refused as well, open **Terminal as administrator** (right-click the Start button → *Terminal (Admin)*) and run the same command from there.
+> 1. Read what actually failed: `winget source list`.
+> 2. Close every other `winget` window — an install or an update holding the sources is enough to fail the next one — and try again.
+> 3. Rebuild the sources this downloads from: `winget source remove --name msstore`, then `winget source update`. If the default source is the one failing, `winget source remove --name winget`, then `winget source add --name winget https://cdn.winget.microsoft.com/cache`, then `winget source update`.
+> 4. Still failing: close every `winget` window and rename `%LOCALAPPDATA%\Microsoft\WinGet\State` to `State.bak`. The next run rebuilds it. Your installed programs are untouched; what goes is the cached index and `winget`'s own ledger of what it installed, which it rebuilds from the registry.
+>
+> `winget source reset --force` is not the way back from this: it re-adds and re-downloads the whole index, so it fails for every network and certificate reason as well, and — since the sources live in your profile — running it elevated changes nothing at all.
 
 ## Usage
 
