@@ -22,7 +22,7 @@
 //! and the one for Office would leave an application running behind a menu.
 
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -111,6 +111,18 @@ const IMAGEMAGICK_PAGE: &str = "https://imagemagick.org/download/";
 const PEAZIP_PAGE: &str = "https://peazip.github.io/peazip-64bit.html";
 const CALIBRE_PAGE: &str = "https://calibre-ebook.com/download_windows";
 
+/// The `winget` package id of each engine this app can install itself, kept beside the pages for
+/// the same reason those are: one table says where a missing engine is got from, along both roads
+/// a row offers — the page a browser opens, and the install a background `winget` runs. A Store
+/// package has no id here: installing one needs the Store's own context, which this app has no way
+/// to stand in for.
+const MPV_WINGET: &str = "shinchiro.mpv";
+const FFMPEG_WINGET: &str = "Gyan.FFmpeg";
+const LIBREOFFICE_WINGET: &str = "TheDocumentFoundation.LibreOffice";
+const IMAGEMAGICK_WINGET: &str = "ImageMagick.ImageMagick";
+const PEAZIP_WINGET: &str = "Giorgiotani.Peazip";
+const CALIBRE_WINGET: &str = "calibre.calibre";
+
 /// One row of the tray's `Codecs` submenu: what the engine or codec is called, whether this
 /// machine has it, and where it is got from where it does not.
 pub struct Row {
@@ -122,6 +134,11 @@ pub struct Row {
     /// for the two picture formats that arrive in two packages, the page of whichever package
     /// this machine is missing.
     pub link: Option<&'static str>,
+    /// The `winget` package that installs it, where this app knows of one: what the `Codecs →
+    /// Install` submenu offers, and the only rows that submenu lists. `None` for a codec or a
+    /// component this app cannot install itself — the Store's extensions and Windows' own parts
+    /// alike.
+    pub winget: Option<&'static str>,
 }
 
 /// The engines and the codecs a video preview leans on.
@@ -138,23 +155,27 @@ pub fn video() -> Vec<Row> {
         // installer itself (see `MPV_PAGE`).
         Row {
             name: "MPV",
-            available: mpv_available(),
+            available: mpv_available() || installed_by_winget(MPV_WINGET),
             link: Some(MPV_PAGE),
+            winget: Some(MPV_WINGET),
         },
         Row {
             name: "FFmpeg (ffplay)",
-            available: ffplay_available(),
+            available: ffplay_available() || installed_by_winget(FFMPEG_WINGET),
             link: Some(FFMPEG_PAGE),
+            winget: Some(FFMPEG_WINGET),
         },
         Row {
             name: "Windows Media Foundation",
             available: mf_started(),
             link: None,
+            winget: None,
         },
         Row {
             name: "H.264",
             available: video_decoder(&MFVideoFormat_H264),
             link: None,
+            winget: None,
         },
         // One row for the two, because one decoder answers for both: Windows' MPEG-4
         // Part 2 decoder is what plays a DivX or Xvid file as well.
@@ -162,31 +183,37 @@ pub fn video() -> Vec<Row> {
             name: "MPEG-4 / WMV",
             available: video_decoder(&MFVideoFormat_MP4V) || video_decoder(&MFVideoFormat_WMV3),
             link: None,
+            winget: None,
         },
         Row {
             name: "MPEG-2",
             available: video_decoder(&MFVideoFormat_MPEG2),
             link: Some(MPEG2_PAGE),
+            winget: None,
         },
         Row {
             name: "HEVC (H.265)",
             available: video_decoder(&MFVideoFormat_HEVC),
             link: Some(HEVC_PAGE),
+            winget: None,
         },
         Row {
             name: "VP9",
             available: video_decoder(&MFVideoFormat_VP90),
             link: Some(VP9_PAGE),
+            winget: None,
         },
         Row {
             name: "AV1",
             available: video_decoder(&MFVideoFormat_AV1),
             link: Some(AV1_PAGE),
+            winget: None,
         },
         Row {
             name: "Theora (Ogg)",
             available: video_decoder(&MFVideoFormat_Theora),
             link: Some(THEORA_PAGE),
+            winget: None,
         },
     ]
 }
@@ -207,18 +234,21 @@ pub fn audio() -> Vec<Row> {
     vec![
         Row {
             name: "FFmpeg (ffplay)",
-            available: ffplay_available(),
+            available: ffplay_available() || installed_by_winget(FFMPEG_WINGET),
             link: Some(FFMPEG_PAGE),
+            winget: Some(FFMPEG_WINGET),
         },
         Row {
             name: "Windows Media Foundation",
             available: mf_started(),
             link: None,
+            winget: None,
         },
         Row {
             name: "MP3",
             available: audio_decoder(&MFAudioFormat_MP3),
             link: None,
+            winget: None,
         },
         // One row for the two spellings of AAC, because one decoder answers for both: an
         // `.aac` file is the raw stream and an `.m4a` the same codec in a container.
@@ -226,6 +256,7 @@ pub fn audio() -> Vec<Row> {
             name: "AAC / M4A",
             available: audio_decoder(&MFAudioFormat_AAC) || audio_decoder(&MFAudioFormat_ADTS),
             link: None,
+            winget: None,
         },
         // And one for the WMA family, whose three decoders are one format to a person.
         Row {
@@ -234,16 +265,19 @@ pub fn audio() -> Vec<Row> {
                 || audio_decoder(&MFAudioFormat_WMAudioV9)
                 || audio_decoder(&MFAudioFormat_WMAudio_Lossless),
             link: None,
+            winget: None,
         },
         Row {
             name: "FLAC",
             available: audio_decoder(&MFAudioFormat_FLAC),
             link: None,
+            winget: None,
         },
         Row {
             name: "ALAC",
             available: audio_decoder(&MFAudioFormat_ALAC),
             link: None,
+            winget: None,
         },
         // The one row here that is a package rather than something Windows ships: Vorbis and
         // Opus are the Ogg family's audio half, and the extension that carries Theora carries
@@ -252,16 +286,19 @@ pub fn audio() -> Vec<Row> {
             name: "Vorbis & Opus (Ogg)",
             available: audio_decoder(&MFAudioFormat_Vorbis) || audio_decoder(&MFAudioFormat_Opus),
             link: Some(THEORA_PAGE),
+            winget: None,
         },
         Row {
             name: "Dolby Digital (AC-3)",
             available: audio_decoder(&MFAudioFormat_Dolby_AC3),
             link: None,
+            winget: None,
         },
         Row {
             name: "DTS",
             available: audio_decoder(&MFAudioFormat_DTS),
             link: None,
+            winget: None,
         },
     ]
 }
@@ -296,6 +333,7 @@ pub fn images() -> Vec<Row> {
             } else {
                 Some(HEVC_PAGE)
             },
+            winget: None,
         },
         Row {
             name: "AVIF",
@@ -308,11 +346,13 @@ pub fn images() -> Vec<Row> {
             } else {
                 Some(AV1_PAGE)
             },
+            winget: None,
         },
         Row {
             name: "JPEG XL",
             available: image_codec(JXL_MIME_TYPES),
             link: Some(JXL_PAGE),
+            winget: None,
         },
         // The one picture here that needs nothing: this app carries its own libwebp,
         // which is what plays an animated one and what decodes a still one where the
@@ -323,6 +363,7 @@ pub fn images() -> Vec<Row> {
             name: "WebP",
             available: true,
             link: None,
+            winget: None,
         },
     ]
 }
@@ -336,26 +377,35 @@ pub fn engines() -> Vec<Row> {
             name: "WebView2 Runtime",
             available: crate::engines::webview_preview::is_available(),
             link: None,
+            winget: None,
         },
         Row {
             name: "LibreOffice",
-            available: crate::engines::libreoffice_render::available(),
+            available: crate::engines::libreoffice_render::available()
+                || installed_by_winget(LIBREOFFICE_WINGET),
             link: Some(LIBREOFFICE_PAGE),
+            winget: Some(LIBREOFFICE_WINGET),
         },
         Row {
             name: "ImageMagick",
-            available: crate::engines::imagemagick_render::available(),
+            available: crate::engines::imagemagick_render::available()
+                || installed_by_winget(IMAGEMAGICK_WINGET),
             link: Some(IMAGEMAGICK_PAGE),
+            winget: Some(IMAGEMAGICK_WINGET),
         },
         Row {
             name: "PeaZip",
-            available: crate::engines::peazip_render::available(),
+            available: crate::engines::peazip_render::available()
+                || installed_by_winget(PEAZIP_WINGET),
             link: Some(PEAZIP_PAGE),
+            winget: Some(PEAZIP_WINGET),
         },
         Row {
             name: "Calibre",
-            available: crate::engines::calibre_render::available(),
+            available: crate::engines::calibre_render::available()
+                || installed_by_winget(CALIBRE_WINGET),
             link: Some(CALIBRE_PAGE),
+            winget: Some(CALIBRE_WINGET),
         },
         // The Office applications are the one group here with no page to open: they are not
         // free downloads, so a row that is missing one stays a row that cannot be picked.
@@ -363,21 +413,25 @@ pub fn engines() -> Vec<Row> {
             name: "Microsoft Word",
             available: prog_id_installed("Word.Application"),
             link: None,
+            winget: None,
         },
         Row {
             name: "Microsoft Excel",
             available: prog_id_installed("Excel.Application"),
             link: None,
+            winget: None,
         },
         Row {
             name: "Microsoft PowerPoint",
             available: prog_id_installed("PowerPoint.Application"),
             link: None,
+            winget: None,
         },
         Row {
             name: "Windows PDF Engine",
             available: winrt_class_registered(PDF_ENGINE_CLASS),
             link: None,
+            winget: None,
         },
     ]
 }
@@ -660,6 +714,62 @@ pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
         .into_iter()
         .map(|folder| folder.join(name))
         .find(|program| program.is_file())
+}
+
+/// Where `winget` is, if this machine has one: the alias Windows keeps for it in this user's own
+/// `WindowsApps`, then the `PATH` — the same two places a shell finds it in, and nothing spawned to
+/// ask (see `find_program`).
+///
+/// The one question the tray asks before it offers to install anything: no `winget`, no row, and
+/// the `Codecs` rows stay the links they have always been.
+pub fn winget() -> Option<PathBuf> {
+    let alias = std::env::var_os("LOCALAPPDATA").map(|root| {
+        Path::new(&root)
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("winget.exe")
+    });
+
+    alias
+        .filter(|program| program.is_file())
+        .or_else(|| find_program("winget.exe"))
+}
+
+/// The engines this app knows how to install with `winget`, in the order the tray lists them: the
+/// video rows that carry a package id, then the engine rows that do.
+///
+/// A table of what *can* be installed rather than of what *is* missing, because the `Codecs →
+/// Install` rows are addressed by their position in this list: a list that changed with what the
+/// machine has would make an id mean one engine when the menu was built and another when it was
+/// clicked (see `submenus::install_engine`).
+pub fn installable() -> Vec<Row> {
+    let mut rows = video();
+    rows.extend(engines());
+    rows.retain(|row| row.winget.is_some());
+    rows
+}
+
+/// The package ids `winget` installed during this run, which their rows read as present.
+///
+/// The engines' own probes answer their first question for the life of the process — the folders
+/// LibreOffice, ImageMagick, PeaZip and Calibre install into are looked for once (see
+/// `libreoffice_render::available`) — so an engine installed a minute ago would still be answered
+/// as missing until the next start, which is the one answer this feature exists to avoid.
+static INSTALLED: Lazy<Mutex<HashSet<&'static str>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Record that `winget` has just installed the engine its package id belongs to.
+pub fn note_installed(id: &'static str) {
+    if let Ok(mut installed) = INSTALLED.lock() {
+        installed.insert(id);
+    }
+}
+
+/// Whether this run watched `winget` install the engine behind `id`.
+fn installed_by_winget(id: &str) -> bool {
+    INSTALLED
+        .lock()
+        .map(|installed| installed.contains(id))
+        .unwrap_or(false)
 }
 
 /// Whether a decoder for one compressed video format is registered, asked of the
@@ -958,6 +1068,49 @@ fn remember_probed_codec(key: ProbedCodec, answer: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rows an install is offered for are the engines this app runs and nothing else: a Store
+    /// codec has no package id, one engine is not listed twice, and every row that carries an id
+    /// carries the page its download link opens — the two roads are the same table's.
+    #[test]
+    fn the_installable_rows_are_the_engines_and_no_store_codec() {
+        let rows = installable();
+
+        assert_eq!(
+            rows.iter().map(|row| row.name).collect::<Vec<_>>(),
+            [
+                "MPV",
+                "FFmpeg (ffplay)",
+                "LibreOffice",
+                "ImageMagick",
+                "PeaZip",
+                "Calibre",
+            ],
+            "one row per engine, in the order the `Codecs` groups list them"
+        );
+
+        for row in &rows {
+            assert!(row.winget.is_some(), "{} offers no package", row.name);
+            assert!(row.link.is_some(), "{} offers no page beside it", row.name);
+        }
+
+        let mut ids: Vec<&str> = rows.iter().filter_map(|row| row.winget).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), rows.len(), "no engine is installed twice");
+
+        // A Store codec is a package the Store installs, which is what this app cannot do: the
+        // rows that carry a page and no id are exactly those.
+        assert!(
+            video()
+                .iter()
+                .filter(|row| row.winget.is_none())
+                .any(|row| row
+                    .link
+                    .is_some_and(|link| link.contains("apps.microsoft.com"))),
+            "the Store's codec rows are still rows no install is offered for"
+        );
+    }
 
     /// The order is the promise: beside the app, then every folder on the `PATH`, then the two
     /// install folders — each contributing exactly its own `mpv.exe`. Beside the app and the

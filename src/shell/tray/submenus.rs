@@ -17,15 +17,17 @@ use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
     BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, DDS_BACKGROUND_CHOICES, DOCUMENT_SCALE_CHOICES,
     ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE, ID_TRAY_AUDIO_SEEK_BASE,
-    ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_MPV_BASE,
-    ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY,
-    ID_TRAY_PIN_NAV_IMAGE_ALL, ID_TRAY_PIN_NAV_IMAGE_CATEGORY, ID_TRAY_PIN_NAV_OTHERS_ALL,
-    ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_VIDEO_CATEGORY,
-    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, PIN_END_OF_FILE_CHOICES,
-    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES, ZOOM_BACKGROUND_CHOICES,
+    ID_TRAY_CODEC_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
+    ID_TRAY_INSTALL_BASE, ID_TRAY_MPV_BASE, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
+    ID_TRAY_PIN_NAV_AUDIO_ALL, ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_IMAGE_ALL,
+    ID_TRAY_PIN_NAV_IMAGE_CATEGORY, ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY,
+    ID_TRAY_PIN_NAV_VIDEO_ALL, ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_VIDEO_ENGINE_BASE,
+    ID_TRAY_VIDEO_ENGINE_FALLBACK, PIN_END_OF_FILE_CHOICES, TICK_CHOICES_MS,
+    TIMING_DELAY_CHOICES_MS, VIDEO_ENGINE_CHOICES, ZOOM_BACKGROUND_CHOICES,
 };
 
 use crate::app::dialogs;
+use crate::app::winget;
 use crate::config::config::{
     AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
     PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
@@ -40,9 +42,9 @@ use crate::CONFIG;
 use std::path::{Path, PathBuf};
 use windows::core::{w, PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, HMENU, MENU_ITEM_FLAGS, MFT_RADIOCHECK,
-    MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    MF_UNCHECKED,
+    AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, DestroyMenu, HMENU, MENU_ITEM_FLAGS,
+    MFT_RADIOCHECK, MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED,
 };
 
 /// The mark a row of a menu where exactly one answer is in force carries instead of the tick:
@@ -1337,9 +1339,12 @@ pub(super) fn append_engine_idle_menu(
 /// nothing — there is nothing to do about a thing the machine already has. A row that is
 /// not there is greyed and cannot be picked at all where there is nowhere to send anyone,
 /// and is pickable where the README names a page for it: picking one asks whether to open
-/// that page, which is the whole of what this submenu does. The app installs nothing and
-/// fetches nothing for it — what a yes hands over is a link, and the browser the user
-/// already has is what opens it (see `open_codec_page`).
+/// that page, which is the whole of what this submenu does. What a yes hands over is a link,
+/// and the browser the user already has is what opens it (see `open_codec_page`).
+///
+/// The one thing this submenu can install is the `Install` group beside the four above, and
+/// only where `winget` is here to install with: it runs one package install in the background
+/// and never fetches a page (see `append_install_menu`).
 ///
 /// A Windows item cannot be both normal-looking and unpickable, so the rows that are
 /// present are made inert by having no id at all rather than by being disabled, and the
@@ -1364,6 +1369,12 @@ pub(super) fn append_codecs_menu(menu: HMENU) {
     append_codec_group(codecs_menu, w!("Images"), images, images_base);
     append_codec_group(codecs_menu, w!("Engines"), codecs::engines(), engines_base);
 
+    // Offered only where there is a `winget` to install with: without one the submenu is absent
+    // rather than empty, and every row above is the link it has always been.
+    if codecs::winget().is_some() {
+        append_install_menu(codecs_menu);
+    }
+
     let _ = unsafe {
         AppendMenuW(
             menu,
@@ -1372,6 +1383,93 @@ pub(super) fn append_codecs_menu(menu: HMENU) {
             w!("Codecs"),
         )
     };
+}
+
+/// The `Codecs → Install` submenu: one row per engine this app can install with `winget`, listing
+/// the engines this machine is missing.
+///
+/// Its ids are positions in `codecs::installable`, a table of what can be installed rather than of
+/// what is missing, so a row's id still names the same engine after an install has removed it from
+/// the list (see `install_engine`). Where an install is in flight, its row says so and no row can be
+/// picked: one install at a time is the whole of the guard (see `winget::install`). A machine that
+/// has every engine here gets no submenu at all, since it has nothing to install.
+fn append_install_menu(parent: HMENU) {
+    let in_flight = winget::in_flight();
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let mut listed = 0;
+
+    for (index, row) in codecs::installable().iter().enumerate() {
+        if row.available {
+            continue;
+        }
+
+        let Some(package) = row.winget else {
+            continue;
+        };
+
+        listed += 1;
+
+        let (label, pickable) = install_row(row.name, package, in_flight);
+
+        let flags = if pickable {
+            MF_STRING
+        } else {
+            MF_STRING | MF_GRAYED
+        };
+
+        let id = if pickable {
+            ID_TRAY_INSTALL_BASE + index as u16
+        } else {
+            0
+        };
+
+        append_labeled_item(menu, flags, id, &label);
+    }
+
+    if listed == 0 {
+        let _ = unsafe { DestroyMenu(menu) };
+        return;
+    }
+
+    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Install")) };
+}
+
+/// What one row of the `Codecs → Install` submenu reads as, and whether it can be picked: the
+/// engine being installed says so, and while one is nothing can be picked — one install at a time
+/// is the whole of the guard.
+///
+/// Pure so that both halves of it are checked without a menu: the row in flight is the only one that
+/// says it is, and no row is pickable while it is.
+pub(super) fn install_row(name: &str, package: &str, in_flight: Option<&str>) -> (String, bool) {
+    match in_flight {
+        Some(busy) if busy == package => (format!("{name} \u{2014} installing\u{2026}"), false),
+        Some(_) => (name.to_string(), false),
+        None => (name.to_string(), true),
+    }
+}
+
+/// The click on a row of the `Codecs → Install` submenu: ask whether to install the engine, and set
+/// the install going where the answer is yes.
+///
+/// The row is read from the table again rather than kept from the menu build, the same way a page's
+/// row is: what the row says now is what is acted on, so an engine installed by another door in the
+/// meantime is one nothing is installed over.
+pub(super) fn install_engine(index: u16) {
+    let Some(row) = codecs::installable().into_iter().nth(index as usize) else {
+        return;
+    };
+
+    let Some(id) = row.winget else {
+        return;
+    };
+
+    if row.available || winget::in_flight().is_some() {
+        return;
+    }
+
+    if dialogs::confirm_install(row.name, id) {
+        winget::install(&row);
+    }
 }
 
 /// One group of the `Codecs` submenu, with a row per engine or codec in it.

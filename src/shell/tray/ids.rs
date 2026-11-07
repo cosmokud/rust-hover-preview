@@ -22,6 +22,10 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::WM_USER;
 
 pub(super) const WM_TRAYICON: u32 = WM_USER + 1;
+/// What the tray window is told when an engine install its `Codecs → Install` rows started has
+/// finished: the worker has already re-probed and recorded what it installed, and what is left for
+/// this thread is the slot that said one install was in flight (see `winget::settle`).
+pub(super) const WM_TRAY_INSTALL_FINISHED: u32 = WM_USER + 2;
 pub(super) const ID_TRAY_EXIT: u16 = 1001;
 pub(super) const ID_TRAY_STARTUP: u16 = 1002;
 pub(super) const ID_TRAY_ENABLE: u16 = 1003;
@@ -378,6 +382,12 @@ pub(super) const CODEC_COMMANDS: u16 = 64;
 /// out — and is wider than any machine's install list is likely to be.
 pub(super) const ID_TRAY_MPV_BASE: u16 = 1664;
 pub(super) const MPV_COMMANDS: u16 = 8;
+/// The rows of the `Codecs → Install` submenu, one per engine this app can install with `winget`, in
+/// the order `codecs::installable` lists them — a table of what *can* be installed rather than of
+/// what is missing, so an id means the same engine on both sides of a click. It sits past every id
+/// the app hands out (the `… TTL` ranges end at 1726) and is wider than the list is long.
+pub(super) const ID_TRAY_INSTALL_BASE: u16 = 1730;
+pub(super) const INSTALL_COMMANDS: u16 = 6;
 /// The `Pin Mode → Navigation` rows: four anchors — Image, Video, Audio, Others — in menu
 /// order, each with All and Same Category. They sit past every id the app hands out, so no click
 /// is read as another submenu's item (see `PinNavFileTypes`). The old single-pair ids
