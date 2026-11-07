@@ -14,7 +14,7 @@ use super::built_ins::{
     DEFAULT_OFFICE_EXTENSIONS, DEFAULT_PEAZIP_EXTENSIONS, DEFAULT_TEXT_EXTENSIONS,
     DEFAULT_TEXT_NAMES, DEFAULT_VECTOR_EXTENSIONS, DEFAULT_VIDEO_EXTENSIONS,
     DESIGN_EXTENSIONS_BEFORE_AI, DESIGN_EXTENSIONS_BEFORE_CDR_AND_PROCREATE,
-    DESIGN_EXTENSIONS_WITH_CDR, IMAGE_EXTENSIONS_BEFORE_AVCI,
+    DESIGN_EXTENSIONS_WITH_CDR, F3D_EXTENSIONS_BEFORE_DXF, IMAGE_EXTENSIONS_BEFORE_AVCI,
     IMAGE_EXTENSIONS_BEFORE_CODEC_FORMATS, IMAGE_EXTENSIONS_BEFORE_DDS,
     IMAGE_EXTENSIONS_BEFORE_SVG, IMAGE_EXTENSIONS_BEFORE_THE_WIC_SPELLINGS,
     IMAGE_EXTENSIONS_WITH_SVG, LIBRE_EXTENSIONS_WITH_THE_NAMES_THE_ENGINE_CANNOT_READ,
@@ -353,14 +353,16 @@ pub(crate) const CALIBRE: List = List {
 };
 
 /// The `[f3d]` list: the scenes an installed f3d is asked to draw, which are the only preview
-/// of the kind there is — nothing here reads a model.
+/// of the kind there is — nothing here reads a model. It is walked by the repair because a `dxf`
+/// was put into it beside the render engine's own list, and a file holding the list before that is
+/// this app's own rather than an edit.
 pub(crate) const F3D: List = List {
     section: "f3d",
     key: "extensions",
     defaults: DEFAULT_F3D_EXTENSIONS,
-    before: &[],
+    before: &[F3D_EXTENSIONS_BEFORE_DXF],
     entries: Entries::Bare,
-    repaired: false,
+    repaired: true,
     held: |config| &config.f3d_extensions,
     set: |config, list| config.f3d_extensions = list,
 };

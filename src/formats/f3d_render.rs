@@ -8,9 +8,11 @@
 //! What is asked of it is the program the installer writes, `f3d.exe`, run the way a user runs it.
 //! Every name it is asked about is one its own reader list declares — see `lists::F3D` and
 //! `DEFAULT_F3D_EXTENSIONS`, which is that list minus the names another kind of this app has
-//! already claimed — and every file of one of those names is one whose own front says it is the
-//! format the name promises (see `model_formats`), so a picture or a document never pays for a
-//! launch that could not answer.
+//! already claimed, `dxf` aside — and every file of one of those names is one whose own front says
+//! it is the format the name promises (see `model_formats`), so a picture or a document never pays
+//! for a launch that could not answer. A DXF is the name that is both kinds' and the one whose
+//! answer is its body rather than its front: the viewer reads only the 3D half of the format, and
+//! the render engine beside it imports the 2D sheet (see `model_formats::dxf`).
 //!
 //! **What that head check answers is not recorded here**, and the refusal below is unchanged by
 //! it: a file whose front is not a model is never claimed, so the engine is never asked, and the
@@ -22,7 +24,7 @@
 //! desktop. What begins it, waits for its window and dresses it is `f3d_player`, beside the two
 //! players this app already hosts.
 
-use crate::config::config::TransparentBackground;
+use crate::config::config::{AppConfig, TransparentBackground};
 use crate::formats::codecs;
 use once_cell::sync::Lazy;
 use std::ffi::{OsStr, OsString};
@@ -156,6 +158,23 @@ pub fn available() -> bool {
     program().is_some()
 }
 
+/// The same question, of a configuration the caller already holds.
+///
+/// It exists because the machine's half of the answer is cached without the configuration's lock,
+/// and the routing's claims are asked with that lock in hand: `program` takes it, so a claim that
+/// asked `available` would be a lock taken inside one — a deadlock the first time. The path the
+/// setting names is the caller's, and the two installations are this machine's.
+pub fn available_in(config: &AppConfig) -> bool {
+    let (on_path, installed) = installations();
+
+    resolve(
+        Some(Path::new(&config.f3d_path)),
+        on_path.clone(),
+        installed.clone(),
+    )
+    .is_some()
+}
+
 /// Whether f3d has already turned `path` down.
 ///
 /// It never has, and the answer is a constant for a reason worth stating: f3d 4.0.1 was measured
@@ -173,14 +192,25 @@ pub fn refused(_path: &Path) -> bool {
 /// chosen program that is not one of them — a portable copy, a build of their own — is still the
 /// one to run (see `resolve`).
 pub fn program() -> Option<PathBuf> {
-    static FOUND: Lazy<Option<PathBuf>> = Lazy::new(|| {
-        let chosen = crate::CONFIG
-            .lock()
-            .ok()
-            .map(|config| PathBuf::from(&config.f3d_path));
+    let chosen = crate::CONFIG
+        .lock()
+        .ok()
+        .map(|config| PathBuf::from(&config.f3d_path));
 
-        resolve(
-            chosen.as_deref(),
+    let (on_path, installed) = installations();
+
+    resolve(chosen.as_deref(), on_path.clone(), installed.clone())
+}
+
+/// The two installations this machine has, found once: what a `PATH` lookup answers and what the
+/// installer wrote.
+///
+/// Cached apart from the chosen path because they are facts about the machine rather than about
+/// the configuration, and the one caller that must not take that configuration's lock is the one
+/// asking whether there is an engine at all (see `available_in`).
+fn installations() -> &'static (Option<PathBuf>, Option<PathBuf>) {
+    static FOUND: Lazy<(Option<PathBuf>, Option<PathBuf>)> = Lazy::new(|| {
+        (
             // The two places `Command::new` looks in, which f3d is found by on most machines.
             codecs::find_program(F3D_NAME),
             install_folder(std::env::var_os("ProgramFiles").as_deref())
@@ -188,7 +218,7 @@ pub fn program() -> Option<PathBuf> {
         )
     });
 
-    FOUND.clone()
+    &FOUND
 }
 
 /// Which of the three answers to run, in the order they are preferred: the chosen path while it is

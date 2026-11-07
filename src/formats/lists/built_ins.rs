@@ -598,12 +598,18 @@ pub const DEFAULT_CALIBRE_EXTENSIONS: &str =
 ///
 /// What is listed is f3d 4.0.1's own reader list — the names it answers `--list-readers` with —
 /// *minus every name another list of this app's already claims*, because a name sits in exactly one
-/// list and what another kind already draws is a preview with a reader here. Four kinds of name
+/// list and what another kind already draws is a preview with a reader here. Three kinds of name
 /// came out that way: the pictures (`bmp`, `exr`, `hdr`, `jpeg`, `jpg`, `png`, `tga`, `tif`, `tiff`,
 /// `webp`), which a decoder here draws and f3d would only decode again; the scanner's dataset an
-/// installed ImageMagick develops (`dcm`); the drawing and the point cloud the render engine's list
-/// already names (`dxf`, `pcd`); and the container FFmpeg's demuxers have (`drc`). Fourteen names,
-/// and none of them a loss.
+/// installed ImageMagick develops (`dcm`); the point cloud the render engine's list already names
+/// (`pcd`); and the container FFmpeg's demuxers have (`drc`). Thirteen names, and none of them a
+/// loss.
+///
+/// **`dxf` is the one name in two lists**, and it is in this one on purpose: the viewer reads only
+/// the 3D half of the format, and the render engine beside it imports the 2D drafting sheet the
+/// viewer draws nothing of, so which of the two a file is belongs to what it holds rather than to
+/// its name (see `model_formats::dxf` and `routing::claim_models`). Every other name here is in no
+/// other list at all, which is what makes a name in two of them the order's answer.
 ///
 /// Two rules are applied on top of that, and both are this app's rather than the engine's. f3d's
 /// single-character names — `e`, `g` and `x` — are dropped: too broad a claim for a file manager,
@@ -618,6 +624,18 @@ pub const DEFAULT_CALIBRE_EXTENSIONS: &str =
 /// `f3d_render`). `stl`, `3mf`, `gltf` and `ply` — the four names a user's own models are most
 /// often under — are here too, and are the reason the kind exists at all.
 pub const DEFAULT_F3D_EXTENSIONS: &str =
+    "210,3ds,3mf,abc,amf,bin,bpf,brep,cdf,csd,dae,dxf,ex2,exo,fbx,fcstd,glb,gltf,gml,ifc,iges,igs,\
+las,laz,mdl,mha,mhd,nc,ncdf,nhdr,nrrd,obj,off,p21,pic,ply,pts,ptx,qi,sbet,slpk,splat,spz,\
+step,stl,stp,stpnc,usd,usda,usdc,usdz,vdb,vrml,vti,vtk,vtkhdf,vtm,vtp,vtr,vts,vtu,wrl,xbf";
+
+/// The built-in `[f3d]` list as it stood before `dxf` was put in it beside the render engine's own
+/// list.
+///
+/// A file holding exactly these entries is this app's own list rather than a user's edit, so it is
+/// brought up to the list of now — which is what gives an installation that already exists the
+/// drawing the viewer can open. A list a person edited is theirs and is kept as written (see
+/// `repair_older_lists`), which is also what keeps a `dxf` somebody took out of it out.
+pub const F3D_EXTENSIONS_BEFORE_DXF: &str =
     "210,3ds,3mf,abc,amf,bin,bpf,brep,cdf,csd,dae,ex2,exo,fbx,fcstd,glb,gltf,gml,ifc,iges,igs,\
 las,laz,mdl,mha,mhd,nc,ncdf,nhdr,nrrd,obj,off,p21,pic,ply,pts,ptx,qi,sbet,slpk,splat,spz,\
 step,stl,stp,stpnc,usd,usda,usdc,usdz,vdb,vrml,vti,vtk,vtkhdf,vtm,vtp,vtr,vts,vtu,wrl,xbf";

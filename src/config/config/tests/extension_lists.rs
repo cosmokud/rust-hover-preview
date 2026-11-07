@@ -221,6 +221,52 @@ fn an_engine_drawn_kind_is_switched_by_the_kind_it_belongs_to() {
     }
 }
 
+/// The drawing the viewer can open was added to the `[f3d]` list after that list had been written
+/// to files, and a file holding the list of before it is this app's own rather than an edit: it is
+/// brought up to the list of now, which is how an installation that already exists is given the
+/// name — and with it the models, which no other build of this app ever asked the engine about.
+///
+/// A list somebody edited is theirs and is kept exactly as it is, `dxf` taken out of one included:
+/// the repair tells an edit from a list this app wrote by the entries alone, and a name a person
+/// removed is not put back (see `repair_older_lists`).
+#[test]
+fn a_model_list_from_before_the_drawing_was_added_to_it_takes_the_name() {
+    let mut ini = Ini::new();
+    ini.set(
+        lists::F3D.section,
+        "extensions",
+        Some(lists::F3D_EXTENSIONS_BEFORE_DXF.to_string()),
+    );
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.f3d_extensions,
+        lists::sanitize_extension_list(lists::DEFAULT_F3D_EXTENSIONS),
+        "the list this app shipped before the drawing was in it is the list it ships now"
+    );
+    assert!(
+        config.f3d_extensions.contains(&"dxf".to_string()),
+        "and the drawing is the entry that list gained"
+    );
+
+    let edited = format!("gly,{}", lists::F3D_EXTENSIONS_BEFORE_DXF);
+    let mut ini = Ini::new();
+    ini.set(lists::F3D.section, "extensions", Some(edited.clone()));
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.f3d_extensions,
+        lists::sanitize_extension_list(&edited),
+        "an edit is read as the edit it is"
+    );
+    assert!(
+        !config.f3d_extensions.contains(&"dxf".to_string()),
+        "and a drawing somebody took out of their own list is not put back into it"
+    );
+}
+
 /// The models an installed f3d is asked about are a list and a gate of their own, and that gate is
 /// all this app knows about them: nothing here reads a scene, so the list is the whole of what is
 /// asked of the engine and a machine without it has no model preview at all (see `f3d_render`).
