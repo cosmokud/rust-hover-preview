@@ -2,17 +2,13 @@
 ; `[package.metadata.packager.nsis] template` in Cargo.toml. The placeholders
 ; in double braces are filled in by cargo-packager.
 ;
-; This is cargo-packager 0.11.8's own template with four differences:
+; This is cargo-packager 0.11.8's own template with three differences:
 ;   - there is no "Already Installed" page: a previous installation is removed
 ;     automatically, before anything is written, instead of being offered as a
 ;     choice;
 ;   - a running copy of the app is terminated rather than prompted for;
-;   - a page of its own is shown after the shortcuts page, asking whether the
-;     app's settings are to be put back to the defaults this version recommends
-;     (see "Recommended settings page" below). It writes no configuration of its
-;     own: it leaves two files for the app to find, and the app is what puts the
-;     settings back.
-;   - a page of its own is shown after that one, listing the optional engines this
+;   - a page of its own is shown after the shortcuts page, listing the optional
+;     engines this
 ;     app can drive but does not ship, marked with whether this machine already
 ;     has each of them and carrying a link to the page it is installed from where
 ;     it does not (see "Optional engines page" below). It installs nothing and
@@ -161,26 +157,7 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 Var AppStartMenuFolder
 !insertmacro MUI_PAGE_STARTMENU Application $AppStartMenuFolder
 
-; 6. Recommended settings page
-;
-; Two boxes, both clear, and nothing else asked: what is offered is a reset of the app's
-; own settings, and a reinstall is not a reason to want one. This installer writes no
-; configuration — a second writer of `config.ini` would carry the defaults of whenever the
-; installer was built, and an installation made that way would keep them for good — so what
-; a box does is leave a file beside that configuration, and the app reads it as it starts.
-;
-; The page is not shown to an unattended installer at all: an update put on by the app's
-; own `Auto` answer runs this installer silently, and must never change a setting.
-;
-; nsDialogs is not included here because MUI2 already brings it in — the uninstaller's own
-; checkbox below is built out of its constants.
-Var RecommendedSettingsCheckbox
-Var RecommendedListsCheckbox
-Var RecommendedSettingsState
-Var RecommendedListsState
-Page custom RecommendedShow RecommendedLeave
-
-; 7. Optional engines page
+; 6. Optional engines page
 ;
 ; The engines this app can drive but does not ship, and whether this machine already has each
 ; of them: one row per engine, saying what the engine is called and a few of the formats it
@@ -195,22 +172,23 @@ Page custom RecommendedShow RecommendedLeave
 ; What is asked about each engine is what the app itself asks before it drives one, so a page
 ; that says a name is missing and the app's own `Codecs` row agree: the folders each installer
 ; writes to, the `PATH` for FFmpeg's player, the two folders mpv's own installers write to, the
-; console archiver inside a PeaZip installation, and the ProgID of each Office application — as
+; console archiver inside a PeaZip installation, the `f3d\bin` folder f3d's own installer writes,
+; and the ProgID of each Office application — as
 ; a row of Office's own, which is the one row here with nothing to its right, since Office is not
 ; a download, and as the one thing decided here about LibreOffice: the Office formats are worth
 ; naming only on a machine with no Office to draw them, and what LibreOffice adds to a machine
 ; that has one is the formats beside them.
 ;
-; Like the page above it, this page is not shown to an unattended installer at all: an update
+; Like the pages above it, this page is not shown to an unattended installer at all: an update
 ; put on by the app's own `Auto` answer runs this installer silently, and a page nobody is
 ; there to read is not shown to anyone.
 Var EnginesLibreText
 Page custom EnginesShow EnginesLeave
 
-; 8. Installation page
+; 7. Installation page
 !insertmacro MUI_PAGE_INSTFILES
 
-; 9. Finish page
+; 8. Finish page
 ;
 ; Don't auto jump to finish page after installation page,
 ; because the installation page has useful info that can be used debug any issues with the installer.
@@ -265,13 +243,6 @@ FunctionEnd
 ; the language files above defines — `$(createDesktop)`, `$(deleteAppData)` — and these are
 ; the page's own, so they are written here. A build that adds a language needs a line for it
 ; here as much as it needs the language file above.
-LangString recommendedTitle ${LANG_ENGLISH} "Recommended settings"
-LangString recommendedSubtitle ${LANG_ENGLISH} "Put the app's settings back to this version's defaults"
-LangString recommendedIntro ${LANG_ENGLISH} "Put the app's settings back to the defaults this version recommends. A box left clear changes nothing."
-LangString recommendedSettings ${LANG_ENGLISH} "Reset to Recommended Settings"
-LangString recommendedLists ${LANG_ENGLISH} "Reset Extension Lists"
-LangString recommendedNote ${LANG_ENGLISH} "The first puts the settings back and leaves your extension lists alone. The second puts the lists back and leaves every other setting alone."
-
 ; The words the optional-engines page carries: what each row is called, with a few of the
 ; formats that engine would give previews to, and the two words a row can carry to its right.
 ; `enginesLibreOffice` is the name a machine with no Office sees and `enginesLibreNiche` the one
@@ -294,6 +265,7 @@ LangString enginesLibreNiche ${LANG_ENGLISH} "LibreOffice (cdr, odt, ods, odp, o
 LangString enginesImageMagick ${LANG_ENGLISH} "ImageMagick (nef, cr2, cr3, arw, dng, raf, ...)"
 LangString enginesPeaZip ${LANG_ENGLISH} "PeaZip (cab, iso, rpm, deb, arj, lzh, ...)"
 LangString enginesCalibre ${LANG_ENGLISH} "Calibre (mobi, azw3, epub, djvu, fb2, ...)"
+LangString enginesF3D ${LANG_ENGLISH} "f3d (stl, step, glb, gltf, fbx, obj, ...)"
 LangString enginesOffice ${LANG_ENGLISH} "Microsoft Office (doc, docx, xls, xlsx, ppt, pptx, ...)"
 
 !macro SetContext
@@ -503,26 +475,6 @@ Section Install
       Call CreateStartMenuShortcut
   shortcuts_done:
 
-  ; What the recommended-settings page's boxes asked for, left where the app will find it:
-  ; the folder the app keeps its own configuration in. It is the path `appdata-paths` names
-  ; in the packaging metadata in Cargo.toml, written out here because it is not a file the
-  ; app ships — and it is the only place this installer writes anything about the app's
-  ; settings, which is why the boxes are files rather than a configuration of its own.
-  ;
-  ; A box left clear writes nothing, so a reinstall leaves the app's settings alone.
-  SetShellVarContext current
-  CreateDirectory "$APPDATA\rust-hover-preview"
-
-  ${If} $RecommendedSettingsState == 1
-    FileOpen $0 "$APPDATA\rust-hover-preview\reset-settings.marker" w
-    FileClose $0
-  ${EndIf}
-
-  ${If} $RecommendedListsState == 1
-    FileOpen $0 "$APPDATA\rust-hover-preview\reset-extensions.marker" w
-    FileClose $0
-  ${EndIf}
-
   ; Auto close this page for passive mode
   ${IfThen} $PassiveMode == 1 ${|} SetAutoClose true ${|}
 SectionEnd
@@ -693,46 +645,6 @@ Function SkipIfPassive
   ${IfThen} $PassiveMode == 1  ${|} Abort ${|}
 FunctionEnd
 
-; The recommended-settings page: two boxes and nothing else, both clear. What they were set
-; to is read as the page is left, and the files they stand for are written once the
-; installation has gone through (see the end of the Install section).
-;
-; A custom page is skipped by aborting where it is built, which is where an unattended
-; installer leaves it: no page is ever shown to one, so an update put on silently cannot
-; change a setting.
-Function RecommendedShow
-  ${If} ${Silent}
-    Abort
-  ${EndIf}
-  ${IfThen} $PassiveMode == 1 ${|} Abort ${|}
-
-  !insertmacro MUI_HEADER_TEXT "$(recommendedTitle)" "$(recommendedSubtitle)"
-
-  nsDialogs::Create 1018
-  Pop $0
-  ${If} $0 == error
-    Abort
-  ${EndIf}
-
-  ${NSD_CreateLabel} 0 0 100% 20u "$(recommendedIntro)"
-  Pop $0
-
-  ${NSD_CreateCheckbox} 0 26u 100% 12u "$(recommendedSettings)"
-  Pop $RecommendedSettingsCheckbox
-  ${NSD_CreateCheckbox} 0 40u 100% 12u "$(recommendedLists)"
-  Pop $RecommendedListsCheckbox
-
-  ${NSD_CreateLabel} 0 60u 100% 24u "$(recommendedNote)"
-  Pop $0
-
-  nsDialogs::Show
-FunctionEnd
-
-Function RecommendedLeave
-  SendMessage $RecommendedSettingsCheckbox ${BM_GETCHECK} 0 0 $RecommendedSettingsState
-  SendMessage $RecommendedListsCheckbox ${BM_GETCHECK} 0 0 $RecommendedListsState
-FunctionEnd
-
 ; The optional-engines page: one row per engine this app can drive, marked with whether this
 ; machine already has it and carrying a link to the page it is installed from where it does not.
 ;
@@ -844,6 +756,30 @@ Function CalibreInstalled
     Return
   ${EndIf}
   ${If} ${FileExists} "$PROGRAMFILES\Calibre2\ebook-convert.exe"
+    StrCpy $0 1
+  ${EndIf}
+FunctionEnd
+
+; f3d is asked for where the app asks for it (see `f3d_render::program`): beside the app, in a
+; folder on the `PATH`, and in the folder its own Windows installer writes, `f3d\bin` under
+; Program Files. What the app also honors is a copy the user named in its own settings
+; (`f3d_path`), which this installer reads none of — the same silence a chosen mpv gets.
+Function F3DInstalled
+  StrCpy $0 0
+  ${If} ${FileExists} "$INSTDIR\f3d.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  SearchPath $1 "f3d.exe"
+  ${IfNot} ${Errors}
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$PROGRAMFILES64\f3d\bin\f3d.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$PROGRAMFILES\f3d\bin\f3d.exe"
     StrCpy $0 1
   ${EndIf}
 FunctionEnd
@@ -995,18 +931,34 @@ Function EnginesShow
     ${NSD_OnClick} $0 EnginesLinkCalibre
   ${EndIf}
 
+  Call F3DInstalled
+  ${If} $0 == 1
+    StrCpy $1 "√ $(enginesF3D)"
+    ${NSD_CreateLabel} 0 116u 74% 12u "$1"
+    Pop $0
+    ${NSD_CreateLabel} 75% 116u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 116u 74% 12u "$(enginesF3D)"
+    Pop $0
+    EnableWindow $0 0
+    ${NSD_CreateLink} 75% 116u 25% 12u "$(enginesDownload)"
+    Pop $0
+    ${NSD_OnClick} $0 EnginesLinkF3D
+  ${EndIf}
+
   ; Office's row is the one with nothing beside it: Office is not a free download, so a machine
   ; without it is told what the row is and offered nowhere to go — the same silence the app's own
   ; `Codecs` rows keep for it, which cannot be picked either.
   Call OfficeInstalled
   ${If} $0 == 1
     StrCpy $1 "√ $(enginesOffice)"
-    ${NSD_CreateLabel} 0 116u 74% 12u "$1"
+    ${NSD_CreateLabel} 0 130u 74% 12u "$1"
     Pop $0
-    ${NSD_CreateLabel} 75% 116u 25% 12u "$(enginesDetected)"
+    ${NSD_CreateLabel} 75% 130u 25% 12u "$(enginesDetected)"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 116u 74% 12u "$(enginesOffice)"
+    ${NSD_CreateLabel} 0 130u 74% 12u "$(enginesOffice)"
     Pop $0
     EnableWindow $0 0
   ${EndIf}
@@ -1021,7 +973,7 @@ FunctionEnd
 Function EnginesLeave
 FunctionEnd
 
-; The page's six links, a function each, so that the address a row opens is written by the row
+; The page's seven links, a function each, so that the address a row opens is written by the row
 ; rather than looked up from a table. The control handle the click carries is the first thing on
 ; the stack and is dropped: what a click does is one address, and which control it was is not
 ; part of the question. Office's row has no function of its own here: there is nowhere to send
@@ -1054,6 +1006,11 @@ FunctionEnd
 Function EnginesLinkCalibre
   Pop $0
   ExecShell "open" "https://calibre-ebook.com/download_windows"
+FunctionEnd
+
+Function EnginesLinkF3D
+  Pop $0
+  ExecShell "open" "https://github.com/f3d-app/f3d/releases"
 FunctionEnd
 
 Function CreateDesktopShortcut
