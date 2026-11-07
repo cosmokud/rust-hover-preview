@@ -969,19 +969,24 @@ FunctionEnd
 ; widths are the words' own: measured in the dialog font, `Manual Download` is 104 px of the page's
 ; ~465 px, `Install` 36 px, `Detected` 53 px.
 ;
-; The words are **centred in their columns**, which is why the two actions are statics and not
-; link controls: nsDialogs' `LINK` control draws its text hard against its left edge and honours no
-; centring style at all — measured, `BS_CENTER` on it changes nothing — while a `STATIC` with
-; `SS_CENTER` centres, and with the `SS_NOTIFY` `${NSD_CreateLabel}` already gives it, answers
-; `${NSD_OnClick}` through the same `WM_COMMAND` the link control used. So what was a link control
-; is a static painted as a link, and the column it is given is the room its centring is measured in.
+; The words are centred in their columns, and the two mechanisms that do it are not the same one.
+; `Detected` is a `STATIC` with `SS_CENTER`, which centres its text in its own rectangle. The two
+; actions keep nsDialogs' `LINK` control, because that is what draws the **hand cursor** over
+; itself — a static draws an arrow and NSIS has no per-control cursor to give it — and a `LINK`
+; control draws its text hard against its left edge and honours no centring style at all (measured:
+; `BS_CENTER` on it changes nothing). So its centring is geometry instead of style: the control's
+; rectangle is the word's own width plus a pixel either side, and against a page 399 px across the
+; measured words are 84 px (`Manual Download`, 22%), 29 px (`Install`, 8%) and 44 px (`Detected`,
+; 11%) — the same fractions at every dpi, since the font scales with the page. `Detected` is given
+; exactly `Manual Download`'s rectangle, so its centre is that word's centre and a row with nothing
+; to do sits in the column of a row with two things.
 ;
-; What that static must keep is both halves of a link's look and neither is default: the plain
-; string as its text — a static parses no anchor markup, so `<a id="i">Install</a>` is what a
-; reader sees — and `SetCtlColors` with the navy MUI's own Finish page gives its link and **no
-; background colour**. The second half is not an omission: with a background given the control
-; paints that rectangle opaquely, which is white boxes around the words on a page whose background
-; is the dialog's own, while with the colour alone it draws the text and lets the page show through.
+; What a `LINK` control must keep is both halves of a link's look, and neither is default: the plain
+; string as its text — it parses no anchor markup, so `<a id="i">Install</a>` is what a reader
+; sees — and `SetCtlColors` with the navy MUI's own Finish page gives its link and **no background
+; colour**. The second half is not an omission: with a background given the control paints that
+; rectangle opaquely, which is white boxes around the words on a page whose background is the
+; dialog's own, while with the colour alone it draws the text and lets the page show through.
 ;
 ; `NAME` names the globals this row keeps its own controls in, so that the row can be redrawn
 ; declared at the top, beside the other `Var`s, because a `Var` inside a function — which is where
@@ -991,7 +996,7 @@ FunctionEnd
   ${If} $0 == 1
     ${NSD_CreateLabel} 0 ${POS}u 63% 12u "√ ${LABEL}"
     Pop $0
-    ${NSD_CreateLabel} 74% ${POS}u 24% 12u "$(enginesDetected)"
+    ${NSD_CreateLabel} 74% ${POS}u 22% 12u "$(enginesDetected)"
     Pop $0
     ${NSD_AddStyle} $0 ${SS_CENTER}
   ${Else}
@@ -1006,16 +1011,14 @@ FunctionEnd
     ; half, and it needs no name of its own.
     !if "${PKG}" != "-"
       ${If} $EnginesWinget != ""
-        ${NSD_CreateLabel} 65% ${POS}u 8% 12u "$(enginesInstall)"
+        ${NSD_CreateLink} 65% ${POS}u 8% 12u "$(enginesInstall)"
         Pop $Engines${NAME}Install
-        ${NSD_AddStyle} $Engines${NAME}Install ${SS_CENTER}
         SetCtlColors $Engines${NAME}Install "000080"
         ${NSD_OnClick} $Engines${NAME}Install EnginesInstall${NAME}
       ${EndIf}
     !endif
-    ${NSD_CreateLabel} 74% ${POS}u 24% 12u "$(enginesManualDownload)"
+    ${NSD_CreateLink} 74% ${POS}u 22% 12u "$(enginesManualDownload)"
     Pop $Engines${NAME}Download
-    ${NSD_AddStyle} $Engines${NAME}Download ${SS_CENTER}
     SetCtlColors $Engines${NAME}Download "000080"
     ${NSD_OnClick} $Engines${NAME}Download ${LINK}
   ${EndIf}
@@ -1376,9 +1379,13 @@ Function EnginesInstallTick
   ${EndIf}
   ${NSD_CreateLabel} 0 $EnginesRowPos 63% 12u "√ $EnginesLabelText"
   Pop $0
-  ${NSD_CreateLabel} 74% $EnginesRowPos 24% 12u "$(enginesDetected)"
+  ${NSD_CreateLabel} 74% $EnginesRowPos 22% 12u "$(enginesDetected)"
   Pop $0
   ${NSD_AddStyle} $0 ${SS_CENTER}
+  ; The style is set after this control was created, and unlike the rows above — which are painted
+  ; for the first time when the page is shown — this one is already on a showing page. Without the
+  ; repaint it would keep drawing itself the way it was laid out, hard against its left edge.
+  System::Call 'USER32::InvalidateRect(p $0, p 0, i 1)'
   ${NSD_SetText} $EnginesIntro "$(enginesInstallDone)"
 FunctionEnd
 
