@@ -10,11 +10,12 @@
 ;   - a page of its own is shown after the shortcuts page, listing the optional
 ;     engines this
 ;     app can drive but does not ship, marked with whether this machine already
-;     has each of them and carrying a link to the page it is installed from where
-;     it does not (see "Optional engines page" below). It installs nothing and
-;     writes nothing: it is the README's install steps, offered where a user is
-;     already looking. Office is the one engine on it with no page to open — it is
-;     not a download — so Office's row is the one that carries nothing.
+;     has each of them and carrying an `Install` link where `winget` is here to run
+;     and a `Manual Download` link where it is not (see "Optional engines page"
+;     below). It writes one batch script into `%TEMP%` and nothing else: an install
+;     is winget's, shown in a console window, and a manual download is the page
+;     opened in the user's own browser. Office and f3d are the rows with no
+;     `Install`, having no package id, so they carry the manual download alone.
 ; Upgrading cargo-packager means diffing this file against the upstream
 ; template at crates/packager/src/package/nsis/installer.nsi.
 
@@ -161,31 +162,69 @@ Var AppStartMenuFolder
 ;
 ; The engines this app can drive but does not ship, and whether this machine already has each
 ; of them: one row per engine, saying what the engine is called and a few of the formats it
-; would give previews to, marked as detected or left greyed with a link to the page it is
-; installed from.
+; would give previews to, marked as detected or left greyed with an `Install` link and a `Manual
+; Download` one.
 ;
-; Nothing is installed from here and nothing is downloaded. What a link does is open a page in
-; the browser the user already has — the same pages the README names, and the same ones the
-; tray's `Codecs` rows open — and it opens it in the user's own session, not this installer's:
-; the browser is started by `explorer.exe` (see `EnginesLinkMPV`) rather than by `ExecShell`,
-; which would hand the address to the token this installer runs elevated with and land it in an
-; administrator's profile or nowhere at all. A row an engine is present for offers nothing,
-; since there is nothing to offer.
+; `Install` runs `winget` in a console window of its own, from a batch script written here into
+; `%TEMP%` — the same script, character for character, that the app's own `Codecs → Install` rows
+; run (see `src/app/winget.rs`), so the two doors install the same thing the same way and both
+; leave the retry, and the reason a failure is readable, to the window. Nothing is elevated:
+; `installMode = "currentUser"` above gives `RequestExecutionLevel user`, so `winget` installs
+; into this user's own profile, which is the profile the app then looks in. A machine-wide package
+; — LibreOffice, calibre, ImageMagick, PeaZip — raises its own UAC prompt, and that is the
+; package's, not this page's.
+;
+; `Manual Download` opens the page the engine is installed from in the browser the user already
+; has: `ExecShell "open"`, since this installer is not elevated (see the note above the link
+; functions). A row an engine is present for offers nothing, since there is nothing to offer.
 ;
 ; What is asked about each engine is what the app itself asks before it drives one, so a page
 ; that says a name is missing and the app's own `Codecs` row agree: the folders each installer
 ; writes to, beside the app or the `PATH` for FFmpeg's player, the two folders mpv's own
-; installers write to, the console archiver inside a PeaZip installation, the `f3d\bin` folder
-; f3d's own installer writes, and the ProgID of each Office application — as
-; a row of Office's own, which is the one row here with nothing to its right, since Office is not
-; a download, and as the one thing decided here about LibreOffice: the Office formats are worth
-; naming only on a machine with no Office to draw them, and what LibreOffice adds to a machine
-; that has one is the formats beside them.
+; installers write to and the three places winget puts one (its `Links` shim, `…\Local\Programs`
+; and the portable package under `…\WinGet\Packages`), the console archiver inside a PeaZip
+; installation, the `f3d\bin` folder f3d's own installer writes, and the ProgID of each Office
+; application — as a row of Office's own, which has no `Install` because Office is not a package
+; and no free download, and as the one thing decided here about LibreOffice: the Office formats are
+; worth naming only on a machine with no Office to draw them, and what LibreOffice adds to a
+; machine that has one is the formats beside them.
 ;
 ; Like the pages above it, this page is not shown to an unattended installer at all: an update
 ; put on by the app's own `Auto` answer runs this installer silently, and a page nobody is
 ; there to read is not shown to anyone.
 Var EnginesLibreText
+Var EnginesWinget
+Var EnginesIntro
+Var EnginesBusy
+Var EnginesId
+Var EnginesCheck
+Var EnginesScript
+Var EnginesRc
+Var EnginesCode
+Var EnginesWaited
+Var EnginesLabelText
+Var EnginesRowLabel
+Var EnginesRowPos
+Var EnginesRowInstall
+Var EnginesRowDownload
+
+; One row's own controls: the label, where it sits, and its two links. A row is inserted with the
+; same `NAME` here, and the same name again in `EnginesInstall<NAME>` — see `EnginesRow`.
+!macro EnginesRowVars NAME
+  Var Engines${NAME}Label
+  Var Engines${NAME}Pos
+  Var Engines${NAME}Install
+  Var Engines${NAME}Download
+!macroend
+!insertmacro EnginesRowVars Mpv
+!insertmacro EnginesRowVars FFmpeg
+!insertmacro EnginesRowVars LibreOffice
+!insertmacro EnginesRowVars ImageMagick
+!insertmacro EnginesRowVars PeaZip
+!insertmacro EnginesRowVars Calibre
+!insertmacro EnginesRowVars F3D
+!insertmacro EnginesRowVars Office
+
 Page custom EnginesShow EnginesLeave
 
 ; 7. Installation page
@@ -258,9 +297,16 @@ FunctionEnd
 ; which would be drawn as a box.
 LangString enginesTitle ${LANG_ENGLISH} "Optional engines"
 LangString enginesSubtitle ${LANG_ENGLISH} "Previews that need something this app does not ship"
-LangString enginesIntro ${LANG_ENGLISH} "These engines are optional: without one, the files it draws simply show no preview. Nothing is installed here — a link opens the page it is installed from, and an engine installed later is used without a restart."
+LangString enginesIntro ${LANG_ENGLISH} "These engines are optional: without one, the files it draws simply show no preview. Install runs winget here, in a console window and without administrator rights; Manual Download opens the page instead."
 LangString enginesDetected ${LANG_ENGLISH} "Detected"
-LangString enginesDownload ${LANG_ENGLISH} "Download"
+LangString enginesInstall ${LANG_ENGLISH} "Install"
+LangString enginesManualDownload ${LANG_ENGLISH} "Manual Download"
+LangString enginesInstallRunning ${LANG_ENGLISH} "Installing in the console window that just opened. This page waits until it finishes: closing that window aborts the install."
+LangString enginesInstallFailed ${LANG_ENGLISH} "The install did not succeed. The console window it opened says why, and the row is unchanged."
+LangString enginesInstallCode ${LANG_ENGLISH} "Exit code:"
+LangString enginesInstallTimedOut ${LANG_ENGLISH} "The install did not finish within half an hour. Its console window may still be running, and the row is unchanged."
+LangString enginesInstallNotFound ${LANG_ENGLISH} "The install reported success, but the engine is not where this page looks. Restarting the installer may see it."
+LangString enginesInstallDone ${LANG_ENGLISH} "Installed. The engine is used by the app without a restart."
 LangString enginesMPV ${LANG_ENGLISH} "MPV (flv, rmvb, mxf, ogv, swf, ...)"
 LangString enginesFFmpeg ${LANG_ENGLISH} "FFmpeg (flv, rmvb, mxf, ogv, swf, ...)"
 LangString enginesLibreOffice ${LANG_ENGLISH} "LibreOffice (doc, docx, xls, xlsx, ppt, pptx, ...)"
@@ -658,12 +704,41 @@ FunctionEnd
 ; Each engine is asked about one at a time, and each detector answers in `$0`: 1 where the engine
 ; is installed and 0 where it is not.
 ;
+; Whether `$3` is inside a winget package under `$1` whose folder name starts with `$2`: a package
+; folder is named for the package and the source it came from
+; (`shinchiro.mpv_Microsoft.Winget.Source_8wekyb3d8bbwe`), so the name is what is matched. The
+; payload is asked for both in that folder and in a `bin` beneath it, which is where a portable
+; package that ships its own tree puts it.
+;
+; Answers in `$0`, like every detector here, and uses `$4`/`$5` for the walk.
+Function EnginesWinGetScan
+  StrCpy $0 0
+  FindFirst $4 $5 "$1\$2*"
+  engines_winget_scan:
+    StrCmp $5 "" engines_winget_scan_done
+    ${If} ${FileExists} "$1\$5\$3"
+      StrCpy $0 1
+      Goto engines_winget_scan_done
+    ${EndIf}
+    ${If} ${FileExists} "$1\$5\bin\$3"
+      StrCpy $0 1
+      Goto engines_winget_scan_done
+    ${EndIf}
+    FindNext $4 $5
+    Goto engines_winget_scan
+  engines_winget_scan_done:
+  FindClose $4
+FunctionEnd
+
 ; mpv is asked for where the app asks for it (see `codecs::mpv_installs`): beside the app, in a
-; folder on the `PATH`, and in the two folders its own installers write to — `MPV Player` under
-; Program Files, which is where winget puts it, and SVP 4's `mpv64`. What the app also honors is
-; a copy the user picked in its own settings, which is a path in the app's configuration; this
-; installer reads none of that, so a machine whose only mpv is a chosen copy is one this page
-; does not know about.
+; folder on the `PATH`, in the two folders its own installers write to — `MPV Player` under
+; Program Files and SVP 4's `mpv64` — and in what winget leaves, which is where an mpv installed
+; from this page lands: its shim in `…\WinGet\Links`, its per-user Inno destination under
+; `…\Local\Programs`, and the portable package's own folder. mpv's per-user destination is not
+; verified, so every plausible folder under `Programs` named for it is asked for rather than one
+; guessed at. What the app also honors is a copy the user picked in its own settings, which is a
+; path in the app's configuration; this installer reads none of that, so a machine whose only mpv
+; is a chosen copy is one this page does not know about.
 Function MPVInstalled
   StrCpy $0 0
   ${If} ${FileExists} "$INSTDIR\mpv.exe"
@@ -673,6 +748,24 @@ Function MPVInstalled
   SearchPath $1 "mpv.exe"
   ${IfNot} ${Errors}
     StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$LOCALAPPDATA\Microsoft\WinGet\Links\mpv.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  StrCpy $1 "$LOCALAPPDATA\Programs"
+  StrCpy $2 "mpv"
+  StrCpy $3 "mpv.exe"
+  Call EnginesWinGetScan
+  ${If} $0 == 1
+    Return
+  ${EndIf}
+  StrCpy $1 "$LOCALAPPDATA\Microsoft\WinGet\Packages"
+  StrCpy $2 "shinchiro.mpv"
+  StrCpy $3 "mpv.exe"
+  Call EnginesWinGetScan
+  ${If} $0 == 1
     Return
   ${EndIf}
   ${If} ${FileExists} "$PROGRAMFILES64\MPV Player\mpv.exe"
@@ -685,8 +778,10 @@ Function MPVInstalled
 FunctionEnd
 
 ; FFmpeg is asked for the player beside the app first, which is where an unpacked copy sits and
-; where the app looks before it looks anywhere else (see `codecs::find_ffplay`), and then in a
-; folder on the `PATH`.
+; where the app looks before it looks anywhere else (see `codecs::find_ffplay`), then in a folder
+; on the `PATH`, and then in what winget leaves: the `Links` shim is what a portable package
+; always gets, while the package folder itself holds a build folder one level deeper still
+; (`ffmpeg-7.1-full_build\bin`), which the scan below does not walk.
 Function FFmpegInstalled
   StrCpy $0 0
   ${If} ${FileExists} "$INSTDIR\ffplay.exe"
@@ -694,8 +789,18 @@ Function FFmpegInstalled
     Return
   ${EndIf}
   SearchPath $1 "ffplay.exe"
-  IfErrors +2 0
+  ${IfNot} ${Errors}
     StrCpy $0 1
+    Return
+  ${EndIf}
+  ${If} ${FileExists} "$LOCALAPPDATA\Microsoft\WinGet\Links\ffplay.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
+  StrCpy $1 "$LOCALAPPDATA\Microsoft\WinGet\Packages"
+  StrCpy $2 "Gyan.FFmpeg"
+  StrCpy $3 "ffplay.exe"
+  Call EnginesWinGetScan
 FunctionEnd
 
 Function LibreOfficeInstalled
@@ -817,14 +922,23 @@ Function OfficeInstalled
   ${EndIf}
 FunctionEnd
 
-; One row of the page, at `POS` units down: the label, marked with `√` and answered `Detected`
-; where the detector `CHECK` says the engine is here, and the same label greyed with a link where
-; it is not. `-` for the link means there is none, which is Office's row alone.
+; One row of the page, at `POS` units down: `LABEL`, marked with `√` and answered `Detected`
+; where the detector `CHECK` says the engine is here, and — where it is not — the same label greyed
+; beside an `Install` link where `PKG` is a winget package and winget was found, and a
+; `Manual Download` link that opens the page the engine is installed from. `-` for `PKG` means no
+; package, which is f3d's row and Office's.
 ;
-; The link is a SysLink, which sends its click as a notification rather than as `BN_CLICKED`:
-; `${NSD_OnClick}` hangs its function off the second and this control never sends it, which is
-; why every row registers `${NSD_OnNotify}` — the same one value on the stack, the control handle.
-!macro EnginesRow POS CHECK LABEL LINK
+; Every link's text carries anchor markup, and that is not decoration: `${NSD_CreateLink}` makes a
+; SysLink, and a SysLink whose text is plain draws itself as a link but holds no link at all — it
+; never sends `NM_CLICK`, so a function hung off `NSD_OnNotify` is one that never runs. The `id`
+; names the anchor within `NMLINK`; a click on a row's two links is two controls and so two
+; callbacks, because a WM_NOTIFY does not say which anchor of one control was hit.
+;
+; `NAME` names the globals this row keeps its own controls in, so that the row can be redrawn
+; detected in place once an install has put the engine there (see `EnginesInstallStart`). They are
+; declared at the top, beside the other `Var`s, because a `Var` inside a function — which is where
+; this macro is inserted — is not one NSIS makes.
+!macro EnginesRow NAME POS CHECK LABEL PKG LINK
   Call ${CHECK}
   ${If} $0 == 1
     ${NSD_CreateLabel} 0 ${POS}u 74% 12u "√ ${LABEL}"
@@ -832,14 +946,20 @@ FunctionEnd
     ${NSD_CreateLabel} 75% ${POS}u 25% 12u "$(enginesDetected)"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 ${POS}u 74% 12u "${LABEL}"
-    Pop $0
-    EnableWindow $0 0
-    !if "${LINK}" != "-"
-      ${NSD_CreateLink} 75% ${POS}u 25% 12u "$(enginesDownload)"
-      Pop $0
-      ${NSD_OnNotify} $0 ${LINK}
-    !endif
+    ${NSD_CreateLabel} 0 ${POS}u 52% 12u "${LABEL}"
+    Pop $Engines${NAME}Label
+    EnableWindow $Engines${NAME}Label 0
+    StrCpy $Engines${NAME}Pos "${POS}u"
+    StrCpy $Engines${NAME}Install ""
+    ${If} "${PKG}" != "-"
+    ${AndIf} $EnginesWinget != ""
+      ${NSD_CreateLink} 54% ${POS}u 16% 12u '<a id="i">$(enginesInstall)</a>'
+      Pop $Engines${NAME}Install
+      ${NSD_OnNotify} $Engines${NAME}Install EnginesInstall${NAME}
+    ${EndIf}
+    ${NSD_CreateLink} 71% ${POS}u 29% 12u '<a id="d">$(enginesManualDownload)</a>'
+    Pop $Engines${NAME}Download
+    ${NSD_OnNotify} $Engines${NAME}Download ${LINK}
   ${EndIf}
 !macroend
 
@@ -857,13 +977,42 @@ Function EnginesShow
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 26u "$(enginesIntro)"
-  Pop $0
+  ${NSD_CreateLabel} 0 0 100% 30u "$(enginesIntro)"
+  Pop $EnginesIntro
+
+  StrCpy $EnginesBusy 0
+
+  ; winget, found the way a shell finds it and without starting it: the alias Windows keeps in
+  ; this user's `WindowsApps`, the Store package's own folder — named for its version, so the folder
+  ; is what is walked — and the `PATH`. Empty means absent, and then no row is offered an `Install`
+  ; link at all rather than one that cannot work.
+  StrCpy $EnginesWinget ""
+  ${If} ${FileExists} "$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+    StrCpy $EnginesWinget "$LOCALAPPDATA\Microsoft\WindowsApps\winget.exe"
+  ${Else}
+    FindFirst $0 $1 "$PROGRAMFILES\WindowsApps\Microsoft.DesktopAppInstaller_*"
+    engines_winget_folder:
+      StrCmp $1 "" engines_winget_folder_done
+      ${If} ${FileExists} "$PROGRAMFILES\WindowsApps\$1\winget.exe"
+        StrCpy $EnginesWinget "$PROGRAMFILES\WindowsApps\$1\winget.exe"
+        Goto engines_winget_folder_done
+      ${EndIf}
+      FindNext $0 $1
+      Goto engines_winget_folder
+    engines_winget_folder_done:
+    FindClose $0
+    ${If} $EnginesWinget == ""
+      SearchPath $1 "winget.exe"
+      ${IfNot} ${Errors}
+        StrCpy $EnginesWinget $1
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
 
   ; mpv's row is the first, as mpv is the first of the engines the app lists for a video: where
   ; more than one player is installed, it is the one `Best` prefers.
-  !insertmacro EnginesRow 32 MPVInstalled $(enginesMPV) EnginesLinkMPV
-  !insertmacro EnginesRow 46 FFmpegInstalled $(enginesFFmpeg) EnginesLinkFFmpeg
+  !insertmacro EnginesRow Mpv 32 MPVInstalled $(enginesMPV) shinchiro.mpv EnginesLinkMPV
+  !insertmacro EnginesRow FFmpeg 46 FFmpegInstalled $(enginesFFmpeg) Gyan.FFmpeg EnginesLinkFFmpeg
 
   ; What LibreOffice is called here is decided before it is asked about: the Office formats are
   ; worth naming where there is no Office to draw them, and the formats beside them are what the
@@ -874,70 +1023,293 @@ Function EnginesShow
     StrCpy $EnginesLibreText "$(enginesLibreNiche)"
   ${EndIf}
 
-  !insertmacro EnginesRow 60 LibreOfficeInstalled $EnginesLibreText EnginesLinkLibreOffice
-  !insertmacro EnginesRow 74 ImageMagickInstalled $(enginesImageMagick) EnginesLinkImageMagick
-  !insertmacro EnginesRow 88 PeaZipInstalled $(enginesPeaZip) EnginesLinkPeaZip
-  !insertmacro EnginesRow 102 CalibreInstalled $(enginesCalibre) EnginesLinkCalibre
-  !insertmacro EnginesRow 116 F3DInstalled $(enginesF3D) EnginesLinkF3D
+  !insertmacro EnginesRow LibreOffice 60 LibreOfficeInstalled $EnginesLibreText TheDocumentFoundation.LibreOffice EnginesLinkLibreOffice
+  !insertmacro EnginesRow ImageMagick 74 ImageMagickInstalled $(enginesImageMagick) ImageMagick.ImageMagick EnginesLinkImageMagick
+  !insertmacro EnginesRow PeaZip 88 PeaZipInstalled $(enginesPeaZip) Giorgiotani.Peazip EnginesLinkPeaZip
+  !insertmacro EnginesRow Calibre 102 CalibreInstalled $(enginesCalibre) calibre.calibre EnginesLinkCalibre
 
-  ; Office's row is the one with nothing beside it: Office is not a free download, so a machine
-  ; without it is told what the row is and offered nowhere to go — the same silence the app's own
-  ; `Codecs` rows keep for it, which cannot be picked either.
-  !insertmacro EnginesRow 130 OfficeInstalled $(enginesOffice) -
+  ; f3d has no winget package, so its row is the manual download alone — the same page the app's
+  ; own `Codecs` row opens, and the one its releases are taken from by hand.
+  !insertmacro EnginesRow F3D 116 F3DInstalled $(enginesF3D) - EnginesLinkF3D
+
+  ; Office's row offers no Install either: it is not a free package, so what it carries is the page
+  ; Microsoft sells it from.
+  !insertmacro EnginesRow Office 130 OfficeInstalled $(enginesOffice) - EnginesLinkOffice
 
   nsDialogs::Show
 FunctionEnd
 
-; Nothing is read from this page as it is left: it says what the machine has and the links are
-; all it does, so there is no state to collect. The page above has two boxes and this one has
+; Nothing is read from this page as it is left: it says what the machine has, and its links are
+; what it does, so there is no state to collect. The page above has two boxes and this one has
 ; none — which is why this function is empty rather than absent, since a page is declared with
 ; both of its functions.
 Function EnginesLeave
 FunctionEnd
 
-; The page's six links, a function each, so that the address a row opens is written by the row
-; rather than looked up from a table. The control handle the notification carries is the first
-; thing on the stack and is dropped: what a click does is one address, and which control it was
-; is not part of the question. Office's row has no function of its own here: there is nowhere to
-; send anyone.
+; The page's links, a function each, so that the address a row opens is written by the row rather
+; than looked up from a table. The control handle the notification carries is the first thing on
+; the stack and is dropped: what a click does is one address, and which control it was is not part
+; of the question.
 ;
-; The address is handed to `explorer.exe` rather than to `ExecShell "open"`, because this
-; installer runs elevated: `ExecShell` would start the browser with the administrator token, in
-; that account's profile or in none. Explorer is already running as the interactive user at
-; medium integrity, so the page it opens is a page that user's own browser shows.
+; `ExecShell "open"` and not `explorer.exe`, because this installer is unelevated:
+; `installMode = "currentUser"` in Cargo.toml takes the branch above that asks for
+; `RequestExecutionLevel user`, so the page opens in the browser of the user who is looking at it.
+; (The per-machine branch that would ask for `highest`, and with it the reason the address used to
+; be handed to Explorer, is the one this build never takes.)
 Function EnginesLinkMPV
   Pop $0
-  Exec '"$WINDIR\explorer.exe" "https://mpv.io/installation/"'
+  ExecShell "open" "https://mpv.io/installation/"
 FunctionEnd
 
 Function EnginesLinkFFmpeg
   Pop $0
-  Exec '"$WINDIR\explorer.exe" "https://ffmpeg.org/download.html"'
+  ExecShell "open" "https://ffmpeg.org/download.html"
 FunctionEnd
 
 Function EnginesLinkLibreOffice
   Pop $0
-  Exec '"$WINDIR\explorer.exe" "https://www.libreoffice.org/download/"'
+  ExecShell "open" "https://www.libreoffice.org/download/"
 FunctionEnd
 
 Function EnginesLinkImageMagick
   Pop $0
-  Exec '"$WINDIR\explorer.exe" "https://imagemagick.org/download/"'
+  ExecShell "open" "https://imagemagick.org/download/"
 FunctionEnd
 
 Function EnginesLinkPeaZip
   Pop $0
-  Exec '"$WINDIR\explorer.exe" "https://peazip.github.io/peazip-64bit.html"'
+  ExecShell "open" "https://peazip.github.io/peazip-64bit.html"
 FunctionEnd
 
 Function EnginesLinkCalibre
   Pop $0
-  Exec '"$WINDIR\explorer.exe" "https://calibre-ebook.com/download_windows"'
+  ExecShell "open" "https://calibre-ebook.com/download_windows"
 FunctionEnd
 
 Function EnginesLinkF3D
   Pop $0
-  Exec '"$WINDIR\explorer.exe" "https://github.com/f3d-app/f3d/releases"'
+  ExecShell "open" "https://github.com/f3d-app/f3d/releases"
+FunctionEnd
+
+; Office has nowhere to install from but Microsoft's own page, and nothing this page can run.
+Function EnginesLinkOffice
+  Pop $0
+  ExecShell "open" "https://www.microsoft.com/microsoft-365/buy/compare-all-microsoft-365-products"
+FunctionEnd
+
+; What one engine's `Install` link does: name its own row — its label, where it sits, its two links
+; — and its package and the detector that asks whether it arrived, which is everything
+; `EnginesInstallStart` knows about any engine, and hand over. Only the engines with a winget
+; package have one of these, since the row does not create the link otherwise.
+Function EnginesInstallMpv
+  Pop $0
+  StrCpy $EnginesId "shinchiro.mpv"
+  StrCpy $EnginesCheck "MPVInstalled"
+  StrCpy $EnginesRowLabel $EnginesMpvLabel
+  StrCpy $EnginesRowPos $EnginesMpvPos
+  StrCpy $EnginesRowInstall $EnginesMpvInstall
+  StrCpy $EnginesRowDownload $EnginesMpvDownload
+  Call EnginesInstallStart
+FunctionEnd
+
+Function EnginesInstallFFmpeg
+  Pop $0
+  StrCpy $EnginesId "Gyan.FFmpeg"
+  StrCpy $EnginesCheck "FFmpegInstalled"
+  StrCpy $EnginesRowLabel $EnginesFFmpegLabel
+  StrCpy $EnginesRowPos $EnginesFFmpegPos
+  StrCpy $EnginesRowInstall $EnginesFFmpegInstall
+  StrCpy $EnginesRowDownload $EnginesFFmpegDownload
+  Call EnginesInstallStart
+FunctionEnd
+
+Function EnginesInstallLibreOffice
+  Pop $0
+  StrCpy $EnginesId "TheDocumentFoundation.LibreOffice"
+  StrCpy $EnginesCheck "LibreOfficeInstalled"
+  StrCpy $EnginesRowLabel $EnginesLibreOfficeLabel
+  StrCpy $EnginesRowPos $EnginesLibreOfficePos
+  StrCpy $EnginesRowInstall $EnginesLibreOfficeInstall
+  StrCpy $EnginesRowDownload $EnginesLibreOfficeDownload
+  Call EnginesInstallStart
+FunctionEnd
+
+Function EnginesInstallImageMagick
+  Pop $0
+  StrCpy $EnginesId "ImageMagick.ImageMagick"
+  StrCpy $EnginesCheck "ImageMagickInstalled"
+  StrCpy $EnginesRowLabel $EnginesImageMagickLabel
+  StrCpy $EnginesRowPos $EnginesImageMagickPos
+  StrCpy $EnginesRowInstall $EnginesImageMagickInstall
+  StrCpy $EnginesRowDownload $EnginesImageMagickDownload
+  Call EnginesInstallStart
+FunctionEnd
+
+Function EnginesInstallPeaZip
+  Pop $0
+  StrCpy $EnginesId "Giorgiotani.Peazip"
+  StrCpy $EnginesCheck "PeaZipInstalled"
+  StrCpy $EnginesRowLabel $EnginesPeaZipLabel
+  StrCpy $EnginesRowPos $EnginesPeaZipPos
+  StrCpy $EnginesRowInstall $EnginesPeaZipInstall
+  StrCpy $EnginesRowDownload $EnginesPeaZipDownload
+  Call EnginesInstallStart
+FunctionEnd
+
+Function EnginesInstallCalibre
+  Pop $0
+  StrCpy $EnginesId "calibre.calibre"
+  StrCpy $EnginesCheck "CalibreInstalled"
+  StrCpy $EnginesRowLabel $EnginesCalibreLabel
+  StrCpy $EnginesRowPos $EnginesCalibrePos
+  StrCpy $EnginesRowInstall $EnginesCalibreInstall
+  StrCpy $EnginesRowDownload $EnginesCalibreDownload
+  Call EnginesInstallStart
+FunctionEnd
+
+; Half an hour of 250 ms polls. winget's own LibreOffice download is minutes of that; what
+; outlasts it is answered as not finished, and the console window is left to finish on its own.
+!define ENGINES_INSTALL_POLLS 7200
+
+; The install itself, shared by every engine's `Install` link: the same batch script the app's own
+; `Codecs → Install` rows write — one text and two doors, so the flags and the retry cannot drift
+; apart — started in a console window the user watches, with the exit code read back out of the
+; `.rc` the script leaves beside itself before it waits for a key.
+;
+; This function sleeps while the window works, so the page answers nothing until the install is
+; done and the console window is the whole of the progress display; that is deliberate, and the
+; status line is written before the wait and forced out with `UpdateWindow` because nothing the
+; dialog manager would deliver is processed here while the loop runs.
+;
+; Nothing is timed out of its work: the cap below only ends this page's wait, and a row that was
+; not re-probed detected is left exactly as it was rather than claimed.
+Function EnginesInstallStart
+  ${If} $EnginesBusy == 1
+    Return
+  ${EndIf}
+  ${If} $EnginesWinget == ""
+    Return
+  ${EndIf}
+
+  StrCpy $EnginesBusy 1
+  StrCpy $EnginesScript "$TEMP\r-hover-preview-winget-$EnginesId.cmd"
+  StrCpy $EnginesRc "$TEMP\r-hover-preview-winget-$EnginesId.rc"
+
+  ; An exit code an earlier run left would be read as this install's the moment it appeared.
+  Delete "$EnginesRc"
+
+  ClearErrors
+  FileOpen $0 "$EnginesScript" w
+  ${If} ${Errors}
+    ClearErrors
+    StrCpy $EnginesBusy 0
+    ${NSD_SetText} $EnginesIntro "$(enginesInstallFailed)"
+    Return
+  ${EndIf}
+  FileWrite $0 "@echo off$\r$\n"
+  FileWrite $0 "title Rust Hover Preview - installing $EnginesId$\r$\n"
+  FileWrite $0 '"$EnginesWinget" install -e --id $EnginesId --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity$\r$\n'
+  FileWrite $0 "if errorlevel 1 ($\r$\n"
+  FileWrite $0 "    echo.$\r$\n"
+  FileWrite $0 "    echo First attempt failed. Updating the winget sources and retrying once.$\r$\n"
+  FileWrite $0 "    echo.$\r$\n"
+  FileWrite $0 '    "$EnginesWinget" source update$\r$\n'
+  FileWrite $0 '    "$EnginesWinget" install -e --id $EnginesId --source winget --silent --accept-package-agreements --accept-source-agreements --disable-interactivity$\r$\n'
+  FileWrite $0 ")$\r$\n"
+  FileWrite $0 '> "$EnginesRc" echo %ERRORLEVEL%$\r$\n'
+  FileWrite $0 "echo.$\r$\n"
+  FileWrite $0 "echo Finished. This window can be closed.$\r$\n"
+  FileWrite $0 "pause >nul$\r$\n"
+  FileClose $0
+
+  ${NSD_SetText} $EnginesIntro "$(enginesInstallRunning)"
+  System::Call 'USER32::UpdateWindow(p $EnginesIntro)'
+
+  ClearErrors
+  Exec '"$SYSDIR\cmd.exe" /c ""$EnginesScript""'
+  ${If} ${Errors}
+    ClearErrors
+    StrCpy $EnginesBusy 0
+    ${NSD_SetText} $EnginesIntro "$(enginesInstallFailed)"
+    Return
+  ${EndIf}
+
+  EnableWindow $HWNDPARENT 0
+  StrCpy $EnginesCode ""
+  StrCpy $EnginesWaited 0
+
+  engines_install_wait:
+    Sleep 250
+    IntOp $EnginesWaited $EnginesWaited + 1
+    ${If} ${FileExists} "$EnginesRc"
+      ClearErrors
+      FileOpen $1 "$EnginesRc" r
+      ${IfNot} ${Errors}
+        FileRead $1 $2
+        FileClose $1
+        StrCpy $EnginesCode $2 -2
+      ${EndIf}
+    ${EndIf}
+    ${If} $EnginesCode == ""
+    ${AndIf} $EnginesWaited < ${ENGINES_INSTALL_POLLS}
+      Goto engines_install_wait
+    ${EndIf}
+
+  EnableWindow $HWNDPARENT 1
+  StrCpy $EnginesBusy 0
+
+  ${If} $EnginesCode == ""
+    ${NSD_SetText} $EnginesIntro "$(enginesInstallTimedOut)"
+    Return
+  ${EndIf}
+
+  ${If} $EnginesCode != "0"
+    ${NSD_SetText} $EnginesIntro "$(enginesInstallFailed) $(enginesInstallCode) $EnginesCode"
+    Return
+  ${EndIf}
+
+  ; The row is asked again rather than trusted: a package's installer reporting success and the
+  ; engine standing where this page looks for it are two different claims.
+  StrCmp $EnginesCheck "MPVInstalled" 0 +3
+    Call MPVInstalled
+    Goto engines_install_probed
+  StrCmp $EnginesCheck "FFmpegInstalled" 0 +3
+    Call FFmpegInstalled
+    Goto engines_install_probed
+  StrCmp $EnginesCheck "LibreOfficeInstalled" 0 +3
+    Call LibreOfficeInstalled
+    Goto engines_install_probed
+  StrCmp $EnginesCheck "ImageMagickInstalled" 0 +3
+    Call ImageMagickInstalled
+    Goto engines_install_probed
+  StrCmp $EnginesCheck "PeaZipInstalled" 0 +3
+    Call PeaZipInstalled
+    Goto engines_install_probed
+  StrCmp $EnginesCheck "CalibreInstalled" 0 +3
+    Call CalibreInstalled
+    Goto engines_install_probed
+  engines_install_probed:
+
+  ${If} $0 != 1
+    ${NSD_SetText} $EnginesIntro "$(enginesInstallNotFound)"
+    Return
+  ${EndIf}
+
+  ; Redrawn detected in place: the row's own controls are hidden and a detected pair is put where
+  ; they were, which is the layout the row would have been built with had the engine been here.
+  ${NSD_GetText} $EnginesRowLabel $EnginesLabelText
+  System::Call 'USER32::ShowWindow(p $EnginesRowLabel, i 0)'
+  ${If} $EnginesRowInstall != ""
+    System::Call 'USER32::ShowWindow(p $EnginesRowInstall, i 0)'
+  ${EndIf}
+  ${If} $EnginesRowDownload != ""
+    System::Call 'USER32::ShowWindow(p $EnginesRowDownload, i 0)'
+  ${EndIf}
+  ${NSD_CreateLabel} 0 $EnginesRowPos 74% 12u "√ $EnginesLabelText"
+  Pop $0
+  ${NSD_CreateLabel} 75% $EnginesRowPos 25% 12u "$(enginesDetected)"
+  Pop $0
+  ${NSD_SetText} $EnginesIntro "$(enginesInstallDone)"
 FunctionEnd
 
 Function CreateDesktopShortcut
