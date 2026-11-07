@@ -636,6 +636,30 @@ fn a_drawing_is_the_kind_of_geometry_its_own_group_codes_name() {
         path
     };
 
+    // Verbatim DXF right-justifies each group code in three columns, so the file a machine writes
+    // opens `  0\r\nSECTION` rather than `0\r\nSECTION`: the padding is the drawing's own
+    // formatting, and the claim is the same one behind it.
+    for (name, body, kind) in [
+        (
+            "a-padded-face.dxf",
+            "  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\n3DFACE\r\n  8\r\n0\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n",
+            PreviewType::Models,
+        ),
+        (
+            "a-padded-sheet.dxf",
+            "  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\nLWPOLYLINE\r\n 90\r\n2\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n",
+            PreviewType::Libre,
+        ),
+    ] {
+        let path = written(name, body);
+
+        assert_eq!(
+            kind_of_with_facts(&path, &config, None),
+            Some(kind),
+            "`{name}` is spaced the way a drawing written verbatim is, and is the same file"
+        );
+    }
+
     // The geometry the viewer imports, an entity at a time, so a name that stopped being the
     // viewer's says which one did.
     for (name, entities) in [

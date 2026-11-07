@@ -279,12 +279,13 @@ pub(super) fn is_dbase_table(probe: &[u8]) -> bool {
 
 /// Whether the front of a file is a DXF drawing: the sentinel a binary file of the format
 /// opens with, or a text file whose first group is the section code every one starts with.
+///
+/// The text half is `model_formats::ascii_dxf`'s own question — the same drawing has to be a
+/// drawing on both roads, and the one that settles whether the viewer can draw it asks it there
+/// (see `routing::claim_libre`).
 pub(super) fn is_dxf(probe: &[u8]) -> bool {
-    if starts_with(probe, b"AutoCAD Binary DXF") {
-        return true;
-    }
-
-    starts_with(probe, b"0\r\nSECTION") || starts_with(probe, b"0\nSECTION")
+    starts_with(probe, b"AutoCAD Binary DXF")
+        || crate::formats::model_formats::ascii_dxf(probe, probe.len() as u64)
 }
 
 /// Whether the front of a file is a PageMaker document of one version: the tag the format
