@@ -963,11 +963,13 @@ FunctionEnd
 ; `Manual Download` link that opens the page the engine is installed from. `-` for `PKG` means no
 ; package, which is f3d's row and Office's.
 ;
-; One column split for every row, detected or not: the label owns `0–52%` and everything the row
-; says about itself starts at `54%` — `Detected` alone, or `Install` at `54%` with
-; `Manual Download` hung straight off its right edge at `65%`, so the two read as one compact
-; group rather than as two words pinned to opposite ends of the page. Nothing is right-aligned:
-; the status is the row's, not the page's.
+; One column split for every row, detected or not: the label owns `0–63%` — enough for the longest
+; of them — and the status sits on the far right, `74–98%`, left-aligned inside that column.
+; `Detected` starts exactly where `Manual Download` does, so a row that has nothing to do and a row
+; that has two things read at the same edge, and `Install` is hung straight against its left at
+; `65%` — the two links are one compact group rather than two words pinned to opposite ends.
+; The widths are the words' own: measured in the dialog font, `Manual Download` is 104 px of the
+; page's ~465 px, `Install` 36 px, `Detected` 53 px.
 ;
 ; The link control is a `LINK`-class control of nsDialogs' own, not a comctl32 SysLink, and three
 ; things follow from that — each of which this page got wrong once:
@@ -989,12 +991,12 @@ FunctionEnd
 !macro EnginesRow NAME POS CHECK LABEL PKG LINK
   Call ${CHECK}
   ${If} $0 == 1
-    ${NSD_CreateLabel} 0 ${POS}u 52% 12u "√ ${LABEL}"
+    ${NSD_CreateLabel} 0 ${POS}u 63% 12u "√ ${LABEL}"
     Pop $0
-    ${NSD_CreateLabel} 54% ${POS}u 46% 12u "$(enginesDetected)"
+    ${NSD_CreateLabel} 74% ${POS}u 24% 12u "$(enginesDetected)"
     Pop $0
   ${Else}
-    ${NSD_CreateLabel} 0 ${POS}u 52% 12u "${LABEL}"
+    ${NSD_CreateLabel} 0 ${POS}u 63% 12u "${LABEL}"
     Pop $Engines${NAME}Label
     EnableWindow $Engines${NAME}Label 0
     StrCpy $Engines${NAME}Pos "${POS}u"
@@ -1005,13 +1007,13 @@ FunctionEnd
     ; half, and it needs no name of its own.
     !if "${PKG}" != "-"
       ${If} $EnginesWinget != ""
-        ${NSD_CreateLink} 54% ${POS}u 11% 12u "$(enginesInstall)"
+        ${NSD_CreateLink} 65% ${POS}u 8% 12u "$(enginesInstall)"
         Pop $Engines${NAME}Install
         SetCtlColors $Engines${NAME}Install "000080"
         ${NSD_OnClick} $Engines${NAME}Install EnginesInstall${NAME}
       ${EndIf}
     !endif
-    ${NSD_CreateLink} 65% ${POS}u 34% 12u "$(enginesManualDownload)"
+    ${NSD_CreateLink} 74% ${POS}u 24% 12u "$(enginesManualDownload)"
     Pop $Engines${NAME}Download
     SetCtlColors $Engines${NAME}Download "000080"
     ${NSD_OnClick} $Engines${NAME}Download ${LINK}
@@ -1371,9 +1373,9 @@ Function EnginesInstallTick
   ${If} $EnginesRowDownload != ""
     System::Call 'USER32::ShowWindow(p $EnginesRowDownload, i 0)'
   ${EndIf}
-  ${NSD_CreateLabel} 0 $EnginesRowPos 52% 12u "√ $EnginesLabelText"
+  ${NSD_CreateLabel} 0 $EnginesRowPos 63% 12u "√ $EnginesLabelText"
   Pop $0
-  ${NSD_CreateLabel} 54% $EnginesRowPos 46% 12u "$(enginesDetected)"
+  ${NSD_CreateLabel} 74% $EnginesRowPos 24% 12u "$(enginesDetected)"
   Pop $0
   ${NSD_SetText} $EnginesIntro "$(enginesInstallDone)"
 FunctionEnd
