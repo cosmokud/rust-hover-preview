@@ -51,10 +51,10 @@ use super::ids::{
     ID_TRAY_FONT_80, ID_TRAY_FONT_90, ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE,
     ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE,
     ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE,
-    ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
-    ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
-    ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
-    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ID_TRAY_INSTALL_BASE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
+    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
+    ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
+    ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
     ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL,
     ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_IMAGE_ALL, ID_TRAY_PIN_NAV_IMAGE_CATEGORY,
@@ -74,14 +74,14 @@ use super::ids::{
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
     ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
-    IMAGE_CACHE_SIZE_CHOICES_MB, MPV_COMMANDS, PIN_END_OF_FILE_CHOICES, TASKBAR_CREATED,
-    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND, VIDEO_ENGINE_CHOICES,
-    WM_TRAYICON, ZOOM_BACKGROUND_CHOICES,
+    IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MPV_COMMANDS, PIN_END_OF_FILE_CHOICES,
+    TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
+    VIDEO_ENGINE_CHOICES, WM_TRAYICON, WM_TRAY_INSTALL_FINISHED, ZOOM_BACKGROUND_CHOICES,
 };
 use super::menus::show_context_menu;
-use super::submenus::open_codec_page;
+use super::submenus::{install_engine, open_codec_page};
 
-use crate::app::{dialogs, updates};
+use crate::app::{dialogs, updates, winget};
 use crate::config::config::{
     MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewType, TextTheme,
     TriggerKeyMode, VOLUME_CHOICES,
@@ -97,7 +97,7 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostQuitMessage,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostMessageW, PostQuitMessage,
     RegisterClassExW, RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, MSG,
     PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
     WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
@@ -153,6 +153,14 @@ unsafe extern "system" fn tray_window_proc(
                 if (event == WM_RBUTTONUP || event == WM_LBUTTONUP) && !dialogs::is_confirming() {
                     show_context_menu(hwnd);
                 }
+                LRESULT(0)
+            }
+            // An install the `Codecs → Install` rows started has finished. The worker has already
+            // re-probed the machine and recorded what it installed, so what is left is the slot
+            // that kept a second install from starting — and the menu is built when it is opened,
+            // so the next opening is the one that lists the new answer.
+            WM_TRAY_INSTALL_FINISHED => {
+                winget::settle();
                 LRESULT(0)
             }
             WM_COMMAND => {
@@ -422,6 +430,14 @@ unsafe extern "system" fn tray_window_proc(
                     {
                         open_codec_page(cmd - ID_TRAY_CODEC_BASE)
                     }
+                    // A row of the `Codecs → Install` submenu, by the position it was listed at: the
+                    // table is what this app can install rather than what is missing, so the id means
+                    // the same engine on both sides of the click (see `install_engine`).
+                    cmd if (ID_TRAY_INSTALL_BASE..ID_TRAY_INSTALL_BASE + INSTALL_COMMANDS)
+                        .contains(&cmd) =>
+                    {
+                        install_engine(cmd - ID_TRAY_INSTALL_BASE)
+                    }
                     // An mpv in the `Codecs → Videos → MPV` submenu, by the position its install
                     // was listed at: the installs are re-enumerated in the same order the menu
                     // listed them, so the id means the same thing on both sides (see
@@ -686,6 +702,20 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
         ..Default::default()
     };
     let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+/// Tell the tray window that an install has finished, from the worker that ran it.
+///
+/// The message is posted rather than the slot cleared where the install ended, because clearing it
+/// is the tray's own business: what the rows read while an install is in flight is read on the
+/// thread the menu is built on, and the worker's job ends with the message. A tray window that is
+/// gone — the app on its way out — leaves the slot set, which nothing reads again.
+pub(crate) fn note_install_finished() {
+    let hwnd = unsafe { TRAY_HWND };
+
+    if !hwnd.is_invalid() {
+        let _ = unsafe { PostMessageW(hwnd, WM_TRAY_INSTALL_FINISHED, WPARAM(0), LPARAM(0)) };
+    }
 }
 
 /// Run the tray window and its message loop, which is where this app's main thread spends the

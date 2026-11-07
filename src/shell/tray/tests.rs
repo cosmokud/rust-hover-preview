@@ -1337,6 +1337,12 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         (ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_IMAGE_CACHE_BASE),
         // The codec rows, wider than the list is long.
         (ID_TRAY_CODEC_BASE, ID_TRAY_CODEC_BASE + CODEC_COMMANDS),
+        // And the `Codecs → Install` rows, one id per engine this app can install with
+        // `winget`, in a table of what can be installed rather than of what is missing.
+        (
+            ID_TRAY_INSTALL_BASE,
+            ID_TRAY_INSTALL_BASE + INSTALL_COMMANDS,
+        ),
         // And the mpv installs the `Codecs → Videos → MPV` submenu lists, wider than any
         // machine's install list is likely to be.
         (ID_TRAY_MPV_BASE, ID_TRAY_MPV_BASE + MPV_COMMANDS),
@@ -1873,6 +1879,28 @@ fn mpv_labels_keep_the_tail_and_shorten_from_the_front() {
     );
 }
 
+/// The `Codecs → Install` submenu says which engine it is installing and offers nothing else while
+/// it does: one install at a time is the guard, and a row that could be picked while one is in
+/// flight is a second worker and a second prompt.
+#[test]
+fn the_install_rows_name_the_one_in_flight_and_offer_nothing_while_it_is() {
+    assert_eq!(
+        install_row("Calibre", "calibre.calibre", None),
+        ("Calibre".to_string(), true),
+        "with nothing installing, every row is the name the `Codecs` group lists and is pickable"
+    );
+    assert_eq!(
+        install_row("Calibre", "calibre.calibre", Some("calibre.calibre")),
+        ("Calibre \u{2014} installing\u{2026}".to_string(), false),
+        "the engine being installed says so, and cannot be installed twice"
+    );
+    assert_eq!(
+        install_row("PeaZip", "Giorgiotani.Peazip", Some("calibre.calibre")),
+        ("PeaZip".to_string(), false),
+        "and none of the others can be picked while that one is"
+    );
+}
+
 /// A submenu whose rows are answers of which exactly one is in force marks the row the setting
 /// is on with the disc rather than the tick — the rows are one group rather than a switch
 /// apiece, and the mark is what says so — while a row the setting is not on carries no mark at
@@ -2022,6 +2050,7 @@ fn every_range_the_tray_hands_out_resolves_and_no_two_share_an_id() {
 
         match expression {
             "CODEC_COMMANDS" => Some(CODEC_COMMANDS),
+            "INSTALL_COMMANDS" => Some(INSTALL_COMMANDS),
             "MPV_COMMANDS" => Some(MPV_COMMANDS),
             // Spelled out for the `theme` folder's arm, which is a span today and would be a
             // base plus this cap if it were written the way every other range is.

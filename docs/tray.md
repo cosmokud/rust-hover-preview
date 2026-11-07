@@ -214,7 +214,8 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - Greyed out where `mpv` is not installed.
   - No `ImageMagick TTL`, `PeaZip TTL`, or `Calibre TTL`: those tools run once and exit, so idle time cannot bound them. A second hover is a cache hit.
 - **Codecs** — What this machine has: Videos, Audio, Images, Engines.
-  - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — nothing is installed or downloaded by the app itself.
+  - A missing one carries a cross, and where the README names a page for it, picking the row offers to open that page — the app opens a page rather than downloading anything itself.
+  - **Install** is there only where `winget` is: one row per missing engine the app can install itself (mpv, FFmpeg, LibreOffice, ImageMagick, PeaZip, Calibre). Picking one asks once, then runs `winget install` in the background without administrator rights; the row reads `… — installing…` until it is done, one install at a time, and a failure shows the end of what `winget` said. Where a failure is winget's own sources, `winget source update` is run and the install tried once more. Nothing is removed and nothing is retried interactively.
   - **Videos → MPV** opens a submenu of every mpv this machine has where there is more than one — the standalone install and SVP's own, say — each named by its path, with the one in use marked. Picking one is remembered as `mpv_path`.
 - **System (vX.Y.Z)**
   - **Check for Updates** — Whether the app asks GitHub for a newer release on its own, at startup and when the menu is opened. On by default; at most once every six hours. Where one is found, the **Update Available** row appears above this submenu on the menu's next opening; where none is, nothing happens. Turning it on asks at once.

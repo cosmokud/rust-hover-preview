@@ -22,7 +22,7 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetDlgItem, MessageBoxW, SetWindowTextW, SetWindowsHookExW,
     UnhookWindowsHookEx, HCBT_ACTIVATE, IDNO, IDYES, MB_DEFBUTTON2, MB_ICONINFORMATION,
-    MB_ICONWARNING, MB_SETFOREGROUND, MB_YESNO, MESSAGEBOX_STYLE, WH_CBT,
+    MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNO, MESSAGEBOX_STYLE, WH_CBT,
 };
 
 /// The caption every dialog of this app carries.
@@ -180,6 +180,62 @@ pub(crate) fn confirm_open_page(name: &str, url: &str) -> bool {
     );
 
     confirm(&text, "Open", MB_ICONINFORMATION)
+}
+
+/// The question a row of the `Codecs → Install` submenu asks: whether to install the engine with
+/// `winget`, which is a download, an installer and possibly a UAC prompt rather than a page.
+///
+/// The package id is in the question for the same reason a page's address is: what a yes runs is
+/// read before it runs, and an engine whose `winget` package is not what a user expected is one
+/// they can refuse here.
+pub(crate) fn confirm_install(name: &str, id: &str) -> bool {
+    let text = format!(
+        "Install {name} with winget?\n\n{id}\n\n\
+         It downloads and installs in the background, without administrator rights. A prompt from \
+         the installer itself may appear."
+    );
+
+    confirm(&text, "Install", MB_ICONINFORMATION)
+}
+
+/// What an install that failed says: the end of what winget printed, which is where its errors
+/// are, and what was left alone.
+///
+pub(crate) fn report_install_failure(name: &str, said: &str) {
+    let said = if said.trim().is_empty() {
+        "winget said nothing."
+    } else {
+        said
+    };
+
+    let text = format!(
+        "{name} could not be installed.\n\n{said}\n\n\
+         Its page is still on the row above, and nothing else was changed."
+    );
+
+    report(&text);
+}
+
+/// A box that reports rather than asks, for what has already happened and cannot be refused.
+///
+/// It is a dialog of this app's like the questions are — the tray answers no menu while one is on
+/// screen — and it is shown from the thread that needs it, which for an install is the worker's.
+fn report(text: &str) {
+    let caption = wide(CAPTION);
+    let text = wide(text);
+
+    begin();
+
+    unsafe {
+        MessageBoxW(
+            HWND::default(),
+            PCWSTR(text.as_ptr()),
+            PCWSTR(caption.as_ptr()),
+            MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
+        );
+    }
+
+    end();
 }
 
 /// A string as a message box wants it: UTF-16, terminated.
