@@ -739,6 +739,26 @@ fn a_drawing_is_the_kind_of_geometry_its_own_group_codes_name() {
         "a drawing of a mesh is the viewer's where one is installed and the sheet's where none is"
     );
 
+    // And the two settings that keep it a sheet: the tray's `3D` gate, which is a preview nobody
+    // asked for, and a list that no longer names the file — a machine with the viewer on it either
+    // way.
+    for closed in [
+        AppConfig {
+            f3d_preview_enabled: false,
+            ..config.clone()
+        },
+        AppConfig {
+            f3d_extensions: Vec::new(),
+            ..config.clone()
+        },
+    ] {
+        assert_eq!(
+            kind_of_with_facts(&mesh, &closed, None),
+            Some(PreviewType::Libre),
+            "a drawing the viewer will not be asked to draw is the sheet's"
+        );
+    }
+
     // A name alone is answered without the file being read, which is the form `content_type`
     // asks: the 2D/3D split is the body's question, and a name has no body.
     assert_eq!(
