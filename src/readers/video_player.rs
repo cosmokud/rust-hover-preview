@@ -192,7 +192,7 @@
 //!
 //! The engine is what decides which files it can play: whatever Windows 11 decodes out of
 //! the box, plus whatever a codec extension from the Microsoft Store has added — which is
-//! the question the tray's `Codecs` submenu answers for the machine it is running on.
+//! the question the tray's `Components` submenu answers for the machine it is running on.
 //!
 //! The questions asked of the engine from outside are all answered here. [`dimensions`]
 //! is a video's shape, asked of a source reader before there is anything to play. [`plays`]

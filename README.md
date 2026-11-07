@@ -151,7 +151,7 @@ Runs on any processor Windows 11 itself supports: the build asks for SSE4.2 and 
 
 For smoother playback and a better picture, install mpv: videos then play through it automatically, using your graphics card, with subtitles just working — including any `.srt` file beside the video.
 
-The app finds `mpv.exe` beside itself, in your `PATH`, in `MPV Player` under Program Files, and in SVP 4's `mpv64`; where more than one is found, **Codecs → Videos → MPV** lets you pick which one plays.
+The app finds `mpv.exe` beside itself, in your `PATH`, in `MPV Player` under Program Files, and in SVP 4's `mpv64`; where more than one is found, **Components → Videos → MPV** lets you pick which one plays.
 
 **Option A: winget**
 
@@ -208,7 +208,7 @@ The media engine decodes H.264, MPEG-4, and WMV out of the box; each codec below
 | Theora, Vorbis and Opus in an Ogg file | [Web Media Extensions](https://apps.microsoft.com/detail/9N5TDP8VCMHS)   |
 
 
-All are free, official from Microsoft. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one takes effect the next time the tray's **Codecs** menu is opened — no restart, nothing to configure.
+All are free, official from Microsoft. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one takes effect the next time the tray's **Components** menu is opened — no restart, nothing to configure.
 
 ### Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)
 
@@ -301,7 +301,7 @@ The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its ins
 >
 > `winget source reset --force` is not the way back from this: it re-adds and re-downloads the whole index, so it fails for every network and certificate reason as well, and — since the sources live in your profile — running it elevated changes nothing at all.
 
-The tray does the install for you where it can: right-click the tray icon and pick the engine under `Codecs → Install`, which opens a console window showing the same `winget` command run without administrator rights and re-checks the machine when it is done. The window is where you watch the download, and where a second attempt is made — winget's sources updated and the install tried once more — if the first one fails; nothing is removed from your machine. Every engine still has its row above as well, so the page is one click away whether or not `winget` is there.
+The tray does the install for you where it can: right-click the tray icon and pick the engine under `Components → Install`, which opens a console window showing the same `winget` command run without administrator rights and re-checks the machine when it is done. The window is where you watch the download, and where a second attempt is made — winget's sources updated and the install tried once more — if the first one fails; nothing is removed from your machine. Every engine still has its row above as well, so the page is one click away whether or not `winget` is there.
 
 ## Usage
 

@@ -512,7 +512,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|config| config.video_engine)
         .unwrap_or(DEFAULT_VIDEO_ENGINE);
-    // Asked again here for the reason the `Codecs` rows are asked again: a machine that has just
+    // Asked again here for the reason the `Components` rows are asked again: a machine that has just
     // been given FFmpeg is answered from the machine rather than from the hover that cached it
     // (see `codecs::refresh`).
     refresh_codecs();
@@ -1813,7 +1813,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Engine"),
     );
 
-    // Add the "Codecs" submenu: every engine and every codec extension a preview can lean
+    // Add the "Components" submenu: every engine and every codec extension a preview can lean
     // on, each marked with whether this machine has it. The list is what is installed
     // rather than what this app can do, so a row that is greyed is a preview that will not
     // be shown and a package that can be installed to show it — and where the README names

@@ -166,7 +166,7 @@ pub(crate) fn confirm_reset_lists(sections: &[String]) -> bool {
     confirm(&text, "Reset", MB_ICONWARNING)
 }
 
-/// The question a missing row of the tray's `Codecs` submenu asks: whether to open the page
+/// The question a missing row of the tray's `Components` submenu asks: whether to open the page
 /// the engine or codec is got from.
 ///
 /// Nothing is installed from here and nothing is fetched: a yes hands the page to the
@@ -182,7 +182,7 @@ pub(crate) fn confirm_open_page(name: &str, url: &str) -> bool {
     confirm(&text, "Open", MB_ICONINFORMATION)
 }
 
-/// The question a row of the `Codecs → Install` submenu asks: whether to install the engine with
+/// The question a row of the `Components → Install` submenu asks: whether to install the engine with
 /// `winget`, which is a download, an installer and possibly a UAC prompt rather than a page.
 ///
 /// The package id is in the question for the same reason a page's address is: what a yes runs is

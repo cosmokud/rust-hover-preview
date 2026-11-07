@@ -1,4 +1,4 @@
-//! Installing a missing engine with `winget`, for the `Codecs → Install` rows.
+//! Installing a missing engine with `winget`, for the `Components → Install` rows.
 //!
 //! Four decisions are the whole of it, and each is one a reader would otherwise reverse:
 //!
@@ -58,7 +58,7 @@ const USER_ENVIRONMENT: &str = "Environment";
 /// second one is started while it is (see `install`).
 static IN_FLIGHT: Lazy<Mutex<Option<&'static str>>> = Lazy::new(|| Mutex::new(None));
 
-/// Which engine is being installed right now, if one is: the `Codecs → Install` rows read it to
+/// Which engine is being installed right now, if one is: the `Components → Install` rows read it to
 /// label the row and to keep every row unpickable while it is in flight.
 pub(crate) fn in_flight() -> Option<&'static str> {
     IN_FLIGHT.lock().ok().and_then(|slot| *slot)
@@ -72,7 +72,7 @@ pub(crate) fn settle() {
     }
 }
 
-/// Install one engine of the `Codecs` rows, on a thread of its own.
+/// Install one engine of the `Components` rows, on a thread of its own.
 ///
 /// Nothing is started where `winget` is not there — the rows are only offered where it is (see
 /// `codecs::winget`) — and nothing is started while another install is in flight: one install at a

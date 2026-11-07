@@ -353,7 +353,7 @@ pub(in super::super) fn set_video_engine(engine: VideoEngine) {
     }
 }
 
-/// Which `mpv.exe` a launch runs, from `Codecs → Videos → MPV`, by the position its install was
+/// Which `mpv.exe` a launch runs, from `Components → Videos → MPV`, by the position its install was
 /// listed at.
 ///
 /// The installs are asked of the machine again rather than remembered from the menu build, so an

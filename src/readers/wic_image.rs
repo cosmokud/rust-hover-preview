@@ -118,7 +118,7 @@ thread_local! {
 /// The factory is made in whatever apartment the thread already had, which is the one its
 /// objects belong to either way.
 ///
-/// Treating that refusal as a failure empties the tray's `Codecs` submenu on every machine
+/// Treating that refusal as a failure empties the tray's `Components` submenu on every machine
 /// rather than the odd one: the factory is not made, and a factory that is not made reads
 /// as a picture codec that is not installed, so those rows vanish from the menu on
 /// hardware that decodes them perfectly well.
