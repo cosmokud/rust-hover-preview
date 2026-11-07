@@ -964,28 +964,26 @@ FunctionEnd
 ; package, which is f3d's row and Office's.
 ;
 ; One column split for every row, detected or not: the label owns `0–63%` — enough for the longest
-; of them — and the status sits on the far right, `74–98%`, left-aligned inside that column.
-; `Detected` starts exactly where `Manual Download` does, so a row that has nothing to do and a row
-; that has two things read at the same edge, and `Install` is hung straight against its left at
-; `65%` — the two links are one compact group rather than two words pinned to opposite ends.
-; The widths are the words' own: measured in the dialog font, `Manual Download` is 104 px of the
-; page's ~465 px, `Install` 36 px, `Detected` 53 px.
+; of them — and the status sits on the far right, all of it centred in its column: `Detected` in
+; `74–98%`, exactly where `Manual Download` is, and `Install` in `65–73%` against its left. The
+; widths are the words' own: measured in the dialog font, `Manual Download` is 104 px of the page's
+; ~465 px, `Install` 36 px, `Detected` 53 px.
 ;
-; The link control is a `LINK`-class control of nsDialogs' own, not a comctl32 SysLink, and three
-; things follow from that — each of which this page got wrong once:
+; The words are **centred in their columns**, which is why the two actions are statics and not
+; link controls: nsDialogs' `LINK` control draws its text hard against its left edge and honours no
+; centring style at all — measured, `BS_CENTER` on it changes nothing — while a `STATIC` with
+; `SS_CENTER` centres, and with the `SS_NOTIFY` `${NSD_CreateLabel}` already gives it, answers
+; `${NSD_OnClick}` through the same `WM_COMMAND` the link control used. So what was a link control
+; is a static painted as a link, and the column it is given is the room its centring is measured in.
 ;
-; Its text is drawn as it is written, so it must be the plain string: anchor markup is not parsed,
-; and `<a id="i">Install</a>` is what a reader sees. It draws in the control's own colour rather
-; than the theme's link colour, so `SetCtlColors` is what makes it read as a link at all: the navy
-; MUI's own Finish page gives its link, and **no background colour**. The second half is not an
-; omission — with a background the control paints that rectangle opaquely, which is white boxes
-; around the words on a page whose background is the dialog's own, while with the colour alone it
-; draws the text and lets the page show through. And it answers a click with `WM_COMMAND`, so
-; `${NSD_OnClick}` is its notification: `${NSD_OnNotify}` waits for a `WM_NOTIFY` this control never
-; sends, which is why clicking one did nothing at all.
+; What that static must keep is both halves of a link's look and neither is default: the plain
+; string as its text — a static parses no anchor markup, so `<a id="i">Install</a>` is what a
+; reader sees — and `SetCtlColors` with the navy MUI's own Finish page gives its link and **no
+; background colour**. The second half is not an omission: with a background given the control
+; paints that rectangle opaquely, which is white boxes around the words on a page whose background
+; is the dialog's own, while with the colour alone it draws the text and lets the page show through.
 ;
 ; `NAME` names the globals this row keeps its own controls in, so that the row can be redrawn
-; detected in place once an install has put the engine there (see `EnginesInstallStart`). They are
 ; declared at the top, beside the other `Var`s, because a `Var` inside a function — which is where
 ; this macro is inserted — is not one NSIS makes.
 !macro EnginesRow NAME POS CHECK LABEL PKG LINK
@@ -995,6 +993,7 @@ FunctionEnd
     Pop $0
     ${NSD_CreateLabel} 74% ${POS}u 24% 12u "$(enginesDetected)"
     Pop $0
+    ${NSD_AddStyle} $0 ${SS_CENTER}
   ${Else}
     ${NSD_CreateLabel} 0 ${POS}u 63% 12u "${LABEL}"
     Pop $Engines${NAME}Label
@@ -1007,14 +1006,16 @@ FunctionEnd
     ; half, and it needs no name of its own.
     !if "${PKG}" != "-"
       ${If} $EnginesWinget != ""
-        ${NSD_CreateLink} 65% ${POS}u 8% 12u "$(enginesInstall)"
+        ${NSD_CreateLabel} 65% ${POS}u 8% 12u "$(enginesInstall)"
         Pop $Engines${NAME}Install
+        ${NSD_AddStyle} $Engines${NAME}Install ${SS_CENTER}
         SetCtlColors $Engines${NAME}Install "000080"
         ${NSD_OnClick} $Engines${NAME}Install EnginesInstall${NAME}
       ${EndIf}
     !endif
-    ${NSD_CreateLink} 74% ${POS}u 24% 12u "$(enginesManualDownload)"
+    ${NSD_CreateLabel} 74% ${POS}u 24% 12u "$(enginesManualDownload)"
     Pop $Engines${NAME}Download
+    ${NSD_AddStyle} $Engines${NAME}Download ${SS_CENTER}
     SetCtlColors $Engines${NAME}Download "000080"
     ${NSD_OnClick} $Engines${NAME}Download ${LINK}
   ${EndIf}
@@ -1377,6 +1378,7 @@ Function EnginesInstallTick
   Pop $0
   ${NSD_CreateLabel} 74% $EnginesRowPos 24% 12u "$(enginesDetected)"
   Pop $0
+  ${NSD_AddStyle} $0 ${SS_CENTER}
   ${NSD_SetText} $EnginesIntro "$(enginesInstallDone)"
 FunctionEnd
 
