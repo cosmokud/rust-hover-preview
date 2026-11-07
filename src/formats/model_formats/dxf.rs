@@ -279,6 +279,29 @@ mod tests {
         );
     }
 
+    /// **A drawing is written with its group codes right-justified**, so the scanner is handed
+    /// `  0` in front of every one of them: what it reads is the code a line names rather than the
+    /// column it starts in, which is why the padding in front of a front is the front's question
+    /// alone (see `ascii_dxf`).
+    #[test]
+    fn a_code_written_in_the_columns_a_drawing_is_written_with_is_still_a_code() {
+        assert!(
+            is_3d_of(
+                "padded.dxf",
+                "  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\n3DFACE\r\n  8\r\n0\r\n  0\r\nENDSEC\r\n"
+            ),
+            "a padded `3DFACE` is the entity the importer reads"
+        );
+
+        assert!(
+            !is_3d_of(
+                "padded-flat.dxf",
+                "  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\nPOLYLINE\r\n 70\r\n1\r\n"
+            ),
+            "and a padded 2D polyline is still the sheet's"
+        );
+    }
+
     /// A file that is not there, an empty one, and one whose first line is not a group code are
     /// all answered false: nothing is opened on their account twice.
     #[test]

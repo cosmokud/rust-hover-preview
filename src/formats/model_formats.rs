@@ -241,9 +241,25 @@ fn zip(front: &[u8], _len: u64) -> bool {
     ZIP_MAGICS.iter().any(|magic| front.starts_with(magic))
 }
 
-/// An AutoCAD interchange drawing in the ASCII spelling the viewer's importer reads. The binary one
-/// opens with a sentinel of its own, and is the render engine's alone.
-fn ascii_dxf(front: &[u8], _len: u64) -> bool {
+/// The columns a drawing's first group code may be written in ahead of the code itself: verbatim
+/// DXF right-justifies every code in three, so a file written by the application opens `  0`.
+const DXF_CODE_PAD: usize = 4;
+
+/// An AutoCAD interchange drawing in the ASCII spelling the viewer's importer reads, whatever
+/// spacing in front of its first group code. The binary one opens with a sentinel of its own, and
+/// is the render engine's alone.
+///
+/// This is the same question `content_type::matchers::is_dxf` asks, and it asks it here rather than
+/// spelling it a second time: a front this accepts is a drawing on both roads to the file.
+pub(crate) fn ascii_dxf(front: &[u8], _len: u64) -> bool {
+    let front = front.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(front);
+    let pad = front
+        .iter()
+        .take(DXF_CODE_PAD)
+        .take_while(|byte| **byte == b' ' || **byte == b'\t')
+        .count();
+    let front = &front[pad..];
+
     front.starts_with(b"0\r\nSECTION") || front.starts_with(b"0\nSECTION")
 }
 
@@ -800,6 +816,37 @@ mod tests {
         assert!(
             claims_content(&mesh, None),
             "a drawing holding a face is the model the name promises"
+        );
+
+        // Verbatim DXF writes its group codes right-justified in three columns, so a drawing the
+        // application saved opens `  0\r\nSECTION`: the padding is the file's own formatting, and
+        // what is behind it is the same drawing.
+        let padded_mesh = folder.join("a-padded-mesh.dxf");
+        std::fs::write(
+            &padded_mesh,
+            b"  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\n3DFACE\r\n  8\r\n0\r\n  0\r\nENDSEC\r\n  0\r\nEOF\r\n",
+        )
+        .expect("a drawing");
+        assert!(
+            claims_content(&padded_mesh, None),
+            "a face written under a padded group code is the model it was unpadded"
+        );
+
+        let padded_sheet = folder.join("a-padded-sheet.dxf");
+        std::fs::write(
+            &padded_sheet,
+            b"  0\r\nSECTION\r\n  2\r\nENTITIES\r\n  0\r\nLWPOLYLINE\r\n 90\r\n2\r\n  0\r\nENDSEC\r\n",
+        )
+        .expect("a drawing");
+        assert!(
+            !claims_content(&padded_sheet, None),
+            "and a padded sheet is still the render engine's, as the unpadded one is"
+        );
+
+        // A pad is the few columns a code is written in, not an indent of any depth.
+        assert!(
+            !matcher("dxf")(b"        0\r\nSECTION", 0),
+            "a front indented past the columns a code is written in is no drawing"
         );
 
         // The binary spelling has the front `is_dxf` names and no head the importer can read:

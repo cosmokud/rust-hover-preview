@@ -73,6 +73,24 @@ fn agreement_is_no_opinion() {
         Content::Unknown,
         "a DXF under its own name is the router's to settle"
     );
+    // Verbatim DXF writes its group codes right-justified in three columns, so the drawing a real
+    // machine saves opens `  0` rather than `0` — a byte-order mark in front of it as well, where
+    // one was written. It is the same drawing to the signature, and the same answer.
+    for front in [
+        &b"  0\r\nSECTION\r\n"[..],
+        &b"\xEF\xBB\xBF\t 0\nSECTION\n  2\nENTITIES\n"[..],
+    ] {
+        assert_eq!(
+            classified("drawing.dxf", front),
+            Content::Unknown,
+            "a padded drawing is the drawing an unpadded one is"
+        );
+    }
+    assert_eq!(
+        classified("drawing.txt", b"  0\r\nSECTION\r\n"),
+        Content::Kind(PreviewType::Libre),
+        "and a padded one under another name is still read as a drawing"
+    );
 }
 
 /// A box is not an answer, which is the half of the signature tables that is
