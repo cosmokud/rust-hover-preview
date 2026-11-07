@@ -16,16 +16,17 @@ target/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# Machine-local cargo config holding the shared absolute target dir (never commit)
+/.cargo/target-dir.local.toml
+
+# Scratch
 /scratchpad/
 /.scratch/
 /.tmp/
 /.spec/
 /.venv/
-/.ua/
 
-# Machine-local cargo config holding the shared absolute target dir (never commit)
-/.cargo/target-dir.local.toml
+# Others
+pi-session*.html
 /state
-
-# scratch
-.tmp/
+/.ua/
