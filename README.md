@@ -301,7 +301,7 @@ The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its ins
 >
 > `winget source reset --force` is not the way back from this: it re-adds and re-downloads the whole index, so it fails for every network and certificate reason as well, and — since the sources live in your profile — running it elevated changes nothing at all.
 
-The tray does the install for you where it can: right-click the tray icon and pick the engine under `Codecs → Install`, which runs the same `winget` command in the background without administrator rights and re-checks the machine when it is done. Every engine still has its row above as well, so the page is one click away whether or not `winget` is there.
+The tray does the install for you where it can: right-click the tray icon and pick the engine under `Codecs → Install`, which opens a console window showing the same `winget` command run without administrator rights and re-checks the machine when it is done. The window is where you watch the download, and where a second attempt is made — winget's sources updated and the install tried once more — if the first one fails; nothing is removed from your machine. Every engine still has its row above as well, so the page is one click away whether or not `winget` is there.
 
 ## Usage
 

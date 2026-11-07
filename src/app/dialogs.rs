@@ -187,30 +187,26 @@ pub(crate) fn confirm_open_page(name: &str, url: &str) -> bool {
 ///
 /// The package id is in the question for the same reason a page's address is: what a yes runs is
 /// read before it runs, and an engine whose `winget` package is not what a user expected is one
-/// they can refuse here.
+/// they can refuse here. What a yes opens is a console window, and it is said so: the window is
+/// where the install is watched and where a failure is read.
 pub(crate) fn confirm_install(name: &str, id: &str) -> bool {
     let text = format!(
         "Install {name} with winget?\n\n{id}\n\n\
-         It downloads and installs in the background, without administrator rights. A prompt from \
-         the installer itself may appear."
+         A console window opens and shows the install, without administrator rights. The machine's \
+         installers for LibreOffice, calibre, ImageMagick and PeaZip may raise their own UAC prompt \
+         — that is theirs, and it is expected."
     );
 
     confirm(&text, "Install", MB_ICONINFORMATION)
 }
 
-/// What an install that failed says: the end of what winget printed, which is where its errors
-/// are, and what was left alone.
-///
-pub(crate) fn report_install_failure(name: &str, said: &str) {
-    let said = if said.trim().is_empty() {
-        "winget said nothing."
-    } else {
-        said
-    };
-
+/// What an install that failed says: the code `winget` left, what was left alone, and where the
+/// reason is — the console window that is still up, showing what winget printed.
+pub(crate) fn report_install_failure(name: &str, code: i32) {
     let text = format!(
-        "{name} could not be installed.\n\n{said}\n\n\
-         Its page is still on the row above, and nothing else was changed."
+        "{name} could not be installed.\n\nwinget exited with code {code}.\n\n\
+         The winget window that was open shows why. Its page is still on the row above, and \
+         nothing else was changed."
     );
 
     report(&text);
