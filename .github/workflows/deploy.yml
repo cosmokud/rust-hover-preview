@@ -110,8 +110,12 @@ jobs:
       # release exists, and an immutable release is one that cannot be taken back - so this
       # runs before anything is built and before the release is created, which is the last
       # point at which a leak is still a failed run rather than a permanent one.
+      #
+      # Asked for in the profile that ships, not in the debug one: this test target pulls in
+      # the whole dependency graph either way, and in `github` that graph is the one the
+      # packaging step goes on to use, so a release compiles it once instead of twice.
       - name: Path leaks
-        run: cargo test --test no_path_leaks
+        run: cargo test --profile github --test no_path_leaks
 
       - name: Install cargo-packager
         shell: pwsh

@@ -263,13 +263,23 @@ strip = true
 # What the release artifacts are built with, and the only thing that uses it: the
 # GitHub workflows and `build-installers.ps1` package with `--profile github`, while
 # `cargo build --release` keeps the profile above, so the edit-build-test loop is still
-# a short one. What ships is optimized as one program instead of as sixteen codegen
-# units apiece — 419 KB, 5.7% of the release binary measured on 0.2.11 — and nothing
-# about it is slower at run time.
+# a short one. What ships is optimized as one program: fat LTO merges every dependency's
+# bitcode into one module, runs its passes over the whole of that, and only then splits
+# it back into codegen units for the backend — so sixteen units here cost nothing at run
+# time and buy back the parallel codegen of this crate on the runner, where one unit
+# serializes three hundred files both before the merge and after it. The ISA comes from
+# `.cargo/config.toml`, which asks for the x86-64-v2 level: nothing here narrows it, and
+# nothing here may widen it past a machine the OS itself runs on.
 [profile.github]
 inherits = "release"
 lto = "fat"
-codegen-units = 1
+codegen-units = 16
+
+# The build scripts and proc macros, which run on the runner and ship nowhere: `winres`
+# and the `cc` builds beside it (libwebp, Oniguruma) finish sooner above the zero a build
+# dependency is otherwise given.
+[profile.github.build-override]
+opt-level = 1
 
 [package.metadata.packager]
 product-name = "Rust Hover Preview"

@@ -128,7 +128,7 @@ A secret or credential file is never previewed while **Don't Preview Secret File
 
 | Engine                                                     | `config.ini` | Default extensions                                                                                                                                                                                                                                                                                                         |
 | --- | --- | --- |
-| [f3d](#optional-enable-3d-models-f3d), which draws a scene into a window of its own | `[f3d]`      | 210, 3ds, 3mf, abc, amf, bin, bpf, brep, cdf, csd, dae, ex2, exo, fbx, fcstd, glb, gltf, gml, ifc, iges, igs, las, laz, mdl, mha, mhd, nc, ncdf, nhdr, nrrd, obj, off, p21, pic, ply, pts, ptx, qi, sbet, slpk, splat, spz, step, stl, stp, stpnc, usd, usda, usdc, usdz, vdb, vrml, vti, vtk, vtkhdf, vtm, vtp, vtr, vts, vtu, wrl, xbf |
+| [f3d](#optional-enable-3d-models-f3d), which draws a scene into a window of its own | `[f3d]`      | 210, 3ds, 3mf, abc, amf, bin, bpf, brep, cdf, csd, dae, dxf, ex2, exo, fbx, fcstd, glb, gltf, gml, ifc, iges, igs, las, laz, mdl, mha, mhd, nc, ncdf, nhdr, nrrd, obj, off, p21, pic, ply, pts, ptx, qi, sbet, slpk, splat, spz, step, stl, stp, stpnc, usd, usda, usdc, usdz, vdb, vrml, vti, vtk, vtkhdf, vtm, vtp, vtr, vts, vtu, wrl, xbf |
 
 
 ## Installation
@@ -144,6 +144,8 @@ Each release provides two options:
 4. Launch Rust Hover Preview.
 
 No Rust toolchain is needed.
+
+Runs on any processor Windows 11 itself supports: the build asks for SSE4.2 and POPCNT, not AVX2, so an x64 emulation on an ARM64 device runs it too.
 
 ### Optional: Enable Video Preview with mpv
 
@@ -238,6 +240,8 @@ winget install -e --id TheDocumentFoundation.LibreOffice
 
 Or download the official installer from [https://www.libreoffice.org/download/](https://www.libreoffice.org/download/) and run the suggested file (`LibreOffice_*_Win_x86-64.msi`; LibreOffice ships an `.msi`, not an `.exe`).
 
+`dxf` is in this list and in the `[f3d]` one, because the two engines draw different halves of the format: LibreOffice imports a drafting sheet whole, and f3d reads only the 3D geometry it holds. Which of them a file is, is decided by the file rather than by the name — see [3D Models](#optional-enable-3d-models-f3d).
+
 ### Optional: Enable Camera Raw and More Pictures (ImageMagick)
 
 The camera raws and the pictures beside them in `[image]` are decoded by the codecs Windows has
@@ -285,6 +289,8 @@ Or download the official Windows build from [https://github.com/f3d-app/f3d/rele
 
 The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its installer writes under Program Files; a copy anywhere else is named by `f3d_path` in `config.ini`, and the `[f3d]` list there is edited like every other engine's. A file whose own head is not the format its `[f3d]` name promises previews as nothing rather than starting the viewer; a name whose format declares nothing in its front is left to the viewer; and a name you add to that list yourself is trusted, since nothing here knows the format it stands for.
 
+`dxf` is the one name in two lists, and the file itself says which: a drawing holding 3D geometry — a `3DFACE`, or a `POLYLINE` marked as a 3D one, a mesh or a polyface — is drawn here, and every other drawing is a 2D sheet this app hands to LibreOffice, which imports it whole where f3d would draw nothing. A drawing whose 3D geometry sits past the first 256 KB of the file stays the sheet's, so a hover stays fast. Without f3d installed, `dxf` is LibreOffice's alone.
+
 > [!WARNING]
 > If `winget` reports an error, the package sources are usually why: run `winget source reset --force`.
 >
@@ -310,7 +316,7 @@ See [docs/configuration.md](docs/configuration.md) for every `config.ini` settin
 
 ## Build from Source
 
-Requirements: Windows 11, Rust 1.98.1+, Visual Studio Build Tools (MSVC / C++), and the Windows SDK.
+Requirements: Windows 11, Rust 1.98.1+, Visual Studio Build Tools (MSVC / C++), and the Windows SDK. The build targets the x86-64-v2 level (`-C target-cpu=x86-64-v2` in `.cargo/config.toml`), so the machine that compiles it has to be one that can run the result.
 
 ```bash
 cargo build            # debug
