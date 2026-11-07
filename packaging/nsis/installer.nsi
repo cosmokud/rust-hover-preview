@@ -1011,9 +1011,9 @@ FunctionEnd
     StrCpy $Engines${NAME}Pos "${POS}u"
     StrCpy $Engines${NAME}Install ""
     ; `!if` and not `${If}`: the package being `-` has to keep the handler's name out of the
-    ; compiled page, because there is no `EnginesInstallF3D` or `EnginesInstallOffice` function to
-    ; resolve and a runtime branch would still name one. Whether winget was found is the runtime
-    ; half, and it needs no name of its own.
+    ; compiled page, because there is no `EnginesInstallOffice` function to resolve and a runtime
+    ; branch would still name one. Whether winget was found is the runtime half, and it needs no
+    ; name of its own.
     !if "${PKG}" != "-"
       ${If} $EnginesWinget != ""
         ${NSD_CreateLink} 65% ${POS}u 21u 12u "$(enginesInstall)"
@@ -1095,9 +1095,10 @@ Function EnginesShow
   !insertmacro EnginesRow PeaZip 88 PeaZipInstalled $(enginesPeaZip) Giorgiotani.Peazip EnginesLinkPeaZip
   !insertmacro EnginesRow Calibre 102 CalibreInstalled $(enginesCalibre) calibre.calibre EnginesLinkCalibre
 
-  ; f3d has no winget package, so its row is the manual download alone — the same page the app's
-  ; own `Components` row opens, and the one its releases are taken from by hand.
-  !insertmacro EnginesRow F3D 116 F3DInstalled $(enginesF3D) - EnginesLinkF3D
+  ; f3d's package is the one whose installer is an `.exe` of its own rather than a machine-wide
+  ; MSI: winget runs it, it is the same NSIS build its releases page hands out, and the row's
+  ; manual download stays beside it for a machine with no winget.
+  !insertmacro EnginesRow F3D 116 F3DInstalled $(enginesF3D) f3d-app.f3d EnginesLinkF3D
 
   ; Office's row offers no Install either: it is not a free package, so what it carries is the page
   ; Microsoft sells it from.
@@ -1236,6 +1237,17 @@ Function EnginesInstallCalibre
   StrCpy $EnginesRowPos $EnginesCalibrePos
   StrCpy $EnginesRowInstall $EnginesCalibreInstall
   StrCpy $EnginesRowDownload $EnginesCalibreDownload
+  Call EnginesInstallStart
+FunctionEnd
+
+Function EnginesInstallF3D
+  Pop $0
+  StrCpy $EnginesId "f3d-app.f3d"
+  StrCpy $EnginesCheck "F3DInstalled"
+  StrCpy $EnginesRowLabel $EnginesF3DLabel
+  StrCpy $EnginesRowPos $EnginesF3DPos
+  StrCpy $EnginesRowInstall $EnginesF3DInstall
+  StrCpy $EnginesRowDownload $EnginesF3DDownload
   Call EnginesInstallStart
 FunctionEnd
 
