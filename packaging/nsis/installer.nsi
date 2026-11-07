@@ -166,14 +166,17 @@ Var AppStartMenuFolder
 ;
 ; Nothing is installed from here and nothing is downloaded. What a link does is open a page in
 ; the browser the user already has — the same pages the README names, and the same ones the
-; tray's `Codecs` rows open. A row an engine is present for offers nothing, since there is
-; nothing to offer.
+; tray's `Codecs` rows open — and it opens it in the user's own session, not this installer's:
+; the browser is started by `explorer.exe` (see `EnginesLinkMPV`) rather than by `ExecShell`,
+; which would hand the address to the token this installer runs elevated with and land it in an
+; administrator's profile or nowhere at all. A row an engine is present for offers nothing,
+; since there is nothing to offer.
 ;
 ; What is asked about each engine is what the app itself asks before it drives one, so a page
 ; that says a name is missing and the app's own `Codecs` row agree: the folders each installer
-; writes to, the `PATH` for FFmpeg's player, the two folders mpv's own installers write to, the
-; console archiver inside a PeaZip installation, the `f3d\bin` folder f3d's own installer writes,
-; and the ProgID of each Office application — as
+; writes to, beside the app or the `PATH` for FFmpeg's player, the two folders mpv's own
+; installers write to, the console archiver inside a PeaZip installation, the `f3d\bin` folder
+; f3d's own installer writes, and the ProgID of each Office application — as
 ; a row of Office's own, which is the one row here with nothing to its right, since Office is not
 ; a download, and as the one thing decided here about LibreOffice: the Office formats are worth
 ; naming only on a machine with no Office to draw them, and what LibreOffice adds to a machine
@@ -681,8 +684,15 @@ Function MPVInstalled
   ${EndIf}
 FunctionEnd
 
+; FFmpeg is asked for the player beside the app first, which is where an unpacked copy sits and
+; where the app looks before it looks anywhere else (see `codecs::find_ffplay`), and then in a
+; folder on the `PATH`.
 Function FFmpegInstalled
   StrCpy $0 0
+  ${If} ${FileExists} "$INSTDIR\ffplay.exe"
+    StrCpy $0 1
+    Return
+  ${EndIf}
   SearchPath $1 "ffplay.exe"
   IfErrors +2 0
     StrCpy $0 1
@@ -807,6 +817,32 @@ Function OfficeInstalled
   ${EndIf}
 FunctionEnd
 
+; One row of the page, at `POS` units down: the label, marked with `√` and answered `Detected`
+; where the detector `CHECK` says the engine is here, and the same label greyed with a link where
+; it is not. `-` for the link means there is none, which is Office's row alone.
+;
+; The link is a SysLink, which sends its click as a notification rather than as `BN_CLICKED`:
+; `${NSD_OnClick}` hangs its function off the second and this control never sends it, which is
+; why every row registers `${NSD_OnNotify}` — the same one value on the stack, the control handle.
+!macro EnginesRow POS CHECK LABEL LINK
+  Call ${CHECK}
+  ${If} $0 == 1
+    ${NSD_CreateLabel} 0 ${POS}u 74% 12u "√ ${LABEL}"
+    Pop $0
+    ${NSD_CreateLabel} 75% ${POS}u 25% 12u "$(enginesDetected)"
+    Pop $0
+  ${Else}
+    ${NSD_CreateLabel} 0 ${POS}u 74% 12u "${LABEL}"
+    Pop $0
+    EnableWindow $0 0
+    !if "${LINK}" != "-"
+      ${NSD_CreateLink} 75% ${POS}u 25% 12u "$(enginesDownload)"
+      Pop $0
+      ${NSD_OnNotify} $0 ${LINK}
+    !endif
+  ${EndIf}
+!macroend
+
 Function EnginesShow
   ${If} ${Silent}
     Abort
@@ -826,37 +862,8 @@ Function EnginesShow
 
   ; mpv's row is the first, as mpv is the first of the engines the app lists for a video: where
   ; more than one player is installed, it is the one `Best` prefers.
-  Call MPVInstalled
-  ${If} $0 == 1
-    StrCpy $1 "√ $(enginesMPV)"
-    ${NSD_CreateLabel} 0 32u 74% 12u "$1"
-    Pop $0
-    ${NSD_CreateLabel} 75% 32u 25% 12u "$(enginesDetected)"
-    Pop $0
-  ${Else}
-    ${NSD_CreateLabel} 0 32u 74% 12u "$(enginesMPV)"
-    Pop $0
-    EnableWindow $0 0
-    ${NSD_CreateLink} 75% 32u 25% 12u "$(enginesDownload)"
-    Pop $0
-    ${NSD_OnClick} $0 EnginesLinkMPV
-  ${EndIf}
-
-  Call FFmpegInstalled
-  ${If} $0 == 1
-    StrCpy $1 "√ $(enginesFFmpeg)"
-    ${NSD_CreateLabel} 0 46u 74% 12u "$1"
-    Pop $0
-    ${NSD_CreateLabel} 75% 46u 25% 12u "$(enginesDetected)"
-    Pop $0
-  ${Else}
-    ${NSD_CreateLabel} 0 46u 74% 12u "$(enginesFFmpeg)"
-    Pop $0
-    EnableWindow $0 0
-    ${NSD_CreateLink} 75% 46u 25% 12u "$(enginesDownload)"
-    Pop $0
-    ${NSD_OnClick} $0 EnginesLinkFFmpeg
-  ${EndIf}
+  !insertmacro EnginesRow 32 MPVInstalled $(enginesMPV) EnginesLinkMPV
+  !insertmacro EnginesRow 46 FFmpegInstalled $(enginesFFmpeg) EnginesLinkFFmpeg
 
   ; What LibreOffice is called here is decided before it is asked about: the Office formats are
   ; worth naming where there is no Office to draw them, and the formats beside them are what the
@@ -867,101 +874,16 @@ Function EnginesShow
     StrCpy $EnginesLibreText "$(enginesLibreNiche)"
   ${EndIf}
 
-  Call LibreOfficeInstalled
-  ${If} $0 == 1
-    StrCpy $1 "√ $EnginesLibreText"
-    ${NSD_CreateLabel} 0 60u 74% 12u "$1"
-    Pop $0
-    ${NSD_CreateLabel} 75% 60u 25% 12u "$(enginesDetected)"
-    Pop $0
-  ${Else}
-    ${NSD_CreateLabel} 0 60u 74% 12u "$EnginesLibreText"
-    Pop $0
-    EnableWindow $0 0
-    ${NSD_CreateLink} 75% 60u 25% 12u "$(enginesDownload)"
-    Pop $0
-    ${NSD_OnClick} $0 EnginesLinkLibreOffice
-  ${EndIf}
-
-  Call ImageMagickInstalled
-  ${If} $0 == 1
-    StrCpy $1 "√ $(enginesImageMagick)"
-    ${NSD_CreateLabel} 0 74u 74% 12u "$1"
-    Pop $0
-    ${NSD_CreateLabel} 75% 74u 25% 12u "$(enginesDetected)"
-    Pop $0
-  ${Else}
-    ${NSD_CreateLabel} 0 74u 74% 12u "$(enginesImageMagick)"
-    Pop $0
-    EnableWindow $0 0
-    ${NSD_CreateLink} 75% 74u 25% 12u "$(enginesDownload)"
-    Pop $0
-    ${NSD_OnClick} $0 EnginesLinkImageMagick
-  ${EndIf}
-
-  Call PeaZipInstalled
-  ${If} $0 == 1
-    StrCpy $1 "√ $(enginesPeaZip)"
-    ${NSD_CreateLabel} 0 88u 74% 12u "$1"
-    Pop $0
-    ${NSD_CreateLabel} 75% 88u 25% 12u "$(enginesDetected)"
-    Pop $0
-  ${Else}
-    ${NSD_CreateLabel} 0 88u 74% 12u "$(enginesPeaZip)"
-    Pop $0
-    EnableWindow $0 0
-    ${NSD_CreateLink} 75% 88u 25% 12u "$(enginesDownload)"
-    Pop $0
-    ${NSD_OnClick} $0 EnginesLinkPeaZip
-  ${EndIf}
-
-  Call CalibreInstalled
-  ${If} $0 == 1
-    StrCpy $1 "√ $(enginesCalibre)"
-    ${NSD_CreateLabel} 0 102u 74% 12u "$1"
-    Pop $0
-    ${NSD_CreateLabel} 75% 102u 25% 12u "$(enginesDetected)"
-    Pop $0
-  ${Else}
-    ${NSD_CreateLabel} 0 102u 74% 12u "$(enginesCalibre)"
-    Pop $0
-    EnableWindow $0 0
-    ${NSD_CreateLink} 75% 102u 25% 12u "$(enginesDownload)"
-    Pop $0
-    ${NSD_OnClick} $0 EnginesLinkCalibre
-  ${EndIf}
-
-  Call F3DInstalled
-  ${If} $0 == 1
-    StrCpy $1 "√ $(enginesF3D)"
-    ${NSD_CreateLabel} 0 116u 74% 12u "$1"
-    Pop $0
-    ${NSD_CreateLabel} 75% 116u 25% 12u "$(enginesDetected)"
-    Pop $0
-  ${Else}
-    ${NSD_CreateLabel} 0 116u 74% 12u "$(enginesF3D)"
-    Pop $0
-    EnableWindow $0 0
-    ${NSD_CreateLink} 75% 116u 25% 12u "$(enginesDownload)"
-    Pop $0
-    ${NSD_OnClick} $0 EnginesLinkF3D
-  ${EndIf}
+  !insertmacro EnginesRow 60 LibreOfficeInstalled $EnginesLibreText EnginesLinkLibreOffice
+  !insertmacro EnginesRow 74 ImageMagickInstalled $(enginesImageMagick) EnginesLinkImageMagick
+  !insertmacro EnginesRow 88 PeaZipInstalled $(enginesPeaZip) EnginesLinkPeaZip
+  !insertmacro EnginesRow 102 CalibreInstalled $(enginesCalibre) EnginesLinkCalibre
+  !insertmacro EnginesRow 116 F3DInstalled $(enginesF3D) EnginesLinkF3D
 
   ; Office's row is the one with nothing beside it: Office is not a free download, so a machine
   ; without it is told what the row is and offered nowhere to go — the same silence the app's own
   ; `Codecs` rows keep for it, which cannot be picked either.
-  Call OfficeInstalled
-  ${If} $0 == 1
-    StrCpy $1 "√ $(enginesOffice)"
-    ${NSD_CreateLabel} 0 130u 74% 12u "$1"
-    Pop $0
-    ${NSD_CreateLabel} 75% 130u 25% 12u "$(enginesDetected)"
-    Pop $0
-  ${Else}
-    ${NSD_CreateLabel} 0 130u 74% 12u "$(enginesOffice)"
-    Pop $0
-    EnableWindow $0 0
-  ${EndIf}
+  !insertmacro EnginesRow 130 OfficeInstalled $(enginesOffice) -
 
   nsDialogs::Show
 FunctionEnd
@@ -973,44 +895,49 @@ FunctionEnd
 Function EnginesLeave
 FunctionEnd
 
-; The page's seven links, a function each, so that the address a row opens is written by the row
-; rather than looked up from a table. The control handle the click carries is the first thing on
-; the stack and is dropped: what a click does is one address, and which control it was is not
-; part of the question. Office's row has no function of its own here: there is nowhere to send
-; anyone.
+; The page's six links, a function each, so that the address a row opens is written by the row
+; rather than looked up from a table. The control handle the notification carries is the first
+; thing on the stack and is dropped: what a click does is one address, and which control it was
+; is not part of the question. Office's row has no function of its own here: there is nowhere to
+; send anyone.
+;
+; The address is handed to `explorer.exe` rather than to `ExecShell "open"`, because this
+; installer runs elevated: `ExecShell` would start the browser with the administrator token, in
+; that account's profile or in none. Explorer is already running as the interactive user at
+; medium integrity, so the page it opens is a page that user's own browser shows.
 Function EnginesLinkMPV
   Pop $0
-  ExecShell "open" "https://mpv.io/installation/"
+  Exec '"$WINDIR\explorer.exe" "https://mpv.io/installation/"'
 FunctionEnd
 
 Function EnginesLinkFFmpeg
   Pop $0
-  ExecShell "open" "https://ffmpeg.org/download.html"
+  Exec '"$WINDIR\explorer.exe" "https://ffmpeg.org/download.html"'
 FunctionEnd
 
 Function EnginesLinkLibreOffice
   Pop $0
-  ExecShell "open" "https://www.libreoffice.org/download/"
+  Exec '"$WINDIR\explorer.exe" "https://www.libreoffice.org/download/"'
 FunctionEnd
 
 Function EnginesLinkImageMagick
   Pop $0
-  ExecShell "open" "https://imagemagick.org/download/"
+  Exec '"$WINDIR\explorer.exe" "https://imagemagick.org/download/"'
 FunctionEnd
 
 Function EnginesLinkPeaZip
   Pop $0
-  ExecShell "open" "https://peazip.github.io/peazip-64bit.html"
+  Exec '"$WINDIR\explorer.exe" "https://peazip.github.io/peazip-64bit.html"'
 FunctionEnd
 
 Function EnginesLinkCalibre
   Pop $0
-  ExecShell "open" "https://calibre-ebook.com/download_windows"
+  Exec '"$WINDIR\explorer.exe" "https://calibre-ebook.com/download_windows"'
 FunctionEnd
 
 Function EnginesLinkF3D
   Pop $0
-  ExecShell "open" "https://github.com/f3d-app/f3d/releases"
+  Exec '"$WINDIR\explorer.exe" "https://github.com/f3d-app/f3d/releases"'
 FunctionEnd
 
 Function CreateDesktopShortcut
