@@ -32,11 +32,7 @@ Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. 
 picture: the ones this app decodes itself and the ones a codec Windows ships decodes — `heic`,
 `heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, a still `webp`, the icon and cursor resources
 `ico`/`icon`/`cur`, the bitmap shapes `dib`/`rle`/`exif`, and every camera raw from `3fr` to
-`x3f`. A document, a project or a dataset is another list's however an engine could rasterise it:
-`xcf` stays in `[magick]` and so does `dcm`.
-
-Everything an extension provides has to be installed once — the ones a codec Windows ships
-(`heic`, `heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, `webp`) come from the [Store
+`x3f`.  Everything an extension provides has to be installed once — the ones a codec Windows ships (`heic`, `heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, `webp`) come from the [Store
 extensions](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs), and the camera
 raws from the **Raw Image Extension** beside them — and every other entry of `[image]` needs
 nothing installed. Where a codec is missing, a [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick)
@@ -210,7 +206,7 @@ The media engine decodes H.264, MPEG-4, and WMV out of the box; each codec below
 
 All are free, official from Microsoft. Windows 11 usually has HEVC, VP9, and AV1 already. Installing one takes effect the next time the tray's **Components** menu is opened — no restart, nothing to configure.
 
-### Optional: Enable HEIC, AVIF, JPEG XL and WebP Preview (Windows Codecs)
+### Optional: Enable HEIC, AVIF, JPEG XL, WebP, Camera Raws Preview (Windows Codecs)
 
 A **still** `heic`, `heif`, `avif`, `jxl`, and still `webp` is decoded by a codec Windows provides rather than one shipped with the app. Each still needs its extension installed once from the Microsoft Store:
 
@@ -287,10 +283,6 @@ winget install -e --id f3d-app.f3d
 
 Or download the official Windows build from [https://github.com/f3d-app/f3d/releases](https://github.com/f3d-app/f3d/releases).
 
-The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its installer writes under Program Files; a copy anywhere else is named by `f3d_path` in `config.ini`, and the `[f3d]` list there is edited like every other engine's. A file whose own head is not the format its `[f3d]` name promises previews as nothing rather than starting the viewer; a name whose format declares nothing in its front is left to the viewer; and a name you add to that list yourself is trusted, since nothing here knows the format it stands for.
-
-`dxf` is the one name in two lists, and the file itself says which: a drawing holding 3D geometry — a `3DFACE`, or a `POLYLINE` marked as a 3D one, a mesh or a polyface — is drawn here, and every other drawing is a 2D sheet this app hands to LibreOffice, which imports it whole where f3d would draw nothing. A drawing whose 3D geometry sits past the first 256 KB of the file stays the sheet's, so a hover stays fast. Without f3d installed, `dxf` is LibreOffice's alone.
-
 > [!WARNING]
 > `winget` keeps its sources and its state in your own profile — `%LOCALAPPDATA%\Microsoft\WinGet` — so every step below is run from your own Terminal, and none of them as an administrator: an elevated window belongs to whichever administrator account it was opened from, so it repairs that account's sources rather than yours, or finds none at all.
 >
@@ -301,7 +293,7 @@ The app finds `f3d.exe` beside itself, in your `PATH`, and in the folder its ins
 >
 > `winget source reset --force` is not the way back from this: it re-adds and re-downloads the whole index, so it fails for every network and certificate reason as well, and — since the sources live in your profile — running it elevated changes nothing at all.
 
-The tray does the install for you where it can: right-click the tray icon and pick the engine under `Components → Install` — mpv, FFmpeg, LibreOffice, ImageMagick, PeaZip, Calibre and f3d — which opens a console window showing the same `winget` command run without administrator rights and re-checks the machine when it is done. The window is where you watch the download, and where a second attempt is made — winget's sources updated and the install tried once more — if the first one fails; nothing is removed from your machine. Every engine still has its row above as well, so the page is one click away whether or not `winget` is there. Office is the one engine with no `Install`: the only Office package `winget` has is *Microsoft 365 Apps for enterprise*, which installs for every user of the machine and needs a tenant licence behind it, so the row carries Microsoft's own page instead.
+The tray does the install for you where it can: right-click the tray icon and pick the engine under `Components → Install` — mpv, FFmpeg, LibreOffice, ImageMagick, PeaZip, Calibre and f3d — which opens a console window showing the same `winget` command run without administrator rights and re-checks the machine when it is done. 
 
 ## Usage
 
