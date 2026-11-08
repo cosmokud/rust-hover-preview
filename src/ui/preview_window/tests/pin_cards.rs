@@ -1313,7 +1313,7 @@ fn the_bands_edges_drag_the_height_and_the_cards_buttons_keep_their_rows() {
         "a press on the band's bottom edge is the band's"
     );
     assert!(
-        unsafe { pin_playlist::drag(HWND::default(), edge + 40) },
+        unsafe { pin_playlist::drag(HWND::default(), width / 2, edge + 40) },
         "and the drag that follows it is the band's too"
     );
     assert_eq!(

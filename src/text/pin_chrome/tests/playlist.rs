@@ -1,6 +1,10 @@
-use super::super::playlist::{playlist_edge_at, playlist_row, playlist_thumb, PlaylistEdge};
+use super::super::playlist::{
+    playlist_edge_at, playlist_row, playlist_scroll_at, playlist_scroll_max, playlist_thumb,
+    playlist_thumb_grab, playlist_track_holds, PlaylistEdge,
+};
 use super::*;
 use crate::readers::audio_track::{self, Player, Probed, Track};
+use crate::text::audio_preview::{Fact, FactKind};
 
 /// A band of a display's own scale at 96 dpi, which is what every number below is counted in.
 const SCALE: f32 = 1.0;
@@ -8,7 +12,16 @@ const SCALE: f32 = 1.0;
 fn a_row(name: &str) -> PlaylistRow {
     PlaylistRow {
         name: name.to_string(),
-        facts: "MP3 · 4.2 MB".to_string(),
+        facts: vec![
+            Fact {
+                text: "MP3".to_string(),
+                kind: FactKind::Name,
+            },
+            Fact {
+                text: "4.2 MB".to_string(),
+                kind: FactKind::Number,
+            },
+        ],
         clock: None,
     }
 }
@@ -38,14 +51,25 @@ fn the_rows_are_two_columns_and_the_clock_is_the_second() {
     );
 
     // A band with more rows than fit keeps the scrollbar's room off its right as well, and the
-    // rows are narrowed by exactly that.
+    // rows are narrowed by exactly that. The bar itself is a mark on the window's own edge: it is
+    // held two pixels off it, which is the whole of the margin it is given.
     let scrolling = playlist_layout(400, 240, SCALE, 40);
     let (left, right) = scrolling
         .track
         .expect("a band of forty rows in the room of five scrolls");
-    assert_eq!(right, 390, "the track sits in the band's own margin");
-    assert!(left < right);
-    assert!(scrolling.clock_right < layout.clock_right);
+    assert_eq!(
+        right, 398,
+        "the track hugs the window's own right edge, two pixels off it"
+    );
+    assert_eq!(right - left, 4, "and it is the width of a bar");
+    assert!(
+        scrolling.clock_right < layout.clock_right,
+        "the clock gives the bar its room"
+    );
+    assert!(
+        scrolling.clock_right < left,
+        "and the clock ends before the track begins, so the two are never one column"
+    );
 }
 
 /// A press lands on the row its row of the band holds, and on nothing in the pad or below the
@@ -214,9 +238,21 @@ fn a_row_says_what_the_file_says_and_who_long_it_is() {
         row.name, "mixdown",
         "a row names the file without the extension it is already known by"
     );
+    let parts: Vec<(&str, FactKind)> = row
+        .facts
+        .iter()
+        .map(|fact| (fact.text.as_str(), fact.kind.clone()))
+        .collect();
     assert_eq!(
-        row.facts, "FLAC · 44.1 kHz · stereo · 1006 kbps · 3.0 MB",
-        "the parts are the card's own, joined with the card's own separator"
+        parts,
+        vec![
+            ("FLAC", FactKind::Name),
+            ("44.1 kHz", FactKind::Number),
+            ("stereo", FactKind::Word),
+            ("1006 kbps", FactKind::Number),
+            ("3.0 MB", FactKind::Number),
+        ],
+        "the parts are the card's own, in the card's own inks"
     );
     assert_eq!(row.clock.as_deref(), Some("1:02:03"));
 
@@ -226,7 +262,14 @@ fn a_row_says_what_the_file_says_and_who_long_it_is() {
     std::fs::write(&bare, vec![0u8; 1024 * 1024]).expect("a written file");
     let row = playlist_row(&bare);
     assert_eq!(row.name, "unknown");
-    assert_eq!(row.facts, "APE · 1.0 MB");
+    assert_eq!(
+        row.facts
+            .iter()
+            .map(|fact| fact.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["APE", "1.0 MB"],
+        "and its parts are the extension and the room it takes"
+    );
     assert_eq!(
         row.clock, None,
         "and nothing at all where no length is known"
@@ -296,5 +339,76 @@ fn the_band_claims_its_whole_box_and_stripes_the_row_it_shows() {
         stripe,
         [palette.accent[2], palette.accent[1], palette.accent[0]],
         "the row the pin is showing is striped in the accent, premultiplied"
+    );
+}
+
+/// A thumb dragged down the track is the scroll that row means, and the two are one arithmetic: a bar
+/// drawn from one and answered by the other would drift out from under the hand that is carrying it.
+#[test]
+fn a_thumb_dragged_down_the_track_is_the_scroll_it_means() {
+    let layout = playlist_layout(400, 240, SCALE, 40);
+    let max = playlist_scroll_max(40, layout.visible.max(0) as usize);
+    assert!(max > 0, "a band of forty rows in the room of five scrolls");
+
+    assert_eq!(
+        playlist_scroll_at(&layout, 40, layout.rows_top),
+        0,
+        "the top of the track is the first row"
+    );
+    assert_eq!(
+        playlist_scroll_at(&layout, 40, layout.rows_bottom),
+        max,
+        "and the bottom of it is the last"
+    );
+
+    // The two are inverses over the whole of the travel: where the bar draws the thumb is the row a
+    // drag to that place comes back to.
+    for step in 0..=20 {
+        let scrolled = max * step / 20;
+        let (top, _) = playlist_thumb(&layout, scrolled, 40);
+        let back = playlist_scroll_at(&layout, 40, top);
+
+        assert!(
+            back.abs_diff(scrolled) <= 1,
+            "scroll {scrolled} drawn at {top} came back as {back}"
+        );
+    }
+}
+
+/// A press on the bar takes hold of the part of the thumb it landed on, and of the middle of it where
+/// it landed on the track: a thumb that jumped to put its top under the hand is a list that jumped
+/// the moment it was touched.
+#[test]
+fn a_press_on_the_bar_takes_hold_of_the_thumb_it_found() {
+    let layout = playlist_layout(400, 240, SCALE, 40);
+    let (top, bottom) = playlist_thumb(&layout, 10, 40);
+
+    assert_eq!(
+        playlist_thumb_grab(&layout, 10, 40, top + 3),
+        3,
+        "the hand took the thumb three pixels down from its top"
+    );
+    assert_eq!(
+        playlist_thumb_grab(&layout, 10, 40, layout.rows_top),
+        (bottom - top) / 2,
+        "and a press on the track above it took the middle"
+    );
+
+    // And the bar is the window's own column, held the two pixels off its edge: a press anywhere else
+    // in the band is a row's.
+    let (left, right) = layout.track.expect("a band that scrolls has a track");
+    assert!(playlist_track_holds(&layout, left, layout.rows_top));
+    assert!(playlist_track_holds(
+        &layout,
+        right - 1,
+        layout.rows_bottom - 1
+    ));
+    assert!(
+        !playlist_track_holds(&layout, left - 1, layout.rows_top),
+        "a press left of the bar is the rows'"
+    );
+    assert!(
+        !playlist_track_holds(&layout, left, layout.rows_top - 1),
+        "and one above it is nobody's"
     );
 }

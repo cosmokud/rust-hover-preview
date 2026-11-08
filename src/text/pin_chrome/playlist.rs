@@ -27,9 +27,11 @@ pub(crate) struct PlaylistRow {
     /// The file's own name without its extension: what a person reading the band is
     /// identifying, the folder being the one the pin was taken up in already.
     pub(crate) name: String,
-    /// What the file says about itself, joined with ` · ` and read once when the rows are built:
-    /// the format, the sample rate, the channels, the bitrate and the room it takes.
-    pub(crate) facts: String,
+    /// What the file says about itself, read once when the rows are built and drawn the way the
+    /// card draws its own facts line: the format in the page's ink, the quantities in the numbers'
+    /// ink and the words in the muted one, parted by the same ` · ` in that same muted gray (see
+    /// `audio_preview::facts_of` and `audio_preview::page`).
+    pub(crate) facts: Vec<audio_preview::Fact>,
     /// How long it plays, or nothing where the file does not say — a row's right column is a
     /// clock rather than a dash, so a lengthless file carries nothing there.
     pub(crate) clock: Option<String>,
@@ -87,7 +89,7 @@ pub(crate) fn playlist_row_height(scale: f32) -> i32 {
 /// so a band at any scale keeps the pair on the middle of its row rather than on its top.
 fn line_boxes(layout: &PlaylistLayout, row_top: i32, scale: f32) -> (RECT, RECT) {
     let name_cell = text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[NAME_LEVEL as usize], scale);
-    let facts_cell = text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[FACTS_LEVEL as usize], scale);
+    let facts_cell = text_paint::scaled(FACTS_PIXELS as i32, scale);
     let top = row_top + ((layout.row_height - name_cell - facts_cell) / 2).max(0);
 
     (
@@ -115,6 +117,7 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let stripe = text_paint::scaled(STRIPE_PIXELS as i32, scale).max(0);
     let bar = text_paint::scaled(SCROLLBAR_PIXELS as i32, scale).max(1);
     let gap = text_paint::scaled(SCROLLBAR_GAP_PIXELS as i32, scale).max(0);
+    let track_margin = text_paint::scaled(TRACK_MARGIN_PIXELS as i32, scale).max(0);
     let clock = text_paint::scaled(CLOCK_PIXELS as i32, scale).max(0);
     let clock_gap = text_paint::scaled(CLOCK_GAP_PIXELS as i32, scale).max(0);
 
@@ -122,10 +125,22 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let rows_bottom = (height - pad).max(rows_top);
     let visible = ((rows_bottom - rows_top) / row_height).max(0);
     let scrolling = rows.saturating_sub(visible as usize) > 0;
-    let margin = if scrolling { bar + gap } else { 0 };
+    // The scrollbar is a mark on the window's own edge rather than a column of the band's: it is
+    // held the margin off the edge and the rows are held the gap off it, so what the rows give up
+    // for it is its own width and a breath beside it and no more.
+    let track_right = (width - track_margin).max(0);
+    let track_left = (track_right - bar).max(0);
+    // What the rows give up on their right: the pad the band holds everything off its edge by, or
+    // the bar's own column and the breath beside it where there is one — the bar stands on the
+    // window's edge rather than inside the pad, so the two are counted from different ends.
+    let margin = if scrolling {
+        width - track_left + gap
+    } else {
+        pad
+    };
 
     let text_left = pad + stripe + gap;
-    let clock_right = (width - pad - margin).max(text_left);
+    let clock_right = (width - margin).max(text_left);
     let clock_left = (clock_right - clock).max(text_left);
 
     PlaylistLayout {
@@ -138,10 +153,7 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
         name_right: (clock_left - clock_gap).max(text_left),
         clock_left,
         clock_right,
-        track: scrolling.then(|| {
-            let right = (width - pad).max(0);
-            (right - bar, right)
-        }),
+        track: scrolling.then_some((track_left, track_right)),
     }
 }
 
@@ -214,6 +226,52 @@ pub(crate) fn playlist_thumb(layout: &PlaylistLayout, scroll: usize, rows: usize
     let top = layout.rows_top + (travel * scroll.min(max) as i32) / max as i32;
 
     (top, top + height)
+}
+
+/// The scroll a thumb dragged to `top` means: the inverse of `playlist_thumb`, so that a press on
+/// the bar and the bar's own drawing are one arithmetic rather than two that drift.
+///
+/// Nothing at all for a band whose rows all fit, which is a band with no bar to drag.
+pub(crate) fn playlist_scroll_at(layout: &PlaylistLayout, rows: usize, top: i32) -> usize {
+    let room = (layout.rows_bottom - layout.rows_top).max(1);
+    let visible = layout.visible.max(1) as usize;
+    let max = playlist_scroll_max(rows, visible);
+    let (thumb_top, thumb_bottom) = playlist_thumb(layout, 0, rows);
+    let travel = room - (thumb_bottom - thumb_top);
+
+    if travel <= 0 || max == 0 {
+        return 0;
+    }
+
+    let carried = (top - layout.rows_top).clamp(0, travel);
+    ((carried as i64 * max as i64 + (travel as i64 / 2)) / travel as i64) as usize
+}
+
+/// The share of the thumb a press on the track has hold of, so that the bar does not jump under the
+/// hand that is carrying it: where on the thumb the press landed, and the middle of it for a press
+/// on the track itself — which is the one gesture a bar answers by jumping.
+pub(crate) fn playlist_thumb_grab(
+    layout: &PlaylistLayout,
+    scroll: usize,
+    rows: usize,
+    y: i32,
+) -> i32 {
+    let (thumb_top, thumb_bottom) = playlist_thumb(layout, scroll, rows);
+
+    if (thumb_top..thumb_bottom).contains(&y) {
+        return y - thumb_top;
+    }
+
+    (thumb_bottom - thumb_top) / 2
+}
+
+/// Whether a band-local point is the scrollbar's own track rather than a row's.
+pub(crate) fn playlist_track_holds(layout: &PlaylistLayout, x: i32, y: i32) -> bool {
+    let Some((left, right)) = layout.track else {
+        return false;
+    };
+
+    x >= left && x < right && y >= layout.rows_top && y < layout.rows_bottom
 }
 
 /// How far a name has to travel before its end is in sight, at the room a row's left column
@@ -293,11 +351,23 @@ pub(crate) fn paint_playlist(
     let name_style = name_style();
     let facts_style = facts_style();
 
+    // **The facts line is set the way the card sets its own**, which is three inks rather than one:
+    // the format is the page's own, the quantities are the numbers' ink and the words — how many
+    // channels there are, said as a person says it — are the muted gray the card's own line uses.
+    // The ` · ` between two of them is that same gray, so the line reads as parts of one sentence
+    // rather than as a run of one colour (see `audio_preview::page`).
+    let muted = text_paint::blend(palette.background, palette.foreground, MUTED_INK);
+    let separator = " · ";
+
     // The runs are drawn through GDI, which writes colour and leaves the alpha byte at zero (see
     // the module documentation of `pin_chrome`), so each run's own box is given its coverage back
     // once it has been drawn — the same sealing the caption does for its title.
-    let mut boxes = Vec::with_capacity(band.rows.len() * 3);
+    let mut boxes = Vec::with_capacity(band.rows.len() * 6);
     let mut painter = text_paint::RunPainter::new(surface, scale);
+    // The second line is a pixel under the first, so it is measured and drawn at the scale that
+    // lands it there rather than at the band's own (see `facts_scale`).
+    let small = facts_scale(scale);
+    let mut small_painter = text_paint::RunPainter::new(surface, small);
 
     for (step, row) in band.rows.iter().enumerate() {
         let index = band.first + step;
@@ -367,24 +437,65 @@ pub(crate) fn paint_playlist(
         );
         boxes.push(name_box);
 
-        painter.draw(
-            &fit_title(
-                surface,
-                &facts_style,
-                &row.facts,
-                facts_box.right - facts_box.left,
-                scale,
-            ),
-            facts_box.left,
-            facts_box,
-            &facts_style,
-            palette.number,
-            under,
-        );
+        // The parts of the facts line, one after another, each in its own ink and each parted from
+        // the one before it by the muted gray — and the whole of it cut where the column ends, which
+        // is what a line of parts rather than one string is drawn by.
+        let mut x = facts_box.left;
+        for (at, fact) in row.facts.iter().enumerate() {
+            let ink = match fact.kind {
+                audio_preview::FactKind::Name => palette.foreground,
+                audio_preview::FactKind::Number => palette.number,
+                audio_preview::FactKind::Word => muted,
+            };
+
+            if at > 0 {
+                let width = measure(surface, &facts_style, separator, small);
+                if x + width > facts_box.right {
+                    break;
+                }
+                small_painter.draw(
+                    separator,
+                    x,
+                    RECT {
+                        left: x,
+                        right: x + width,
+                        ..facts_box
+                    },
+                    &facts_style,
+                    muted,
+                    under,
+                );
+                boxes.push(RECT {
+                    left: x,
+                    right: x + width,
+                    ..facts_box
+                });
+                x += width;
+            }
+
+            let room = facts_box.right - x;
+            let text = fit_title(surface, &facts_style, &fact.text, room, small);
+            let width = measure(surface, &facts_style, &text, small);
+            if width == 0 {
+                break;
+            }
+            let run = RECT {
+                left: x,
+                right: x + width,
+                ..facts_box
+            };
+            small_painter.draw(&text, x, run, &facts_style, ink, under);
+            boxes.push(run);
+            x += width;
+
+            if width >= room {
+                break;
+            }
+        }
         boxes.push(facts_box);
 
         if let Some(clock) = row.clock.as_deref() {
-            let measured = measure(surface, &facts_style, clock, scale);
+            let measured = measure(surface, &facts_style, clock, small);
             let clock_box = RECT {
                 left: layout.clock_left,
                 top: facts_box.top,
@@ -392,12 +503,15 @@ pub(crate) fn paint_playlist(
                 bottom: facts_box.bottom,
             };
             if clock_box.right > clock_box.left {
-                painter.draw(
+                // The length is the accent, which is the ink the card's own clock and its bar are
+                // drawn in: the two say the same thing about the same second (see
+                // `audio_preview::page`).
+                small_painter.draw(
                     clock,
                     (clock_box.right - measured).max(clock_box.left),
                     clock_box,
                     &facts_style,
-                    palette.number,
+                    palette.accent,
                     under,
                 );
                 boxes.push(clock_box);
@@ -461,10 +575,24 @@ fn name_style() -> text_paint::TextStyle {
     styled(NAME_LEVEL)
 }
 
-/// The style a row's facts and its clock are set in: the theme's own body text, in the ink a
-/// card reads its numbers in.
+/// The style a row's facts and its clock are set in: the theme's own body text, at the size one
+/// pixel under it — a facts line is the note under the name rather than a second name, and a pixel
+/// is the whole of the difference a row needs.
 fn facts_style() -> text_paint::TextStyle {
     styled(FACTS_LEVEL)
+}
+
+/// The scale the facts line is set at, which is the band's own times the ratio that lands it a pixel
+/// under the body level.
+///
+/// A size is a level of the page's own table and the step under the body is three pixels, so the one
+/// pixel is asked for as a scale: a font is made at the size its style names times the scale, so the
+/// scale that lands `FACTS_PIXELS` where `LEVEL_FONT_PIXELS[FACTS_LEVEL]` would have stood is the
+/// display's own times the ratio of the two.
+fn facts_scale(scale: f32) -> f32 {
+    let body = text_paint::LEVEL_FONT_PIXELS[FACTS_LEVEL as usize] as f32;
+
+    scale * (FACTS_PIXELS / body)
 }
 
 fn styled(level: u8) -> text_paint::TextStyle {
@@ -493,26 +621,26 @@ pub(crate) fn playlist_row(path: &Path) -> PlaylistRow {
         _ => None,
     };
 
-    let mut parts: Vec<String> = match track.as_ref() {
-        Some(track) => audio_preview::facts_of(track, path)
-            .into_iter()
-            .map(|fact| fact.text)
-            .collect(),
-        None => vec![audio_preview::extension_of(path).to_uppercase()],
+    let mut facts = match track.as_ref() {
+        Some(track) => audio_preview::facts_of(track, path),
+        None => vec![audio_preview::Fact {
+            text: audio_preview::extension_of(path).to_uppercase(),
+            kind: audio_preview::FactKind::Name,
+        }],
     };
     // The room the file takes is the one part no probe answers for, and the one a person picking
-    // one of ten mixes reads: it is always there.
-    parts.push(format!(
-        "{:.1} MB",
-        size_in_bytes(path) as f64 / BYTES_IN_A_MEGABYTE
-    ));
+    // one of ten mixes reads: it is always there, and it is a quantity like the others.
+    facts.push(audio_preview::Fact {
+        text: format!("{:.1} MB", size_in_bytes(path) as f64 / BYTES_IN_A_MEGABYTE),
+        kind: audio_preview::FactKind::Number,
+    });
 
     PlaylistRow {
         name: path
             .file_stem()
             .map(|stem| stem.to_string_lossy().to_string())
             .unwrap_or_default(),
-        facts: parts.join(" · "),
+        facts,
         clock: track
             .as_ref()
             .and_then(|track| track.duration)
@@ -535,6 +663,9 @@ const STRIPE_PIXELS: f32 = 3.0;
 /// off it, and how far a row's name may run before the scrollbar's own room is taken off.
 const SCROLLBAR_PIXELS: f32 = 4.0;
 const SCROLLBAR_GAP_PIXELS: f32 = 6.0;
+/// How far the scrollbar's track is held off the window's own right edge: the bar is a mark on that
+/// edge, and a margin wider than a couple of pixels reads as a column the band does not have.
+const TRACK_MARGIN_PIXELS: f32 = 2.0;
 
 /// The clock's column: the room `1:02:03` is set in at the body level, and the gap that holds the
 /// name column off it.
@@ -550,9 +681,17 @@ const ROW_FACE: &str = "Segoe UI";
 const NAME_LEVEL: u8 = 3;
 const FACTS_LEVEL: u8 = text_paint::BODY_LEVEL;
 
+/// The size a row's facts line is set at: the body level less the one pixel that makes it the note
+/// under the name (see `facts_scale`).
+const FACTS_PIXELS: f32 = text_paint::LEVEL_FONT_PIXELS[FACTS_LEVEL as usize] as f32 - 1.0;
+
 /// How far the wash a picked row takes lifts off the band's page, which is the lift a caption
 /// button takes under the pointer: a row is a thing a hand has chosen, not a control lit up.
 const ROW_WASH: f32 = 0.10;
+
+/// How far the muted ink a facts line's words and its separators are drawn in stands off the page,
+/// which is the amount the card's own facts line is muted by (see `audio_preview::page`).
+const MUTED_INK: f32 = 0.45;
 
 /// How far the seam at the band's top is drawn off the page, and the scrollbar's two inks: the
 /// same two amounts a page of text draws its own bar in.
