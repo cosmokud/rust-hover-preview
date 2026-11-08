@@ -173,6 +173,37 @@ fn every_button_of_a_caption_is_the_one_under_the_pointer() {
     );
 }
 
+/// The strip a press on a caption is answered by, as one box, is the buttons the same caption
+/// carries as many boxes: the same edges, for every width and both kinds of strip.
+///
+/// It is what the hook is given instead of this list — it cannot build one inside its own callback —
+/// so a strip that came back one button wide, or that began where the walk's first surviving button
+/// does not, would be a press on a button read as a press on the listing behind it (see `button_strip`
+/// and `ui::preview_window::publish_pin_button_boxes`).
+#[test]
+fn the_strip_a_press_is_answered_by_is_the_buttons_the_caption_carries() {
+    for width in [0, 40, 200, 600, 3_000] {
+        for maximizable in [false, true] {
+            let buttons = button_boxes(width, 30, 96, maximizable);
+            let strip = button_strip(width, 30, 96, maximizable);
+
+            assert_eq!(
+                strip,
+                buttons
+                    .first()
+                    .zip(buttons.last())
+                    .map(|(first, last)| RECT {
+                        left: first.rect.left,
+                        top: 0,
+                        right: last.rect.right,
+                        bottom: 30,
+                    }),
+                "a strip {width} wide is not the buttons it carries"
+            );
+        }
+    }
+}
+
 /// A caption too narrow for the walk carries the window's buttons and nothing else. A pin is worth
 /// less than a window it can be closed from, and the buttons that stay are the ones a hand has been
 /// reaching for on every window it has ever had — so the walk goes first, from its own left end, and

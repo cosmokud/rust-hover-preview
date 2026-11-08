@@ -67,7 +67,7 @@ pub(super) const STATE_RECHECK_ACTIVE_MS: u64 = 100; // When active
 /// has stopped answering cannot end anything: a document nothing is waiting on, held
 /// by a loop that is not running, is the leftover process this app exists not to leave
 /// behind (see `engine_processes`). What counts as stopped is the age of the loop's
-/// last tick, which it notes as it runs (`preview_window::preview_stall_ms`) — its own
+/// last tick, which it notes as it runs (`crate::app::seam::preview_stall_ms`) — its own
 /// waits are a sixteenth of a second with a preview up and half a second idle, so
 /// three seconds of quiet is not a wait but work that has not come back, or a loop
 /// that is gone.

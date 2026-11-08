@@ -216,7 +216,7 @@ pub fn show_preview_keyboard(
 
     // A keyboard preview is not the pointer's, so the item the pointer was last read
     // on has nothing to say about it: the box goes rather than gating a preview the
-    // keyboard asked for (see `HOVER_POINTER_BOX`).
+    // keyboard asked for (see `POINTER_ITEM_BOX`).
     clear_pointer_item_box();
 
     send_preview(PreviewMessage::ShowKeyboard(
@@ -251,7 +251,7 @@ pub fn hide_preview() {
     // was last read on are written under one lock, so a load that is still running —
     // started under the count from before this — cannot put the preview back up after
     // it, and nothing is revealed against a hover that has already gone (see
-    // `HIDDEN_EPOCH` and `HOVER_POINTER_BOX`).
+    // `HIDDEN_EPOCH` and `POINTER_ITEM_BOX`).
     {
         let mut hidden = HIDDEN_EPOCH.lock().ok();
         if let Some(hidden) = hidden.as_mut() {

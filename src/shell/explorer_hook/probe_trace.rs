@@ -439,7 +439,7 @@ pub(super) fn pointer_moved_off_the_hovered_item(
 /// box of the item it found, so a look that found the same item leaves that box exactly
 /// where it was, while a look that found another item publishes another box — and an item
 /// with no preview of its own is an item all the same, which is the case that makes the
-/// published box on its own the wrong question (see `HOVER_POINTER_BOX`). A preview is
+/// published box on its own the wrong question (see `POINTER_ITEM_BOX`). A preview is
 /// therefore spared only where the box under the pointer is the box the preview was
 /// resolved from *and* still holds the pointer; another item, another box, no box at all
 /// are all read as the pointer having left, which is the reading that cannot leave a

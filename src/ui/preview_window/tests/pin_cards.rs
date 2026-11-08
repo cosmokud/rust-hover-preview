@@ -2528,6 +2528,7 @@ fn a_sounds_always_on_top_button_is_the_pins_own_and_not_a_file_under_it() {
     stand_pin(Some(pin));
 
     let (x, y) = a_sound_window_button_point(&sound_pin(), CardControl::AlwaysOnTop);
+    publish_pin_button_boxes();
     assert!(
         pin_button_covers((window.0 + x, window.1 + y)),
         "the always-on-top button is the pin's own chrome"

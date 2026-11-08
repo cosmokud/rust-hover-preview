@@ -3,22 +3,11 @@
 
 use super::*;
 
-/// Whether the left mouse button is down, as the Explorer hook's last read of the buttons
-/// found it.
-///
-/// Published rather than read here, because `GetAsyncKeyState` cannot be asked for this
-/// without also spending the press bit that tells the hook a click has happened — and the
-/// hook is what `Pin Mode → Update Preview` follows a pick by. See `left_button_down` for
-/// the whole of it, and `PIN_MEDIA_LEFT_PRESSES` for the press beside the state.
-pub(super) static PIN_MEDIA_LEFT_DOWN: AtomicBool = AtomicBool::new(false);
-
-/// How many left-button presses the Explorer hook has read, as a count rather than a bit.
-///
-/// The preview thread polls for a pin's press handling more slowly than the hook publishes,
-/// so a press published as a bit would be overwritten by the next tick's "no press" before
-/// this side ever looked and would read as no press at all. A count cannot be missed that
-/// way: what this side asks is whether the count has moved, which is the question a press is.
-pub(super) static PIN_MEDIA_LEFT_PRESSES: AtomicU64 = AtomicU64::new(0);
+// The two facts a press on the pin is read from are the seam's own now that the hook and this loop
+// are two processes: the hook is the one place in this app that reads the buttons, and this side
+// only reads what it published. Their storage moved, their readers did not (see
+// `crate::app::seam::PIN_MEDIA_LEFT_DOWN`).
+use crate::app::seam::{PIN_MEDIA_LEFT_DOWN, PIN_MEDIA_LEFT_PRESSES};
 
 /// Whether the pointer is carrying the pinned window, or pulling it to a new size, right now.
 ///

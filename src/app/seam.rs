@@ -38,6 +38,7 @@
 //! copy. What is in here is the whole of what a second process is told, which is what makes the split
 //! a change of one module.
 
+pub(crate) use crate::ui::preview_window::PreviewCursorHover;
 use crate::ui::preview_window::{AvoidRegion, PinPlanned, ScreenRegion};
 use once_cell::sync::Lazy;
 use std::cell::UnsafeCell;
@@ -51,6 +52,7 @@ use std::sync::atomic::{
 };
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Memory::{
@@ -130,6 +132,38 @@ pub(crate) struct SeamFacts {
     pin_presses: AtomicU32,
     toggle_presses: AtomicU32,
     pin_main_down: AtomicU32,
+    /// Which of this app's own surfaces the pointer stands on, one bit a surface (see
+    /// `cursor_preview_hover`): the preview's picture, the player's window, the engine's, or none.
+    preview_hover: AtomicU32,
+    /// The box the preview surface on screen stands in (see `preview_screen_rect`).
+    preview_rect: AtomicU64,
+    /// Whether the page the engine is drawing is one that runs, and whether a drag that began on it is
+    /// still down — the two halves of the page rule that are the viewer's to know (see
+    /// `ENGINE_PAGE_RUNS`).
+    engine_page_runs: AtomicBool,
+    engine_page_drag: AtomicBool,
+    /// Whether a text preview in full mode is on screen, and whether a spinner is standing in for a
+    /// page that is on its way. Both hold the pointer; what they hold it *through* differs (see
+    /// `TEXT_PREVIEW_HOLDING` and the two boxes below).
+    text_preview_holding: AtomicBool,
+    waiting_preview_holding: AtomicBool,
+    /// The two boxes a text preview or a pin holds the pointer through, packed the way
+    /// `PublishedRegion` packs one (see `HOLD_REGION_JOURNEY`).
+    hold_region_journey: AtomicU64,
+    hold_region_preview: AtomicU64,
+    /// The box the view drew the item under the pointer in (see `POINTER_ITEM_BOX`).
+    pointer_item_box: AtomicU64,
+    /// The left button's state and how many presses it has taken, published by the one place in this
+    /// app that reads the buttons (see `PIN_MEDIA_LEFT_DOWN`).
+    pin_media_left_down: AtomicBool,
+    pin_media_left_presses: AtomicU64,
+    /// The wall clock of the preview loop's last tick, in milliseconds since the epoch: a number both
+    /// processes can read, which is the whole of why it is a wall clock rather than an `Instant` (see
+    /// `preview_stall_ms`).
+    preview_alive_unix_ms: AtomicU64,
+    /// The boxes a standing pin's own buttons answer a press in, each packed whole, and `NO_REGION`
+    /// for the ones this pin has no button in (see `pin_button_covers`).
+    pin_buttons: [AtomicU64; PIN_BUTTONS],
     /// Messages the tray side sends the preview side, and the other way, each with an event of its own
     /// to wake the reader (see `SeamRing`).
     preview_ring: SeamRing,
@@ -178,6 +212,19 @@ impl SeamFacts {
             pin_presses: AtomicU32::new(0),
             toggle_presses: AtomicU32::new(0),
             pin_main_down: AtomicU32::new(0),
+            preview_hover: AtomicU32::new(0),
+            preview_rect: AtomicU64::new(NO_REGION),
+            engine_page_runs: AtomicBool::new(false),
+            engine_page_drag: AtomicBool::new(false),
+            text_preview_holding: AtomicBool::new(false),
+            waiting_preview_holding: AtomicBool::new(false),
+            hold_region_journey: AtomicU64::new(NO_REGION),
+            hold_region_preview: AtomicU64::new(NO_REGION),
+            pointer_item_box: AtomicU64::new(NO_REGION),
+            pin_media_left_down: AtomicBool::new(false),
+            pin_media_left_presses: AtomicU64::new(0),
+            preview_alive_unix_ms: AtomicU64::new(0),
+            pin_buttons: [const { AtomicU64::new(NO_REGION) }; PIN_BUTTONS],
             preview_ring: SeamRing::new(),
             tray_ring: SeamRing::new(),
         }
@@ -198,6 +245,10 @@ const SEAM_TEXT_UNITS: usize = 512;
 
 /// How many numbers a slot carries, which is as many as the widest variant writes.
 const SEAM_NUMBERS: usize = 10;
+
+/// How many boxes a standing pin's own buttons can answer a press in: the nine controls a sound's card
+/// carries, and the room a caption's buttons take as one (see `pin_button_covers`).
+pub(crate) const PIN_BUTTONS: usize = 10;
 
 /// One direction's ring of fixed slots: messages claimed in one order and read in that same order.
 ///
@@ -1020,6 +1071,197 @@ pub(crate) fn publish_find_bar_up(open: bool) {
     PIN_FIND_BAR_UP.store(open, Ordering::Release);
 }
 
+/// Which of this app's own surfaces the pointer is on, published by the preview loop once a tick.
+///
+/// **It is published rather than asked because the surface is not the hook's to find.** One of the
+/// three is a layered window drawn by the process on the other side of the seam, and the others are a
+/// player's window and the engine's, which that process owns as well: `WindowFromPoint` in the tray
+/// would name a handle the tray can hold but not draw a preview in, and the four questions the hook
+/// asks of it — is the pointer on a preview at all, is it on a picture, on a page, on a film — are all
+/// questions about what is *shown* rather than about what the desktop holds. One tick of staleness is
+/// what a surface that appears under a hand can be wrong by, and the hand that put it there is not
+/// also moving the wheel (see `PIN_KEYS_OWNER` for the same road and the same reason).
+static PREVIEW_HOVER: Fact<AtomicU32> = Fact::of(|facts| &facts.preview_hover);
+
+/// Whether the surface the pointer stands on is a picture, a film, or a page the engine draws — the
+/// three of them, as the preview loop last saw the pointer (see `PREVIEW_HOVER`).
+pub(crate) fn cursor_preview_hover() -> PreviewCursorHover {
+    let published = PREVIEW_HOVER.load(Ordering::Acquire);
+
+    PreviewCursorHover {
+        image: published & 1 != 0,
+        video: published & 2 != 0,
+        engine: published & 4 != 0,
+    }
+}
+
+/// Publish which surface the pointer is on, from the tick that is allowed to ask the desktop (see
+/// `PREVIEW_HOVER`).
+pub(crate) fn publish_preview_cursor_hover(hover: PreviewCursorHover) {
+    let published =
+        u32::from(hover.image) | u32::from(hover.video) << 1 | u32::from(hover.engine) << 2;
+
+    PREVIEW_HOVER.store(published, Ordering::Release);
+}
+
+/// The box the preview surface on screen stands in, published by the preview loop once a tick: what the
+/// hook asks instead of walking the desktop for a window it does not own (see `preview_screen_rect`).
+pub(crate) static PREVIEW_SCREEN_RECT: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.preview_rect);
+
+/// The box the preview surface on screen stands in, or nothing where none is (see
+/// `PREVIEW_SCREEN_RECT`).
+///
+/// It is the engine's own box where a document is what is shown, because that is where a document is
+/// drawn: a page that runs is held through the rectangle the engine put its window in, and the hook
+/// cannot ask the engine for it (see `preview_pointer_hold`).
+pub(crate) fn preview_screen_rect() -> Option<(i32, i32, i32, i32)> {
+    PREVIEW_SCREEN_RECT.get()
+}
+
+/// Whether the page the engine is drawing is one that **runs** — a document with script of its own in
+/// it rather than a picture of one — published beside the box above.
+///
+/// It is published rather than derived because the two things it is made of are the preview side's: the
+/// path the engine is showing, and whether that path is a page at all (see `html_is_engine_drawn`).
+/// The rule the hook reads it by is the one the preview side reads for itself: a page that runs is held
+/// through its own rectangle, and a document that cannot be touched is dismissed by the pointer as a
+/// picture is (see `preview_pointer_hold`).
+pub(crate) static ENGINE_PAGE_RUNS: Fact<AtomicBool> = Fact::of(|facts| &facts.engine_page_runs);
+
+/// Whether a drag that began on the page the engine drew is still down.
+///
+/// The hook keeps it — a press inside the engine's rectangle arms it, and a tick with no button down at
+/// all stands it down, which is the only reading that says the drag is over — and the preview side
+/// reads it, which is why it crosses. A drag cannot be seen from where the pointer has got to: the page
+/// is under the hand only where the drag began, and everything after that is the page being orbited or
+/// panned (see `preview_pointer_hold`).
+pub(crate) static ENGINE_PAGE_DRAG: Fact<AtomicBool> = Fact::of(|facts| &facts.engine_page_drag);
+
+/// Whether a text preview in full mode is on screen, which is the one thing a pointer can rest on to
+/// select from and scroll.
+///
+/// The hold the hook leaves the pointer in is answered from the two boxes below, and both are the
+/// preview side's to publish: the window they are measured from is not the hook's, and a pointer the
+/// hook dismissed is a preview the hook's own `hide_preview` takes down before its tick asks again.
+pub(crate) static TEXT_PREVIEW_HOLDING: Fact<AtomicBool> =
+    Fact::of(|facts| &facts.text_preview_holding);
+
+/// Whether what is on screen is the spinner a page is being rendered behind.
+///
+/// It holds the pointer through the item the wait is for rather than through a box of its own: the
+/// spinner is placed at the hand and follows it, so a box of its own would be one the pointer could
+/// never leave (see `preview_pointer_hold` and `POINTER_ITEM_BOX`).
+pub(crate) static WAITING_PREVIEW_HOLDING: Fact<AtomicBool> =
+    Fact::of(|facts| &facts.waiting_preview_holding);
+
+/// The two boxes a preview holds the pointer through, published whole: the journey from the point a
+/// hover was opened from to the preview, and the preview itself.
+///
+/// **They are packed words and not a list**, because the reader is the hook's own tick and the writer
+/// is a preview loop on the other side of the seam: a list is a length, a pointer and a heap the other
+/// process does not share. Two boxes is all any caller publishes — a text preview's journey and its
+/// box, or a pinned window's own box alone — so a slot per box is the whole of it, and a rectangle is
+/// packed into each slot whole, which is what makes a torn box impossible to read.
+pub(crate) static HOLD_REGION_JOURNEY: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.hold_region_journey);
+pub(crate) static HOLD_REGION_PREVIEW: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.hold_region_preview);
+
+/// The box the view drew the item under the pointer in: the hook's own answer about where the pointer
+/// is, published with every look at that item and withdrawn with the window.
+///
+/// It is what holds a reveal to the item a hover was resolved from, what tells the hook a pointer that
+/// has crossed to another row has moved at all, and what a spinner holds the pointer through. Both
+/// sides read it and both sides write it — the item is found on the hook's thread and a window going
+/// down withdraws it on the preview side — which is why it is one packed word here rather than the
+/// locked `Option` it was while both sides were one process: a hook callback may take no lock, and a
+/// box read half from one publish and half from the next names a place no item is drawn in.
+pub(crate) static POINTER_ITEM_BOX: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.pointer_item_box);
+
+/// The left mouse button's state and how many presses it has taken, as the one place in this app that
+/// reads the buttons published it (see `pin_drag::left_button_down`).
+///
+/// `GetAsyncKeyState`'s low-order bit says a key has been pressed since the previous call and is spent
+/// by any call for that key, whichever thread makes it: the hook and the pin's own press handling poll
+/// at different rates, so a click was answered by whichever of them read it first. The count is a
+/// count rather than a bit for the opposite reason — the preview side polls slower, and a bit
+/// published and published again reads as no press at all.
+pub(crate) static PIN_MEDIA_LEFT_DOWN: Fact<AtomicBool> =
+    Fact::of(|facts| &facts.pin_media_left_down);
+pub(crate) static PIN_MEDIA_LEFT_PRESSES: Fact<AtomicU64> =
+    Fact::of(|facts| &facts.pin_media_left_presses);
+
+/// The boxes a standing pin's own buttons answer a press in, in screen coordinates, published whole.
+///
+/// The hook reads a press on this app's own window as a press on the listing the window stands over, so
+/// a press on a caption's Minimize or on a sound card's own controls would arrive with the file drawn
+/// under it (see `pin_button_covers`). **The boxes rather than a mask of which buttons the pin has**:
+/// the question asked is about a point, and the only other road is to publish the pin's whole chrome
+/// geometry — its content box, band rows, display scale and display options — so that the tray can lay
+/// the buttons out again, which is more facts to cross *and* an answer that can disagree with the one
+/// the window procedure gives the same press. The geometry is published instead of the verdict, so the
+/// intersection is a comparison the hook can afford inside its own callback.
+pub(crate) fn publish_pin_buttons(boxes: [Option<(i32, i32, i32, i32)>; PIN_BUTTONS]) {
+    let published = the_facts().pin_buttons.as_slice();
+    for (cell, region) in published.iter().zip(boxes) {
+        cell.store(pack_a_box(region), Ordering::Release);
+    }
+}
+
+/// Whether a screen point is on one of a standing pin's own buttons (see `publish_pin_buttons`).
+///
+/// Half-open on every edge, which is how a window hit-test reads a rectangle and how the button's own
+/// press is read: a point on a box's right or bottom edge is outside it.
+pub(crate) fn pin_button_covers(point: (i32, i32)) -> bool {
+    let (x, y) = point;
+
+    the_facts().pin_buttons.iter().any(|cell| {
+        unpack_a_box(cell.load(Ordering::Acquire)).is_some_and(|(left, top, right, bottom)| {
+            x >= left && x < right && y >= top && y < bottom
+        })
+    })
+}
+
+/// How long the preview loop has been quiet, in milliseconds: the age of its last tick, growing for as
+/// long as the loop is inside work that has not come back.
+///
+/// **A wall clock, because the two ends are two processes.** An `Instant` is this process's own and
+/// cannot be read in another, so what crosses is the milliseconds since the epoch of the loop's last
+/// tick, and the age is the difference between that number and the one the reader's own clock gives.
+/// A loop that has never ticked answers with no quiet at all: a preview that has not been begun is not
+/// a preview that has stopped. Nothing here waits on the loop or looks for it — it is only ever a
+/// number read.
+///
+/// shortcut: a wall clock stepped backwards reads as no quiet, upgrade if a run must survive the clock
+/// being set back under it.
+pub(crate) fn preview_stall_ms() -> u64 {
+    let alive = the_facts().preview_alive_unix_ms.load(Ordering::Relaxed);
+    if alive == 0 {
+        return 0;
+    }
+
+    let now = unix_millis();
+    now.saturating_sub(alive)
+}
+
+/// Note that the preview loop has run a tick, whether the tick did anything or not: a loop waiting on
+/// the channel for a hover is a loop that is working (see `preview_stall_ms`).
+pub(crate) fn note_the_preview_ticked() {
+    the_facts()
+        .preview_alive_unix_ms
+        .store(unix_millis(), Ordering::Relaxed);
+}
+
+/// Milliseconds since the epoch, which is the only clock two processes can both read.
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|age| age.as_millis() as u64)
+        .unwrap_or_default()
+}
+
 /// What the preview side tells the tray side, on a channel of its own.
 ///
 /// Three things, and all three are notices rather than questions: a setting the pin's own chrome can
@@ -1727,26 +1969,34 @@ impl PublishedRegion {
 
     /// Publish `region` whole, or withdraw the box where there is none.
     pub(crate) fn publish(&self, region: Option<(i32, i32, i32, i32)>) {
-        let packed = region
-            .and_then(|(left, top, right, bottom)| {
-                let edge = |value: i32| i16::try_from(value).ok().map(|value| value as u16 as u64);
-                Some(edge(left)? | edge(top)? << 16 | edge(right)? << 32 | edge(bottom)? << 48)
-            })
-            .unwrap_or(NO_REGION);
-
-        self.cell().store(packed, Ordering::Release);
+        self.cell().store(pack_a_box(region), Ordering::Release);
     }
 
     /// The box as it was last published, or `None` where there is none.
     pub(crate) fn get(&self) -> Option<(i32, i32, i32, i32)> {
-        let packed = self.cell().load(Ordering::Acquire);
-        if packed == NO_REGION {
-            return None;
-        }
-
-        let edge = |shift: u32| ((packed >> shift) as u16 as i16) as i32;
-        Some((edge(0), edge(16), edge(32), edge(48)))
+        unpack_a_box(self.cell().load(Ordering::Acquire))
     }
+}
+
+/// `region` as the one word `PublishedRegion` keeps it in, or `NO_REGION` where there is none to pack:
+/// a box with an edge outside the 16-bit screen this is packed in is published as no box at all.
+fn pack_a_box(region: Option<(i32, i32, i32, i32)>) -> u64 {
+    region
+        .and_then(|(left, top, right, bottom)| {
+            let edge = |value: i32| i16::try_from(value).ok().map(|value| value as u16 as u64);
+            Some(edge(left)? | edge(top)? << 16 | edge(right)? << 32 | edge(bottom)? << 48)
+        })
+        .unwrap_or(NO_REGION)
+}
+
+/// The box `packed` holds, or `None` where it holds none.
+fn unpack_a_box(packed: u64) -> Option<(i32, i32, i32, i32)> {
+    if packed == NO_REGION {
+        return None;
+    }
+
+    let edge = |shift: u32| ((packed >> shift) as u16 as i16) as i32;
+    Some((edge(0), edge(16), edge(32), edge(48)))
 }
 
 /// The box a wheel notch over a pin's volume control belongs to: the open popup's panel and the button
@@ -1975,14 +2225,13 @@ fn the_viewer_process() -> u32 {
 pub(crate) use crate::shell::explorer_hook::{view_sort_of, SortKey, ViewSort};
 pub(crate) use crate::shell::tray::FONT_SIZE_CHOICES;
 pub(crate) use crate::ui::preview_window::{
-    cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    note_engine_page_drag, pin_button_covers, pin_press_was_not_a_pick, pointer_item_box,
-    pointer_item_holds, press_pinned_preview, preview_pointer_hold, preview_screen_rect,
-    preview_stall_ms, publish_pin_media_press, publish_pointer_item_box, refresh_pin,
+    hide_preview, kill_stray_video_process, monitor_dpi_from_point, note_engine_page_drag,
+    pin_press_was_not_a_pick, pointer_item_box, pointer_item_holds, press_pinned_preview,
+    preview_pointer_hold, publish_pin_media_press, publish_pointer_item_box, refresh_pin,
     refresh_preview, refresh_preview_types, refresh_render_html, request_pin_end,
     request_pin_menu_dismiss, show_preview, show_preview_keyboard, take_pin_handed_off,
     take_pin_menu_pressed, take_pin_resumed, trim_image_cache, trim_subtitle_cache,
-    update_pinned_preview, PreviewCursorHover,
+    update_pinned_preview,
 };
 
 #[cfg(test)]

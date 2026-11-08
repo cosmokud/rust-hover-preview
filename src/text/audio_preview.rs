@@ -47,8 +47,8 @@ mod card;
 mod page;
 
 pub(crate) use card::{
-    bar_share_at, control_at, control_box, facts_of, measure, name_of, render, AudioPreviewOptions,
-    Card, CardChrome, CardControl, NameScroll,
+    bar_share_at, control_at, control_box, control_hit_boxes, facts_of, measure, name_of, render,
+    AudioPreviewOptions, Card, CardChrome, CardControl, NameScroll, CARD_CONTROL_BOXES,
 };
 pub(crate) use page::{window_button_band, window_button_span};
 

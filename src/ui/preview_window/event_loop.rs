@@ -558,7 +558,26 @@ pub fn run_preview_window() {
             // the user is working in: the pointer is over the pin while the keyboard stays behind
             // it, and a notch turned there is the pin's either way (see
             // `crate::app::seam::publish_preview_under_the_pointer`).
-            crate::app::seam::publish_preview_under_the_pointer(cursor_preview_hover().any());
+            //
+            // Which of the three surfaces it is, as well as whether it is one: the hook dismisses a
+            // preview the pointer arrives on, and a page that runs, a film and a picture are three
+            // different answers to that (see `crate::app::seam::cursor_preview_hover`).
+            let preview_hover = cursor_preview_hover();
+            crate::app::seam::publish_preview_under_the_pointer(preview_hover.any());
+            crate::app::seam::publish_preview_cursor_hover(preview_hover);
+            // And the box that surface stands in, and whether the page in it is one that *runs*,
+            // which are the two answers the hook's hold is made of and the two it cannot ask for
+            // itself: the window is this process's, and so is what the engine is showing (see
+            // `crate::app::seam::PREVIEW_SCREEN_RECT`).
+            crate::app::seam::PREVIEW_SCREEN_RECT.publish(preview_screen_rect());
+            crate::app::seam::ENGINE_PAGE_RUNS.store(
+                webview_preview::showing_path().is_some_and(|path| html_is_engine_drawn(&path)),
+                Ordering::Release,
+            );
+            // And the boxes a press on one of a standing pin's own buttons is answered in, which the
+            // hook reads a press against and cannot lay out for itself (see
+            // `publish_pin_button_boxes`).
+            publish_pin_button_boxes();
             // And the two boxes a notch over a pinned picture or a pinned model is claimed by, published
             // from this tick because the hook asks them from inside a system-wide callback that may take
             // no lock: both are answered out of the pin's own state, which is settled by the time this
@@ -1821,7 +1840,7 @@ pub fn run_preview_window() {
                 // count it carries (see `HIDDEN_EPOCH`), and a pointer that has
                 // crossed to another item since the hover was resolved is the same
                 // answer one moment earlier, before any hide has been sent for it
-                // (see `HOVER_POINTER_BOX`). Either way the answer is dropped here
+                // (see `POINTER_ITEM_BOX`). Either way the answer is dropped here
                 // rather than built — no frame installed, no engine window put up,
                 // no player started — for a hover that has already gone.
                 //

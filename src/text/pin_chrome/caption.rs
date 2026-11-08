@@ -238,6 +238,30 @@ pub(super) fn buttons_fit(width: i32, dpi: u32, maximizable: bool) -> bool {
     button_boxes(width, 1, dpi, maximizable).len() == full_kind_count(maximizable)
 }
 
+/// The room a caption's buttons take as **one** box, for a caller that has to answer for a point
+/// without this module's layout: the buttons sit against the right edge, one button's width each and
+/// with no gap between them, so the ones a width kept are a rectangle and only the *number* kept is a
+/// walk (see `button_boxes`).
+///
+/// It is that walk's answer and not arithmetic of its own — the count it keeps is the count `button_boxes`
+/// keeps, at the same width, taken from the same end. What it is for is the hook, which reads a press on
+/// a pin's caption as a press on the listing behind it unless it is told where the buttons are, and which
+/// cannot build this `Vec` inside its own callback (see `ui::preview_window::publish_pin_button_boxes`).
+pub(crate) fn button_strip(width: i32, height: i32, dpi: u32, maximizable: bool) -> Option<RECT> {
+    let button = text_paint::scaled(BUTTON_PIXELS as i32, dpi as f32 / 96.0).max(1);
+    let kept = ((width / button).max(0) as usize).min(caption_button_kinds(maximizable).len());
+    if kept == 0 {
+        return None;
+    }
+
+    Some(RECT {
+        left: width - kept as i32 * button,
+        top: 0,
+        right: width,
+        bottom: height,
+    })
+}
+
 /// One caption button and the box it occupies.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CaptionButtonBox {

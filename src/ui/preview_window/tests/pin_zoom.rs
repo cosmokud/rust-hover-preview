@@ -1803,10 +1803,7 @@ fn a_short_page_is_still_a_page_a_ctrl_wheel_resizes() {
     let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-    let previous_regions = POINTER_HOLD_REGIONS
-        .lock()
-        .ok()
-        .and_then(|mut held| held.take());
+    let previous_regions = POINTER_HOLD_REGIONS.get();
     let previous_holding = TEXT_PREVIEW_HOLDING.swap(true, Ordering::AcqRel);
 
     let content = (100, 100, 500, 400);
@@ -1840,9 +1837,7 @@ another
     }
 
     // What the loop publishes for a pin: the window's own box, which is what the hook reads.
-    if let Ok(mut held) = POINTER_HOLD_REGIONS.lock() {
-        *held = Some(vec![content]);
-    }
+    POINTER_HOLD_REGIONS.publish(&[content]);
 
     publish_text_wheel_boxes(Some(content), false, true, true);
     assert!(
@@ -1866,9 +1861,7 @@ another
     crate::app::seam::TEXT_SCROLL_REGION.publish(None);
     crate::app::seam::TEXT_SIZE_REGION.publish(None);
     TEXT_PREVIEW_HOLDING.store(previous_holding, Ordering::Release);
-    if let Ok(mut held) = POINTER_HOLD_REGIONS.lock() {
-        *held = previous_regions;
-    }
+    POINTER_HOLD_REGIONS.restore(previous_regions);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
     }
@@ -1902,10 +1895,7 @@ fn a_pinned_page_takes_the_wheel_though_the_hover_window_is_down() {
     let previous_window = pin_real_window::real_pin_window();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-    let previous_regions = POINTER_HOLD_REGIONS
-        .lock()
-        .ok()
-        .and_then(|mut held| held.take());
+    let previous_regions = POINTER_HOLD_REGIONS.get();
     let previous_anchor = TEXT_SCROLL_ANCHOR
         .lock()
         .ok()
@@ -1987,9 +1977,7 @@ fn a_pinned_page_takes_the_wheel_though_the_hover_window_is_down() {
     if let Ok(mut anchor) = TEXT_SCROLL_ANCHOR.lock() {
         *anchor = previous_anchor;
     }
-    if let Ok(mut held) = POINTER_HOLD_REGIONS.lock() {
-        *held = previous_regions;
-    }
+    POINTER_HOLD_REGIONS.restore(previous_regions);
     TEXT_PREVIEW_HOLDING.store(previous_holding, Ordering::Release);
     TEXT_PREVIEW_SCROLLABLE.store(previous_scrollable, Ordering::Release);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
