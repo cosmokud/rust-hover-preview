@@ -4,7 +4,7 @@ use super::super::playlist::{
     playlist_track_holds, PlaylistEdge,
 };
 use super::*;
-use crate::readers::audio_track::{self, Player, Probed, Track};
+use crate::readers::audio_track::{self, Player, Track};
 use crate::text::audio_preview::{Fact, FactKind};
 
 /// A band of a display's own scale at 96 dpi, which is what every number below is counted in.
@@ -259,14 +259,14 @@ fn a_row_says_what_the_file_says_and_who_long_it_is() {
     std::fs::write(&probed, vec![0u8; 3 * 1024 * 1024]).expect("a written file");
     audio_track::remember(
         &probed,
-        Probed::Track(Track {
+        Track {
             player: Player::Native,
             codec: Some("FLAC".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(1_006_000),
             duration: Some(3_723.0),
-        }),
+        },
     );
 
     let row = playlist_row(&probed);
@@ -309,6 +309,63 @@ fn a_row_says_what_the_file_says_and_who_long_it_is() {
     assert_eq!(
         row.clock, None,
         "and nothing at all where no length is known"
+    );
+}
+
+/// A row whose facts are gone is a row whose file can never be previewed again, because the read
+/// that found nothing was held as the answer: the row and the card both ask the memo, and an
+/// emptiness held tells them nothing more is coming until the app is restarted (see
+/// `audio_track::remember`).
+#[test]
+fn a_row_of_a_file_no_read_could_answer_for_says_what_the_folder_says_and_takes_the_facts_a_read_lands(
+) {
+    let root = scratch("playlist-row-unread");
+    let probed = root.join("mixdown.flac");
+    std::fs::write(&probed, vec![0u8; 3 * 1024 * 1024]).expect("a written file");
+
+    let words = |path: &std::path::Path| -> Vec<String> {
+        playlist_row(path)
+            .facts
+            .iter()
+            .map(|fact| fact.text.clone())
+            .collect()
+    };
+    let unread = words(&probed);
+    assert_eq!(
+        unread,
+        vec!["FLAC", "3.0 MB"],
+        "a row nothing read is the extension and its size"
+    );
+
+    // The sweep's read of this file answers with nothing — the case a FLAC takes where nothing in
+    // this process decodes it — and the next sweep is owed the file again.
+    assert_eq!(
+        audio_track::probed(&probed),
+        audio_track::Probed::NotAsked,
+        "a read that found nothing is no answer a row or a card can be drawn from"
+    );
+    assert_eq!(
+        words(&probed),
+        unread,
+        "and the row it did not answer for is the row it was"
+    );
+
+    // The read the sweep after it takes lands, and the row is redrawn from it.
+    audio_track::remember(
+        &probed,
+        Track {
+            player: Player::Native,
+            codec: Some("FLAC".to_string()),
+            rate: Some(44_100),
+            channels: Some(2),
+            bitrate: Some(1_006_000),
+            duration: Some(3_723.0),
+        },
+    );
+    assert_eq!(
+        words(&probed),
+        vec!["FLAC", "44.1 kHz", "stereo", "1006 kbps", "3.0 MB"],
+        "the facts the read landed are the facts the row is drawn with"
     );
 }
 
