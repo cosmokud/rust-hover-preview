@@ -103,7 +103,7 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     // A drag of the playlist band's own height, which is the band being given its size rather than
     // the window being carried: the window's top-left does not move for it (see
     // `pin_playlist::drag`).
-    if pin_playlist::drag(hwnd, y) {
+    if pin_playlist::drag(hwnd, x, y) {
         return;
     }
 

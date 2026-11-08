@@ -48,7 +48,8 @@ mod page;
 
 pub(crate) use card::{
     bar_share_at, clock, control_at, control_box, extension_of, facts_of, measure, name_of, render,
-    AudioPreviewOptions, Card, CardChrome, CardControl, NameScroll, NAME_ADVANCE_MS, NAME_HOLD,
+    AudioPreviewOptions, Card, CardChrome, CardControl, Fact, FactKind, NameScroll,
+    NAME_ADVANCE_MS, NAME_HOLD,
 };
 pub(crate) use page::{window_button_band, window_button_span};
 
@@ -62,8 +63,8 @@ use crate::text::text_paint::{readable, rgb, scaled, TextMetrics, BODY_LEVEL};
 use crate::text::text_theme;
 #[cfg(test)]
 use card::{
-    bitrate_label, channel_label, rate_label, Fact, FactKind, BAR_GAP_PIXELS, BAR_PIXELS,
-    BAR_REACH_PIXELS, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, MIN_CONTENT_ADVANCES,
+    bitrate_label, channel_label, rate_label, BAR_GAP_PIXELS, BAR_PIXELS, BAR_REACH_PIXELS,
+    CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, MIN_CONTENT_ADVANCES,
     WINDOW_BUTTON_GAP_PIXELS,
 };
 #[cfg(test)]

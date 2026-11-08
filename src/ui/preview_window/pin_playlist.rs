@@ -75,8 +75,9 @@ struct Marquee {
 #[derive(Clone, Copy)]
 struct PlaylistResize {
     edge: pin_chrome::PlaylistEdge,
-    /// The window row the pointer was at when the drag began, which every move is measured from
-    /// rather than the move before it: a drag that accumulated its own rounding would creep.
+    /// The *screen* row the pointer was at when the drag began, which every move is measured from
+    /// rather than the move before it: a drag that accumulated its own rounding would creep, and one
+    /// measured in the window's own rows would chase a window the drag is itself moving.
     from: i32,
     /// The band's height when the drag began.
     height: i32,
@@ -110,10 +111,13 @@ struct PinPlaylist {
     /// would swallow the release of a drag the card began and leave the window carrying the pointer
     /// for the rest of the run.
     pressed: bool,
-    /// The height's drag in flight: which of the window's two edges is being pulled, the window row
+    /// The height's drag in flight: which of the window's two edges is being pulled, the screen row
     /// the pointer was at when it began, the height the band had, and the box the card stood in —
     /// which is the one thing a drag of the top edge moves and a drag of the bottom one does not.
     resizing: Option<PlaylistResize>,
+    /// The scrollbar's thumb being carried, as the share of it the press took hold of: the bar's own
+    /// drag rather than the band's, and the one thing a press on the track begins.
+    thumb: Option<i32>,
     marquee: Option<Marquee>,
 }
 
@@ -569,7 +573,7 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
                 playlist.pressed = true;
                 playlist.resizing = Some(PlaylistResize {
                     edge,
-                    from: y,
+                    from: screen_y(hwnd, x, y),
                     height: HEIGHT.load(Ordering::Acquire),
                     content,
                 });
@@ -588,21 +592,44 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
             return true;
         };
         let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
-        let Some(index) =
-            pin_chrome::playlist_row_at(&layout, playlist.scroll, playlist.rows.len(), local)
-        else {
-            // The pad between two rows and the room below the last of them are the band's own: a
-            // press there picks nothing and is still not a press the card answers.
-            return true;
-        };
 
-        playlist.pressed = true;
-        playlist.picked = Some(index);
-        playlist.set_the_marquee(&layout, scale);
+        // **The scrollbar, before the rows it stands beside.** The bar is a mark on the window's own
+        // right edge and a press on it carries the list rather than picking the row it happens to be
+        // level with — and a press that is not on the thumb takes hold of the middle of it, which is
+        // the one gesture a bar answers by jumping to where the hand landed (see
+        // `pin_chrome::playlist_thumb_grab`).
+        if pin_chrome::playlist_track_holds(&layout, x, local) {
+            let grab = pin_chrome::playlist_thumb_grab(
+                &layout,
+                playlist.scroll,
+                playlist.rows.len(),
+                local,
+            );
+            // The pointer is taken for the bar, as it is for the band's own edge: a hand carrying the
+            // thumb out of the window would otherwise stop being followed the moment it left it.
+            let _ = SetCapture(hwnd);
+            playlist.pressed = true;
+            playlist.thumb = Some(grab);
+            playlist.scroll =
+                pin_chrome::playlist_scroll_at(&layout, playlist.rows.len(), local - grab);
+            None
+        } else {
+            let Some(index) =
+                pin_chrome::playlist_row_at(&layout, playlist.scroll, playlist.rows.len(), local)
+            else {
+                // The pad between two rows and the room below the last of them are the band's own: a
+                // press there picks nothing and is still not a press the card answers.
+                return true;
+            };
 
-        double_click
-            .then(|| playlist.order.get(index).cloned())
-            .flatten()
+            playlist.pressed = true;
+            playlist.picked = Some(index);
+            playlist.set_the_marquee(&layout, scale);
+
+            double_click
+                .then(|| playlist.order.get(index).cloned())
+                .flatten()
+        }
     };
 
     if let Some(path) = opened.as_deref() {
@@ -613,31 +640,46 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
     true
 }
 
-/// The pointer's own move with the height's drag in flight, answering whether the move was the
-/// band's.
+/// The pointer's own move with something of the band's in flight, answering whether the move was the
+/// band's: the thumb of its scrollbar being carried, or one of its two edges being pulled.
 ///
-/// A row of the window is the measurement the height is dragged by, and every move is measured from
-/// where the drag *began* rather than from the move before it: a drag that accumulated its own
-/// rounding would creep, and one measured from its start lands on the size the hand has pulled it to
-/// however many moves were coalesced on the way.
-///
-/// **The card never moves for the bottom edge and goes with the window for the top one.** A window
-/// whose top edge is dragged up is the band growing under a card that has gone up with it, and the
-/// window's own bottom is the edge that does not move: the card is carried by exactly the rows the
-/// band gained (see `PlaylistEdge`).
-pub(super) unsafe fn drag(hwnd: HWND, y: i32) -> bool {
-    let Some(resize) = THE_PLAYLIST
-        .lock()
-        .ok()
-        .and_then(|playlist| playlist.resizing)
-    else {
+/// **Every travel is measured from where the drag began and on the screen**, which is the whole of
+/// what keeps a pull of the window's top edge from shaking: that edge moves the window, so the window
+/// coordinate of a pointer that has not moved changes with it, and a drag measured in one is a drag
+/// that chases itself a pixel at a time. The screen is what both edges are measured against, and a
+/// drag of the bottom one is the same arithmetic because its window does not move at all.
+pub(super) unsafe fn drag(hwnd: HWND, x: i32, y: i32) -> bool {
+    let (resize, thumb) = match THE_PLAYLIST.lock() {
+        Ok(playlist) => (playlist.resizing, playlist.thumb),
+        Err(_) => return false,
+    };
+
+    let Some((top, height, width, scale)) = the_band_of_the_pin() else {
         return false;
     };
 
-    let scale = the_band_of_the_pin().map_or(1.0, |(_, _, _, scale)| scale);
+    if let Some(grab) = thumb {
+        let Ok(mut playlist) = THE_PLAYLIST.lock() else {
+            return true;
+        };
+        let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
+        let scrolled = pin_chrome::playlist_scroll_at(&layout, playlist.rows.len(), y - top - grab);
+
+        if scrolled != playlist.scroll {
+            playlist.scroll = scrolled;
+            drop(playlist);
+            render_layered_preview(hwnd);
+        }
+        return true;
+    }
+
+    let Some(resize) = resize else {
+        return false;
+    };
+
     let floor = pin_chrome::playlist_row_height(scale) * TWO_ROWS;
     let ceiling = CEILING.load(Ordering::Acquire).max(floor);
-    let travel = y - resize.from;
+    let travel = screen_y(hwnd, x, y) - resize.from;
 
     let height = match resize.edge {
         pin_chrome::PlaylistEdge::Bottom => resize.height + travel,
@@ -650,6 +692,11 @@ pub(super) unsafe fn drag(hwnd: HWND, y: i32) -> bool {
     }
     HEIGHT.store(height, Ordering::Release);
 
+    // **The top edge is the bottom edge's own drag and a window moved under it.** The band grows by
+    // exactly the rows the bottom edge would have given it, and the window is then carried up by them
+    // so that the card goes with it and the window's own bottom stays where it is — which is the
+    // illusion the hand is asking for, and why the card is never given a size of its own (see
+    // `PlaylistEdge`).
     if matches!(resize.edge, pin_chrome::PlaylistEdge::Top) {
         let carried = resize.height - height;
         with_pin(|pin| {
@@ -661,10 +708,10 @@ pub(super) unsafe fn drag(hwnd: HWND, y: i32) -> bool {
             );
         });
 
-        // **The window is moved before it is painted, and only for the top edge.** The paint is
-        // placed at the window's own rectangle, and a top edge pulled up is a rectangle whose place
-        // has moved as well as its size — while a bottom edge is the same place and a size the paint
-        // commits on its own, which is how every other box of a pin's is committed (see
+        // The window is moved before it is painted, and only for the top edge: the paint is placed at
+        // the window's own rectangle, and a top edge pulled up is a rectangle whose place has moved as
+        // well as its size — while a bottom edge is the same place and a size the paint commits on its
+        // own, which is how every other box of a pin's is committed (see
         // `render_pinned_preview_at`).
         if let Some((window, width, height)) = pinned_window_box() {
             let _ = SetWindowPos(
@@ -683,11 +730,12 @@ pub(super) unsafe fn drag(hwnd: HWND, y: i32) -> bool {
     true
 }
 
-/// Which of the band's two edges the pointer is on, asked of the cursor's place in the window rather
-/// than of any message, so that the shape it wears and the press it answers are one arithmetic.
-///
-/// Nothing at all for a pin that carries no band, and nothing on the window's top edge where the
-/// card's own window buttons stand (see `the_edge_is_the_cards`).
+/// The pointer's place down the screen, which is what a drag of the window's own top edge is measured
+/// by (see `drag`).
+fn screen_y(hwnd: HWND, x: i32, y: i32) -> i32 {
+    client_to_screen(hwnd, x, y).1
+}
+
 pub(super) fn edge_at(x: i32, y: i32) -> Option<pin_chrome::PlaylistEdge> {
     let (top, height, _, scale) = the_band_of_the_pin()?;
     let edge = pin_chrome::playlist_edge_at(top, height, scale, y)?;
@@ -722,14 +770,15 @@ fn the_edge_is_the_cards(edge: pin_chrome::PlaylistEdge, x: i32, y: i32) -> bool
 /// on a pinned window keeps: a release that let go of a capture it never took would run
 /// `pin_capture_lost` before the arm that owns one had read what its press armed.
 pub(super) unsafe fn release(hwnd: HWND) -> bool {
-    let (pressed, dragging) = match THE_PLAYLIST.lock() {
+    let (pressed, dragging, thumb) = match THE_PLAYLIST.lock() {
         Ok(mut playlist) => {
             // The press is spent here rather than left standing, and it is the whole of what keeps
             // the band's arm from swallowing the releases that follow it: a flag left set is the
             // release of every drag and every caption button the card begins afterwards, taken for
             // a press the band answered, and a window left carrying the pointer for the run.
             let pressed = std::mem::take(&mut playlist.pressed);
-            (pressed, playlist.resizing.take())
+            let thumb = playlist.thumb.take();
+            (pressed, playlist.resizing.take(), thumb)
         }
         Err(_) => return false,
     };
@@ -737,7 +786,9 @@ pub(super) unsafe fn release(hwnd: HWND) -> bool {
         return false;
     }
 
-    if dragging.is_some() {
+    // The pointer is given back for either drag the band can begin: the height's and the bar's, both
+    // of which take it for as long as the hand is on them.
+    if dragging.is_some() || thumb.is_some() {
         let _ = ReleaseCapture();
         render_layered_preview(hwnd);
     }
@@ -751,6 +802,7 @@ pub(super) fn the_capture_was_lost() {
     if let Ok(mut playlist) = THE_PLAYLIST.lock() {
         playlist.pressed = false;
         playlist.resizing = None;
+        playlist.thumb = None;
     }
 }
 
