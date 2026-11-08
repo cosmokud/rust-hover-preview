@@ -112,16 +112,30 @@ pub fn pinned_path() -> Option<PathBuf> {
 /// until the incoming file is installed, so a press on the file being loaded or held used to be
 /// read as a new pick — the load dropped, the hold abandoned, its player killed — and the picture
 /// that was being kept went with them (see `pin_install::THE_FILE_IN_FLIGHT`).
+///
+/// **The pin is one window of the run's wherever it stands, and this door is the hook's.** A pick is
+/// offered by the Explorer hook, in a process that has no pin window at all — the pin is a viewer's —
+/// so the published answers are the ones that decide, and the ones this process holds are kept beside
+/// them for the run that draws its own previews, where the two are the same window (see
+/// `app::seam::the_pin_is_up`, `the_pin_block` and `pin_is_on_its_way_to`).
 pub fn update_pinned_preview(path: &Path) {
-    if !pinned() || !pin_update_enabled() {
+    if !pinned() && !crate::app::seam::the_pin_is_up() {
         return;
     }
 
-    if pinned_path().as_deref() == Some(path) {
+    if !pin_update_enabled() {
         return;
     }
 
-    if pin_install::pin_file_in_flight().as_deref() == Some(path) {
+    if pinned_path().as_deref() == Some(path)
+        || crate::app::seam::pinned_path().as_deref() == Some(path)
+    {
+        return;
+    }
+
+    if pin_install::pin_file_in_flight().as_deref() == Some(path)
+        || crate::app::seam::pin_is_on_its_way_to(path)
+    {
         note_pin_trace!(
             "pick dropped: {} is already the file in flight",
             pin_trace::path_name(path)

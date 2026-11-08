@@ -674,6 +674,23 @@ pub fn run_preview_window() {
                 }
             }
 
+            // **The user is back in the listing the pin stands over, and the pin is the one that has to
+            // hear it.** The foreground is the hook's to watch and the window is this loop's, so the ask
+            // crosses and is answered here, on the tick it is read: the pin is put behind the window the
+            // user came back to, which is what a pin that is not Always On Top owes and what nothing but a
+            // press used to answer (see `app::seam::PIN_BEHIND_ASK` and `lower_pinned_preview`, which
+            // keeps every rule of pin mode: a collapsed pin, one that is Always On Top and one whose
+            // `Move To Top` row is off are left exactly where they are). A viewer holding no pin spends
+            // the ask and puts nothing anywhere.
+            if let Some(window) = crate::app::seam::take_the_pin_behind_ask() {
+                if pinned() {
+                    note_pin_trace!("behind: the user is back in the listing, lowering the pin");
+                    // The handle is the hook's, read off the desktop: a lowering places windows and
+                    // dereferences nothing.
+                    lower_pinned_preview(pinned_window(), HWND(window as *mut _));
+                }
+            }
+
             if pinned() {
                 // A film that has been watched to its end is begun again here, before anything else
                 // in this tick reads the player that ended it as a failure. Three things down here
