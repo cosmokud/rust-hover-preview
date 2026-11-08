@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::seam::{PIN_BUBBLE_HWND, PIN_MENU_HWND};
 use crate::config::config::{PinNavFileTypes, DEFAULT_FONT_SCALE_PERCENT};
 use std::cell::Cell;
 // The key a pin answers with nothing, which is the one the mapping has to name explicitly

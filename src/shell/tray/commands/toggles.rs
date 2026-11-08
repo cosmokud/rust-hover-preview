@@ -18,13 +18,14 @@
 //! wider than the thing it names. `super::super` is `tray`, which is exactly as wide as the
 //! `pub(super)` these were written as when they all lived in one file.
 
+use crate::app::seam::{
+    refresh_pin, refresh_preview, refresh_preview_types, refresh_render_html, send_preview,
+    PreviewMessage,
+};
 use crate::app::startup;
 use crate::config::config::PreviewType;
 use crate::engines::office_render;
 use crate::engines::webview_preview;
-use crate::ui::preview_window::{
-    refresh_pin, refresh_preview, refresh_preview_types, refresh_render_html,
-};
 use crate::CONFIG;
 
 pub(in super::super) fn toggle_startup() {
@@ -265,8 +266,8 @@ pub(in super::super) fn toggle_video_subtitles() {
         config.video_subtitles = !config.video_subtitles;
         config.save();
     }
-    crate::ui::preview_window::forget_video_geometry();
-    crate::ui::preview_window::keep_extraction_for(None);
+    send_preview(PreviewMessage::ForgetVideoGeometry);
+    send_preview(PreviewMessage::KeepExtraction { path: None });
 }
 
 /// Whether a page of HTML is drawn by the browser engine rather than shown as its markup.

@@ -3,7 +3,7 @@
 
 use super::*;
 
-use crate::shell::tray::FONT_SIZE_CHOICES;
+use crate::app::seam::FONT_SIZE_CHOICES;
 
 /// The item the hover on screen is about, as the box the view draws it in: the
 /// hook's own answer about the pointer, published with every look at the item under
@@ -403,9 +403,42 @@ pub(super) unsafe fn publish_pointer_hold(hwnd: HWND) {
         }
     }
 
+    let box_at_hand = keep_alive
+        .as_ref()
+        .and_then(|regions| regions.last().copied());
     if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
         *published = keep_alive;
     }
+
+    publish_text_wheel_boxes(
+        box_at_hand,
+        TEXT_PREVIEW_SCROLLABLE.load(Ordering::Acquire),
+        TEXT_PREVIEW_HOLDING.load(Ordering::Acquire),
+        pinned(),
+    );
+}
+
+/// Publish — or withdraw — the two boxes a wheel notch over a text preview is claimed by: the scroll's,
+/// which is the preview itself and not the journey to it, and the size's, which is the same box asked
+/// about a page that fits the one it is drawn in.
+///
+/// The answer is a rule rather than a reading, and it is handed in as four values for that reason: a box
+/// that can only be tested by putting a window on somebody's screen is a box that goes untested (see
+/// `text_size_after_notches`). What the loop has in hand when it publishes is what this is given.
+///
+/// **The two are not one box.** A page that scrolls hands the wheel with its scroll, and a page short
+/// enough to fit its box is a page no scroll will ever reach — but it is exactly one a reader has a
+/// reason to enlarge, and a `Ctrl` and a wheel over it is the only grip there is on how large a pinned
+/// page is drawn. That is a pin's question alone, because a hover that fits its box is a preview the
+/// pointer has not settled on (see `TEXT_SCROLL_REGION` and `TEXT_SIZE_REGION`).
+pub(super) fn publish_text_wheel_boxes(
+    region: Option<ScreenRegion>,
+    scrollable: bool,
+    holding: bool,
+    pinned: bool,
+) {
+    crate::app::seam::TEXT_SCROLL_REGION.publish(if scrollable { region } else { None });
+    crate::app::seam::TEXT_SIZE_REGION.publish(if holding && pinned { region } else { None });
 }
 
 /// Remember the point a preview was opened from, which is what the hold region
@@ -428,15 +461,13 @@ pub(super) fn clear_pointer_hold() {
     if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
         *published = None;
     }
+    // And the two boxes the wheel hook reads are withdrawn with it, so a wheel turned over where a
+    // preview was is the listing's and not a preview's that is no longer there.
+    crate::app::seam::TEXT_SCROLL_REGION.publish(None);
+    crate::app::seam::TEXT_SIZE_REGION.publish(None);
     if let Ok(mut anchor) = TEXT_SCROLL_ANCHOR.lock() {
         *anchor = None;
     }
-}
-
-/// Whether the preview on screen is a text preview that scrolls. Cheap enough for
-/// the Explorer hook to ask on every poll tick.
-pub fn text_preview_scrollable() -> bool {
-    TEXT_PREVIEW_SCROLLABLE.load(Ordering::Acquire)
 }
 
 /// Whether the pointer is inside a region that keeps what is on screen alive, without
@@ -544,51 +575,6 @@ pub(super) fn engine_page_holds(
 /// that has wandered off the page is given.
 pub fn note_engine_page_drag(down: bool) {
     ENGINE_PAGE_DRAG.store(down, Ordering::Release);
-}
-
-/// The published preview region, without blocking. The wheel hook runs inside a
-/// system-wide hook procedure, where waiting on a lock held by the preview thread
-/// would stall every wheel message on the desktop — so a lock it cannot take
-/// immediately means the wheel is not ours to take either.
-///
-/// This is the preview itself and not the journey to it: the wheel belongs to the
-/// preview while the pointer is on (or just past) its edge, not while the pointer
-/// is still crossing the row in front of it, where the wheel is Explorer's.
-pub fn text_scroll_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
-    if !text_preview_scrollable() {
-        return None;
-    }
-
-    text_region_try()
-}
-
-/// The same region, without the question of whether the page can scroll: a `Ctrl` and a wheel
-/// resizes a page rather than moving it, and a page short enough to fit its box is exactly one a
-/// reader has a reason to enlarge (see `text_size_after_notches`).
-///
-/// Nothing is widened by asking it this way: a page that fits its box has no scroll to give
-/// Explorer, so the wheel over one is not a scroll anybody is losing. It is answered for a pin
-/// alone, because a hover that fits its box is a preview the pointer has not settled on and one
-/// Explorer's wheel still scrolls the list under — and for a *page* alone, because the region a pin
-/// publishes is its whole window whatever it shows, and a `Ctrl` and a wheel over a pinned picture
-/// is that picture being zoomed (see `pin_zoom_keep_alive_try`).
-///
-/// Whether this app is in the pin at all is asked of two published answers rather than the lock,
-/// and asked first: a notch over a pinned picture — a picture's wheel is its zoom, and not this —
-/// is the case this must not pay a lock for (see `wheel_hook_proc`).
-pub fn text_size_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
-    if !pinned() || !TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
-        return None;
-    }
-
-    text_region_try()
-}
-
-fn text_region_try() -> Option<(i32, i32, i32, i32)> {
-    POINTER_HOLD_REGIONS
-        .try_lock()
-        .ok()
-        .and_then(|held| held.as_ref().and_then(|regions| regions.last().copied()))
 }
 
 /// Move the text preview on screen to `first_line` and repaint it.

@@ -205,6 +205,8 @@ pub fn run_explorer_hook() {
             flush_probe_counts(Instant::now(), &mut last_probe_flush, path);
         }
 
+        answer_what_the_preview_side_asked();
+
         // A preview loop that has stopped ticking cannot end what it is holding, so
         // what it keeps warm is ended from here instead — once for the stall, and not
         // again until it ticks (see `PREVIEW_STALL_MS`).
@@ -297,13 +299,13 @@ pub fn run_explorer_hook() {
         // player is one process record (`VIDEO_PID`) and the pin's is whichever was started
         // last, so a safety net for a hover's leftovers killed the pin's own playback instead:
         // a sound that played about a second and stopped, a card whose clock went with it, and a
-        // seek that began a player the next sweep ended. `pinned()` is the whole of the guard,
-        // because a pin's player is taken down with the pin (see `preview_window::pinned`), and
+        // seek that began a player the next sweep ended. the pin's own published state is the whole of the guard,
+        // because a pin's player is taken down with the pin (see `app::seam::PIN_UP`), and
         // the tick after that one this sweep is answering again.
         if last_file.is_none()
             && keyboard_file.is_none()
             && !is_keyboard_hover
-            && !pinned()
+            && !crate::app::seam::the_pin_is_up()
             && last_video_process_sweep.elapsed() >= Duration::from_millis(VIDEO_PROCESS_SWEEP_MS)
         {
             last_video_process_sweep = Instant::now();
@@ -379,7 +381,7 @@ pub fn run_explorer_hook() {
                     }
                 }
 
-                std::thread::sleep(Duration::from_millis(MEDIUM_SLEEP_MS));
+                crate::app::seam::wait_for_the_tray(MEDIUM_SLEEP_MS);
                 continue;
             }
 
@@ -438,8 +440,9 @@ pub fn run_explorer_hook() {
         // is off where the app starts: a pinned preview is a window the user put there, and
         // its own close button is what takes it down. It is the `Hold to Disable Preview`
         // mode the setting speaks for; the reverse mode is left as it is.
-        let trigger_key_muted_by_pin =
-            trigger_key_mode == TriggerKeyMode::Disable && pinned() && !trigger_key_affect_pin_mode;
+        let trigger_key_muted_by_pin = trigger_key_mode == TriggerKeyMode::Disable
+            && crate::app::seam::the_pin_is_up()
+            && !trigger_key_affect_pin_mode;
         let trigger_key_down = trigger_key_enabled
             && !trigger_key_muted_by_pin
             && crate::shell::key_binding::binding_is_active(&trigger_binding);
@@ -458,7 +461,7 @@ pub fn run_explorer_hook() {
             // what says whether previews may be raised at all — which is the question their
             // leaving it standing would answer wrongly. So it comes down with them, by the path
             // its own close button takes (see `request_pin_end`).
-            if pinned() {
+            if crate::app::seam::the_pin_is_up() {
                 request_pin_end();
             }
             keyboard_file = None;
@@ -477,11 +480,11 @@ pub fn run_explorer_hook() {
             // A held key has to be noticed the moment it is released, so the poll
             // stays quick while the trigger is what is holding previews back, and
             // slows down only when previews are turned off outright.
-            std::thread::sleep(Duration::from_millis(if previews_allowed {
+            crate::app::seam::wait_for_the_tray(if previews_allowed {
                 LONG_SLEEP_MS
             } else {
                 tick_ms
-            }));
+            });
             continue;
         }
 
@@ -525,7 +528,7 @@ pub fn run_explorer_hook() {
         // that the hover machinery is quiet behind it. The loop stays here, at the tick's own pace,
         // rather than sleeping deeply, and what is not quiet behind it is the pin's own following
         // where `Pin Mode … Update Preview` asks for it (see `PinUpdateWatch`).
-        if pinned() {
+        if crate::app::seam::the_pin_is_up() {
             // The tick's one reading of the pointer, taken at the tick's
             // opening and before the input pass reads the press bits: every
             // question this tick asks about the pointer — including which
@@ -620,7 +623,7 @@ pub fn run_explorer_hook() {
                 pin_watch = PinUpdateWatch::default();
             }
 
-            std::thread::sleep(Duration::from_millis(tick_ms));
+            crate::app::seam::wait_for_the_tray(tick_ms);
             continue;
         }
 
@@ -661,7 +664,7 @@ pub fn run_explorer_hook() {
                     pointer_pause.clear();
                     keyboard_screen_owner = false;
                 }
-                std::thread::sleep(Duration::from_millis(sleep_ms));
+                crate::app::seam::wait_for_the_tray(sleep_ms);
                 continue;
             }
             ExplorerState::VisibleNotFocused => {
@@ -694,7 +697,7 @@ pub fn run_explorer_hook() {
                         pointer_pause.clear();
                         keyboard_screen_owner = false;
                     }
-                    std::thread::sleep(Duration::from_millis(sleep_ms));
+                    crate::app::seam::wait_for_the_tray(sleep_ms);
                     continue;
                 }
                 // Cursor is over Explorer, switch to active state
@@ -706,7 +709,7 @@ pub fn run_explorer_hook() {
         }
 
         // Explorer is active - use the configured tick
-        std::thread::sleep(Duration::from_millis(tick_ms));
+        crate::app::seam::wait_for_the_tray(tick_ms);
 
         unsafe {
             // Get cursor position, as the tick's one reading of the pointer: everything
@@ -1728,6 +1731,32 @@ pub fn run_explorer_hook() {
     }
 }
 
+/// Answer what the preview side has asked of this one since the last time it asked — a setting turned
+/// from the pin's own chrome, the preview shortcut's switch, a line for the click trace.
+///
+/// The answer is here because the thing asked for is this side's: the file behind a setting, and the
+/// trace file a click's road is written to. A preview thread that flipped a setting would be a second
+/// writer to a file these rows write, and one that wrote this log would be a window procedure writing a
+/// hook's file (see `TrayMessage`). The queue is empty on almost every pass and costs a `try_recv` for it.
+///
+/// A test that presses a button of the pin's own calls this rather than the loop, because what it drives
+/// is the queue the loop drains: the press asks for the flip, and this side of the seam is what flips.
+pub(crate) fn answer_what_the_preview_side_asked() {
+    for message in crate::app::seam::take_tray_messages() {
+        match message {
+            crate::app::seam::TrayMessage::TogglePinAlwaysOnTop => {
+                crate::shell::tray::toggle_pin_always_on_top()
+            }
+            crate::app::seam::TrayMessage::TogglePreviewEnabled => {
+                crate::shell::tray::toggle_preview_enabled()
+            }
+            crate::app::seam::TrayMessage::PinClick(line) => {
+                probe_trace::note_a_pin_click_line(&line)
+            }
+        }
+    }
+}
+
 /// Write down who is in front when the gate decides that no listing can be reached: the window, its
 /// process, its class, and the region its own rectangle was read as covering.
 ///
@@ -1737,7 +1766,7 @@ pub fn run_explorer_hook() {
 /// nothing (see `foreground_cover_rect` and `a_foreground_of_this_class_covers_what_is_behind`).
 /// Written through the preview's own `RHP_PIN_TRACE` log, because it is the same run being read.
 fn note_the_window_that_hides_the_shell() {
-    if !crate::ui::preview_window::pin_trace_asked() {
+    if !probe_trace::pin_trace_asked() {
         return;
     }
 
@@ -1758,7 +1787,7 @@ fn note_the_window_that_hides_the_shell() {
         None => "cover none".to_string(),
     };
 
-    crate::ui::preview_window::note_a_trace_line(&format!(
+    probe_trace::note_a_pin_trace_line(&format!(
         "hidden by foreground {foreground:?} pid {pid} class {class} {cover}"
     ));
 }

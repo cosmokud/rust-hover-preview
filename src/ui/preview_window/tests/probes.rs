@@ -2271,7 +2271,7 @@ fn pin_text_caret_lag_probe() {
     let idle = PIN_PAINTS.load(Ordering::Relaxed) - idle_before;
     println!("idle paints in a second: {idle}");
 
-    let counted_before = crate::shell::key_input::pin_key_counted();
+    let counted_before = crate::app::seam::pin_key_counted();
     let mut caret_ms = Vec::new();
     let mut paint_ms = Vec::new();
     for _ in 0..12 {
@@ -2299,7 +2299,7 @@ fn pin_text_caret_lag_probe() {
 
     println!(
         "caret settled after {caret_ms:?} ms (the hook counted {})",
-        crate::shell::key_input::pin_key_counted() - counted_before
+        crate::app::seam::pin_key_counted() - counted_before
     );
     println!("frame painted after {paint_ms:?} ms");
 

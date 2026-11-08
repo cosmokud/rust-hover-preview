@@ -1454,11 +1454,11 @@ pub(super) fn take_pin_menu_dismiss() -> bool {
     // flag's value before the swap, and whether a menu was up to
     // put away. The hook's side of the same ask is the trace its
     // pinned tick writes (see `note_pin_click!`).
-    crate::shell::explorer_hook::note_pin_click!(
+    crate::app::seam::note_a_pin_click(format!(
         "DISMISS taken  asked {}  menu_up {}",
         asked as u8,
         (was_up || bubble_was_up) as u8,
-    );
+    ));
 
     was_up || bubble_was_up
 }

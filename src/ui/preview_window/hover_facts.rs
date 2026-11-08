@@ -283,7 +283,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
     // window of its own, with the preview's window put down — so a run that only asked the preview's
     // window whether it is visible would answer "nothing of ours is on the screen" with the pin in
     // front of the user, and the wheel would be left to Explorer over the pin's own picture (see
-    // `wheel_input::publish_preview_under_the_pointer`).
+    // `crate::app::seam::publish_preview_under_the_pointer`).
     let pin_hwnd = pin_real_window::real_pin_window();
     let pin_visible = pin_hwnd.is_some_and(|hwnd| unsafe { IsWindowVisible(hwnd).as_bool() });
     let preview_visible = pin_visible

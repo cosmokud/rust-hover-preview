@@ -31,10 +31,16 @@ static THE_FILE_IN_FLIGHT: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Note the file the pin is now on its way to, or `None` where nothing is in flight any more (see
 /// `THE_FILE_IN_FLIGHT`).
+///
+/// Published to the Explorer hook as well as held here: the hook is what offers a pick, and the file one
+/// is already on its way to is the one it must not offer again. What crosses is the file's fingerprint
+/// rather than the file, because the hook may not allocate (see `app::seam::PIN_FILE_IN_FLIGHT`).
 pub(super) fn note_the_pin_file_in_flight(path: Option<&Path>) {
     if let Ok(mut held) = THE_FILE_IN_FLIGHT.lock() {
         *held = path.map(Path::to_path_buf);
     }
+
+    crate::app::seam::publish_the_pin_file_in_flight(path);
 }
 
 /// The file the pin has already been asked for and is not showing yet, if there is one (see

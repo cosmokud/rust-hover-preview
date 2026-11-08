@@ -34,9 +34,10 @@ pub(super) const PIN_MENU_CLASS: PCWSTR = w!("RustHoverPreviewPinMenu");
 
 /// The menu window that is up, or nothing while no menu is.
 ///
-/// `pub(crate)` for the Explorer hook, which asks whether the window under the pointer is this one
-/// rather than the listing the panel covers (see `pin_menu_window_is_at`).
-pub(crate) static PIN_MENU_HWND: AtomicIsize = AtomicIsize::new(0);
+/// Read by the Explorer hook, which asks whether the window under the pointer is this one rather than
+/// the listing the panel covers (see `pin_menu_window_is_at`). It lives in `app::seam` for that reader,
+/// and this is the name it is written by.
+pub(crate) use crate::app::seam::PIN_MENU_HWND;
 
 /// Put the card's menu where it stands, in a window of its own over the screen, and
 /// take that window away where no menu is up.

@@ -3,7 +3,7 @@
 //! The sort is the shell's own answer to `GetSortColumns`, remembered per folder,
 //! because the pin's previous and next walk the files as the listing shows them: a
 //! listing walked in another order is a listing the pin walks wrongly (see
-//! `shell::pin_navigation`).
+//! `preview_window::pin_navigation`).
 
 use super::*;
 

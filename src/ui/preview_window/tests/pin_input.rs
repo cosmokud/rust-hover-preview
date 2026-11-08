@@ -92,7 +92,7 @@ fn an_arrow_on_a_pinned_window_is_never_a_seek() {
 /// window was in.
 #[test]
 fn the_hook_and_the_pin_window_answer_the_same_keys_the_same_way() {
-    use crate::shell::key_input::{pin_key_command, pin_key_message_acts, PIN_KEY_COMMANDS};
+    use crate::app::seam::{pin_key_command, pin_key_message_acts, PIN_KEY_COMMANDS};
 
     for (vk, command) in PIN_KEY_COMMANDS {
         assert_eq!(

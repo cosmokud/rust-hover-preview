@@ -60,10 +60,10 @@ AFK/engines: `app::afk` clock from hook's `ExplorerState`; an engine set to `Unt
 ```
 src/main.rs                 RUNNING, CONFIG, thread boot + tray loop
 src/paths.rs                plain_path() — strip \\?\ (\\?\UNC\ keeps server) before Shell/browser/media use
-src/app/                    seam (the facts the two sides exchange), single_instance, startup (registry sync/repair), updates, engine_processes (job+record), afk, dialogs
+src/app/                    seam (every crossing between the tray side and the preview side — the facts each publishes, the notices each sends, and the one doorway both name), app_icon, single_instance, startup (registry sync/repair), updates, engine_processes (job+record), afk, dialogs
 src/config/                 config (AppConfig, PreviewType/PreviewScale/..., DEFAULT_*, sanitize_*, save/ordered_text/differs/repair_older_lists), engines_in_effect, theme_files
-src/shell/                  explorer_hook/, wheel_input, key_input, hook_thread, cloud_files, pin_navigation, app_icon, tray/
-src/ui/                     preview_window.rs + preview_window/ (pin_*, layout, load*, paint, media_*, video_*, bubble_stream, audio_meter, tick, displays, ...); pin_window, displays seam (Desktop real vs recorder)
+src/shell/                  explorer_hook/, wheel_input, key_input, hook_thread, cloud_files, window_classes (Explorer's own windows: the two answers both sides ask), tray/
+src/ui/                     preview_window.rs + preview_window/ (pin_*, pin_navigation, layout, load*, paint, media_*, video_*, bubble_stream, audio_meter, tick, displays, ...); pin_window, displays seam (Desktop real vs recorder)
 src/formats/                routing, native_formats::NativeJob/job_for, content_type::{Probe,Content}, head, codecs, secret_files::is_secret_file, lists (17 rows), *_formats (see below)
 src/readers/                wic_image, dds_image, bcn/{bc6h,bc7,block_formats}, webp_image, jxl_image, heif_sequence, tone_map::{ToneMap,Curve},
                             psd_image, project_image (+cdr_image), eps_image, metafile_image, svg_preview, font_preview/{font_tables,specimen},

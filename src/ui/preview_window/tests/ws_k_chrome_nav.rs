@@ -441,12 +441,17 @@ fn the_always_on_top_caption_button_toggles_pin_always_on_top() {
         unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
         "so the release is the caption's own to answer"
     );
+    // The release asks for the flip rather than making it: the setting is a row of the tray's with a
+    // file behind it, so the ask travels to that side and is answered there (see
+    // `crate::app::seam::TrayMessage::TogglePinAlwaysOnTop`). What the button did is what this drains.
+    crate::shell::explorer_hook::answer_what_the_preview_side_asked();
     assert_eq!(pin_always_on_top(), !before, "AlwaysOnTop was toggled");
     assert_eq!(the_pressed_button(), None, "and the button was let go of");
 
     // Toggle back to restore initial state
     assert!(unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) });
     assert!(unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) });
+    crate::shell::explorer_hook::answer_what_the_preview_side_asked();
     assert_eq!(pin_always_on_top(), before, "restored to original state");
 
     restore(previous_pin, previous_pid, previous_media);

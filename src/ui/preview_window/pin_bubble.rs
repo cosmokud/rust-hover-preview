@@ -21,8 +21,9 @@ pub(super) const PIN_BUBBLE_CLASS: PCWSTR = w!("RustHoverPreviewPinBubble");
 /// It is read where a press is told apart from a press that landed on the bubble rather
 /// than somewhere else, out on the Explorer hook's side: a collapsed pin's window is
 /// hidden, so the bubble is the only window of the pin's own a press can land on while
-/// a pin is one (see `bubble_window_is_at`).
-pub(crate) static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
+/// a pin is one (see `bubble_window_is_at`). It lives in `app::seam` for that reader, and
+/// this is the name it is written by.
+pub(crate) use crate::app::seam::PIN_BUBBLE_HWND;
 
 /// One frame of a film a player of somebody else's is drawing, as the bubble shows it: the picture,
 /// already scaled to cover a square and cropped to the middle of it, and the side of that square.

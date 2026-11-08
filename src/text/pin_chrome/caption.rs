@@ -68,7 +68,7 @@ pub(crate) fn measure_caption_text(surface: &DibSurface, text: &str, dpi: u32) -
 /// The window's are the ones a hand has been reaching for on every window on the desktop,
 /// and they are where Windows puts them. The pin's are new: the file before this one, the
 /// file after it, and the file handed to whatever the machine has filed it under (see
-/// `shell::pin_navigation`).
+/// `preview_window::pin_navigation`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CaptionButton {
     /// The file before the one pinned, in the order the folder it was taken up in is

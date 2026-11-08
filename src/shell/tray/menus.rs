@@ -54,6 +54,7 @@ use super::submenus::{
     timing_delay_menu, update_available_label, MF_RADIOCHECK,
 };
 
+use crate::app::seam::{send_preview, PreviewMessage};
 use crate::app::updates;
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
@@ -84,7 +85,6 @@ use crate::engines::libreoffice_render;
 use crate::engines::webview_preview;
 use crate::formats::codecs::{self, refresh as refresh_codecs};
 use crate::text::text_theme;
-use crate::ui::preview_window::publish_tray_volume;
 use crate::{app::startup, CONFIG};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
@@ -108,10 +108,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // its own; an unchanged half is left alone so opening the menu does not push the file's
     // level onto a knob dragged elsewhere (see `tray_volume_moved`).
     if changed.0 {
-        publish_tray_volume(false);
+        send_preview(PreviewMessage::TrayVolume { audio: false });
     }
     if changed.1 {
-        publish_tray_volume(true);
+        send_preview(PreviewMessage::TrayVolume { audio: true });
     }
 
     // The menu is also where the check for a newer release is asked for, after the one

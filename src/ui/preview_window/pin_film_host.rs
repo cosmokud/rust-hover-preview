@@ -2217,7 +2217,7 @@ unsafe fn create() -> Option<HWND> {
         // rectangle rather than with the app's own face (see `app_icon`). The host a hover is
         // promoted into is made from the *hover's* class and is given the same icon on the window
         // instead (see `the_button_shells_reads_its_gestures_from`).
-        let icon = unsafe { crate::shell::app_icon::app_icon() };
+        let icon = unsafe { crate::app::app_icon::app_icon() };
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(the_default_answer),
@@ -2360,7 +2360,7 @@ unsafe fn the_button_shells_reads_its_gestures_from(host: HWND) {
 
     // The window's own icon, both sizes: the small one is what a taskbar button draws, and the
     // large one what anything listing the window as a window draws.
-    let icon = unsafe { crate::shell::app_icon::app_icon() };
+    let icon = unsafe { crate::app::app_icon::app_icon() };
     let icon = LPARAM(icon.0 as isize);
     let _ = unsafe { SendMessageW(host, WM_SETICON, WPARAM(ICON_BIG as usize), icon) };
     let _ = unsafe { SendMessageW(host, WM_SETICON, WPARAM(ICON_SMALL as usize), icon) };

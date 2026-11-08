@@ -542,7 +542,7 @@ pub(super) fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::Vol
 ///
 /// The button and not only the panel, because the wheel over the button is the same level
 /// being turned and the popup is kept open while the pointer is on it (see
-/// `pin_volume_keep_alive_try` and `refresh_pin_volume`).
+/// `app::seam::PIN_VOLUME_REGION` and `refresh_pin_volume`).
 pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
     if pin.collapsed {
         return None;
@@ -563,26 +563,11 @@ pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
     }
 }
 
-/// The screen-space box a wheel notch over a pin's volume control belongs to, published by the
-/// preview tick and read by the wheel hook.
-///
-/// It is published rather than resolved on the hook's path because resolving it needs
-/// `PIN_STATE`, which the preview thread holds through each tick: a hook that waited there would
-/// stall every wheel message on the desktop, and one that gave up on the lock — which is what this
-/// used to do — dropped about half the notches of a turned wheel to Explorer instead (see
-/// `pin_volume_keep_alive_try`). The four edges and the flag are written by one thread and read by
-/// the other; a torn box costs one notch taken wrongly, which is why this is four atomics and not
-/// a lock.
-static PIN_VOLUME_REGION: [AtomicI32; 4] = [
-    AtomicI32::new(0),
-    AtomicI32::new(0),
-    AtomicI32::new(0),
-    AtomicI32::new(0),
-];
-
-/// Whether `PIN_VOLUME_REGION` names a box at all (see `pin_volume_keep_alive_try`).
-static PIN_VOLUME_REGION_SET: AtomicBool = AtomicBool::new(false);
-
+/// The screen-space box a wheel notch over a pin's volume control belongs to is published, by the tick
+/// that has the pin in hand, to the wheel hook: resolving it needs `PIN_STATE`, which the preview
+/// thread holds through each tick, and a hook that waited there would stall every wheel message on the
+/// desktop — one that gave up on the lock, which is what this used to do, dropped about half the
+/// notches of a turned wheel to Explorer instead (see `app::seam::PIN_VOLUME_REGION`).
 /// Publish the box a wheel notch over `pin`'s volume control belongs to, or clear it where there
 /// is no pin (see `PIN_VOLUME_REGION`).
 ///
@@ -606,41 +591,12 @@ pub(super) fn publish_pin_volume_region(pin: Option<&PinnedPreview>) {
         ))
     });
 
-    let Some(region) = region else {
-        clear_pin_volume_region();
-        return;
-    };
-
-    for (edge, value) in PIN_VOLUME_REGION
-        .iter()
-        .zip([region.0, region.1, region.2, region.3])
-    {
-        edge.store(value, Ordering::Relaxed);
-    }
-    PIN_VOLUME_REGION_SET.store(true, Ordering::Release);
+    crate::app::seam::PIN_VOLUME_REGION.publish(region);
 }
 
 /// Take the published box away, for a pin that is no longer up (see `publish_pin_volume_region`).
 pub(super) fn clear_pin_volume_region() {
-    PIN_VOLUME_REGION_SET.store(false, Ordering::Release);
-}
-
-/// The box on screen a wheel notch over a pin's volume control belongs to: the open
-/// popup's panel and the button it hangs from, or just the button while it is closed.
-///
-/// Asked from the wheel hook, so it reads only what the tick published and waits on no lock (see
-/// `PIN_VOLUME_REGION`).
-pub(crate) fn pin_volume_keep_alive_try() -> Option<(i32, i32, i32, i32)> {
-    if !PIN_VOLUME_REGION_SET.load(Ordering::Acquire) {
-        return None;
-    }
-
-    Some((
-        PIN_VOLUME_REGION[0].load(Ordering::Relaxed),
-        PIN_VOLUME_REGION[1].load(Ordering::Relaxed),
-        PIN_VOLUME_REGION[2].load(Ordering::Relaxed),
-        PIN_VOLUME_REGION[3].load(Ordering::Relaxed),
-    ))
+    crate::app::seam::PIN_VOLUME_REGION.publish(None);
 }
 
 /// Where a pinned sound's card's volume button opens its panel from, in the window's own
@@ -1297,7 +1253,7 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // the pin's window for it is harmless rather than necessary (see `toggle_pin_volume`).
             CardControl::Volume => toggle_pin_volume(hwnd),
             CardControl::AlwaysOnTop => {
-                crate::shell::tray::toggle_pin_always_on_top();
+                crate::app::seam::send_tray(crate::app::seam::TrayMessage::TogglePinAlwaysOnTop);
             }
             // The two window buttons in the top margin act on the pin rather than on the sound,
             // and are the one way out of a pinned sound that does not ask for the keyboard: the
@@ -1391,7 +1347,9 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
         if still_on_it {
             match button {
                 pin_chrome::CaptionButton::AlwaysOnTop => {
-                    crate::shell::tray::toggle_pin_always_on_top();
+                    crate::app::seam::send_tray(
+                        crate::app::seam::TrayMessage::TogglePinAlwaysOnTop,
+                    );
                 }
                 pin_chrome::CaptionButton::Minimize => ask_pin(PinCommand::Minimize),
                 pin_chrome::CaptionButton::Maximize => ask_pin(PinCommand::Maximize),

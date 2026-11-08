@@ -743,12 +743,15 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
         stand_pin(previous);
         return;
     }
-    crate::shell::key_input::publish_pin_key_owner(foreground.0 as u64, 0);
+    crate::app::seam::publish_pin_key_owner(foreground.0 as u64, 0);
+    // And the box the notch has to be inside, which the same tick publishes: a picture's zoom is asked of
+    // the pin's own state, and a hook may not read that state (see `crate::app::seam::PIN_ZOOM_REGION`).
+    crate::app::seam::PIN_ZOOM_REGION.publish(pin_model::pin_zoom_keep_alive_try());
 
     // The count and the signal are the process's own, so both are cleared here: what is read below has
     // to be this notch's and not one left behind by a test beside this one.
-    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
-    let _ = wheel_input::take_pin_zoom_delta();
+    crate::app::seam::publish_preview_under_the_pointer(false);
+    let _ = crate::app::seam::take_pin_zoom_delta();
     unsafe {
         let _ = ResetEvent(preview_channel_event());
     }
@@ -767,7 +770,7 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     };
 
     unsafe {
-        let _ = wheel_input::wheel_hook_proc(
+        let _ = crate::shell::wheel_input::wheel_hook_proc(
             HC_ACTION as i32,
             WPARAM(WM_MOUSEWHEEL as usize),
             LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
@@ -775,7 +778,7 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     }
 
     assert_eq!(
-        wheel_input::take_pin_zoom_delta(),
+        crate::app::seam::take_pin_zoom_delta(),
         WHEEL_DELTA,
         "a notch over a pinned picture is the pin's and not Explorer's"
     );
@@ -797,14 +800,14 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     // `Pin Mode → Always On Top` off asks for, and a wheel turned there is not this app's to take:
     // it is the program in front that is being scrolled, and taking it would leave that program
     // unscrolled and zoom a window the user cannot even see.
-    let _ = wheel_input::take_pin_zoom_delta();
+    let _ = crate::app::seam::take_pin_zoom_delta();
     unsafe {
         let _ = ResetEvent(preview_channel_event());
     }
-    crate::shell::key_input::publish_pin_key_owner((foreground.0 as u64) ^ 0x1000, 0);
+    crate::app::seam::publish_pin_key_owner((foreground.0 as u64) ^ 0x1000, 0);
 
     let handed_on = unsafe {
-        wheel_input::wheel_hook_proc(
+        crate::shell::wheel_input::wheel_hook_proc(
             HC_ACTION as i32,
             WPARAM(WM_MOUSEWHEEL as usize),
             LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
@@ -812,7 +815,7 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     };
 
     assert_eq!(
-        wheel_input::take_pin_zoom_delta(),
+        crate::app::seam::take_pin_zoom_delta(),
         0,
         "a pin the user is not in does not take the wheel from the program they are working in"
     );
@@ -833,14 +836,14 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     // window the keyboard is in: it stands over every other window, so the box the preview
     // published is the box the pointer is over, and the click that gate used to need was a click
     // a topmost pin never needed (see `publish_pin_always_on_top`).
-    let _ = wheel_input::take_pin_zoom_delta();
+    let _ = crate::app::seam::take_pin_zoom_delta();
     unsafe {
         let _ = ResetEvent(preview_channel_event());
     }
-    crate::shell::key_input::publish_pin_always_on_top(true);
+    crate::app::seam::publish_pin_always_on_top(true);
 
     let swallowed = unsafe {
-        wheel_input::wheel_hook_proc(
+        crate::shell::wheel_input::wheel_hook_proc(
             HC_ACTION as i32,
             WPARAM(WM_MOUSEWHEEL as usize),
             LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
@@ -848,7 +851,7 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     };
 
     assert_eq!(
-        wheel_input::take_pin_zoom_delta(),
+        crate::app::seam::take_pin_zoom_delta(),
         WHEEL_DELTA,
         "a pin that is always on top is the window the pointer is in"
     );
@@ -857,7 +860,7 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
         LRESULT(1),
         "and the notch is the pin's rather than what stands behind it"
     );
-    crate::shell::key_input::publish_pin_always_on_top(false);
+    crate::app::seam::publish_pin_always_on_top(false);
 
     // And the same notch is the pin's while the pin is the surface the pointer is standing on,
     // which is the case the keyboard's question gets wrong: a pin raised over the listing the user
@@ -865,14 +868,14 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     // turned there is the pin's rather than the list's. It is asked of the desktop once a tick and
     // published, because a low-level hook may not walk the desktop itself (see
     // `PREVIEW_UNDER_POINTER`).
-    crate::shell::wheel_input::publish_preview_under_the_pointer(true);
-    let _ = wheel_input::take_pin_zoom_delta();
+    crate::app::seam::publish_preview_under_the_pointer(true);
+    let _ = crate::app::seam::take_pin_zoom_delta();
     unsafe {
         let _ = ResetEvent(preview_channel_event());
     }
 
     let swallowed = unsafe {
-        wheel_input::wheel_hook_proc(
+        crate::shell::wheel_input::wheel_hook_proc(
             HC_ACTION as i32,
             WPARAM(WM_MOUSEWHEEL as usize),
             LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
@@ -880,7 +883,7 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
     };
 
     assert_eq!(
-        wheel_input::take_pin_zoom_delta(),
+        crate::app::seam::take_pin_zoom_delta(),
         WHEEL_DELTA,
         "a pin the pointer is on is scrolled without the click that used to be needed to reach it"
     );
@@ -889,10 +892,11 @@ fn a_wheel_notch_over_a_pin_belongs_to_the_pin_while_the_pointer_is_on_it() {
         LRESULT(1),
         "and the notch is not left for the listing to scroll behind the pin"
     );
-    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
+    crate::app::seam::publish_preview_under_the_pointer(false);
+    crate::app::seam::PIN_ZOOM_REGION.publish(None);
     stand_pin(None);
     stand_pin(previous);
-    crate::shell::key_input::publish_pin_key_owner(0, 0);
+    crate::app::seam::publish_pin_key_owner(0, 0);
 }
 
 /// A wheel that reports less than a notch per message is counted by the unit rather than by the notch:
@@ -1840,24 +1844,27 @@ another
         *held = Some(vec![content]);
     }
 
+    publish_text_wheel_boxes(Some(content), false, true, true);
     assert!(
-        text_size_keep_alive_try().is_some(),
+        crate::app::seam::TEXT_SIZE_REGION.get().is_some(),
         "a pin whose page fits its box publishes a region the size's own wheel reads"
     );
     assert!(
-        text_scroll_keep_alive_try().is_none(),
+        crate::app::seam::TEXT_SCROLL_REGION.get().is_none(),
         "and the scroll's own region is not it: a page that cannot scroll has nothing to give"
     );
 
     // And the region is a page's, not a pin's: a pinned picture is zoomed by a `Ctrl` and a wheel
     // rather than resized, and the window it publishes is the same box (see
-    // `pin_zoom_keep_alive_try`).
-    TEXT_PREVIEW_HOLDING.store(false, Ordering::Release);
+    // `crate::app::seam::PIN_ZOOM_REGION`).
+    publish_text_wheel_boxes(Some(content), false, false, true);
     assert!(
-        text_size_keep_alive_try().is_none(),
+        crate::app::seam::TEXT_SIZE_REGION.get().is_none(),
         "a pin that is not showing a page is not a page to resize"
     );
 
+    crate::app::seam::TEXT_SCROLL_REGION.publish(None);
+    crate::app::seam::TEXT_SIZE_REGION.publish(None);
     TEXT_PREVIEW_HOLDING.store(previous_holding, Ordering::Release);
     if let Ok(mut held) = POINTER_HOLD_REGIONS.lock() {
         *held = previous_regions;
@@ -1963,7 +1970,7 @@ fn a_pinned_page_takes_the_wheel_though_the_hover_window_is_down() {
     unsafe { publish_pointer_hold(preview) };
 
     assert_eq!(
-        text_scroll_keep_alive_try(),
+        crate::app::seam::TEXT_SCROLL_REGION.get(),
         Some(box_),
         "the pin's own window is the box the page is drawn in, and so the box the wheel has to be \
          inside of: asked of the hover's window, which is down, the hold is withdrawn and every notch \

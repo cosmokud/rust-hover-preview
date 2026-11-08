@@ -12,10 +12,10 @@
 //! re-filters in hand rather than reading the folder again, and it is capped at
 //! `FOLDER_LIMIT`: a pin in a folder not in the map reads it again, which is the cost of the cap.
 
+use crate::app::seam::{view_sort_of, SortKey, ViewSort};
 use crate::config::config::{AppConfig, PinNavFileTypes, PreviewType};
 use crate::formats::routing;
 use crate::paths::plain_path;
-use crate::shell::explorer_hook::{view_sort_of, SortKey, ViewSort};
 use once_cell::sync::Lazy;
 use std::cmp::Ordering;
 use std::collections::HashMap;

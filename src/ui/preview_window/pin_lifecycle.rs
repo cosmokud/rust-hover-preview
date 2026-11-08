@@ -254,7 +254,7 @@ pub(crate) enum PinCommand {
     /// The file before the one pinned, in the order the folder it was taken up in is showing
     /// them. It goes through the loop like the rest, because the file it names is a walk of
     /// the folder and the loop is what owns the configuration the walk is read under (see
-    /// `shell::pin_navigation`).
+    /// `preview_window::pin_navigation`).
     ///
     /// **What a `Left` arrow asks for, and what it means is the file in the window's answer:**
     /// the page's caret where the pin holds one, and the walk where it does not (see
@@ -486,7 +486,7 @@ pub(super) unsafe fn settle_the_pin_after_the_setting_moved() {
 
     let front = unsafe { GetForegroundWindow() };
     let the_front_is_where_the_pin_stands = front == hwnd
-        || crate::shell::explorer_hook::explorer_browser_class_matches(front)
+        || crate::shell::window_classes::explorer_class_matches(front)
         || unsafe { foreground_is_the_desktop(front) };
     let stands_over_the_front = unsafe { pin_stands_over(hwnd, front) };
     note_pin_trace!(
@@ -1724,7 +1724,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // that was off the screen only (see `take_the_band_and_give_it_back`).
     let the_front_is_the_pin_or_a_listing = {
         let front = unsafe { GetForegroundWindow() };
-        front == hwnd || crate::shell::explorer_hook::explorer_browser_class_matches(front)
+        front == hwnd || crate::shell::window_classes::explorer_class_matches(front)
     };
     if !pin_always_on_top() && (!on_the_screen || the_front_is_the_pin_or_a_listing) {
         // **A pin that is a window is put in front the one way Windows lets a process without the
@@ -1823,14 +1823,14 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // box being read to the pin being on the screen, and whether this take-up is the one that made the
     // window (the first of a run is the slowest). `preview_up` says whether there was a hover under the
     // pin to hand over from at all.
-    crate::shell::explorer_hook::note_pin_click!(
+    crate::app::seam::note_a_pin_click(format!(
         "SHOW own {} created {} span {}us box {:?} preview_up {}",
         pin_is_its_own_window() as u8,
         created_now as u8,
         started.elapsed().as_micros(),
         window,
         preview_up as u8,
-    );
+    ));
 
     // **A shown engine pin puts its page back last**, whether it was shown by the restore, the
     // taskbar's own button or a box change: the page is a window of its own that the show above
@@ -2539,7 +2539,7 @@ fn where_the_band_goes_back(foreground: HWND, listing: HWND) -> HWND {
     let nowhere_else_to_go = listing.is_invalid()
         || foreground == listing
         || foreground == pinned_window()
-        || crate::shell::explorer_hook::explorer_browser_class_matches(foreground);
+        || crate::shell::window_classes::explorer_class_matches(foreground);
 
     if nowhere_else_to_go {
         HWND::default()
