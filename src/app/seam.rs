@@ -553,6 +553,18 @@ pub(crate) enum PreviewMessage {
     /// Only the viewer can take it down: the page is a window of its engine, and whether it is a
     /// hover's page or a pin's is a question about what is on its screen (see `hide_html_page`).
     HideHtmlPage,
+    /// A disk or memory budget for what previews leave behind has been made smaller, and what is
+    /// over the new one goes now rather than at the next render that happens to pass through a
+    /// cache.
+    ///
+    /// The folders are the machine's, but what may not be given up is not: a page a hover is
+    /// waiting for is held by the viewer, and a trim that ran in the tray would see no page held
+    /// at all and give up the very one on its way (see `document_cache::trim_now`).
+    TrimCaches,
+    /// Nothing is hovered and no pin is up: a player that outlived the hover it was started for
+    /// is ended, which is a question only the process that spawned it can answer — the pid is
+    /// that process's own record (see `ffplay_window::kill_stray_video_process`).
+    KillStrayPlayer,
     /// The pin key was pressed while a preview was on screen: what is up becomes a
     /// window of its own — captioned, movable, always on top — and the hover machinery
     /// stays quiet behind it until it is closed. The rect is the box the preview is
@@ -1392,6 +1404,8 @@ impl SeamMessage {
     const PIN_CLICK: u8 = 24;
     const STOP_ENGINES: u8 = 25;
     const HIDE_HTML_PAGE: u8 = 26;
+    const TRIM_CACHES: u8 = 27;
+    const KILL_STRAY_PLAYER: u8 = 28;
 
     /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
     fn of(tag: u8, numbers: &[i64]) -> Self {
@@ -1492,6 +1506,8 @@ impl SeamMessage {
             PreviewMessage::RefreshTypes => Some(Self::of(Self::REFRESH_TYPES, &[])),
             PreviewMessage::StopEngines => Some(Self::of(Self::STOP_ENGINES, &[])),
             PreviewMessage::HideHtmlPage => Some(Self::of(Self::HIDE_HTML_PAGE, &[])),
+            PreviewMessage::TrimCaches => Some(Self::of(Self::TRIM_CACHES, &[])),
+            PreviewMessage::KillStrayPlayer => Some(Self::of(Self::KILL_STRAY_PLAYER, &[])),
             PreviewMessage::Pin {
                 path,
                 rect,
@@ -1617,6 +1633,8 @@ impl SeamMessage {
             Self::REFRESH_TYPES => PreviewMessage::RefreshTypes,
             Self::STOP_ENGINES => PreviewMessage::StopEngines,
             Self::HIDE_HTML_PAGE => PreviewMessage::HideHtmlPage,
+            Self::TRIM_CACHES => PreviewMessage::TrimCaches,
+            Self::KILL_STRAY_PLAYER => PreviewMessage::KillStrayPlayer,
             Self::PIN => PreviewMessage::Pin {
                 path: self.path()?,
                 rect: box_of(numbers, 0),
@@ -2274,13 +2292,12 @@ fn the_viewer_process() -> u32 {
 pub(crate) use crate::shell::explorer_hook::{view_sort_of, SortKey, ViewSort};
 pub(crate) use crate::shell::tray::FONT_SIZE_CHOICES;
 pub(crate) use crate::ui::preview_window::{
-    hide_preview, kill_stray_video_process, monitor_dpi_from_point, note_engine_page_drag,
-    pin_press_was_not_a_pick, pointer_item_box, pointer_item_holds, press_pinned_preview,
-    preview_pointer_hold, publish_pin_media_press, publish_pointer_item_box, refresh_pin,
-    refresh_preview, refresh_preview_types, refresh_render_html, request_pin_end,
-    request_pin_menu_dismiss, show_preview, show_preview_keyboard, take_pin_handed_off,
-    take_pin_menu_pressed, take_pin_resumed, trim_image_cache, trim_subtitle_cache,
-    update_pinned_preview,
+    hide_preview, monitor_dpi_from_point, note_engine_page_drag, pin_press_was_not_a_pick,
+    pointer_item_box, pointer_item_holds, press_pinned_preview, preview_pointer_hold,
+    publish_pin_media_press, publish_pointer_item_box, refresh_pin, refresh_preview,
+    refresh_preview_types, refresh_render_html, request_pin_end, request_pin_menu_dismiss,
+    show_preview, show_preview_keyboard, take_pin_handed_off, take_pin_menu_pressed,
+    take_pin_resumed, trim_subtitle_cache, update_pinned_preview,
 };
 
 #[cfg(test)]
@@ -2307,6 +2324,8 @@ mod tests {
             PreviewMessage::RefreshTypes,
             PreviewMessage::StopEngines,
             PreviewMessage::HideHtmlPage,
+            PreviewMessage::TrimCaches,
+            PreviewMessage::KillStrayPlayer,
             PreviewMessage::Pin {
                 path: path.clone(),
                 rect: (9, 10, 11, 12),

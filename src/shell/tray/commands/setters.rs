@@ -31,8 +31,7 @@ use super::super::submenus::{
 
 use crate::app::dialogs;
 use crate::app::seam::{
-    refresh_preview, refresh_preview_types, send_preview, trim_image_cache, trim_subtitle_cache,
-    PreviewMessage,
+    refresh_preview, refresh_preview_types, send_preview, trim_subtitle_cache, PreviewMessage,
 };
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
@@ -41,7 +40,6 @@ use crate::config::config::{
     PinNavFileTypes, PreviewScale, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
     VOLUME_CHOICES,
 };
-use crate::engines::document_cache;
 use crate::formats::codecs;
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
@@ -470,7 +468,7 @@ pub(in super::super) fn set_image_cache_mb(index: u16) {
         config.save();
     }
 
-    trim_image_cache();
+    send_preview(PreviewMessage::TrimCaches);
 }
 
 /// How much of what an engine drew may be kept, between hovers.
@@ -488,7 +486,7 @@ pub(in super::super) fn set_document_cache_mb(index: u16) {
         config.save();
     }
 
-    document_cache::trim_now();
+    send_preview(PreviewMessage::TrimCaches);
 }
 
 /// How much of what the image converter developed may be kept, between hovers.
@@ -507,7 +505,7 @@ pub(in super::super) fn set_image_disk_cache_mb(index: u16) {
         config.save();
     }
 
-    document_cache::trim_image_now();
+    send_preview(PreviewMessage::TrimCaches);
 }
 
 /// How much of what a film's own subtitle tracks were copied into may be kept, between hovers.

@@ -50,13 +50,13 @@ mod window_state;
 
 use crate::app::engine_processes;
 use crate::app::seam::{
-    cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    note_engine_page_drag, pin_button_covers, pin_press_was_not_a_pick, pinned_path,
-    pointer_item_box, pointer_item_holds, press_pinned_preview, preview_pointer_hold,
-    preview_screen_rect, preview_stall_ms, preview_window_rect, publish_pin_media_press,
-    publish_pointer_item_box, request_pin_end, request_pin_menu_dismiss, show_preview,
-    show_preview_keyboard, take_pin_handed_off, take_pin_menu_pressed, take_pin_resumed,
-    update_pinned_preview, PreviewCursorHover,
+    cursor_preview_hover, hide_preview, monitor_dpi_from_point, note_engine_page_drag,
+    pin_button_covers, pin_press_was_not_a_pick, pinned_path, pointer_item_box, pointer_item_holds,
+    press_pinned_preview, preview_pointer_hold, preview_screen_rect, preview_stall_ms,
+    preview_window_rect, publish_pin_media_press, publish_pointer_item_box, request_pin_end,
+    request_pin_menu_dismiss, send_preview, show_preview, show_preview_keyboard,
+    take_pin_handed_off, take_pin_menu_pressed, take_pin_resumed, update_pinned_preview,
+    PreviewCursorHover, PreviewMessage,
 };
 use crate::config::config::{
     AvoidMode, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS, DEFAULT_PIN_UPDATE_ENABLED,
