@@ -607,15 +607,21 @@ pub(crate) fn facts_of(track: &Track, path: &Path) -> Vec<Fact> {
     facts
 }
 
-/// The name a card is headed with: the file's own name, which is what a person looking at the
-/// card is identifying — the folder it is in is already said by the hover that put the card up,
-/// and a card is not wide enough for a whole path.
+/// The name a card is headed with: the file's own name without the extension it is already known
+/// by — the format fact beside the name says what the file is in capitals, so the extension is the
+/// one part of the name the card repeats. The folder it is in is not in the name either: that is
+/// said by the hover that put the card up, and a card is not wide enough for a whole path.
 ///
 /// It is the card's business rather than a caller's because two of them need it and they have
 /// to agree: the card is drawn with it, and the scroll a card too narrow for it needs is
 /// measured from it (see [`NameScroll::of`]).
+///
+/// A name that is only an extension — a file called `.flac` — is kept whole rather than stripped:
+/// no extension is the whole of it.
 pub(crate) fn name_of(path: &Path) -> String {
-    path.file_name()
+    path.file_stem()
+        .filter(|stem| !stem.is_empty())
+        .or_else(|| path.file_name())
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default()
 }
