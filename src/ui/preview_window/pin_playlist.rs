@@ -479,6 +479,37 @@ pub(super) fn step_the_pick(direction: i32) -> bool {
     true
 }
 
+/// The file the band's highlight is on, shown in the window that drew it: what a `Return` in a pinned
+/// card asks for (see `PinCommand::PlayRow`).
+///
+/// It answers whether the band took the key, which is the whole of what keeps a `Return` in a window
+/// with no band up — or with a band holding no pick — a key that does nothing at all. It is the row
+/// the hand has *picked* and never the one it is merely on: a hover is where the pointer is, and the
+/// file to play is one the hand has named.
+pub(super) fn play_the_pick() -> bool {
+    // A band that is down is not a list the hand is in, whatever row it was left picked on.
+    if the_band_of_the_pin().is_none() {
+        return false;
+    }
+
+    let picked = match THE_PLAYLIST.lock() {
+        Ok(playlist) => playlist
+            .picked
+            .and_then(|index| playlist.order.get(index).cloned()),
+        Err(_) => None,
+    };
+
+    // The lock is let go of before the pick is made, as it is for a double press on a row: showing a
+    // file is a message to the loop, and the loop's own tick is what reads these rows (see
+    // `show_pinned_file`).
+    let Some(path) = picked else {
+        return false;
+    };
+
+    show_pinned_file(&path);
+    true
+}
+
 /// The band's own state, as a test reads it: the row the hand is on, the row it has picked, and the
 /// row standing first in sight.
 #[cfg(test)]

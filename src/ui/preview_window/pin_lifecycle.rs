@@ -359,6 +359,14 @@ pub(crate) enum PinCommand {
     ///
     /// Nothing at all to a pin that holds no page, or that holds one with nothing selected.
     FindNext,
+    /// Play the row a sound's card has picked in its playlist band: what a `Return` in a pinned card
+    /// asks for, which is the key a hand already inside a list answers it with.
+    ///
+    /// It is the row the hand has *picked* and never the one it is merely on, and it is nothing at all
+    /// to a window with no band up or a band with no row picked — the file is named by a press or by
+    /// the arrows, so a `Return` names nothing a hand has not asked for (see
+    /// `pin_playlist::play_the_pick`).
+    PlayRow,
 }
 
 // The commands the window procedure has left for the preview loop are a field of the pin's own

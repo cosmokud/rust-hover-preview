@@ -209,6 +209,7 @@ fn a_key_reaches_a_pin_by_being_the_one_the_keyboard_is_in() {
         (VK_END.0 as i32, Some(PinCommand::PageBottom), "end"),
         (VK_ESCAPE.0 as i32, Some(PinCommand::Close), "escape"),
         (VK_SPACE.0 as i32, Some(PinCommand::TogglePlayback), "space"),
+        (VK_RETURN.0 as i32, Some(PinCommand::PlayRow), "return"),
     ] {
         assert_eq!(
             pinned_key_command(vk),
@@ -221,16 +222,7 @@ fn a_key_reaches_a_pin_by_being_the_one_the_keyboard_is_in() {
     // the user is typing into, and a modified one is a command of some other program: both
     // are keys this window was never asked about, and answering them would be a preview
     // acting on the keyboard it is merely standing in front of.
-    for vk in [
-        VK_A.0 as i32,
-        VK_C.0 as i32,
-        0x41,
-        0x0D,
-        0x09,
-        0x2E,
-        0x2D,
-        0x5B,
-    ] {
+    for vk in [VK_A.0 as i32, VK_C.0 as i32, 0x41, 0x09, 0x2E, 0x2D, 0x5B] {
         assert_eq!(
             pinned_key_command(vk),
             None,
