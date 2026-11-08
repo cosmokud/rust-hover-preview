@@ -165,22 +165,22 @@ fn a_pinned_windows_bands_are_the_caption_above_it_and_the_bar_below_it() {
     // carries the bar as well, which is a band the media gives up at the bottom.
     let window = (100, 100, 500, 600);
     assert_eq!(
-        content_box_of(window, 96, false, false, pinned_caption_height(96, None)),
+        content_box_of(window, 96, false, false, pinned_caption_height(96, None), 0),
         (100, 130, 500, 600)
     );
     assert_eq!(
-        content_box_of(window, 96, true, false, pinned_caption_height(96, None)),
+        content_box_of(window, 96, true, false, pinned_caption_height(96, None), 0),
         (100, 130, 500, 570)
     );
 
     // And a kind whose chrome is drawn over its media has no bands at all: its window is its
     // media, and the caption and the bar are strips *of* it rather than room beside it.
     assert_eq!(
-        content_box_of(window, 96, false, true, pinned_caption_height(96, None)),
+        content_box_of(window, 96, false, true, pinned_caption_height(96, None), 0),
         window
     );
     assert_eq!(
-        content_box_of(window, 96, true, true, pinned_caption_height(96, None)),
+        content_box_of(window, 96, true, true, pinned_caption_height(96, None), 0),
         window
     );
 }

@@ -537,9 +537,17 @@ fn a_page_that_is_laid_out_to_its_box_is_resized_one_edge_at_a_time() {
         false,
         PinFrame::Free,
         pinned_caption_height(96, None),
+        0,
     );
 
-    let content = content_box_of(resized, 96, false, false, pinned_caption_height(96, None));
+    let content = content_box_of(
+        resized,
+        96,
+        false,
+        false,
+        pinned_caption_height(96, None),
+        0,
+    );
     assert_eq!(content, (0, 30, 600, 330));
 
     // And its own floor holds: a page cannot be dragged to nothing.
@@ -558,8 +566,16 @@ fn a_page_that_is_laid_out_to_its_box_is_resized_one_edge_at_a_time() {
         false,
         PinFrame::Free,
         pinned_caption_height(96, None),
+        0,
     );
-    let content = content_box_of(resized, 96, false, false, pinned_caption_height(96, None));
+    let content = content_box_of(
+        resized,
+        96,
+        false,
+        false,
+        pinned_caption_height(96, None),
+        0,
+    );
     assert_eq!(content, (0, 30, 400, 30 + PIN_MIN_MEDIA_PIXELS as i32));
 }
 
@@ -1359,7 +1375,7 @@ fn a_double_click_puts_a_pin_in_the_middle_of_its_screen() {
     // and none below.
     let fitted = (135, 0, 1785, 1040);
     assert_eq!(
-        centred_pin_box(fitted, 96, false, true, 0, room),
+        centred_pin_box(fitted, 96, false, true, 0, 0, room),
         fitted,
         "a window fitted to the screen was moved off the middle of it, or given a gap above it or \
          below"
@@ -1368,7 +1384,7 @@ fn a_double_click_puts_a_pin_in_the_middle_of_its_screen() {
     // A window smaller than the room is moved to the middle of it, size and all: a 400 by 300 box
     // in the corner comes out 760 across and 370 down.
     assert_eq!(
-        centred_pin_box((0, 0, 400, 300), 96, false, true, 0, room),
+        centred_pin_box((0, 0, 400, 300), 96, false, true, 0, 0, room),
         (760, 370, 1160, 670),
         "a window smaller than the screen was not put in the middle of it"
     );
@@ -1378,7 +1394,7 @@ fn a_double_click_puts_a_pin_in_the_middle_of_its_screen() {
     // media of such a pin is not simply the middle of the room.
     let bands = 30 + pinned_transport_height(96, true);
     let banded_window = (0, 0, 400, 300 + bands);
-    let banded = centred_pin_box(banded_window, 96, true, false, 30, room);
+    let banded = centred_pin_box(banded_window, 96, true, false, 30, 0, room);
     let window = pinned_window_box_of(banded, 96, true, false, 30);
 
     assert_eq!(

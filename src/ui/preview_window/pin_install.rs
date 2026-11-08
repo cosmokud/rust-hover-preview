@@ -1126,7 +1126,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         dpi,
         &DESKTOPS,
     );
-    let content = content_box_of(window, dpi, transport_bar, overlay, caption);
+    let content = content_box_of(window, dpi, transport_bar, overlay, caption, 0);
 
     // Whether the file this pin is coming up on is a sound, which is what says
     // which of the tray's two level settings the level it plays at is read of:

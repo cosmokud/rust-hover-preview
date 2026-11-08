@@ -192,7 +192,8 @@ fn a_pinned_windows_box_is_its_media_plus_the_room_its_chrome_needs() {
             96,
             true,
             false,
-            pinned_caption_height(96, None)
+            pinned_caption_height(96, None),
+            0
         ),
         content
     );
@@ -264,7 +265,7 @@ fn a_sound_is_given_no_caption_above_its_card() {
     // card is drawn in is the whole of the window rather than the rows below a caption.
     let window = pinned_window_box_of((100, 100, 500, 600), 96, false, false, 0);
     assert_eq!(window, (100, 100, 500, 600));
-    assert_eq!(content_box_of(window, 96, false, false, 0), window);
+    assert_eq!(content_box_of(window, 96, false, false, 0, 0), window);
     assert_eq!(pinned_band_rows(600, 0, 0, false, 0), (0, 600));
 
     // A picture's band begins below the caption it has always had.
@@ -1144,6 +1145,65 @@ fn a_band_under_a_card_grows_the_window_and_leaves_the_card_alone() {
         "and a box given back is owed a paint as much as one given: the band is down, and the \
          window it grew is the size it grew to until a paint says otherwise"
     );
+}
+
+/// A window carried is a place and not a size, and the band under a card is the window's: the box a
+/// move reads back out of the window it left is the card's own.
+///
+/// A move that read the band back as content would hand the card the rows of its own playlist, and
+/// then measure the window as that taller card plus a band again — a card stretched down a window
+/// that walks off the screen one drag at a time (see `content_box_of`).
+#[test]
+fn a_move_over_a_band_leaves_the_card_the_box_it_had() {
+    let _room = the_room_to_itself();
+
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let (_, band) = pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+
+    // The window carried a hundred pixels right and two hundred down.
+    let window = pin.window_box();
+    let carried = (
+        window.0 + 100,
+        window.1 + 200,
+        window.2 + 100,
+        window.3 + 200,
+    );
+    let content = content_box_of(
+        carried,
+        pin.dpi,
+        pin.transport_bar,
+        pin.overlay,
+        pin.caption,
+        band,
+    );
+
+    assert_eq!(
+        (content.2 - content.0, content.3 - content.1),
+        (pin.content.2 - pin.content.0, pin.content.3 - pin.content.1),
+        "the card was given a size by a drag that only changed its place"
+    );
+    assert_eq!(
+        (content.0 - pin.content.0, content.1 - pin.content.1),
+        (100, 200),
+        "and it was carried where the hand carried it"
+    );
+
+    // And the two roads are one: the window that content stands in is the window the drag left.
+    let measured = pinned_window_box_of(
+        content,
+        pin.dpi,
+        pin.transport_bar,
+        pin.overlay,
+        pin.caption,
+    );
+    assert_eq!(
+        (measured.0, measured.1, measured.2, measured.3 + band),
+        carried,
+        "the window measured from the card it was read back from is not the window the drag left"
+    );
+
+    pin_playlist::toggle(&pin);
 }
 
 /// A press the band took is a press the band gives back, and only that one: the flag a release is

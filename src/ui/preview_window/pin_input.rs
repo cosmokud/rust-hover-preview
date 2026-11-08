@@ -42,12 +42,19 @@ pub(super) fn client_to_screen(hwnd: HWND, x: i32, y: i32) -> (i32, i32) {
 /// The media box a window box implies: the window less the caption above it and the transport bar
 /// below it — or the window itself, for a kind whose chrome is drawn over its media and whose two
 /// boxes are therefore one box (see `pin_overlay_chrome`).
+///
+/// `playlist` is the band a pinned sound's card grows under it, which is rows of the *window* and
+/// none of the card: it is the inverse of `pinned_window_box_of` only together with that band, and a
+/// road that gave a card the rows of its own band would lay the card out down a window it had grown
+/// — and then measure the window as that card plus a band again, which is a card that stretches and a
+/// window that walks off the screen one move at a time (see `pin_playlist` and `pinned_band_rows`).
 pub(super) fn content_box_of(
     window: ScreenRegion,
     dpi: u32,
     transport: bool,
     overlay: bool,
     caption: i32,
+    playlist: i32,
 ) -> ScreenRegion {
     if overlay {
         return window;
@@ -57,7 +64,7 @@ pub(super) fn content_box_of(
         window.0,
         window.1 + caption,
         window.2,
-        window.3 - pinned_transport_height(dpi, transport),
+        window.3 - pinned_transport_height(dpi, transport) - playlist.max(0),
     )
 }
 
