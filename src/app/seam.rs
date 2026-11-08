@@ -540,6 +540,19 @@ pub(crate) enum PreviewMessage {
     /// now off is rebuilt, and it is rebuilt from the hover it came from, so it
     /// goes away on the spot rather than at the next pointer move.
     RefreshTypes,
+    /// A switch that ends the engines behind a kind of preview has been turned off, in the
+    /// tray's `Preview Types` submenu or by the engine choice moving to LibreOffice.
+    ///
+    /// The processes are the viewer's: it started them, they are its children, and only it can
+    /// end them. The tray asks rather than reaching into a process that has no engine in it (see
+    /// `office_render::stop_engines`).
+    StopEngines,
+    /// The page the browser engine is drawing has been switched off — the `Render HTML` row, or
+    /// the `Text` kind that page rides — and comes down with the switch it was asked for by.
+    ///
+    /// Only the viewer can take it down: the page is a window of its engine, and whether it is a
+    /// hover's page or a pin's is a question about what is on its screen (see `hide_html_page`).
+    HideHtmlPage,
     /// The pin key was pressed while a preview was on screen: what is up becomes a
     /// window of its own — captioned, movable, always on top — and the hover machinery
     /// stays quiet behind it until it is closed. The rect is the box the preview is
@@ -1377,6 +1390,8 @@ impl SeamMessage {
     const TOGGLE_PIN_ALWAYS_ON_TOP: u8 = 22;
     const TOGGLE_PREVIEW_ENABLED: u8 = 23;
     const PIN_CLICK: u8 = 24;
+    const STOP_ENGINES: u8 = 25;
+    const HIDE_HTML_PAGE: u8 = 26;
 
     /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
     fn of(tag: u8, numbers: &[i64]) -> Self {
@@ -1475,6 +1490,8 @@ impl SeamMessage {
             PreviewMessage::Hide => Some(Self::of(Self::HIDE, &[])),
             PreviewMessage::Refresh => Some(Self::of(Self::REFRESH, &[])),
             PreviewMessage::RefreshTypes => Some(Self::of(Self::REFRESH_TYPES, &[])),
+            PreviewMessage::StopEngines => Some(Self::of(Self::STOP_ENGINES, &[])),
+            PreviewMessage::HideHtmlPage => Some(Self::of(Self::HIDE_HTML_PAGE, &[])),
             PreviewMessage::Pin {
                 path,
                 rect,
@@ -1598,6 +1615,8 @@ impl SeamMessage {
             Self::HIDE => PreviewMessage::Hide,
             Self::REFRESH => PreviewMessage::Refresh,
             Self::REFRESH_TYPES => PreviewMessage::RefreshTypes,
+            Self::STOP_ENGINES => PreviewMessage::StopEngines,
+            Self::HIDE_HTML_PAGE => PreviewMessage::HideHtmlPage,
             Self::PIN => PreviewMessage::Pin {
                 path: self.path()?,
                 rect: box_of(numbers, 0),
@@ -2286,6 +2305,8 @@ mod tests {
             PreviewMessage::Hide,
             PreviewMessage::Refresh,
             PreviewMessage::RefreshTypes,
+            PreviewMessage::StopEngines,
+            PreviewMessage::HideHtmlPage,
             PreviewMessage::Pin {
                 path: path.clone(),
                 rect: (9, 10, 11, 12),

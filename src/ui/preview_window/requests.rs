@@ -303,12 +303,24 @@ pub fn refresh_preview() {
     send_preview(PreviewMessage::Refresh);
 }
 
-/// The tray's `Render HTML` row has been switched off: a page the engine is drawing for a
-/// hover comes down with the switch it was asked for by, while a page a pin is showing is
-/// left exactly as it is — a pin is not a hover, and what a setting asks is owed to the next
-/// hover rather than to a window that stands (see `PreviewMessage::Refresh`, which leaves a
-/// pin alone for the same reason, and `webview_preview::hide_html_preview`).
+/// The tray's `Render HTML` row has been switched off, or the `Text` kind the page rides: a page
+/// the engine is drawing for a hover comes down with the switch it was asked for by, while a
+/// page a pin is showing is left exactly as it is — a pin is not a hover, and what a setting asks
+/// is owed to the next hover rather than to a window that stands (see `PreviewMessage::Refresh`,
+/// which leaves a pin alone for the same reason).
+///
+/// Asked rather than done: the engine, the page and the pin are the viewer's, and the tray that
+/// turned the row off has none of them — so the answer is left to the process that has it (see
+/// `hide_html_page`).
 pub fn refresh_render_html() {
+    send_preview(PreviewMessage::HideHtmlPage);
+}
+
+/// The ask above, answered where the page is: the switch that asks for the page has just been
+/// turned off, and a page left standing would be a window nothing takes down again until the
+/// pointer leaves. A pin's page is not one of them — the pin is not a hover, and it comes down
+/// with its kind by the path its own close button takes (see `PreviewMessage::RefreshTypes`).
+pub(crate) fn hide_html_page() {
     if pinned() {
         return;
     }
