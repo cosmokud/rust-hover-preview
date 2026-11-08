@@ -446,6 +446,11 @@ pub(super) const ID_TRAY_VIDEO_SCALE_BASE: u16 = 1550;
 /// lists the same shares through the same builder, and the range is its
 /// own because what moves has a size apart from what does not.
 pub(super) const ID_TRAY_ANIMATED_SCALE_BASE: u16 = 1564;
+/// `3D`, in the range the disk cache's sizes leave before the design one: a model is a
+/// scene rather than a bitmap, so it is asked for a share of the display the way a page is
+/// rather than for a share of a size of its own, and the range is its own because what a
+/// scene is given and what a page is given are not the same answer.
+pub(super) const ID_TRAY_MODEL_SCALE_BASE: u16 = 1440;
 /// `Design`, in the range after the font one: a design document is previewed
 /// from a picture the file keeps of the whole of itself, so it is asked for a share of the
 /// display the way a page is rather than for a share of its own size.
@@ -458,8 +463,8 @@ pub(super) const ID_TRAY_TEXT_SCALE_BASE: u16 = 1450;
 /// The shares of the display every display-share submenu offers, in the order it lists
 /// them: the whole room a document can be given at the top, then the shares of it a
 /// document is asked for below. What differs between the settings is where they start —
-/// `50`, half the display, for a font specimen, and `Fit to Screen` for a drawing, a page
-/// and a design document.
+/// `50`, half the display, for a font specimen, and `Fit to Screen` for a drawing, a page,
+/// a design document and a model.
 pub(super) const DOCUMENT_SCALE_CHOICES: [PreviewScale; 5] = [
     PreviewScale::FitToScreen,
     PreviewScale::Percent(75),
@@ -577,7 +582,8 @@ pub(super) const ID_TRAY_IMAGE_DISK_CACHE_BASE: u16 = 1340;
 /// window proc stops at the first range that holds a click (see `tray::tests`) — and the level it
 /// was answered as was one nobody asked for. It takes the stretch the font sizes leave instead:
 /// 1425 is the first id past the `Font Size` range, which runs 1420 up to but not including it,
-/// and the `Design` shares begin at 1445, which is room for all fifteen of the sizes it lists.
+/// and the `3D` shares begin at 1440, which is room for all fifteen of the sizes it lists, with
+/// the `Design` shares at 1445 past them.
 pub(super) const ID_TRAY_GENERAL_DISK_CACHE_BASE: u16 = 1425;
 /// The `Performance → Decode Budget` submenu: one command per ceiling it offers, in
 /// the order it lists them. It sits in the slack between the `Cache` sizes and the

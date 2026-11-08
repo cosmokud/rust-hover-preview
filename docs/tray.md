@@ -160,6 +160,8 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - A workbook's fallback bitmap is never enlarged.
   - **Font** — Same shares for a font specimen. Default `50%`.
   - **Design** — Same display shares for design documents: Photoshop, Illustrator, Krita, OpenRaster, Procreate. Default **Fit to Screen**.
+  - **3D** — Same display shares for the models an installed f3d draws: meshes, CAD exchange files, point clouds and scientific datasets. Default **Fit to Screen**.
+    - A scene has no size of its own, so the share is of the display rather than of the file; it applies to the next hover and the next pin, not to a preview already up.
 - **Background**
   - **Image** — Transparent, Black, White, or Checkerboard. Default **Checkerboard**.
   - **Vector** — Same backdrops for an SVG document or metafile. Default **Checkerboard**.

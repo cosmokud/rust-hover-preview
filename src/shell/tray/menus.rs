@@ -22,9 +22,9 @@ use super::ids::{
     ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE,
     ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
     ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
-    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_IDLE_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
-    ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
-    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_IDLE_BASE,
+    ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
+    ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
     ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER,
     ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW,
@@ -64,9 +64,9 @@ use crate::config::config::{
     DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_MINIMIZE_TO,
-    DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MODEL_SCALE,
+    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_PIN_ALWAYS_ON_TOP,
+    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SEEK,
     DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
@@ -1254,20 +1254,31 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_AUDIO_SCALE,
     );
 
-    // Add the Vector, Text, Ebook, Document, Font and Design submenus:
+    // Add the Vector, Text, Ebook, Document, Font, Design and 3D submenus:
     // how much of the display each kind of document is drawn over, or
     // measured in. They sit beside the picture scales because they are
     // the same question about other kinds of preview, and each is a
     // submenu of its own because the answers are not the same answers:
     // a picture's percentage is of its own size, a document's is of the
     // display — and a document and a page do not start at the same
-    // share of it either.
+    // share of it either. A model is the last of them because a scene is
+    // a picture an engine drew rather than a file with a size of its
+    // own, so how much of the display to give it is a question of its
+    // own.
     //
     // One of them covers both halves of the `Document` kind, since a page
     // the render engine drew is a page like any other: what the setting
     // answers is how much of the display one is given, whichever engine
     // drew it.
-    let (ebook_scale, document_scale, font_scale, design_scale, vector_scale, text_scale) = CONFIG
+    let (
+        ebook_scale,
+        document_scale,
+        font_scale,
+        design_scale,
+        vector_scale,
+        text_scale,
+        model_scale,
+    ) = CONFIG
         .lock()
         .map(|c| {
             (
@@ -1277,6 +1288,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
                 c.design_scale,
                 c.vector_scale,
                 c.text_scale,
+                c.model_scale,
             )
         })
         .unwrap_or((
@@ -1286,6 +1298,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_DESIGN_SCALE,
             DEFAULT_VECTOR_SCALE,
             DEFAULT_TEXT_SCALE,
+            DEFAULT_MODEL_SCALE,
         ));
 
     append_document_scale_menu(
@@ -1329,6 +1342,16 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_DESIGN_SCALE_BASE,
         design_scale,
         DEFAULT_DESIGN_SCALE,
+    );
+    // A model is the one kind of preview that is a picture an engine drew of
+    // something rather than the file itself, so how much of the display to give it is
+    // asked through the same builder the documents above use.
+    append_document_scale_menu(
+        scaling_menu,
+        w!("3D"),
+        ID_TRAY_MODEL_SCALE_BASE,
+        model_scale,
+        DEFAULT_MODEL_SCALE,
     );
 
     let _ = AppendMenuW(

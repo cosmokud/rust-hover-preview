@@ -277,6 +277,7 @@ fn a_share_follows_the_content_rather_than_the_name() {
         design: PreviewScale::Percent(25),
         vector: PreviewScale::Percent(25),
         font: PreviewScale::Percent(25),
+        model: PreviewScale::Percent(25),
     };
 
     for name in ["tomcat.mp4", "tomcat.docx", "tomcat.txt"] {

@@ -16,6 +16,7 @@ fn one_scale_per_kind() -> HoverScales {
         vector: PreviewScale::Percent(16),
         design: PreviewScale::Percent(17),
         font: PreviewScale::Percent(18),
+        model: PreviewScale::Percent(19),
     }
 }
 
@@ -42,9 +43,9 @@ fn every_kind_follows_the_one_setting_it_names() {
         (PreviewType::Calibre, "ebook_scale", scales.ebook),
         (PreviewType::Design, "design_scale", scales.design),
         (PreviewType::Vector, "vector_scale", scales.vector),
-        // A model is a picture the engine drew at the box it was asked for, so what it follows is
-        // the picture setting, reduced to the room rather than to a size of its own.
-        (PreviewType::Models, "preview_scale", scales.picture),
+        // A model is a scene an engine drew at the box it was asked for, so it follows the share
+        // of the room its own setting names.
+        (PreviewType::Models, "model_scale", scales.model),
         (PreviewType::Fonts, "font_scale", scales.font),
     ] {
         let path = std::env::temp_dir().join(format!("scale-of-kind-{setting}"));

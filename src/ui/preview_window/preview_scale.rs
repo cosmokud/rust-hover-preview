@@ -41,6 +41,12 @@ pub(super) struct HoverScales {
     /// asks for, so the room the display has is free quality the way a document's is, and
     /// the share is of that room.
     pub(super) vector: PreviewScale,
+    /// The share of the display a model is drawn over.
+    ///
+    /// A model is a scene, so there is no size of the file's own to take a percentage of:
+    /// the picture an installed f3d draws of one is drawn at whatever box it is asked for,
+    /// and the box is `f3d_render::model_box` given this share of the room.
+    pub(super) model: PreviewScale,
 }
 
 impl HoverScales {
@@ -57,6 +63,7 @@ impl HoverScales {
             font: config.font_scale,
             design: config.design_scale,
             vector: config.vector_scale,
+            model: config.model_scale,
         }
     }
 }
@@ -318,11 +325,11 @@ pub(super) fn scale_of_kind(
         // that is, so the share is of the display the way a page's or a specimen's is.
         PreviewType::Design => fit_reduced(scales.design),
 
-        // A model is a picture an engine drew at the box it was asked for, so there is no size of
-        // the file's own to scale from and the share is of the room the way a page's is. The
-        // setting is the picture one, because what is on screen for a model is a picture of it and
-        // there is no scale of the kind's own to turn (see `f3d_render`).
-        PreviewType::Models => fit_reduced(scales.picture),
+        // A model is a picture an engine drew at the box it was asked for, so there is no size
+        // of the file's own to scale from and the share is of the room the way a page's is —
+        // the share `model_scale` names, which is a setting of its own because a scene wants a
+        // different share of the screen from a page (see `f3d_render`).
+        PreviewType::Models => fit_reduced(scales.model),
 
         // Both halves of the drawing kind: what a document costs to draw and what a
         // drawing costs to replay are the same question, and the setting is the same one.

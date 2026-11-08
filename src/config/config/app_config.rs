@@ -26,7 +26,7 @@ use super::setting_types::{
     VideoEngine, DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
     DEFAULT_BEAT_HZ, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
-    DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
+    DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_MODEL_SCALE,
     DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_DOUBLE_CLICK_CENTER,
     DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE, DEFAULT_PIN_MINIMIZE_TO,
     DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SEEK,
@@ -413,6 +413,16 @@ pub struct AppConfig {
     /// thing, at whatever size that picture is, so the size one wants is a share of the
     /// screen the way a page's is rather than a share of the file's own size.
     pub design_scale: PreviewScale,
+    /// How large a model — the `3D` kind — is drawn, as a share of the room the display has
+    /// for it: the same question, and the same answers, as the document scales above.
+    ///
+    /// It is a setting of its own rather than the picture scale beside them because a model
+    /// is a scene and not a bitmap: there is no size of the file's own to take a percentage
+    /// of, the picture an installed f3d draws of one being drawn at whatever box it is asked
+    /// for, so the share is of the display the way a page's is — the box
+    /// `f3d_render::model_box` measures, given the share of the room. See
+    /// `effective_preview_scale`.
+    pub model_scale: PreviewScale,
     /// How large a vector drawing is drawn, as a share of the room the display has for it —
     /// the same question, and the same answers, as the document scales above.
     ///
@@ -781,6 +791,7 @@ impl Default for AppConfig {
             document_scale: DEFAULT_DOCUMENT_SCALE,
             font_scale: DEFAULT_FONT_SCALE,
             design_scale: DEFAULT_DESIGN_SCALE,
+            model_scale: DEFAULT_MODEL_SCALE,
             vector_scale: DEFAULT_VECTOR_SCALE,
             text_scale: DEFAULT_TEXT_SCALE,
             ttc_face: DEFAULT_TTC_FACE,

@@ -37,8 +37,8 @@ pub const F3D_NAME: &str = "f3d.exe";
 
 /// The box a model's hover is laid out at, in the shape a picture's preview takes: a scene has no
 /// size of its own to be measured by — it is drawn at whatever box it is given, the way a page the
-/// browser draws is — so what a hover asks for is this box scaled by the picture share (see
-/// `scale_of_kind`).
+/// browser draws is — so what a hover asks for is this box scaled by the share `model_scale`
+/// names (see `scale_of_kind`).
 pub const MODEL_WIDTH: u32 = 1280;
 pub const MODEL_HEIGHT: u32 = 800;
 

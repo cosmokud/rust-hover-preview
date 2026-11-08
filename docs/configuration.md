@@ -77,6 +77,7 @@ design_scale=fit
 document_scale=fit
 ebook_scale=fit
 font_scale=50
+model_scale=fit
 preview_scale=100
 text_scale=fit
 vector_scale=fit
@@ -253,6 +254,7 @@ spinner_delay_ms=250
 - `document_scale`: document page scale against the screen. Default `fit`. A workbook's fallback bitmap keeps its own size and is never enlarged.
 - `font_scale`: font preview scale against the screen. Default `50`; `fit` means all of it; `100` or more reads as `fit`.
 - `design_scale`: design document scale against the screen. Default `fit`.
+- `model_scale`: 3D model scale against the screen — how much of the display the picture f3d draws of a scene is given. Percentage of `fit`, default `fit`; `100` or more reads as `fit`, since a scene has no size of its own to take a share of.
 
 ### Fonts
 

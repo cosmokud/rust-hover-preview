@@ -117,6 +117,7 @@ fn hover_scales() -> HoverScales {
         font: DEFAULT_FONT_SCALE,
         design: DEFAULT_DESIGN_SCALE,
         vector: DEFAULT_VECTOR_SCALE,
+        model: DEFAULT_MODEL_SCALE,
     }
 }
 

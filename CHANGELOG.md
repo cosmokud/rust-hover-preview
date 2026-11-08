@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`Scaling → 3D` gives a model a share of the display of its own** — the tray's `Scaling` submenu gained a `3D` row beside `Design`, listing the same display shares the documents above it list (`Fit to Screen`, `75%`, `50%`, `25%`, `10%`) and starting at `Fit to Screen` like them, written as `model_scale` in `config.ini`. Until now a model was placed by the `Image` share, which asked a photograph's question of a scene: a model has no size of its own — the picture an installed f3d draws of one is drawn at whatever box it is asked for — so what the share is of is the room the display has, the question a page, a drawing and a design document answer. A share of the room is quality the picture gets for free rather than an enlargement, and a hover and a pin both lay a model out at it: the share applies to the next hover and the next take-up, not to a preview already up. A hand-edited value is read the way the documents' are, and a file that names no `model_scale` starts at the whole of the room — the size a model was drawn at before the setting existed.
+
 ## [0.4.11] - 2026-11-08
 
 ### Added
