@@ -370,6 +370,9 @@ fn run_a_detached_window(trace: &mut StartupTrace) {
     // until it is pressed, so Windows hands its notches to Explorer — and that hook is a process's
     // own (see `shell::wheel_input`). The Explorer's hook and the two key watches are exactly what
     // this window does not have.
+    // The pin key's chords, bound in this process as well: only the mouse half of the key is counted
+    // here, and a chord table nothing bound counts no press at all (see `shell::key_input::refresh`).
+    shell::key_input::refresh();
     let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
     trace.step("threads");
 
@@ -447,6 +450,19 @@ fn run_a_viewer(trace: &mut StartupTrace, tray: u32) {
     // is pressed, so Windows hands its notches to Explorer — and that hook is a process's own (see
     // `shell::wheel_input`). The Explorer's hook and the two key watches are exactly what this process does
     // not have.
+    // **The pin key is a number the hook reads, and this process's hook reads its own copy.** The mouse
+    // half of the pin key (`mouse3` by default) never reaches a keyboard hook, so it is counted here,
+    // where the mouse watcher lives — and a viewer that never bound the chords counts nothing at all:
+    // the middle press is then a press no window of this app hears, while the `Space` half goes on
+    // working because the tray's own keyboard hook was refreshed at its start (see
+    // `shell::key_input::refresh`).
+    shell::key_input::refresh();
+    if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+        eprintln!(
+            "seam: the viewer's pin key is bound {}",
+            shell::key_input::pin_key_is_bound() as u8
+        );
+    }
     let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
     trace.step("threads");
 

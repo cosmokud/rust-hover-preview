@@ -408,6 +408,16 @@ impl Presses<'_> {
     }
 }
 
+/// Whether the pin key's chords are bound in this process: the number the hooks read rather than the
+/// configuration, and the one a run says out loud at start-up. A process that never ran `refresh` binds
+/// nothing, and counts no press of the mouse half of the key at all (see `refresh`, and
+/// `wheel_input::spawn_wheel_watcher` for the hook that lives where the mouse is counted).
+pub(crate) fn pin_key_is_bound() -> bool {
+    PIN_CHORDS
+        .iter()
+        .any(|slot| slot.load(Ordering::Acquire) != 0)
+}
+
 /// Count a mouse pin button's edge the way the keyboard hook counts a key's.
 ///
 /// Called from the mouse hook, so it touches atomics only: no lock, no desktop call.
