@@ -1,4 +1,4 @@
-use super::super::playlist::{playlist_handle_holds, playlist_row, playlist_thumb};
+use super::super::playlist::{playlist_edge_at, playlist_row, playlist_thumb, PlaylistEdge};
 use super::*;
 use crate::readers::audio_track::{self, Player, Probed, Track};
 
@@ -142,25 +142,50 @@ fn the_thumb_is_the_share_the_band_shows() {
     assert_eq!((top, bottom), (layout.rows_top, layout.rows_bottom));
 }
 
-/// The band's bottom edge is the height's handle, and no row is ever drawn under it: the pad
-/// below the last row is wider than the handle is tall.
+/// The band's two edges are the window's two edges, and no row is ever drawn under either: the pad
+/// below the last row is wider than the edge is tall, and the pad above the first row is the same
+/// on the other side.
 #[test]
-fn the_handle_is_the_band_and_never_a_row() {
+fn the_edges_are_the_windows_and_never_a_row() {
     let layout = playlist_layout(400, 240, SCALE, 40);
+    let top = 300;
 
-    assert!(playlist_handle_holds(240, SCALE, 239));
-    assert!(playlist_handle_holds(240, SCALE, 234));
-    assert!(
-        !playlist_handle_holds(240, SCALE, 233),
-        "above the handle the band is the rows' own"
+    assert_eq!(
+        playlist_edge_at(top, 240, SCALE, 0),
+        Some(PlaylistEdge::Top)
     );
-    assert!(
-        !playlist_handle_holds(240, SCALE, 240),
+    assert_eq!(
+        playlist_edge_at(top, 240, SCALE, 5),
+        Some(PlaylistEdge::Top)
+    );
+    assert_eq!(
+        playlist_edge_at(top, 240, SCALE, 6),
+        None,
+        "below the window's own first rows the band is the rows' own"
+    );
+
+    assert_eq!(
+        playlist_edge_at(top, 240, SCALE, top + 239),
+        Some(PlaylistEdge::Bottom)
+    );
+    assert_eq!(
+        playlist_edge_at(top, 240, SCALE, top + 234),
+        Some(PlaylistEdge::Bottom)
+    );
+    assert_eq!(
+        playlist_edge_at(top, 240, SCALE, top + 233),
+        None,
+        "above the bottom edge the band is the rows' own"
+    );
+    assert_eq!(
+        playlist_edge_at(top, 240, SCALE, top + 240),
+        None,
         "and a row below the band is nobody's"
     );
+
     assert!(
         playlist_row_at(&layout, 0, 40, 234).is_none() || layout.rows_bottom <= 234,
-        "no row of the band is drawn in the handle"
+        "no row of the band is drawn in the bottom edge"
     );
 }
 

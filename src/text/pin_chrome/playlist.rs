@@ -150,12 +150,36 @@ pub(crate) fn playlist_scroll_max(rows: usize, visible: usize) -> usize {
     rows.saturating_sub(visible)
 }
 
-/// Whether a band-local `y` is the height's own handle rather than a row's: the strip at the
-/// band's bottom edge, which is the one part of a band a press does not pick anything with.
-pub(crate) fn playlist_handle_holds(height: i32, scale: f32, y: i32) -> bool {
-    let handle = text_paint::scaled(HANDLE_PIXELS as i32, scale).max(1);
+/// Which edge of the window a band-local row is the height's own handle on.
+///
+/// The band is the only thing a pinned sound's window is ever resized by — the card above it is
+/// drawn at the share it was taken up at and is never pulled — so the band's two edges are the
+/// window's two edges, and neither strip is one a press picks a row with (see `pin_playlist::drag`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlaylistEdge {
+    /// The window's own first rows: dragging them up grows the band and carries the card up with
+    /// them, the window's bottom edge staying exactly where it was.
+    Top,
+    /// The window's own last rows: dragging them down grows the band, and nothing above moves.
+    Bottom,
+}
 
-    y >= height - handle && y < height
+/// Which of the band's two edges a window row is on, or nothing where it is the band's own body.
+///
+/// `top` is the row the band begins at in the window, which is what tells the window's own first
+/// rows from the band's: the top edge is the window's, and a press on it is a press above the band.
+pub(crate) fn playlist_edge_at(top: i32, height: i32, scale: f32, y: i32) -> Option<PlaylistEdge> {
+    let edge = text_paint::scaled(EDGE_PIXELS as i32, scale).max(1);
+    let bottom = top + height;
+
+    if (0..edge).contains(&y) {
+        return Some(PlaylistEdge::Top);
+    }
+    if (bottom - edge..bottom).contains(&y) {
+        return Some(PlaylistEdge::Bottom);
+    }
+
+    None
 }
 
 /// The row a band-local `y` is on, or nothing where that row is the pad's or the band has run out
@@ -540,9 +564,9 @@ const THUMB_INK: f32 = 0.45;
 /// a row of a line at the top of the band.
 pub(crate) const WHEEL_ROWS: i32 = 3;
 
-/// How close to the band's bottom edge a press is the height's handle rather than a row's — the
-/// one strip of the band a press does not pick anything with.
-pub(crate) const HANDLE_PIXELS: f32 = 6.0;
+/// How close to either of the window's edges a press is the band's height being dragged rather
+/// than a row being picked — the two strips of a window that a press picks nothing with.
+pub(crate) const EDGE_PIXELS: f32 = 6.0;
 
 /// The room a file takes, as the one fact of a row no probe answers for.
 fn size_in_bytes(path: &Path) -> u64 {

@@ -71,6 +71,19 @@ struct Marquee {
     last: Instant,
 }
 
+/// The height's drag in flight, as the press that began it left it (see `press` and `drag`).
+#[derive(Clone, Copy)]
+struct PlaylistResize {
+    edge: pin_chrome::PlaylistEdge,
+    /// The window row the pointer was at when the drag began, which every move is measured from
+    /// rather than the move before it: a drag that accumulated its own rounding would creep.
+    from: i32,
+    /// The band's height when the drag began.
+    height: i32,
+    /// The card's box when the drag began, which a drag of the window's top edge carries with it.
+    content: ScreenRegion,
+}
+
 #[derive(Default)]
 struct PinPlaylist {
     /// The rows in the order they are drawn, and the files they are the rows of — the two are one
@@ -97,9 +110,10 @@ struct PinPlaylist {
     /// would swallow the release of a drag the card began and leave the window carrying the pointer
     /// for the rest of the run.
     pressed: bool,
-    /// The height's drag in flight: the window row the pointer was at when it began, and the height
-    /// it began at.
-    resizing: Option<(i32, i32)>,
+    /// The height's drag in flight: which of the window's two edges is being pulled, the window row
+    /// the pointer was at when it began, the height the band had, and the box the card stood in —
+    /// which is the one thing a drag of the top edge moves and a drag of the bottom one does not.
+    resizing: Option<PlaylistResize>,
     marquee: Option<Marquee>,
 }
 
@@ -183,7 +197,7 @@ pub(super) fn pin_playlist_band(pin: &PinnedPreview) -> Option<(i32, i32)> {
         return None;
     }
 
-    let (_, _, _, bottom) = pinned_window_box_of(
+    let (_, top, _, bottom) = pinned_window_box_of(
         pin.content,
         pin.dpi,
         pin.transport_bar,
@@ -191,7 +205,12 @@ pub(super) fn pin_playlist_band(pin: &PinnedPreview) -> Option<(i32, i32)> {
         pin.caption,
     );
 
-    Some((bottom, height))
+    // **The row the band begins at is the window's own**, and the box above is measured on the
+    // screen: the two are one subtraction. Without it every press in the band is answered against a
+    // screen row no window coordinate ever reaches — a band nothing can be clicked in, a row nothing
+    // can be picked on, and a region the wheel hook never finds the pointer in (see
+    // `pin_playlist_keep_alive_try`, which adds the window's own place back to it).
+    Some((bottom - top, height))
 }
 
 /// The rows the band takes off the pin's media band, and none at all where the pin carries no band
@@ -519,29 +538,49 @@ fn set_the_hover(band: (i32, i32, f32), local: Option<i32>) -> bool {
     changed
 }
 
-/// A press on the band, answering whether the press was the band's: the height's own handle at its
-/// bottom edge takes the pointer and drags the band, and a press on a row picks it — never carries
-/// the window, which is what every other press on a sound's card does.
+/// A press on the band, answering whether the press was the band's: either of the window's two
+/// edges takes the pointer and drags the band's height, and a press on a row picks it — never carries
+/// the window, which is what a press anywhere else on a sound's card does.
 ///
 /// A press that is the second of a pair shows the file that row is, the way a press on a row of the
 /// listing behind the pin shows one, and without the configuration gate the hook's own picks are
 /// behind: the hand is already inside this app's own window and has named the file itself.
-pub(super) unsafe fn press(hwnd: HWND, y: i32, double_click: bool) -> bool {
+///
+/// **It is asked before anything the card owns** — its buttons, its bar, its walk — because the band
+/// is the pin's own rows and none of it is the card's: a band answered by the card's arms is a band a
+/// press picks nothing in and a double press swaps nothing with (see `pinned_press_on`).
+pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bool {
     let Some((top, height, width, scale)) = the_band_of_the_pin() else {
         return false;
     };
+
+    // The band's two edges are the window's two edges, and a press on one is the height being
+    // dragged rather than a row being picked: the card is never resized, and the band is the only
+    // thing a pinned sound's window has to be resized by (see `PlaylistEdge`).
+    if let Some(edge) = pin_chrome::playlist_edge_at(top, height, scale, y) {
+        // Except where the card's own window buttons stand: they are four buttons in the window's
+        // first rows, and a border drawn over them would be a border that eats the close button.
+        if !the_edge_is_the_cards(edge, x, y) {
+            let _ = SetCapture(hwnd);
+            let content = pin_state()
+                .and_then(|pinned| pinned.pin().map(|pin| pin.content))
+                .unwrap_or_default();
+            if let Ok(mut playlist) = THE_PLAYLIST.lock() {
+                playlist.pressed = true;
+                playlist.resizing = Some(PlaylistResize {
+                    edge,
+                    from: y,
+                    height: HEIGHT.load(Ordering::Acquire),
+                    content,
+                });
+            }
+            return true;
+        }
+    }
+
     let local = y - top;
     if local < 0 || local >= height {
         return false;
-    }
-
-    if pin_chrome::playlist_handle_holds(height, scale, local) {
-        let _ = SetCapture(hwnd);
-        if let Ok(mut playlist) = THE_PLAYLIST.lock() {
-            playlist.pressed = true;
-            playlist.resizing = Some((y, HEIGHT.load(Ordering::Acquire)));
-        }
-        return true;
     }
 
     let opened = {
@@ -577,11 +616,17 @@ pub(super) unsafe fn press(hwnd: HWND, y: i32, double_click: bool) -> bool {
 /// The pointer's own move with the height's drag in flight, answering whether the move was the
 /// band's.
 ///
-/// The window's top-left never moves for a band, so a row of the window is the measurement the
-/// height is dragged by: the pointer's travel down the screen is the height's, and what a move
-/// writes is where the band's bottom edge is.
+/// A row of the window is the measurement the height is dragged by, and every move is measured from
+/// where the drag *began* rather than from the move before it: a drag that accumulated its own
+/// rounding would creep, and one measured from its start lands on the size the hand has pulled it to
+/// however many moves were coalesced on the way.
+///
+/// **The card never moves for the bottom edge and goes with the window for the top one.** A window
+/// whose top edge is dragged up is the band growing under a card that has gone up with it, and the
+/// window's own bottom is the edge that does not move: the card is carried by exactly the rows the
+/// band gained (see `PlaylistEdge`).
 pub(super) unsafe fn drag(hwnd: HWND, y: i32) -> bool {
-    let Some((start, start_height)) = THE_PLAYLIST
+    let Some(resize) = THE_PLAYLIST
         .lock()
         .ok()
         .and_then(|playlist| playlist.resizing)
@@ -592,14 +637,82 @@ pub(super) unsafe fn drag(hwnd: HWND, y: i32) -> bool {
     let scale = the_band_of_the_pin().map_or(1.0, |(_, _, _, scale)| scale);
     let floor = pin_chrome::playlist_row_height(scale) * TWO_ROWS;
     let ceiling = CEILING.load(Ordering::Acquire).max(floor);
-    let height = (start_height + (y - start)).clamp(floor, ceiling);
+    let travel = y - resize.from;
 
-    if height != HEIGHT.load(Ordering::Acquire) {
-        HEIGHT.store(height, Ordering::Release);
-        render_layered_preview(hwnd);
+    let height = match resize.edge {
+        pin_chrome::PlaylistEdge::Bottom => resize.height + travel,
+        pin_chrome::PlaylistEdge::Top => resize.height - travel,
     }
+    .clamp(floor, ceiling);
+
+    if height == HEIGHT.load(Ordering::Acquire) {
+        return true;
+    }
+    HEIGHT.store(height, Ordering::Release);
+
+    if matches!(resize.edge, pin_chrome::PlaylistEdge::Top) {
+        let carried = resize.height - height;
+        with_pin(|pin| {
+            pin.content = (
+                resize.content.0,
+                resize.content.1 + carried,
+                resize.content.2,
+                resize.content.3 + carried,
+            );
+        });
+
+        // **The window is moved before it is painted, and only for the top edge.** The paint is
+        // placed at the window's own rectangle, and a top edge pulled up is a rectangle whose place
+        // has moved as well as its size — while a bottom edge is the same place and a size the paint
+        // commits on its own, which is how every other box of a pin's is committed (see
+        // `render_pinned_preview_at`).
+        if let Some((window, width, height)) = pinned_window_box() {
+            let _ = SetWindowPos(
+                hwnd,
+                HWND::default(),
+                window.0,
+                window.1,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+    render_layered_preview(hwnd);
 
     true
+}
+
+/// Which of the band's two edges the pointer is on, asked of the cursor's place in the window rather
+/// than of any message, so that the shape it wears and the press it answers are one arithmetic.
+///
+/// Nothing at all for a pin that carries no band, and nothing on the window's top edge where the
+/// card's own window buttons stand (see `the_edge_is_the_cards`).
+pub(super) fn edge_at(x: i32, y: i32) -> Option<pin_chrome::PlaylistEdge> {
+    let (top, height, _, scale) = the_band_of_the_pin()?;
+    let edge = pin_chrome::playlist_edge_at(top, height, scale, y)?;
+
+    (!the_edge_is_the_cards(edge, x, y)).then_some(edge)
+}
+
+/// Whether the pointer on one of the band's edges is really on something the card owns there: the
+/// four window buttons a pinned sound's card carries in the window's own first rows.
+///
+/// The band's top edge is the window's, and the card's buttons are in it. A border that answered for
+/// them would be a border that ate the close button, so the buttons keep the rows they stand on and
+/// the edge begins where they end (see `pin_audio_window_buttons_at`).
+fn the_edge_is_the_cards(edge: pin_chrome::PlaylistEdge, x: i32, y: i32) -> bool {
+    if !matches!(edge, pin_chrome::PlaylistEdge::Top) {
+        return false;
+    }
+
+    pin_state()
+        .and_then(|pinned| {
+            pinned
+                .pin()
+                .map(|pin| pin_audio_window_buttons_at(pin, x, y))
+        })
+        .unwrap_or(false)
 }
 
 /// The release of a press the band took, answering whether it was the band's: a drag of the height
