@@ -668,6 +668,58 @@ fn the_card_is_headed_with_the_name_and_not_the_extension() {
     );
 }
 
+/// The facts line is laid into the room the readout really leaves it rather than the room the
+/// longest readout there is would need: a card the whole line fits beside its own clock is a card
+/// that draws every fact of it whole, and a card narrower than that draws them up to the clock's own
+/// room and never over it.
+#[test]
+fn the_facts_have_the_room_the_clock_leaves_them() {
+    let card = card();
+    let advance = body_advance();
+    let line = text_width("FLAC · 44.1 kHz · stereo · 1006 kbps", advance);
+    let readout = text_width("1:07 / 9:22", advance);
+
+    // The box the whole of the line and the readout beside it want, cut to a card of that width.
+    let width = (line + readout + advance * TIME_GAP_ADVANCES + metrics_padding() * 2) as u32;
+    let page = scrolled(&card, width, 0);
+    let drawn: Vec<&str> = page.facts.iter().map(|run| run.text.as_str()).collect();
+    assert_eq!(
+        drawn,
+        [
+            "FLAC",
+            " · ",
+            "44.1 kHz",
+            " · ",
+            "stereo",
+            " · ",
+            "1006 kbps",
+            "1:07",
+            " / ",
+            "9:22"
+        ],
+        "every fact is drawn whole beside the clock, and the clock comes after the last of them"
+    );
+
+    // A card too narrow for that much draws the facts into the same room its own readout leaves —
+    // the readout's real advances and the gap, not the eighteen the longest readout would have taken.
+    let narrow = narrowest_card();
+    let page = scrolled(&card, narrow, 0);
+    let facts = page.facts.len() - 3;
+    let room_right = page.facts[facts].x - advance * TIME_GAP_ADVANCES;
+    assert_eq!(
+        room_right,
+        narrow as i32 - metrics_padding() - readout - advance * TIME_GAP_ADVANCES,
+        "the facts end where the readout the clock really draws begins, less the gap"
+    );
+    for run in &page.facts[..facts] {
+        assert!(
+            run.x + run.width <= room_right,
+            "{:?} is drawn into the clock's own room",
+            run.text
+        );
+    }
+}
+
 /// The numbers a card is written with, at the lengths and rates a file can have.
 #[test]
 fn writes_a_position_the_way_a_player_does() {
@@ -1010,6 +1062,18 @@ fn metrics_padding() -> i32 {
     }
 
     metrics.padding
+}
+
+/// The advance of the font the facts line is set in, read of the metrics rather than written down,
+/// for the same reason `metrics_scale` is.
+fn body_advance() -> i32 {
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    metrics.advance[BODY_LEVEL as usize].max(1)
 }
 
 /// Every control of a pinned card is answered inside its own box and nowhere else, which is

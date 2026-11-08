@@ -27,11 +27,6 @@ pub(super) const MARK_CELL_ADVANCES: i32 = 2;
 /// Room between the last fact and the clock at the right edge.
 pub(super) const TIME_GAP_ADVANCES: i32 = 3;
 
-/// The room the clock is given, in body advances: enough for `1:02:03 / 1:02:03`, which is the
-/// longest readout there is. What the clock takes is right-aligned inside it, so the facts are
-/// laid out against a fixed edge and the two do not move as the seconds do.
-pub(super) const CLOCK_ADVANCES: i32 = 17;
-
 /// The narrowest a card is worth drawing, in body advances — the width floor the
 /// card is laid out at, so a room of a few pixels answers with a card that looks
 /// like one rather than a sliver. The floor is the smallest card that still holds
