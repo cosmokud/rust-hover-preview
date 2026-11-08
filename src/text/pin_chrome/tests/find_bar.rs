@@ -989,8 +989,9 @@ fn a_switch_names_itself_while_the_pointer_rests_on_it() {
 
 /// A page longer than its frame draws its scrollbar in the page's own right margin, and the card keeps
 /// clear of it: on such a page the card's margin is measured from the scrollbar's left edge rather than
-/// from the frame's, which is the same rule at every scale and every width a pin is resized to (see
-/// `find_bar_layout` and `scrollbar_room`).
+/// from the frame's, with a gap of its own beyond that so the two do not read as one column — the same
+/// rule at every scale and every width a pin is resized to (see `find_bar_layout` and
+/// `scrollbar_room`).
 #[test]
 fn the_card_keeps_clear_of_the_pages_scrollbar_at_every_scale_and_width() {
     for dpi in [96, 120, 144, 192] {
@@ -1011,8 +1012,9 @@ fn the_card_keeps_clear_of_the_pages_scrollbar_at_every_scale_and_width() {
             );
             assert_eq!(
                 scrollbar_left(width) - scrolling.panel.right,
-                text_paint::scaled(FIND_BAR_MARGIN as i32, scale),
-                "{dpi} dpi in {width} px: and keeps its own margin from the scrollbar"
+                text_paint::scaled(FIND_BAR_MARGIN as i32, scale)
+                    + text_paint::scaled(FIND_BAR_SCROLLBAR_GAP as i32, scale),
+                "{dpi} dpi in {width} px: and stands off it by its own margin and the gap"
             );
             assert!(
                 scrolling.panel.right < plain.panel.right,
