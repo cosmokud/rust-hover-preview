@@ -2642,6 +2642,13 @@ pub fn run_preview_window() {
                     // neither what is wanted there nor what is showing is the page the switch was
                     // turned off under (see `hide_html_page`).
                     PreviewMessage::HideHtmlPage => hide_html_page(),
+                    // A budget made smaller is trimmed here for the same reason: what a trim may
+                    // not give up is this process's, and none of the tray's (see `trim_caches`).
+                    PreviewMessage::TrimCaches => trim_caches(),
+                    // And a player that outlived its hover is this process's child, known to it by
+                    // the pid recorded when the player was started (see
+                    // `kill_stray_video_process`).
+                    PreviewMessage::KillStrayPlayer => kill_stray_video_process(),
                     // The tray's `Pin Mode → Enable` row, and the configuration behind it having
                     // been reloaded. Whether there is a pin to take down is a question only this
                     // thread can answer, and a pin left standing by a feature that was switched
@@ -4108,11 +4115,14 @@ pub fn run_preview_window() {
                     // `PreviewMessage::KeepExtraction`).
                     PreviewMessage::ForgetVideoGeometry => forget_video_geometry(),
                     PreviewMessage::KeepExtraction { path } => keep_extraction_for(path.as_deref()),
-                    // And the two asks a switch in the tray makes are answered above, where the
-                    // engines and the page are: neither is a hover's, and neither is a thing a
-                    // layout is made for (see `PreviewMessage::StopEngines` and
-                    // `PreviewMessage::HideHtmlPage`).
-                    PreviewMessage::StopEngines | PreviewMessage::HideHtmlPage => {}
+                    // And the asks a switch or a budget in the tray makes are answered above,
+                    // where the engines, the caches and the page are: none of them is a hover's,
+                    // and none is a thing a layout is made for (see `PreviewMessage::StopEngines`,
+                    // `HideHtmlPage`, `TrimCaches` and `KillStrayPlayer`).
+                    PreviewMessage::StopEngines
+                    | PreviewMessage::HideHtmlPage
+                    | PreviewMessage::TrimCaches
+                    | PreviewMessage::KillStrayPlayer => {}
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the
                     // transport bar below it where the kind has one. A kind whose chrome is

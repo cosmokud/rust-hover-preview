@@ -309,7 +309,7 @@ pub fn run_explorer_hook() {
             && last_video_process_sweep.elapsed() >= Duration::from_millis(VIDEO_PROCESS_SWEEP_MS)
         {
             last_video_process_sweep = Instant::now();
-            kill_stray_video_process();
+            send_preview(PreviewMessage::KillStrayPlayer);
         }
 
         // Walking every display is not something to do on every tick for a change that

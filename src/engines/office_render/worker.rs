@@ -242,7 +242,9 @@ pub(crate) fn shutdown() {
 /// short would hold a process nothing can be previewed from for good. So it is told
 /// to look at the gate now, and the processes go whether it looks or not.
 ///
-/// Called from the tray, which may not wait on anything: every call here is a request.
+/// Called from the preview loop, which is where the tray's ask for it arrives: the
+/// processes are this process's children, so a tray that ended them would end nothing.
+/// Every call here is a request and none waits.
 pub(crate) fn stop_engines() {
     engine_processes::terminate_all_owned();
 

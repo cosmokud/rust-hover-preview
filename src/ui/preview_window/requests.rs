@@ -4,6 +4,7 @@
 
 use super::pin_trace::note_pin_trace;
 use super::*;
+use crate::engines::document_cache;
 
 /// Whether a preview is pinned — a window of its own with a caption, which stays until it
 /// is closed. The Explorer hook asks this every tick: while it is true nothing is spawned
@@ -326,6 +327,20 @@ pub(crate) fn hide_html_page() {
     }
 
     webview_preview::hide_html_preview();
+}
+
+/// The trimming a smaller budget asks for, done where the caches are: the folders are on the
+/// machine, but what a trim must not give up — the page a hover is waiting for — is held by this
+/// process, and a trim in the tray would see nothing held and give up the page the hover is
+/// waiting for.
+///
+/// Every cache is trimmed rather than the one the row named: each reads its own budget out of the
+/// configuration, which is what the row has just written, and a row is picked once rather than
+/// passed through a message.
+pub(crate) fn trim_caches() {
+    document_cache::trim_now();
+    document_cache::trim_image_now();
+    trim_image_cache();
 }
 
 /// The tray's `Pin Mode → Enable` row was clicked, or the configuration that decides whether
