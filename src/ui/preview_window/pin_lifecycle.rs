@@ -782,6 +782,18 @@ pub(super) fn pin_minimize_to() -> PinMinimizeTo {
         .unwrap_or(DEFAULT_PIN_MINIMIZE_TO)
 }
 
+/// Say on the run's trace that a press of the pin key came to this loop and pinned nothing, and why.
+///
+/// **The two faults a pin key that does nothing can be are told apart here**: a press the loop never took
+/// is said by the absence of any line at all — the hook or the chord that counts it is the fault — while a
+/// press it took and refused is a line with the reason (`RHP_SEAM_TRACE`, and `shell::key_input`'s own
+/// start-up line for whether this process binds the key's mouse half at all).
+fn note_the_pin_key_decided_nothing(reason: &str) {
+    if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+        eprintln!("seam: pin key: nothing pinned — {reason}");
+    }
+}
+
 /// The pin a key press asks for, if there is anything on screen to pin: the file the preview
 /// is of, and the box it occupies at this moment.
 ///
@@ -794,10 +806,14 @@ pub(super) fn pin_what_is_on_screen(
     pending: Option<&PendingLoad>,
 ) -> Option<PreviewMessage> {
     if pending.is_some() {
+        note_the_pin_key_decided_nothing("a load is in hand");
         return None;
     }
 
-    let path = current_show.as_ref().and_then(show_path)?.clone();
+    let Some(path) = current_show.as_ref().and_then(show_path).cloned() else {
+        note_the_pin_key_decided_nothing("no preview on screen");
+        return None;
+    };
 
     // A document, a specimen and a page of HTML are settled by the engine rather than by
     // the media, and the wait above is what stands in for the engine while it is not (see
@@ -805,10 +821,14 @@ pub(super) fn pin_what_is_on_screen(
     let engine_draws = engine_kind_of(&path).is_some()
         && webview_preview::showing_path().as_deref() == Some(path.as_path());
     if !pin_screen_is_settled(current_media_type(), engine_draws) {
+        note_the_pin_key_decided_nothing("the screen is not settled");
         return None;
     }
 
     let rect = preview_screen_rect()?;
+    if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+        eprintln!("seam: pin key: pinning {}", pin_trace::path_name(&path));
+    }
     note_pin_trace!(
         "pin key: {} hover rect {}",
         pin_trace::path_name(&path),
