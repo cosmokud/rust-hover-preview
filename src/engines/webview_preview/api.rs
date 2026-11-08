@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -51,7 +51,12 @@ static RUNTIME: Lazy<Option<String>> = Lazy::new(runtime_version);
 
 /// Whether the engine's window is on screen. The preview loop reads this to know when
 /// to take its own window down, so it is an atomic rather than a message.
-pub(super) static SHOWING: AtomicBool = AtomicBool::new(false);
+///
+/// **The atomic is the seam's**, read here and in the tray out of one word: the other thing that asks it
+/// is the hook's stalled-preview sweep, which must not end a browser that is drawing a document the user
+/// is reading, and the browser is a process of the viewer's on the far side of the split (see
+/// `crate::app::seam::ENGINE_SHOWING`).
+pub(super) use crate::app::seam::ENGINE_SHOWING as SHOWING;
 
 /// Whether the document the engine's window is showing right now is one that runs, and so may
 /// take the pointer and the keyboard: the window is made `WS_EX_NOACTIVATE` and refuses
@@ -208,7 +213,11 @@ static SHOWN: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 /// The engine's window handle, while it has one: what a hit test needs to know whether the
 /// pointer is on a document's preview, which is a preview of this app's in every way but
 /// the window it is drawn in.
-pub(super) static HOST_HWND: AtomicIsize = AtomicIsize::new(0);
+///
+/// The handle is the seam's word, written here where it moves and read by the tray's own hit tests and
+/// by the key hook's stand-down: a copy kept here would be `0` in a run whose previews are drawn in
+/// another process (see `crate::app::seam::ENGINE_HWND`).
+pub(super) use crate::app::seam::ENGINE_HWND as HOST_HWND;
 
 /// The process the engine's pages are drawn by, while it is running: the browser the host
 /// started, which is the one process that owns every window a document is drawn in.

@@ -39,6 +39,11 @@ pub(crate) fn is_foreground_explorer() -> bool {
 /// front — a page the user has activated focuses a child of it — so the question covers the
 /// children the way `cursor_preview_hover` does, in the other direction and for the same
 /// reason: the surface is the engine's, and so is everything inside it.
+///
+/// The engine's window is asked of the fact the viewer publishes — one atomic, no lock and no stale
+/// tick, written where the handle itself moves (see `app::seam::ENGINE_HWND`): the window belongs to a
+/// process this one does not share, so asking the engine here answers nothing at all in a run whose
+/// previews are drawn elsewhere.
 pub(super) fn engine_owns_the_keyboard() -> bool {
     let engine = webview_preview::showing_hwnd();
     if engine == 0 {
@@ -284,6 +289,11 @@ pub(super) fn is_our_own_window(window: HWND) -> bool {
         return true;
     }
 
+    // The engine's window is read from the fact the viewer publishes: the window itself is answered for
+    // by `preview_window_is_at` above, being the viewer's, but a page inside it is not — a page is drawn by
+    // the browser's own windows, which belong to the browser's process rather than to the viewer's, and
+    // `IsChild` is the half that answers for it (see `app::seam::ENGINE_HWND` and
+    // `webview_preview::browser_pid`).
     let engine = webview_preview::showing_hwnd();
     engine != 0
         && unsafe {
