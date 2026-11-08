@@ -359,7 +359,7 @@ pub(crate) enum PinCommand {
 // `pin_window::take_pin_commands`).
 
 /// Whether the pin key is watched, as the configuration has it.
-pub(super) fn pin_enabled() -> bool {
+pub fn pin_enabled() -> bool {
     CONFIG
         .lock()
         .map(|config| config.pin_enabled)
