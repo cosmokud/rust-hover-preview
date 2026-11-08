@@ -1736,12 +1736,14 @@ pub fn run_explorer_hook() {
 }
 
 /// Answer what the preview side has asked of this one since the last time it asked — a setting turned
-/// from the pin's own chrome, the preview shortcut's switch, a line for the click trace.
+/// from the pin's own chrome, the preview shortcut's switch, a line for the click trace, the notice that
+/// the run's viewer is a window of its own now.
 ///
-/// The answer is here because the thing asked for is this side's: the file behind a setting, and the
-/// trace file a click's road is written to. A preview thread that flipped a setting would be a second
-/// writer to a file these rows write, and one that wrote this log would be a window procedure writing a
-/// hook's file (see `TrayMessage`). The queue is empty on almost every pass and costs a `try_recv` for it.
+/// The answer is here because the thing asked for is this side's: the file behind a setting, the
+/// trace file a click's road is written to, and the viewer the run's hovers are drawn in. A preview thread
+/// that flipped a setting would be a second writer to a file these rows write, and one that wrote this log
+/// would be a window procedure writing a hook's file (see `TrayMessage`). The queue is empty on almost
+/// every pass and costs a `try_recv` for it.
 ///
 /// A test that presses a button of the pin's own calls this rather than the loop, because what it drives
 /// is the queue the loop drains: the press asks for the flip, and this side of the seam is what flips.
@@ -1756,6 +1758,11 @@ pub(crate) fn answer_what_the_preview_side_asked() {
             }
             crate::app::seam::TrayMessage::PinClick(line) => {
                 probe_trace::note_a_pin_click_line(&line)
+            }
+            // A viewer's pin became a window of its own: the hovers have nobody drawing them until this run
+            // has a viewer again, and the process that began this one begins it (see `app::viewer`).
+            crate::app::seam::TrayMessage::ViewerDetached(pid) => {
+                crate::app::viewer::another_viewer_is_owed(pid)
             }
         }
     }

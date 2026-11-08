@@ -48,7 +48,7 @@ use std::ops::Deref;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{
-    AtomicBool, AtomicI32, AtomicIsize, AtomicPtr, AtomicU32, AtomicU64, Ordering,
+    AtomicBool, AtomicI32, AtomicIsize, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
 };
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
@@ -391,13 +391,13 @@ pub(crate) fn the_facts() -> &'static SeamFacts {
 /// section that could not be made leaves `the_facts` on this process's own copy, which is what every test
 /// and every run before the split used.
 pub(crate) fn open_the_seam_section() -> bool {
-    // Every event exists before the viewer does, so neither side ever makes one the other has already
-    // waited on: a named event is one object whichever process asked for it first, and all that matters
-    // is that it exists before the first send signals it — and, for the readiness one, before a viewer
-    // can set it and end, which would leave this process waiting on a name nothing holds.
+    // The two events the messages are announced on exist before the viewer does, so neither side ever
+    // makes one the other has already waited on: a named event is one object whichever process asked for
+    // it first, and all that matters is that it exists before the first send signals it. The readiness
+    // event is not one of them: it is named for the viewer that sets it, and is made by whichever side
+    // asks for it first (see `preview_ready_event`).
     let _ = preview_channel_event();
     let _ = tray_channel_event();
-    let _ = preview_ready_event();
 
     let Some(facts) = a_section_of_this_run() else {
         return false;
@@ -417,11 +417,11 @@ pub(crate) fn open_the_seam_section() -> bool {
 /// Called once, at the start of a viewer, before any thread of it that publishes is begun.
 pub(crate) fn join_the_seam_section(tray: u32) -> bool {
     THE_RUN.store(tray, Ordering::Release);
-    // The events beside the section, made by the tray before it began this process: asked for here so
-    // that a send which finds nobody waiting yet is still a signal on the object the tray will read.
+    // The events beside the section: asked for here so that a send which finds nobody waiting yet is still
+    // a signal on the object the other side will read. The readiness event is this process's own and is
+    // made where it is set (see `preview_ready_event` and `note_the_preview_loop_is_up`).
     let _ = preview_channel_event();
     let _ = tray_channel_event();
-    let _ = preview_ready_event();
 
     let name = the_seam_name("");
     let size = size_of::<SeamFacts>();
@@ -804,8 +804,16 @@ pub(crate) fn wake_preview_loop() {
     }
 }
 
-/// The event a viewer sets once its preview loop is running, and the one the tray app waits on before it
-/// makes the rings the road (see `app::viewer`).
+/// The event the viewer `viewer` sets once its preview loop is running, and the one the tray app waits
+/// on before it makes the rings the road (see `app::viewer`).
+///
+/// **It is named for the viewer and not for the run**, because a run may have more than one of them
+/// standing: a viewer whose pin has become a window of its own turns its own loop for the rest of the
+/// session, so one manual-reset event of the run's own could not say which of the two answered (see
+/// `app::detach`). Whoever asks for the name first makes the object — a name that exists already answers
+/// with the object it names, signal and all — and the caller owns the handle: it is closed by the side
+/// that asked only to wait on it, and kept for the life of the process by the viewer that sets it, an
+/// event whose last handle closes being a name nothing holds (see `note_the_preview_loop_is_up`).
 ///
 /// **It is what keeps a viewer that dies at its start-up from costing the user every preview.** The tray
 /// commits to the rings on the strength of a process it has just begun, and a process is begun whether or
@@ -813,29 +821,25 @@ pub(crate) fn wake_preview_loop() {
 /// every hover of the session into a ring nobody reads, which is a run with no previews at all. So a viewer
 /// sets this once its section is joined and its loop is turning, and a tray that does not hear it in time
 /// draws the run's previews itself (see `viewer::begin_the_viewer`).
-///
-/// It is made by the tray before that process is begun, for the reason the two events below are: an event
-/// a viewer sets and then ends is an object that goes with it, and a tray that asked for the name afterwards
-/// would make a fresh one and read its own silence as a viewer that never came up.
-pub(crate) fn preview_ready_event() -> HANDLE {
-    static EVENT: Lazy<isize> = Lazy::new(|| {
-        let name = the_seam_name("-up");
-        // Safety: an event with a name of this run's own and no security descriptor, manual-reset, which
-        // is what a signal set before the tray's wait is armed wants.
-        unsafe { CreateEventW(None, true, false, PCWSTR(name.as_ptr())) }
-            .map(|handle| handle.0 as isize)
-            .unwrap_or_default()
-    });
-
-    HANDLE(*EVENT as *mut core::ffi::c_void)
+pub(crate) fn preview_ready_event(viewer: u32) -> HANDLE {
+    let name = the_seam_name(&format!("-up-{viewer}"));
+    // Safety: an event with a name of this run's own and no security descriptor, manual-reset, which is
+    // what a signal set before the tray's wait is armed wants.
+    unsafe { CreateEventW(None, true, false, PCWSTR(name.as_ptr())) }.unwrap_or_default()
 }
 
 /// Say that this process's preview loop is running: the section is joined, the loop is turning, and every
 /// message the tray publishes from here on is one this process reads (see `preview_ready_event`).
 pub(crate) fn note_the_preview_loop_is_up() {
+    // The handle is kept for the life of this process rather than closed after the signal: a viewer that
+    // sets its event and drops it leaves a name nothing holds, and a tray that asked for the name
+    // afterwards would make a fresh one and read its own silence as a viewer that never came up (see
+    // `preview_ready_event`).
+    static READY: Lazy<isize> = Lazy::new(|| preview_ready_event(std::process::id()).0 as isize);
+
     // Safety: an event of this run's own, signalled: nothing here is dereferenced.
     unsafe {
-        let _ = SetEvent(preview_ready_event());
+        let _ = SetEvent(HANDLE(*READY as *mut core::ffi::c_void));
     }
 
     // And one line from the side the tray is waiting on, on the trace a run asks for: a run whose previews
@@ -865,6 +869,23 @@ fn the_rings_carry_messages() -> bool {
     THE_RINGS_CARRY_MESSAGES.load(Ordering::Acquire)
 }
 
+/// Whether the preview ring is this process's to read and to write, right now: the rings are the road,
+/// and this process is still in the room the ring belongs to.
+///
+/// It is the second half that moves. A viewer whose pin has become a window of its own leaves the room —
+/// every hover the ring carries from then on belongs to the viewer that took its place — and the messages
+/// of its own that used to cross go back to being the channel its own threads share (see `app::detach`).
+fn the_preview_ring_is_ours() -> bool {
+    the_rings_carry_messages() && !crate::app::detach::is_detached()
+}
+
+/// Whether this process has left the room the rings belong to: a viewer that has become a window of its
+/// own, whose own channel is its road from then on (see `the_preview_ring_is_ours` and
+/// `wait_preview_channel`).
+fn the_preview_ring_was_left() -> bool {
+    the_rings_carry_messages() && crate::app::detach::is_detached()
+}
+
 /// Whether this message is one only a viewer drawing something can answer: a hover, the keyboard's hover,
 /// or a pin taken up from either.
 fn a_show(message: &PreviewMessage) -> bool {
@@ -876,7 +897,7 @@ fn a_show(message: &PreviewMessage) -> bool {
 
 /// Send a message to the preview loop and wake it, so that a wait in progress ends at once.
 pub(crate) fn send_preview(message: PreviewMessage) {
-    if the_rings_carry_messages() {
+    if the_preview_ring_is_ours() {
         // A viewer that has gone is begun again before the show that would have been drawn by nobody is
         // put in the ring (see `app::viewer`).
         if a_show(&message) {
@@ -926,7 +947,7 @@ pub(crate) static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
 /// the carry a drag is made of — are the whole of what a message is read out of (see
 /// `pin_drag::Carry::drain`).
 pub(crate) fn next_preview_message(rx: &Receiver<PreviewMessage>) -> Option<PreviewMessage> {
-    if the_rings_carry_messages() {
+    if the_preview_ring_is_ours() {
         let message = the_facts()
             .preview_ring
             .pop()
@@ -975,14 +996,28 @@ pub(crate) fn wait_preview_channel(
 
     let event = preview_channel_event();
     let handles = [event];
-    unsafe {
-        let _ = MsgWaitForMultipleObjectsEx(
-            Some(&handles),
-            wait_ms as u32,
-            QS_ALLINPUT,
-            MWMO_INPUTAVAILABLE,
-        );
-        let _ = ResetEvent(event);
+    if the_preview_ring_was_left() {
+        // **A viewer that has become a window of its own is not in the room any more.** The event is the
+        // one the viewer that took its place is waiting on, and this wait resets it after the wait — a
+        // wake eaten out from under the viewer the hover was meant for. So this process waits on its own
+        // message queue alone, and its own channel is still polled below, on whatever the wait hands back.
+        // Safety: a wait on this thread's own message queue for a bound; nothing here is dereferenced.
+        unsafe {
+            let _ =
+                MsgWaitForMultipleObjectsEx(None, wait_ms as u32, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+    } else {
+        // Safety: an event of this run's own, waited on for a bound and reset after the wait, which is what
+        // makes the arm-then-send race safe; nothing here is dereferenced.
+        unsafe {
+            let _ = MsgWaitForMultipleObjectsEx(
+                Some(&handles),
+                wait_ms as u32,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            );
+            let _ = ResetEvent(event);
+        }
     }
 
     // Woken by input, by a message, or by the timeout. Either way the channel is only ever
@@ -1410,6 +1445,11 @@ pub(crate) enum TrayMessage {
     /// gate and the words around it, and because a line built on the asking side is a line built
     /// whether or not the run asked for any.
     PinClick(String),
+    /// A viewer's pin has become a window of its own, and there is nobody drawing the hovers until this
+    /// run has a viewer again (see `app::detach`). It carries the pid of the window that left, which is
+    /// the one this run keeps beside the viewer that serves the hovers from then on: that process is
+    /// still standing on the screen, and it is standing there as nobody's pin.
+    ViewerDetached(u32),
 }
 
 /// One message as the bytes a ring carries: which message it is, the text it names, and the numbers its
@@ -1475,6 +1515,7 @@ impl SeamMessage {
     const HIDE_HTML_PAGE: u8 = 26;
     const TRIM_CACHES: u8 = 27;
     const KILL_STRAY_PLAYER: u8 = 28;
+    const VIEWER_DETACHED: u8 = 29;
 
     /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
     fn of(tag: u8, numbers: &[i64]) -> Self {
@@ -1666,6 +1707,9 @@ impl SeamMessage {
             TrayMessage::PinClick(line) => {
                 Self::of(Self::PIN_CLICK, &[]).with_text(line.encode_utf16())
             }
+            TrayMessage::ViewerDetached(pid) => {
+                Some(Self::of(Self::VIEWER_DETACHED, &[i64::from(*pid)]))
+            }
         }
     }
 
@@ -1766,6 +1810,7 @@ impl SeamMessage {
             Self::TOGGLE_PIN_ALWAYS_ON_TOP => TrayMessage::TogglePinAlwaysOnTop,
             Self::TOGGLE_PREVIEW_ENABLED => TrayMessage::TogglePreviewEnabled,
             Self::PIN_CLICK => TrayMessage::PinClick(self.line()),
+            Self::VIEWER_DETACHED => TrayMessage::ViewerDetached(self.numbers[0] as u32),
             _ => return None,
         })
     }
@@ -2311,6 +2356,11 @@ pub(crate) fn pin_key_message_acts(message: u32) -> bool {
 /// change as the preview side changes what it draws, and the registry below is the tray's own record of
 /// which process that is — the viewer it began, or itself where it draws its own previews.
 ///
+/// **A run has more than one of them once a pin has been detached.** The window that left is still a
+/// window of this app's standing over the desktop, so it is recorded beside the one the hovers are drawn
+/// in (see `DETACHED_VIEWER_PIDS`), and a press on it is judged the way it was judged before the pin
+/// became its own.
+///
 /// It is asked of a press the hook reads, so that a click on a pinned window is read out of the listing
 /// that window is standing on rather than taken as a click on something that is not a listing at all (see
 /// `click_is_over_a_listing`).
@@ -2325,7 +2375,7 @@ pub(crate) fn window_is_a_viewers(window: isize) -> bool {
         GetWindowThreadProcessId(HWND(window as *mut core::ffi::c_void), Some(&mut pid));
     }
 
-    pid != 0 && pid == the_viewer_process()
+    pid != 0 && (pid == the_viewer_process() || is_a_window_of_its_own(pid))
 }
 
 /// The process this run's previews are drawn in, or `0` where none is recorded.
@@ -2341,6 +2391,45 @@ static THE_VIEWER: AtomicU32 = AtomicU32::new(0);
 /// Note the process this run's previews are drawn in (see `THE_VIEWER`).
 pub(crate) fn note_the_viewer_process(pid: u32) {
     THE_VIEWER.store(pid, Ordering::Release);
+}
+
+/// How many windows of this run's own may be standing beside the one the hovers are drawn in.
+///
+/// A fixed number of slots rather than a list that grows, because the reader takes no lock: the question
+/// is asked of a press on the hook's own path, and a lock that reader waited on would be a hook that stops
+/// answering Explorer behind a preview thread (`THE_VIEWER` is an atomic for the same reason).
+///
+/// shortcut: a run that detaches more windows than this stops recognising the oldest of them, which reads
+/// a press on that window as a press on a window that is not this app's rather than as a press over the
+/// listing it stands on; upgrade to a set that grows if a user ever meets it.
+const DETACHED_VIEWERS: usize = 16;
+
+/// The processes of this run that are windows of their own: every viewer whose pin was detached, and
+/// which draws its own window and nothing else from then on (see `window_is_a_viewers` and `app::detach`).
+static DETACHED_VIEWER_PIDS: [AtomicU32; DETACHED_VIEWERS] =
+    [const { AtomicU32::new(0) }; DETACHED_VIEWERS];
+
+/// Which slot the next window of this run's own is written in: the record is a ring, and the oldest of a
+/// run that detaches more windows than there are slots is the one that is lost.
+static NEXT_DETACHED_VIEWER: AtomicUsize = AtomicUsize::new(0);
+
+/// Note a window of this run's own, standing beside the one the hovers are drawn in (see
+/// `DETACHED_VIEWER_PIDS`).
+pub(crate) fn note_a_detached_viewer(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+
+    let at = NEXT_DETACHED_VIEWER.fetch_add(1, Ordering::Relaxed) % DETACHED_VIEWERS;
+    DETACHED_VIEWER_PIDS[at].store(pid, Ordering::Release);
+}
+
+/// Whether `pid` is a process of this run that has a window of its own standing (see
+/// `DETACHED_VIEWER_PIDS`).
+fn is_a_window_of_its_own(pid: u32) -> bool {
+    DETACHED_VIEWER_PIDS
+        .iter()
+        .any(|slot| slot.load(Ordering::Acquire) == pid)
 }
 
 fn the_viewer_process() -> u32 {
@@ -2497,6 +2586,7 @@ mod tests {
             TrayMessage::TogglePinAlwaysOnTop,
             TrayMessage::TogglePreviewEnabled,
             TrayMessage::PinClick("pin: the press named no file".to_owned()),
+            TrayMessage::ViewerDetached(4242),
         ] {
             let carried = SeamMessage::of_tray(&message).expect("a notice that fits a slot");
             let back = carried.as_tray().expect("a notice back");
