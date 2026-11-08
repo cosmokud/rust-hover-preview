@@ -31,7 +31,13 @@
 //! still in the listing behind it (see `publish_preview_under_the_pointer`), and a pin
 //! behind another program is not (see `key_input::pin_owns_foreground`).
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
+use crate::app::seam::preview_is_under_the_pointer;
+pub(crate) use crate::app::seam::{
+    pin_volume_delta_pending, publish_preview_under_the_pointer, take_pin_volume_delta,
+    take_pin_zoom_delta, take_text_scroll_delta, take_text_size_delta,
+};
+use crate::app::seam::{PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_ZOOM_DELTA, TEXT_SCROLL_DELTA};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -42,55 +48,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// Wheel messages seen since startup; the hook thread is the only writer.
 static WHEEL_TICKS: AtomicU64 = AtomicU64::new(0);
 
-/// Wheel notches handed to a text preview. Signed: up is positive. Swapped to
-/// zero by the preview thread, so a notch is counted once.
-static TEXT_SCROLL_DELTA: AtomicI32 = AtomicI32::new(0);
-
-/// Wheel notches handed to a pinned picture, in the same units and on the same terms as
-/// the text preview's own count above: signed, swapped to zero by the reader, and added
-/// to only where the pointer is inside the box the pin published.
-static PIN_ZOOM_DELTA: AtomicI32 = AtomicI32::new(0);
-
-/// Wheel notches handed to a pin's volume control, on the same terms as the counts
-/// above: signed (up is louder), swapped to zero by the reader, and added to only
-/// where the pointer is over the volume popup or the button that opens it.
-static PIN_VOLUME_DELTA: AtomicI32 = AtomicI32::new(0);
-
-/// Wheel notches handed to a pinned page's own text size, on the same terms again: a notch turned
-/// over a page with `Ctrl` held is how large that page is drawn rather than where it is (see
-/// `text_size_after_notches`).
-static PIN_TEXT_SIZE_DELTA: AtomicI32 = AtomicI32::new(0);
-
 /// Thread running the hook's message pump, published so shutdown can wake it.
 static WHEEL_THREAD_ID: AtomicU32 = AtomicU32::new(0);
-
-/// Whether the preview on screen is the surface the pointer is standing on, published by the
-/// preview thread once a tick.
-///
-/// It is what makes a pin *scrollable the moment it is raised*: a notch over a preview used to be
-/// this app's only while the pin was the window the keyboard was in — Always On Top, or the window
-/// the user had clicked into — so a pin raised over the listing they were working in took no notch
-/// and had to be clicked once before it would scroll. The pointer is over the pin the whole time;
-/// the keyboard is in the listing behind it, which is the point of the raise (see
-/// `Pin Mode → Update Preview → Move To Top`).
-///
-/// It is published rather than asked here because a `WH_MOUSE_LL` callback may not walk the
-/// desktop to find out what is in front — the same reason the pin's key owners are published by
-/// the same tick (see `key_input::publish_pin_key_owner`). One tick of staleness is all it can be
-/// wrong by, and a notch is turned by a hand that is not moving.
-static PREVIEW_UNDER_POINTER: AtomicU32 = AtomicU32::new(0);
-
-/// Whether the preview on screen is the surface the pointer is standing on, as the preview thread
-/// last saw it (see `PREVIEW_UNDER_POINTER`).
-fn preview_is_under_the_pointer() -> bool {
-    PREVIEW_UNDER_POINTER.load(Ordering::Acquire) != 0
-}
-
-/// Publish what the pointer is on, from the tick that is allowed to ask the desktop (see
-/// `PREVIEW_UNDER_POINTER`).
-pub(crate) fn publish_preview_under_the_pointer(under: bool) {
-    PREVIEW_UNDER_POINTER.store(u32::from(under), Ordering::Release);
-}
 
 /// Whether a notch inside a region this app published is this app's to take (see
 /// `wheel_hook_proc`).
@@ -110,41 +69,11 @@ pub fn wheel_tick_count() -> u64 {
     WHEEL_TICKS.load(Ordering::Relaxed)
 }
 
-/// Wheel notches a text preview has been given since this was last called, in
-/// wheel units (120 to a notch).
-pub fn take_text_scroll_delta() -> i32 {
-    TEXT_SCROLL_DELTA.swap(0, Ordering::AcqRel)
-}
-
-/// Wheel notches a pinned page has been given for its own text size since this was last called, in
-/// wheel units (120 to a notch). Signed, up being larger.
-pub fn take_text_size_delta() -> i32 {
-    PIN_TEXT_SIZE_DELTA.swap(0, Ordering::AcqRel)
-}
-
 /// Whether `Ctrl` is held, asked of the keyboard rather than read from the message: a wheel message
 /// carries no modifiers of its own, and this is a read of one number where a low-level callback may
 /// do nothing else (see `wheel_hook_proc`).
 fn control_is_down() -> bool {
     unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0 }
-}
-
-/// Wheel notches a pinned picture has been given since this was last called, in wheel
-/// units (120 to a notch). Signed, up being positive — which is a zoom in.
-pub fn take_pin_zoom_delta() -> i32 {
-    PIN_ZOOM_DELTA.swap(0, Ordering::AcqRel)
-}
-
-/// Wheel notches a pin's volume control has been given since this was last called, in
-/// wheel units (120 to a notch). Signed, up being louder.
-pub fn take_pin_volume_delta() -> i32 {
-    PIN_VOLUME_DELTA.swap(0, Ordering::AcqRel)
-}
-
-/// Whether a volume notch is waiting to be read, so the preview loop can keep its frame cadence
-/// for it rather than let the level land on its own slow wait (see `wait_before_the_next_tick`).
-pub fn pin_volume_delta_pending() -> bool {
-    PIN_VOLUME_DELTA.load(Ordering::Acquire) != 0
 }
 
 /// Starts the hook thread; `main` joins the returned handle after `request_stop`.

@@ -155,7 +155,7 @@ pub(super) fn configured_far_edge_grace_pixels() -> f32 {
 }
 
 /// A region on screen: left, top, right, bottom.
-pub(super) type ScreenRegion = (i32, i32, i32, i32);
+pub(crate) type ScreenRegion = (i32, i32, i32, i32);
 
 /// The region a preview of an item is kept off, as the `Avoid` setting measured it off
 /// the item, and the one thing about it a placement cannot see: whether it is a *column*

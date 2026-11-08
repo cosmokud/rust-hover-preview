@@ -60,7 +60,7 @@ AFK/engines: `app::afk` clock from hook's `ExplorerState`; an engine set to `Unt
 ```
 src/main.rs                 RUNNING, CONFIG, thread boot + tray loop
 src/paths.rs                plain_path() — strip \\?\ (\\?\UNC\ keeps server) before Shell/browser/media use
-src/app/                    single_instance, startup (registry sync/repair), updates, engine_processes (job+record), afk, dialogs
+src/app/                    seam (the facts the two sides exchange), single_instance, startup (registry sync/repair), updates, engine_processes (job+record), afk, dialogs
 src/config/                 config (AppConfig, PreviewType/PreviewScale/..., DEFAULT_*, sanitize_*, save/ordered_text/differs/repair_older_lists), engines_in_effect, theme_files
 src/shell/                  explorer_hook/, wheel_input, key_input, hook_thread, cloud_files, pin_navigation, app_icon, tray/
 src/ui/                     preview_window.rs + preview_window/ (pin_*, layout, load*, paint, media_*, video_*, bubble_stream, audio_meter, tick, displays, ...); pin_window, displays seam (Desktop real vs recorder)
