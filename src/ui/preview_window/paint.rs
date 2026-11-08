@@ -1663,7 +1663,7 @@ pub(super) unsafe fn show_loading_spinner(hwnd: HWND, pl: &PendingLoad) {
     // and the window it writes one step (see `HIDDEN_EPOCH`), and the pointer is
     // asked the same question the reveal is: a wait belongs at the hand that is
     // still on the file, and not at one that has crossed to another item
-    // (see `HOVER_POINTER_BOX`).
+    // (see `POINTER_ITEM_BOX`).
     let hidden = HIDDEN_EPOCH.lock().ok();
     if !hover_still_wanted(&hidden, pl) || !pointer_on_the_hovered_item() {
         return;

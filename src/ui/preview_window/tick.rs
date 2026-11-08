@@ -177,35 +177,22 @@ pub(super) const STATIC_MEDIA_REFRESH_MS: u64 = 500;
 // Use AtomicIsize for the HWND pointer (thread-safe)
 pub(super) static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
 
-/// The clock the preview loop's liveness is read on, and when that loop was last
-/// seen running.
-///
-/// One thread owns the answer and another reads it: the Explorer hook is what
-/// decides about a preview loop that has stopped answering — the engines such a loop
-/// is holding warm are ended from there instead (see `PREVIEW_STALL_MS` in
-/// `explorer_hook`) — and it cannot ask the loop itself, because a question put to a
-/// loop that has stopped is the one question that would not be answered. So the loop
-/// notes its own tick and the hook reads how long ago the last one was. One relaxed
-/// store per tick and one relaxed load per look is the whole cost of it.
-pub(super) static PREVIEW_CLOCK: Lazy<Instant> = Lazy::new(Instant::now);
-pub(super) static PREVIEW_ALIVE_MS: AtomicU64 = AtomicU64::new(0);
+// The preview loop's liveness is the seam's own number now that the hook that watches it is a
+// process of its own: an `Instant` is this process's own and cannot be read across that boundary, so
+// what crosses is the wall clock of the last tick (see `crate::app::seam::preview_stall_ms`).
 
 /// Note that the preview loop has run a tick — whether the tick did anything or not,
-/// since a loop waiting on the channel for a hover is a loop that is working (see
-/// `preview_stall_ms`).
+/// since a loop waiting on the channel for a hover is a loop that is working.
 pub(super) fn note_preview_alive() {
-    PREVIEW_ALIVE_MS.store(
-        PREVIEW_CLOCK.elapsed().as_millis() as u64,
-        Ordering::Relaxed,
-    );
+    crate::app::seam::note_the_preview_ticked();
 }
 
 /// The clock the pin's own liveness is read on, and when the loop last turned a tick
 /// with a pin up.
 ///
 /// This is a second clock from the one above, and it is a second because the two are read
-/// by different watchers for different reasons. `PREVIEW_ALIVE_MS` answers "is the preview
-/// loop working at all", and the Explorer hook is what asks it — a loop stopped on an idle
+/// by different watchers for different reasons. The seam's `preview_stall_ms` answers "is the
+/// preview loop working at all", and the Explorer hook is what asks it — a loop stopped on an idle
 /// channel is a loop that is working. This one answers "is the loop turning while a window
 /// the user is looking at is up", which is a much narrower question with a much shorter
 /// bound, and nobody inside the loop can ask it: a loop that has stopped is a loop that
@@ -295,17 +282,6 @@ pub(super) fn spawn_pin_watchdog() {
             }
         }
     });
-}
-
-/// How long the preview loop has been quiet, in milliseconds: the age of its last
-/// tick, growing for as long as the loop is inside work that has not come back.
-///
-/// A loop that has not ticked since the app started answers with the age of the app,
-/// which is the same answer a loop that is gone is owed — nothing here waits on the
-/// loop or looks for it; it is only ever a number read.
-pub fn preview_stall_ms() -> u64 {
-    let alive = PREVIEW_ALIVE_MS.load(Ordering::Relaxed);
-    (PREVIEW_CLOCK.elapsed().as_millis() as u64).saturating_sub(alive)
 }
 
 /// The number of times the window has been taken down, and the lock that makes a

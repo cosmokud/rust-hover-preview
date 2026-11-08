@@ -11,7 +11,7 @@ fn holds_the_pointer_through_the_item_a_wait_is_for() {
     // A spinner box at the pointer, as one on screen is, and the item the hover was
     // resolved from a row away from it.
     let spinner = (100, 100, 136, 136);
-    *POINTER_HOLD_REGIONS.lock().expect("the published regions") = Some(vec![spinner]);
+    POINTER_HOLD_REGIONS.publish(&[spinner]);
     publish_pointer_item_box((100, 200, 300, 220));
 
     WAITING_PREVIEW_HOLDING.store(true, Ordering::Release);
@@ -144,7 +144,7 @@ fn a_hover_is_not_shown_while_a_preview_is_pinned() {
 /// has moved on, and a hover whose item was never read holds nothing back — which
 /// is what keeps a frame from going up for a file the hand has already left, and
 /// what keeps a keyboard preview or an unknown item from being held to a box that
-/// is not theirs (see `HOVER_POINTER_BOX`).
+/// is not theirs (see `POINTER_ITEM_BOX`).
 #[test]
 fn holds_a_reveal_to_the_item_the_hover_was_resolved_from() {
     let _stand_in = POINTER_STAND_IN.lock().expect("the pointer's own state");

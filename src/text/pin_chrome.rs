@@ -39,8 +39,8 @@ pub(crate) use bubble::{
     BubbleArt, BubbleMark, TooltipText, BUBBLE_BARS,
 };
 pub(crate) use caption::{
-    button_at, button_boxes, caption_fits, measure_caption_text, paint_caption, Caption,
-    CaptionButton,
+    button_at, button_boxes, button_strip, caption_fits, measure_caption_text, paint_caption,
+    Caption, CaptionButton,
 };
 pub(crate) use find_bar::{
     count_text as find_bar_count_text, find_bar_layout, find_bar_surface_size, paint_find_bar,

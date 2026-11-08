@@ -3226,6 +3226,49 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
     )
 }
 
+/// Every one of those controls' boxes in screen coordinates, taken to the card the way
+/// `pin_audio_control_at` takes a point: the card fills the pin's media box and is drawn at the media
+/// band's own row, so only y is offset, and the pin's window box places the card on the screen.
+///
+/// The window procedure answers a press on the card out of these boxes and so does the hook, which is
+/// the whole point of publishing them: a control laid out for a paint and hit-tested by another
+/// arithmetic answers a press in the middle of the facts line (see `audio_preview::control_hit_boxes`).
+pub(super) fn pin_audio_control_rects(
+    pin: &PinnedPreview,
+) -> [Option<ScreenRegion>; audio_preview::CARD_CONTROL_BOXES] {
+    let mut boxes = [None; audio_preview::CARD_CONTROL_BOXES];
+    if !pin_shows_an_audio_card(pin) {
+        return boxes;
+    }
+
+    let (_, height) = pin.window_size();
+    let (band_top, _) = pinned_band_rows(
+        height,
+        pin.caption,
+        pinned_transport_height(pin.dpi, pin.transport_bar),
+        pin.overlay,
+    );
+    let (window_left, window_top, _, _) = pin.window_box();
+    let width = (pin.content.2 - pin.content.0).max(1) as u32;
+
+    for (slot, control) in boxes.iter_mut().zip(audio_preview::control_hit_boxes(
+        width,
+        pin.dpi,
+        pinned_audio_options(pin),
+    )) {
+        *slot = control.map(|rect| {
+            (
+                window_left + rect.left,
+                window_top + band_top + rect.top,
+                window_left + rect.right,
+                window_top + band_top + rect.bottom,
+            )
+        });
+    }
+
+    boxes
+}
+
 /// Whether the card's two window buttons are showing at the window's own point: the top band as
 /// tall as the buttons' own hit boxes (see `audio_preview::window_button_band`) *and* the columns
 /// from the leftmost button to the rightmost widened by a hand's margin (see

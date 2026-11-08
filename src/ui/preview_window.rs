@@ -352,6 +352,12 @@ pub(crate) use pointer::preview_pointer_hold;
 pub(crate) use pointer::publish_pointer_item_box;
 pub(crate) use pointer::AvoidRegion;
 pub(crate) use pointer::ScreenRegion;
+
+// The three facts a hold is answered from cross the seam now that the hook and the loop are two
+// processes: they are the seam's, re-exported where the loop has always named them.
+pub(crate) use crate::app::seam::{
+    ENGINE_PAGE_DRAG, ENGINE_PAGE_RUNS, TEXT_PREVIEW_HOLDING, WAITING_PREVIEW_HOLDING,
+};
 pub(crate) use requests::hide_preview;
 
 /// Whether a screen point is on one of a standing pin's own buttons — the caption's, or a sound's
@@ -366,24 +372,59 @@ pub(crate) use requests::hide_preview;
 ///
 /// A collapsed pin's window is hidden rather than moved, so the answer holds on the tick after a
 /// minimize has already taken the window off screen (see `collapse_pin_to`).
+///
+/// The hook asks the seam's own function by this name now that the two are two processes; this one is
+/// the same question asked from inside, where the boxes are published (see `publish_pin_button_boxes`).
+#[cfg(test)]
 pub(crate) fn pin_button_covers(point: (i32, i32)) -> bool {
-    let Some(pinned) = pin_state() else {
-        return false;
-    };
-    let Some(pin) = pinned.pin() else {
-        return false;
-    };
+    crate::app::seam::pin_button_covers(point)
+}
 
-    let (width, _) = pin.window_size();
-    let (left, top, _, _) = pin.window_box();
-    let framed = pin.frame != PinFrame::None;
-    let (x, y) = (point.0 - left, point.1 - top);
+/// Publish the boxes a standing pin's own buttons answer a press in, from the tick that settles the
+/// pin's chrome (see `pin_button_covers`).
+///
+/// **The boxes, because the hook's question is about a point.** The hook is on the other side of the
+/// seam and cannot lay this geometry out — it would need the pin's content box, its band rows, its
+/// display scale and its display options, and an answer rebuilt from those can disagree with the one
+/// the window procedure gives the same press. What crosses instead is what this side has already
+/// worked out: the card's controls' boxes and, as one box, the room the caption's buttons take (they
+/// sit against the window's right edge, side by side and with no gap between them, so the room they
+/// take is a rectangle). Every slot is written on every publish — no box where this pin has no button
+/// there — so there is no count to be stale and the hook intersects all of them.
+pub(super) fn publish_pin_button_boxes() {
+    let mut boxes = [None; crate::app::seam::PIN_BUTTONS];
 
-    pin_audio_control_at(pin, x, y).is_some()
-        || (pin.caption > 0
-            && pin.chrome.caption
-            && pin_chrome::caption_fits(width, pin.dpi, framed)
-            && pin_chrome::button_at(x, y, width, pin.caption, pin.dpi, framed).is_some())
+    if let Some(pinned) = pin_state() {
+        if let Some(pin) = pinned.pin() {
+            let (width, _) = pin.window_size();
+            let (left, top, _, _) = pin.window_box();
+            let framed = pin.frame != PinFrame::None;
+
+            for (slot, control) in boxes
+                .iter_mut()
+                .zip(pin_lifecycle::pin_audio_control_rects(pin))
+            {
+                *slot = control;
+            }
+
+            if pin.caption > 0
+                && pin.chrome.caption
+                && pin_chrome::caption_fits(width, pin.dpi, framed)
+            {
+                boxes[crate::app::seam::PIN_BUTTONS - 1] =
+                    pin_chrome::button_strip(width, pin.caption, pin.dpi, framed).map(|strip| {
+                        (
+                            left + strip.left,
+                            top,
+                            left + strip.right,
+                            top + strip.bottom,
+                        )
+                    });
+            }
+        }
+    }
+
+    crate::app::seam::publish_pin_buttons(boxes);
 }
 
 /// Whether `RHP_PLAYBACK_TRACE` asks for a launch's sound to be written out — asked by the one module
@@ -429,7 +470,6 @@ pub(crate) use requests::take_pin_resumed;
 pub(crate) use requests::update_pinned_preview;
 pub(crate) use subtitle_files::keep_extraction_for;
 pub(crate) use subtitle_files::trim_now as trim_subtitle_cache;
-pub(crate) use tick::preview_stall_ms;
 pub(crate) use tick::wake_preview_loop;
 pub(crate) use tick::PREVIEW_SENDER;
 // What the tray's `Engine -> Select Engine -> Video` submenu reads: what the choice moving costs

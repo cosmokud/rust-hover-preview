@@ -759,8 +759,12 @@ pub fn run_explorer_hook() {
             // responsible for. Noted before the hold is read, so the tick that begins a drag
             // is the tick the page is already being held by.
             if mouse_button_press {
-                engine_page_drag = webview_preview::screen_rect()
-                    .is_some_and(|rect| point_in_box(cursor_pos, rect));
+                // Armed only where the page rule can read it: a page that runs is the one a drag is held
+                // through, and both halves of that are the preview side's, published once a tick (see
+                // `crate::app::seam::ENGINE_PAGE_RUNS`).
+                engine_page_drag = crate::app::seam::ENGINE_PAGE_RUNS.load(Ordering::Acquire)
+                    && crate::app::seam::preview_screen_rect()
+                        .is_some_and(|rect| point_in_box(cursor_pos, rect));
             } else if !mouse_button_input {
                 engine_page_drag = false;
             }

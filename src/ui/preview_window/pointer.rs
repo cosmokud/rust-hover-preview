@@ -24,23 +24,18 @@ use crate::app::seam::FONT_SIZE_CHOICES;
 /// A box that cannot be told — the view reported no item, the hover is the
 /// keyboard's, nothing at all is on screen — is no constraint, and the reveal is
 /// governed by the count alone.
-pub(super) static HOVER_POINTER_BOX: Mutex<Option<(i32, i32, i32, i32)>> = Mutex::new(None);
-
-/// Note the item the pointer is on, as the box the view draws it in. Published by the
-/// Explorer hook wherever it reads the item under the pointer, which is what keeps it
-/// the item the pointer is on *now* rather than the one the last preview was for (see
-/// `HOVER_POINTER_BOX`).
+///
+/// It is one packed word in the seam rather than the locked `Option` it was while both
+/// sides were one process: the hook publishes it from its own tick, which may take no
+/// lock, and a torn box names a place no item is drawn in (see
+/// `crate::app::seam::POINTER_ITEM_BOX`).
 pub fn publish_pointer_item_box(bounds: (i32, i32, i32, i32)) {
-    if let Ok(mut published) = HOVER_POINTER_BOX.lock() {
-        *published = Some(bounds);
-    }
+    crate::app::seam::POINTER_ITEM_BOX.publish(Some(bounds));
 }
 
 /// Withdraw it: what is on screen is no longer a pointer's hover.
 pub(super) fn clear_pointer_item_box() {
-    if let Ok(mut published) = HOVER_POINTER_BOX.lock() {
-        *published = None;
-    }
+    crate::app::seam::POINTER_ITEM_BOX.publish(None);
 }
 
 /// Whether a box on screen holds a point. Half-open, so a point on the box's right or
@@ -54,20 +49,17 @@ pub(super) fn box_holds(x: i32, y: i32, region: (i32, i32, i32, i32)) -> bool {
 
 /// Whether a point is still on the item the hover on screen is about — the one
 /// question a preview is revealed against, and the one the hook reads a move off (see
-/// `HOVER_POINTER_BOX`). A point outside a published box is a pointer that has left
+/// `publish_pointer_item_box`). A point outside a published box is a pointer that has left
 /// the file, and no box at all is nothing to hold a reveal back with.
 pub fn pointer_item_holds(x: i32, y: i32) -> bool {
-    let Ok(published) = HOVER_POINTER_BOX.lock() else {
-        return true;
-    };
-
-    (*published)
+    crate::app::seam::POINTER_ITEM_BOX
+        .get()
         .map(|region| box_holds(x, y, region))
         .unwrap_or(true)
 }
 
 /// The box the item under the pointer is drawn in, as the last look at it published, or
-/// nothing when no look has answered with one (see `HOVER_POINTER_BOX`).
+/// nothing when no look has answered with one (see `publish_pointer_item_box`).
 ///
 /// The hook asks for it where one look has to be told from another: the box a hover's
 /// preview was resolved from is the item that preview is about, so a look that answered
@@ -75,10 +67,7 @@ pub fn pointer_item_holds(x: i32, y: i32) -> bool {
 /// that found another item publishes another box — an item with no preview of its own
 /// being an item all the same (see `read_failure_is_the_same_item`).
 pub fn pointer_item_box() -> Option<(i32, i32, i32, i32)> {
-    HOVER_POINTER_BOX
-        .lock()
-        .ok()
-        .and_then(|published| *published)
+    crate::app::seam::POINTER_ITEM_BOX.get()
 }
 
 /// Whether the pointer is on that item this moment, read from the cursor: the
@@ -197,11 +186,57 @@ impl AvoidRegion {
     }
 }
 
-/// The regions that keep a preview on screen, in screen coordinates, or `None`
+/// The regions that keep a preview on screen, in screen coordinates, or none at all
 /// when the preview on screen is not one that holds the pointer: the journey to a
 /// text preview and the preview itself, or the box a waiting spinner occupies.
-pub(super) static POINTER_HOLD_REGIONS: Lazy<Mutex<Option<Vec<ScreenRegion>>>> =
-    Lazy::new(|| Mutex::new(None));
+///
+/// **Two packed words in the seam rather than a `Vec` behind a lock.** The reader is the
+/// Explorer hook, inside a tick that may take no lock, and the writer is this loop on the
+/// other side of a process boundary, where a `Vec` is a length and a heap the other side
+/// does not share. No caller ever publishes more than two boxes, and each is packed into
+/// its slot whole, so a box read half from one publish and half from the next is not a
+/// thing that can happen (see `crate::app::seam::HOLD_REGION_JOURNEY`).
+pub(super) static POINTER_HOLD_REGIONS: HoldRegions = HoldRegions;
+
+/// The handle over the two published boxes a preview holds the pointer through (see
+/// `POINTER_HOLD_REGIONS`).
+pub(super) struct HoldRegions;
+
+impl HoldRegions {
+    /// Publish these boxes in order, and withdraw every slot past them.
+    pub(super) fn publish(&self, regions: &[ScreenRegion]) {
+        crate::app::seam::HOLD_REGION_JOURNEY.publish(regions.first().copied());
+        crate::app::seam::HOLD_REGION_PREVIEW.publish(regions.get(1).copied());
+    }
+
+    /// Whether one of them holds a point. Half-open, as a window hit-test reads a box.
+    fn holds(&self, x: i32, y: i32) -> bool {
+        [
+            crate::app::seam::HOLD_REGION_JOURNEY.get(),
+            crate::app::seam::HOLD_REGION_PREVIEW.get(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|region| box_holds(x, y, region))
+    }
+
+    /// The boxes as last published, in their slots, so a caller that is only standing in
+    /// for this loop can put them back.
+    #[cfg(test)]
+    pub(super) fn get(&self) -> [Option<ScreenRegion>; 2] {
+        [
+            crate::app::seam::HOLD_REGION_JOURNEY.get(),
+            crate::app::seam::HOLD_REGION_PREVIEW.get(),
+        ]
+    }
+
+    /// Put back the slots `get` handed out, for a test that stood in for this loop.
+    #[cfg(test)]
+    pub(super) fn restore(&self, regions: [Option<ScreenRegion>; 2]) {
+        crate::app::seam::HOLD_REGION_JOURNEY.publish(regions[0]);
+        crate::app::seam::HOLD_REGION_PREVIEW.publish(regions[1]);
+    }
+}
 
 /// Where the preview that is on screen was opened from: the cursor that hovered
 /// the file, or the middle of the focused item. The hold region is built from
@@ -213,37 +248,10 @@ pub(super) static TEXT_SCROLL_ANCHOR: Lazy<Mutex<Option<(i32, i32)>>> =
 /// show, which is the condition for everything above.
 pub(super) static TEXT_PREVIEW_SCROLLABLE: AtomicBool = AtomicBool::new(false);
 
-/// Whether a pointer is using the preview on screen: any text preview in full
-/// mode, which the pointer can rest on to select from. Published beside the region
-/// so the check for it stays an atomic read.
-pub(super) static TEXT_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
-
-/// Whether what is on screen is a wait rather than a preview: the spinner a
-/// document's page is being rendered behind.
-///
-/// The pointer is held by this the way it is held by a text preview, and for a
-/// reason of its own: there is nothing under the spinner to hand the pointer back
-/// to, and a hover that is dismissed while its page is on the way loses the page
-/// it was waiting for — the render finishes, but the hover it was for is gone.
-///
-/// What it holds the pointer *through* is the item the wait is for and not the box
-/// the spinner occupies: the spinner is placed a pixel off the pointer and follows
-/// it, so a box of its own is one the pointer can never leave — which would be a
-/// preview no fast hand could close on its way to somewhere else (see
-/// `preview_pointer_hold`).
-pub(super) static WAITING_PREVIEW_HOLDING: AtomicBool = AtomicBool::new(false);
-
-/// Whether a drag that began on a page the engine is drawing is still down, which is a
-/// question the rectangle on screen cannot answer for itself: the page is under the
-/// pointer only where the drag started, and a drag that orbits the view or pans it is
-/// read long after the pointer has walked off the box the page was drawn in.
-///
-/// The hook keeps it — a press inside the engine's rectangle arms it, and a tick with no
-/// button down at all stands it down, which is the only reading that says the drag is
-/// over. This side only reads it, and through a predicate of its own rather than through
-/// the published regions, because a region published here is a region the wheel hook
-/// reads and the wheel belongs to the page (see `note_engine_page_drag`).
-pub(super) static ENGINE_PAGE_DRAG: AtomicBool = AtomicBool::new(false);
+// `TEXT_PREVIEW_HOLDING`, `WAITING_PREVIEW_HOLDING` and `ENGINE_PAGE_DRAG` are the seam's
+// own facts now, re-exported by this module's parent: the hook leaves the pointer alone on
+// them and the loop publishes them, and while both sides were one process they were three
+// statics here (see `crate::app::seam`).
 
 /// The regions that keep a preview alive: the journey to it, and the preview.
 ///
@@ -406,9 +414,7 @@ pub(super) unsafe fn publish_pointer_hold(hwnd: HWND) {
     let box_at_hand = keep_alive
         .as_ref()
         .and_then(|regions| regions.last().copied());
-    if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
-        *published = keep_alive;
-    }
+    POINTER_HOLD_REGIONS.publish(keep_alive.as_deref().unwrap_or_default());
 
     publish_text_wheel_boxes(
         box_at_hand,
@@ -458,9 +464,7 @@ pub(super) fn clear_pointer_hold() {
     // here rather than by the tick that finds the buttons up so that every caller's own
     // withdrawal is the whole of what a stale latch needs.
     ENGINE_PAGE_DRAG.store(false, Ordering::Release);
-    if let Ok(mut published) = POINTER_HOLD_REGIONS.lock() {
-        *published = None;
-    }
+    POINTER_HOLD_REGIONS.publish(&[]);
     // And the two boxes the wheel hook reads are withdrawn with it, so a wheel turned over where a
     // preview was is the listing's and not a preview's that is no longer there.
     crate::app::seam::TEXT_SCROLL_REGION.publish(None);
@@ -484,7 +488,7 @@ pub(super) fn clear_pointer_hold() {
 /// hook could never close, however fast the hand is moving on to something else. What a
 /// wait is owed is the question the item box answers: a pointer still inside the item the
 /// hover was resolved from is a pointer still waiting for that file, and one outside it
-/// has gone wherever it liked, spinner or no spinner (see `HOVER_POINTER_BOX`).
+/// has gone wherever it liked, spinner or no spinner (see `POINTER_ITEM_BOX`).
 ///
 /// An item box nobody could be read for is *not* a hold here, which is the reverse of the
 /// rule a reveal follows, and for the reason the hold exists: a hold is the hook leaving the
@@ -504,32 +508,20 @@ pub(super) fn clear_pointer_hold() {
 /// arrived, and there would be nothing left to click.
 pub fn preview_pointer_hold(x: i32, y: i32) -> bool {
     if TEXT_PREVIEW_HOLDING.load(Ordering::Acquire) {
-        let Ok(published) = POINTER_HOLD_REGIONS.lock() else {
-            return false;
-        };
-
-        return (*published)
-            .as_ref()
-            .map(|regions| {
-                regions.iter().any(|(left, top, right, bottom)| {
-                    x >= *left && x < *right && y >= *top && y < *bottom
-                })
-            })
-            .unwrap_or(false);
+        return POINTER_HOLD_REGIONS.holds(x, y);
     }
 
-    // Gated on whether the engine has a window up at all, and it is gated first because this is
-    // asked at the pointer's own rate: 66 times a second, from the hook's tick, for a window that
-    // is usually a picture. Behind the gate are a `PathBuf` clone out of what the engine is
-    // holding, a name test and two `GetWindowRect`s — all evaluated as arguments to the call
-    // below, and all thrown away by it whenever no page is running. The gate is the engine's own
-    // answer, which is one atomic load (see `webview_preview::is_showing`).
-    if webview_preview::is_showing()
+    // The page rule, read off the two facts the hook cannot ask for itself: whether the document the
+    // engine is drawing is one that runs, and where the engine's window stands. Both are the preview
+    // side's answers, published once a tick (see `crate::app::seam::ENGINE_PAGE_RUNS`). The gate on
+    // the engine having a window up at all is the first of the two: a page that runs is a page the
+    // engine is drawing, so a run of the rule with nothing showing cannot be reached.
+    if ENGINE_PAGE_RUNS.load(Ordering::Acquire)
         && engine_page_holds(
             x,
             y,
             preview_screen_rect().unwrap_or((0, 0, 0, 0)),
-            webview_preview::showing_path().is_some_and(|path| html_is_engine_drawn(&path)),
+            true,
             ENGINE_PAGE_DRAG.load(Ordering::Acquire),
         )
     {

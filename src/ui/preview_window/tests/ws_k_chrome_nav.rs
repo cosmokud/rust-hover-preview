@@ -386,6 +386,10 @@ fn the_caption_minimize_is_the_pins_chrome_and_not_a_file_under_it() {
         })
         .expect("a pin is up");
 
+    // The tick's own publish, which is what the hook reads: the boxes are the loop's answer and the
+    // press is read on the other side of the seam (see `publish_pin_button_boxes`).
+    publish_pin_button_boxes();
+
     assert!(
         pin_button_covers((left + x, top + y)),
         "the Minimize button is the pin's own chrome"

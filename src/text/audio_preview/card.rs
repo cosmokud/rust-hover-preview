@@ -571,8 +571,73 @@ pub(crate) fn control_box(
     box_of
 }
 
+/// How many boxes a pinned card's controls answer a press in — the four window buttons, the volume,
+/// the two walk buttons, the play button and the bar's own band (see `control_hit_boxes`).
+pub(crate) const CARD_CONTROL_BOXES: usize = 9;
+
+/// The boxes every one of a pinned card's controls answers a press in, in the card's own
+/// coordinates, in the order `control_at` asks them: the four window buttons in the top corner, the
+/// volume, the walk's two, the play button, and the bar's band last.
+///
+/// It is `control_at`'s own arithmetic read out rather than a second layout, and it is here beside
+/// that function for the reason `control_box` is: a box drawn by one arithmetic and hit-tested by
+/// another answers a press in the middle of the facts line. What needs the whole set at once is a
+/// caller that has to answer for a point and has no display's metrics of its own — the hook, which
+/// reads a press on a pinned card as a press on the listing behind it (see
+/// `ui::preview_window::publish_pin_button_boxes`).
+///
+/// The bar is a **band** rather than a box, and a wider one: a seek is answered against the track a
+/// person can see together with the room above and below it a hand needs, so the box the bar is
+/// drawn in would refuse a press `control_at` answers (see `bar_band`).
+///
+/// A card that carries no controls answers with nine nothings, exactly as `control_box` answers one.
+pub(crate) fn control_hit_boxes(
+    width: u32,
+    dpi: u32,
+    options: AudioPreviewOptions,
+) -> [Option<RECT>; CARD_CONTROL_BOXES] {
+    let mut boxes = [None; CARD_CONTROL_BOXES];
+
+    // Safety: a memory DC to measure fonts in, which nothing is drawn through here; it is freed
+    // below.
+    let dc = unsafe { CreateCompatibleDC(None) };
+    if dc.0.is_null() {
+        return boxes;
+    }
+
+    if let Some(metrics) = TextMetrics::new(dc, dpi, options.font_scale_percent) {
+        if let Some(row) = control_boxes(&metrics, width, true) {
+            let band = bar_band(bar_row(&metrics), row.bar.left, row.bar.right, &metrics);
+
+            boxes = [
+                Some(row.always_on_top.hit),
+                Some(row.detach.hit),
+                Some(row.minimize.hit),
+                Some(row.close.hit),
+                row.rect(CardControl::Volume),
+                row.rect(CardControl::Previous),
+                row.rect(CardControl::Play),
+                row.rect(CardControl::Next),
+                Some(RECT {
+                    left: band.left,
+                    top: band.top,
+                    right: band.right,
+                    bottom: band.bottom,
+                }),
+            ];
+        }
+    }
+
+    // Safety: the DC made above and owned here; it is freed once.
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    boxes
+}
+
 /// The facts line of a file: what it holds, in the order a person reads it — what the format
-/// is, how fast it was sampled, how many channels it has, how much room a second of it takes.
+/// is, how fast it was sampled, how many channels it has, and how much room a second of it takes.
 ///
 /// Every part is left out rather than guessed at, and a file no engine named a codec for is
 /// named by the extension it carries, which is what a card for it can honestly say.
