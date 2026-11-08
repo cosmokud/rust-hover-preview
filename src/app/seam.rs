@@ -54,7 +54,7 @@ use std::sync::Mutex;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Memory::{
-    CreateFileMappingW, MapViewOfFile, FILE_MAP_ALL_ACCESS, PAGE_READWRITE,
+    CreateFileMappingW, MapViewOfFile, OpenFileMappingW, FILE_MAP_ALL_ACCESS, PAGE_READWRITE,
 };
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcessId, ResetEvent, SetEvent, WaitForSingleObject,
@@ -102,6 +102,11 @@ pub(crate) struct SeamFacts {
     pin_key_presses: [AtomicU32; PIN_COMMAND_COUNT],
     pin_find_bar_up: AtomicBool,
     pin_up: AtomicBool,
+    pin_end_requested: AtomicBool,
+    pin_menu_dismiss_requested: AtomicBool,
+    pin_menu_pressed: AtomicBool,
+    pin_resumed: AtomicBool,
+    pin_handed_off: AtomicBool,
     pin_bubble_hwnd: AtomicIsize,
     pin_menu_hwnd: AtomicIsize,
     pin_file_in_flight: AtomicU64,
@@ -118,10 +123,7 @@ pub(crate) struct SeamFacts {
     pin_main_down: AtomicU32,
     /// Messages the tray side sends the preview side, and the other way, each with an event of its own
     /// to wake the reader (see `SeamRing`).
-    // `allow`: what reads and writes these is the send and drain the split switches on.
-    #[allow(dead_code)]
     preview_ring: SeamRing,
-    #[allow(dead_code)]
     tray_ring: SeamRing,
 }
 
@@ -145,6 +147,11 @@ impl SeamFacts {
             pin_key_presses: [const { AtomicU32::new(0) }; PIN_COMMAND_COUNT],
             pin_find_bar_up: AtomicBool::new(false),
             pin_up: AtomicBool::new(false),
+            pin_end_requested: AtomicBool::new(false),
+            pin_menu_dismiss_requested: AtomicBool::new(false),
+            pin_menu_pressed: AtomicBool::new(false),
+            pin_resumed: AtomicBool::new(false),
+            pin_handed_off: AtomicBool::new(false),
             pin_bubble_hwnd: AtomicIsize::new(0),
             pin_menu_hwnd: AtomicIsize::new(0),
             pin_file_in_flight: AtomicU64::new(0),
@@ -202,10 +209,6 @@ struct SeamRing {
     slots: [UnsafeCell<SeamMessage>; SEAM_RING_SLOTS],
 }
 
-// `allow`: the rings and the line a lost message is traced with are the transport the split switches
-// on, and nothing in this process reads or writes one yet; what exercises them today is the round trip
-// test at the end of this module.
-#[allow(dead_code)]
 impl SeamRing {
     const fn new() -> Self {
         Self {
@@ -295,13 +298,65 @@ pub(crate) fn the_facts() -> &'static SeamFacts {
 /// its own rather than reading this one's hovers, and nothing is torn down when it ends: the section goes
 /// with the last view of it.
 ///
-/// Called once, at start-up, before the threads that publish are begun. Nothing here is a condition for a
-/// run to work: a section that could not be made leaves `the_facts` on this process's own copy, which is
-/// what every test and every run before this one used.
-pub(crate) fn open_the_seam_section() {
-    if let Some(facts) = a_section_of_this_run() {
-        MAPPED_FACTS.store(facts, Ordering::Release);
+/// Called once, at start-up, before the threads that publish are begun. It answers whether a section was
+/// had: a run without one has nothing a second process could read, and is therefore a run that draws its
+/// own previews (`main` is where that is decided). Nothing else here is a condition for a run to work — a
+/// section that could not be made leaves `the_facts` on this process's own copy, which is what every test
+/// and every run before the split used.
+pub(crate) fn open_the_seam_section() -> bool {
+    // Both events exist before the viewer does, so neither side ever makes one the other has already
+    // waited on: a named event is one object whichever process asked for it first, and all that matters
+    // is that it exists before the first send signals it.
+    let _ = preview_channel_event();
+    let _ = tray_channel_event();
+
+    let Some(facts) = a_section_of_this_run() else {
+        return false;
+    };
+    MAPPED_FACTS.store(facts, Ordering::Release);
+    true
+}
+
+/// Join the section the tray app opened, and publish into that from here on.
+///
+/// **A viewer never makes one.** The name carries the tray's pid, which is the one thing a viewer is told
+/// on its command line (see `the_seam_name`), and a section made here instead of mapped would be a second
+/// copy of the facts with nothing publishing into it: two sides reading boxes that were never written.
+/// Answers whether the tray's section was found; a viewer that cannot find one has nothing to read and
+/// nothing to be told, and stops rather than standing as a process that draws nothing.
+///
+/// Called once, at the start of a viewer, before any thread of it that publishes is begun.
+pub(crate) fn join_the_seam_section(tray: u32) -> bool {
+    THE_RUN.store(tray, Ordering::Release);
+    // The events beside the section, made by the tray before it began this process: asked for here so
+    // that a send which finds nobody waiting yet is still a signal on the object the tray will read.
+    let _ = preview_channel_event();
+    let _ = tray_channel_event();
+
+    let name = the_seam_name("");
+    let size = size_of::<SeamFacts>();
+
+    // Safety: opening by name a section this run's own tray made, for read and write. Nothing is created
+    // here, and a name nothing holds is answered as an error rather than as an empty section.
+    let Ok(mapped) =
+        (unsafe { OpenFileMappingW(FILE_MAP_ALL_ACCESS.0, false, PCWSTR(name.as_ptr())) })
+    else {
+        return false;
+    };
+
+    // Safety: a whole view of the section the handle names.
+    let view = unsafe { MapViewOfFile(mapped, FILE_MAP_ALL_ACCESS, 0, 0, size) };
+    // The view is what holds the section: the mapping's own handle is finished with here.
+    // Safety: a handle this process owns and has finished with, and it is closed once.
+    unsafe {
+        let _ = CloseHandle(mapped);
     }
+    if view.Value.is_null() {
+        return false;
+    }
+
+    MAPPED_FACTS.store(view.Value.cast::<SeamFacts>(), Ordering::Release);
+    true
 }
 
 /// This run's section, mapped and written with the at-rest facts, or `None` where there is none to be had.
@@ -558,6 +613,21 @@ pub(crate) enum PreviewMessage {
     },
 }
 
+/// The pid this run's seam is named for: this process's own for the tray app, the tray's for a viewer it
+/// began. Zero until a run says otherwise, which is what every test and every single-process start is.
+static THE_RUN: AtomicU32 = AtomicU32::new(0);
+
+/// The pid this run's seam is named for (see `THE_RUN`).
+fn the_run_pid() -> u32 {
+    let run = THE_RUN.load(Ordering::Acquire);
+    if run != 0 {
+        return run;
+    }
+
+    // Safety: asks the kernel for this process's own id; nothing is dereferenced.
+    unsafe { GetCurrentProcessId() }
+}
+
 /// The name a piece of this run's seam is known by, as the UTF-16 the Win32 calls take.
 ///
 /// **The run's own pid is in it, and that is the whole of why two runs never meet.** A kernel object's
@@ -567,11 +637,13 @@ pub(crate) enum PreviewMessage {
 /// the one thing a run has and no other run has, and the `Local\` prefix keeps even that within the
 /// session the run was begun in.
 ///
+/// A viewer is the exception that proves it: it is a process of its own whose facts are the tray's, so it
+/// is named for the tray's pid and joins what the tray opened rather than opening anything.
+///
 /// Nothing outlives the run that made it: a section and an event live exactly as long as the last
 /// handle to them, so a run that ends takes its names with it.
 fn the_seam_name(suffix: &str) -> Vec<u16> {
-    // Safety: asks the kernel for this process's own id; nothing is dereferenced.
-    let pid = unsafe { GetCurrentProcessId() };
+    let pid = the_run_pid();
     format!("Local\\rust-hover-preview-seam-{pid}{suffix}")
         .encode_utf16()
         .chain(std::iter::once(0))
@@ -623,8 +695,55 @@ pub(crate) fn wake_preview_loop() {
     }
 }
 
+/// Whether this process's messages cross the rings rather than the channels its own threads share.
+///
+/// Set once, at start-up, by whichever side is one of two — the tray app once its viewer is standing, the
+/// viewer as it begins — and never moved again: there is no road back, and a run that has no viewer takes
+/// the channels from the first moment and keeps them (see `main`). It is where the split is decided, and
+/// it is one atomic load for every send and every wait.
+static THE_RINGS_CARRY_MESSAGES: AtomicBool = AtomicBool::new(false);
+
+/// Make the rings the road the messages take, in both directions, from here on (see
+/// `THE_RINGS_CARRY_MESSAGES`).
+pub(crate) fn carry_messages_in_the_rings() {
+    THE_RINGS_CARRY_MESSAGES.store(true, Ordering::Release);
+}
+
+fn the_rings_carry_messages() -> bool {
+    THE_RINGS_CARRY_MESSAGES.load(Ordering::Acquire)
+}
+
+/// Whether this message is one only a viewer drawing something can answer: a hover, the keyboard's hover,
+/// or a pin taken up from either.
+fn a_show(message: &PreviewMessage) -> bool {
+    matches!(
+        message,
+        PreviewMessage::Show(..) | PreviewMessage::ShowKeyboard(..) | PreviewMessage::Pin { .. }
+    )
+}
+
 /// Send a message to the preview loop and wake it, so that a wait in progress ends at once.
 pub(crate) fn send_preview(message: PreviewMessage) {
+    if the_rings_carry_messages() {
+        // A viewer that has gone is begun again before the show that would have been drawn by nobody is
+        // put in the ring (see `app::viewer`).
+        if a_show(&message) {
+            crate::app::viewer::make_sure_a_viewer_is_standing();
+        }
+
+        // A message the ring has no room for is dropped rather than waited on, and a message a slot
+        // cannot carry is not sent at all (see `SeamRing` and `SeamMessage::of_preview`). The wake is
+        // signalled either way: an armed wait must never be left on a message that was not written.
+        if let Some(slot) = SeamMessage::of_preview(&message) {
+            the_facts().preview_ring.push(slot, "preview");
+        }
+        // Safety: an event of this run's own, signalled: nothing here is dereferenced.
+        unsafe {
+            let _ = SetEvent(preview_channel_event());
+        }
+        return;
+    }
+
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(tx) = sender.as_ref() {
             let _ = tx.send(message);
@@ -639,6 +758,24 @@ pub(crate) fn send_preview(message: PreviewMessage) {
 
 pub(crate) static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
     Lazy::new(|| Mutex::new(None));
+
+/// The next preview message waiting, or `None`: off the ring where the two sides are two processes, off
+/// this process's channel otherwise.
+///
+/// It is asked of the same `Receiver` on both roads, so a caller never learns which one answered it: the
+/// channel's own reader is the loop, and the three places that read it — the loop's drain, its wait, and
+/// the carry a drag is made of — are the whole of what a message is read out of (see
+/// `pin_drag::Carry::drain`).
+pub(crate) fn next_preview_message(rx: &Receiver<PreviewMessage>) -> Option<PreviewMessage> {
+    if the_rings_carry_messages() {
+        return the_facts()
+            .preview_ring
+            .pop()
+            .and_then(|slot| slot.as_preview());
+    }
+
+    rx.try_recv().ok()
+}
 
 /// Wait for a preview message or for window input, whichever comes first.
 ///
@@ -663,7 +800,7 @@ pub(crate) fn wait_preview_channel(
     wait_ms: u64,
 ) -> Option<PreviewMessage> {
     // A message sent just before the wait is answered without waiting at all.
-    if let Ok(message) = rx.try_recv() {
+    if let Some(message) = next_preview_message(rx) {
         return Some(message);
     }
 
@@ -681,7 +818,7 @@ pub(crate) fn wait_preview_channel(
 
     // Woken by input, by a message, or by the timeout. Either way the channel is only ever
     // polled, never blocked on, so the queue is never left unpumped while a drag is going.
-    if let Ok(message) = rx.try_recv() {
+    if let Some(message) = next_preview_message(rx) {
         return Some(message);
     }
 
@@ -915,8 +1052,6 @@ pub(crate) struct SeamMessage {
     numbers: [i64; SEAM_NUMBERS],
 }
 
-// `allow`: what reads and writes these is the send and drain the split switches on.
-#[allow(dead_code)]
 impl SeamMessage {
     /// No message: what a slot holds before anything is written in it.
     const EMPTY: Self = Self {
@@ -1326,6 +1461,19 @@ pub(crate) fn tray_channel_event() -> HANDLE {
 /// The send is signalled after the message is in the channel rather than before, so a wait that is
 /// already armed can only be woken by something there is to read.
 pub(crate) fn send_tray(message: TrayMessage) {
+    if the_rings_carry_messages() {
+        // A notice the ring has no room for is dropped rather than waited on: a preview thread that
+        // blocked on the tray would be a picture that stopped while a menu was open.
+        if let Some(slot) = SeamMessage::of_tray(&message) {
+            the_facts().tray_ring.push(slot, "tray");
+        }
+        // Safety: an event of this run's own, signalled: nothing here is dereferenced.
+        unsafe {
+            let _ = SetEvent(tray_channel_event());
+        }
+        return;
+    }
+
     if let Ok(sender) = TRAY_CHANNEL.sender.lock() {
         let _ = sender.send(message);
         unsafe {
@@ -1336,6 +1484,13 @@ pub(crate) fn send_tray(message: TrayMessage) {
 
 /// Everything the preview side has told the tray side since this was last called, in order.
 pub(crate) fn take_tray_messages() -> Vec<TrayMessage> {
+    if the_rings_carry_messages() {
+        let ring = &the_facts().tray_ring;
+        return std::iter::from_fn(|| ring.pop())
+            .filter_map(|slot| slot.as_tray())
+            .collect();
+    }
+
     let Ok(receiver) = TRAY_CHANNEL.receiver.lock() else {
         return Vec::new();
     };
@@ -1369,6 +1524,37 @@ pub(crate) fn note_a_pin_click(line: String) {
         send_tray(TrayMessage::PinClick(line));
     }
 }
+
+/// A pin was asked to come down, by the tray side (previews were switched off, or the trigger key is
+/// holding them back) or by the resumption of the machine from sleep. What a pin *is* belongs to the
+/// preview side, so this is a request rather than a take-down: the loop ends it on its next tick, through
+/// the same path its own close button takes (see `pin_lifecycle`).
+pub(crate) static PIN_END_REQUESTED: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_end_requested);
+
+/// The pin's menu was asked to come down, by the hook, because a press landed on a window that is not the
+/// pin's own. The pin window is `WS_NOACTIVATE` and holds no capture, so a press on another window never
+/// reaches its procedure and the hook's poll is the only side that sees it. Only the menu goes: the pin is
+/// left standing (see `pin_menu::PIN_MENU_DISMISS_REQUESTED`).
+pub(crate) static PIN_MENU_DISMISS_REQUESTED: Fact<AtomicBool> =
+    Fact::of(|facts| &facts.pin_menu_dismiss_requested);
+
+/// Whether a press was made on the pin's own menu, asked of by the hook once a tick and cleared on read:
+/// the menu's window is the preview side's, and what a press on it means is decided there (see
+/// `pin_menu::take_pin_menu_pressed`).
+pub(crate) static PIN_MENU_PRESSED: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_menu_pressed);
+
+/// Whether a pin has been closed since this was last asked, cleared on read. The hook reads it once per
+/// tick to know that what is under the pointer is a hover it has not answered yet: the file it was on
+/// when the pin went up is not a file the pointer has left and come back to, and treating it as one would
+/// hold the next preview back for the re-hover delay (see `pin_window::PIN_RESUMED`).
+pub(crate) static PIN_RESUMED: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_resumed);
+
+/// Whether the pin that came down did so because its file was handed off to another program rather than
+/// closed by the user. The hook reads it beside `PIN_RESUMED`, and what it answers is the opposite: a pin
+/// that was closed is a pointer on something new, while a pin that was handed off is a hand that has left
+/// for another program, and a preview raised over it is a card the click did not mean (see
+/// `pin_window::PIN_HANDED_OFF`).
+pub(crate) static PIN_HANDED_OFF: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_handed_off);
 
 /// Whether a preview is pinned: a window of its own with a caption, which stays until it is closed,
 /// collapsed into its bubble included.
@@ -1644,10 +1830,11 @@ pub(crate) fn pin_key_message_acts(message: u32) -> bool {
 /// Whether a window belongs to a viewer this tray started: the hover's window, the window a pin stands
 /// in, the host a film is drawn in, a bubble or the menu it carries, a taskbar stand-in, a page's source.
 ///
-/// **A question about whose a window is rather than a list of the ones we made.** A list would be
-/// published by the side that makes windows, and that side makes many of them, so a list is a leak every
-/// time one is made and a set owned by the wrong side besides. The process the window was made in is the
-/// one thing about it that does not change as the preview side changes what it draws.
+/// **It is a question about the process the window was made in**, not a list of the windows we made: a
+/// list would be published by the side that makes windows, and that side makes many of them, so a list is
+/// a leak every time one is made. The process a window belongs to is the one thing about it that does not
+/// change as the preview side changes what it draws, and the registry below is the tray's own record of
+/// which process that is — the viewer it began, or itself where it draws its own previews.
 ///
 /// It is asked of a press the hook reads, so that a click on a pinned window is read out of the listing
 /// that window is standing on rather than taken as a click on something that is not a listing at all (see
@@ -1658,6 +1845,7 @@ pub(crate) fn window_is_a_viewers(window: isize) -> bool {
     }
 
     let mut pid = 0u32;
+    // Safety: asks the window's own thread for the process it was made in; nothing is dereferenced.
     unsafe {
         GetWindowThreadProcessId(HWND(window as *mut core::ffi::c_void), Some(&mut pid));
     }
@@ -1665,13 +1853,28 @@ pub(crate) fn window_is_a_viewers(window: isize) -> bool {
     pid != 0 && pid == the_viewer_process()
 }
 
-/// The process the viewers are, and the whole of what is still a stub about them.
+/// The process this run's previews are drawn in, or `0` where none is recorded.
 ///
-/// A second process is what the step after this one makes, and it is where this answer comes from the
-/// pids this one started. Until then the viewer is this process, which is what the call this replaces
-/// answered: `is_preview_window` compared a handle against the three windows the preview side could be
-/// drawn in, and every one of those is a window of this process.
+/// It is the viewer the tray began. **Nothing recorded is this process's own**, which is what the call this
+/// replaced answered: a run that draws its own previews has no second process to name, and that is every
+/// fallback run and every test.
+///
+/// Written before the threads that ask are begun, and only again when a viewer that died is begun in its
+/// place; read on every press the hook reads, which is why it is one atomic and not a lock.
+static THE_VIEWER: AtomicU32 = AtomicU32::new(0);
+
+/// Note the process this run's previews are drawn in (see `THE_VIEWER`).
+pub(crate) fn note_the_viewer_process(pid: u32) {
+    THE_VIEWER.store(pid, Ordering::Release);
+}
+
 fn the_viewer_process() -> u32 {
+    let noted = THE_VIEWER.load(Ordering::Acquire);
+    if noted != 0 {
+        return noted;
+    }
+
+    // Safety: asks the kernel for this process's own id; nothing is dereferenced.
     unsafe { GetCurrentProcessId() }
 }
 
@@ -1818,6 +2021,18 @@ mod tests {
         let long = PathBuf::from("a".repeat(SEAM_TEXT_UNITS + 1));
 
         assert!(SeamMessage::of_preview(&PreviewMessage::PinUpdate(long)).is_none());
+    }
+
+    #[test]
+    fn a_viewer_that_is_named_is_the_process_a_window_is_judged_by() {
+        note_the_viewer_process(4242);
+        assert_eq!(the_viewer_process(), 4242);
+        assert!(!window_is_a_viewers(0), "no window belongs to anybody");
+
+        // And back to nothing recorded, which is this process's own previews and what every other test
+        // in this binary reads.
+        note_the_viewer_process(0);
+        assert_eq!(the_viewer_process(), std::process::id());
     }
 
     #[test]

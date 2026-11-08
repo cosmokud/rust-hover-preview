@@ -119,6 +119,10 @@ fn main() {
             run_a_detached_window(&mut trace);
             return;
         }
+        app::detach::Startup::Viewer(tray) => {
+            run_a_viewer(&mut trace, tray);
+            return;
+        }
     }
 
     // Bail out before any hook, window, or thread is created when the app is
@@ -131,8 +135,9 @@ fn main() {
 
     // The facts this run publishes are a section of its own from here on (see `app::seam::the_facts`),
     // opened before the threads that publish are begun so that no thread starts on this process's own
-    // copy and finds the facts moved under it.
-    app::seam::open_the_seam_section();
+    // copy and finds the facts moved under it. A run that could not open one has nothing a second
+    // process could read, and draws its own previews below.
+    let the_seam_is_open = app::seam::open_the_seam_section();
     trace.step("seam section");
 
     configure_dpi_awareness();
@@ -196,10 +201,23 @@ fn main() {
     }
     trace.step("com");
 
-    // Start the preview window in a separate thread
-    let preview_handle = std::thread::spawn(|| {
-        ui::preview_window::run_preview_window();
-    });
+    // **Where a preview is drawn, which is the one thing this run decides about itself.** A viewer of its
+    // own where one could be begun — the frame of every preview from here on, in a process that opens the
+    // file on its own thread and owns the media it opened — and this process where it could not, which is
+    // exactly the run this app was before the split: one process, its own channel, its own preview thread.
+    // The road is taken once and never again: there is no switching back, and no second attempt at a viewer
+    // a run has given up on (see `app::viewer`).
+    let two_processes = the_seam_is_open && app::viewer::begin_the_viewer();
+    let mut preview_handle = None;
+    if two_processes {
+        app::seam::carry_messages_in_the_rings();
+    } else {
+        // The fallback road: this process renders, which is exactly the run this app was before the
+        // split (see `app::viewer`).
+        preview_handle = Some(std::thread::spawn(|| {
+            ui::preview_window::run_preview_window();
+        }));
+    }
 
     // Watch config.ini changes off the hover hot path.
     let config_watch_handle = std::thread::spawn(|| watch_the_configuration(false));
@@ -210,8 +228,13 @@ fn main() {
     });
 
     // Watch system-wide wheel input so scrolling Explorer refreshes the preview
-    // of the item that lands under the parked cursor.
-    let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
+    // of the item that lands under the parked cursor. **The viewer's hook where there is a viewer**:
+    // what a notch does — a pin's zoom, a pin's volume, a model's band, a text preview's scroll — is
+    // all of it drawn there, and a hook is a process's own (see `shell::wheel_input`).
+    let mut wheel_handle = None;
+    if !two_processes {
+        wheel_handle = Some(shell::wheel_input::spawn_wheel_watcher());
+    }
 
     // And watch the pin key, which is the one key this app acts on itself: a preview
     // on screen when it is pressed becomes a window of its own. The watch is bound
@@ -254,9 +277,13 @@ fn main() {
     // it makes crosses into Explorer, and a shell that has stopped answering holds one of
     // those crossings for as long as it likes — which is the wait the Office engine's own
     // thread is not given, for the same reason. It goes with the process.
-    let _ = preview_handle.join();
+    if let Some(preview_handle) = preview_handle {
+        let _ = preview_handle.join();
+    }
     drop(hook_handle);
-    let _ = wheel_handle.join();
+    if let Some(wheel_handle) = wheel_handle {
+        let _ = wheel_handle.join();
+    }
     let _ = key_handle.join();
     let _ = config_watch_handle.join();
 
@@ -360,6 +387,81 @@ fn run_a_detached_window(trace: &mut StartupTrace) {
 
     // The engines are this process's own and are ended with it the way the tray app's are ended
     // with it: nothing of this app's should outlive the window it was begun for.
+    engines::office_render::shutdown();
+    engines::webview_preview::shutdown();
+    ui::preview_window::shut_down_the_resident();
+
+    let _ = preview_handle.join();
+    let _ = wheel_handle.join();
+    let _ = config_watch_handle.join();
+
+    unsafe {
+        CoUninitialize();
+    }
+}
+
+/// The run a viewer has: the preview loop, the one low-level hook a preview keeps, and nothing that
+/// watches a listing.
+///
+/// **This is the process every preview of a run is drawn in.** It renders: the layered window, the pins,
+/// the players, the engines, the pages. It does not sense: the Explorer hook, the two key watches, the
+/// tray icon and the sweeps of what earlier runs left behind are the tray app's, and none of them is begun
+/// here. It was begun by that tray app and is told its pid, which is what every name the seam is known by
+/// is made of — the section it maps rather than makes, and the two events its messages are announced on
+/// (see `app::seam` and `app::viewer`).
+fn run_a_viewer(trace: &mut StartupTrace, tray: u32) {
+    // The facts are the tray's from here on. A viewer that cannot find the section has nothing to be told
+    // and nothing to tell, and stops rather than standing as a process that draws nothing: the tray's next
+    // hover begins another one (see `app::viewer`).
+    if !app::seam::join_the_seam_section(tray) {
+        return;
+    }
+    // And the rings are the road from here on: every hover, every pin and every notice crosses there
+    // rather than through a channel of this process's own.
+    app::seam::carry_messages_in_the_rings();
+    trace.step("seam section");
+
+    configure_dpi_awareness();
+    trace.step("dpi awareness");
+
+    // The apartment a page's own measurements are taken in before any file is read: a page is laid out by
+    // this thread, and a PDF page is rendered through Windows.Data.Pdf and a picture of a format this app
+    // has no decoder for is decoded by the codec Windows has (see `run_preview_window`).
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+    trace.step("com");
+
+    let preview_handle = std::thread::spawn(|| {
+        ui::preview_window::run_preview_window();
+    });
+
+    // The configuration is watched here as well, and `detached` is false because the tray's own rows are
+    // *spoken* to this window: the text size and the band arrive as the messages they have always been,
+    // sent by the tray's process rather than by its thread (see `watch_the_configuration`).
+    let config_watch_handle = std::thread::spawn(|| watch_the_configuration(false));
+
+    // **The one watch a viewer keeps.** The wheel over a pinned picture, a pinned page, a model's band and
+    // a page of text is the low-level hook's rather than the window's — a pin is nobody's keyboard until it
+    // is pressed, so Windows hands its notches to Explorer — and that hook is a process's own (see
+    // `shell::wheel_input`). The Explorer's hook and the two key watches are exactly what this process does
+    // not have.
+    let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
+    trace.step("threads");
+
+    // And what ends it: the tray app going, which the job it began this process in answers on its own, and
+    // the process that began it, waited on for the machine where a job could not be joined (see
+    // `app::detach::watch_the_process`).
+    app::detach::watch_the_process(tray);
+
+    while RUNNING.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    shell::wheel_input::request_stop();
+
+    // The engines are this process's own and are ended with it the way the tray app's are ended with it:
+    // nothing of this app's should outlive the window it was begun for.
     engines::office_render::shutdown();
     engines::webview_preview::shutdown();
     ui::preview_window::shut_down_the_resident();

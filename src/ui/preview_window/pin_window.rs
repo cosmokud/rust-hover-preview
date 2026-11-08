@@ -65,7 +65,7 @@
 //! `resize_pinned_window`).
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Mutex, MutexGuard};
 
 use windows::Win32::Foundation::HWND;
@@ -308,7 +308,7 @@ pub(crate) use crate::app::seam::PIN_UP;
 /// has not answered yet: the file it was on when the pin went up is not a file the pointer has
 /// left and come back to, and treating it as one would hold the next preview back for the
 /// re-hover delay. What a pin is over writes it (see `end_pin`).
-static PIN_RESUMED: AtomicBool = AtomicBool::new(false);
+use crate::app::seam::PIN_RESUMED;
 
 /// Whether the pin that came down did so because its file was handed off to another program,
 /// rather than closed by the user: the last two rows of a sound card's menu, and the two buttons
@@ -319,7 +319,7 @@ static PIN_RESUMED: AtomicBool = AtomicBool::new(false);
 /// handed off is a hand that has left for another program — the file under it was never asked
 /// for, and a preview raised over that program is a card the click did not mean. The hook holds
 /// hovers back on it until the pointer moves (see `take_pin_handed_off`).
-static PIN_HANDED_OFF: AtomicBool = AtomicBool::new(false);
+use crate::app::seam::PIN_HANDED_OFF;
 
 /// Whether a preview is pinned, answered without a lock and without waiting for one (see
 /// [`PIN_UP`]).
