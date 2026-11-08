@@ -8,6 +8,8 @@
 
 - **`Ctrl`+`F` over a pinned page seeds the find box with what is selected in the page** — the chord is the one an editor answers the same way: a word double pressed in the page, or a run dragged over, is what the reader is asking to find, so the query comes up holding it rather than the query the bar was last left with, its caret after it and its places already searched and highlighted. The seed is taken as written — two spaces selected are two spaces searched for — and cut at the first line break, because the query is one line. A page with nothing selected is unchanged: the chord brings back the query the bar was left holding, all of it selected.
 
+- **A second `Ctrl`+`F` over a bar that is already up takes the word picked out of the page since** — the reader who double presses another word in the page, or drags over a run of it, and reaches for the chord again is asking for that one, so the query it seeded is replaced and the document searched again rather than the box merely being refocused. A query the reader is still in is untouched: the chord pressed with the field focused selects the whole of it for what is typed next, so the word a page was left selected at is not brought back over what has since been typed.
+
 - **The two switches of a page's find bar say what they are while the pointer rests on them** — `Aa` and `W` are glyphs rather than words, so `Match Case` and `Match Whole Word` are drawn as a small card below the card, centred under the switch the hand is on, in the same panel and shadow a caption button's own name is floated in.
 
 ### Fixed

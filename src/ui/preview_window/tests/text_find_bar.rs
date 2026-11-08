@@ -1356,6 +1356,59 @@ fn a_ctrl_f_over_a_page_with_a_selection_seeds_the_query_with_it() {
     );
 }
 
+/// A second `Ctrl`+`F` over a bar that is already up takes the word the reader has picked out of the
+/// page since, and searches that instead: the shortcut is the box an editor answers this way, and a
+/// reader who selects another word and reaches for the key is asking for that word rather than for the
+/// query the bar is showing (see `text_find::open_text_find` and `the_pages_selection`).
+#[test]
+fn a_second_ctrl_f_takes_the_word_picked_out_of_the_page_since() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    put_page(
+        "alpha one\nbeta two\nbeta three\n",
+        "a-bar-seeded-again.txt",
+        240,
+        80,
+    );
+
+    // A bar already up, holding a query of its own and found in the page.
+    text_find::open_text_find();
+    type_into_the_bar("alpha");
+    assert_eq!(bar_now().1, "alpha", "the bar holds the typed query");
+    assert_eq!(bar_now().2, 1, "which is found once");
+
+    // And the reader picking `beta` out of the page: a press in the page is the page focused, and the
+    // word under the hand is selected, which is what a double press takes (see `begin_text_selection`).
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.selection = Some(text_preview::Selection {
+                anchor: (1, 0),
+                caret: (1, 4),
+            });
+            state.find.focused = FindFocus::Page;
+        }
+    }
+
+    text_find::open_text_find();
+    unsafe { text_find::settle(a_pin_window()) };
+
+    let (open, query, matches, current, ..) = bar_now();
+    assert!(open, "the bar is still the bar it was");
+    assert_eq!(query, "beta", "and the query is the word picked out since");
+    assert_eq!(matches, 2, "which the page is searched for");
+    assert_eq!(
+        focus_now(),
+        Some(FindFocus::Field),
+        "with the query focused"
+    );
+    assert_eq!(caret_now(), (4, 4), "and the caret after the seed");
+    assert!(
+        current.is_some(),
+        "and the reader on a place the new query was found"
+    );
+}
+
 /// The keys that step the matches keep stepping them with the field under the caret: `↓`, `Enter`
 /// and `F3` go on and `↑` comes back, and none of them moves the caret or the query (see
 /// `text_find::key_edit`).
@@ -1575,18 +1628,23 @@ fn a_copy_under_the_bar_is_the_surface_the_reader_was_last_in() {
 
     // And a query the reader is in with nothing selected copies the page: the fallback this has
     // always had, so a selection made in the page is never a copy they asked for and did not get.
-    // `Ctrl`+`F` focuses the query and selects the whole of it, and an arrow then collapses that
-    // selection to a caret — which is a query the reader is in with nothing selected in it.
+    // `Ctrl`+`F` over the page takes the selection the drag just made into the query, and a second
+    // one — pressed with the query focused, where the page's selection is not what is being asked for
+    // — focuses the query and selects the whole of it; an arrow then collapses that selection to a
+    // caret, which is a query the reader is in with nothing selected in it (see `open_text_find`).
     text_find::open_text_find();
     assert_eq!(focus_now(), Some(FindFocus::Field));
+    let seeded = bar_now().1;
+    assert_ne!(seeded, "", "the drag's selection is what the chord seeded");
+    text_find::open_text_find();
     text_find::note(FindEdit::Move(
         text_find_field::Motion::CharacterRight,
         false,
     ));
     unsafe { text_find::settle(a_pin_window()) };
     assert_eq!(
-        (bar_now().1.as_str(), a_copy_now()),
-        ("needle", (None, true)),
+        (bar_now().1, a_copy_now()),
+        (seeded, (None, true)),
         "a query with nothing selected gives the chord back to the page"
     );
 }
