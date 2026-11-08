@@ -233,12 +233,15 @@ impl ViewerFacts {
 }
 
 /// How many viewers one run may have standing at once, which is how many blocks its section holds:
-/// the viewer serving the hovers, and one per pin detached into a window of its own.
+/// the tray's own, the viewer serving the hovers, and one per pin detached into a window of its own.
 ///
-/// shortcut: a run that detaches more windows than this has no block for the eighth of them, and a
-/// viewer with no block stops at its start-up; upgrade to a section sized for a list if a user ever
-/// meets it.
-const SEAM_VIEWERS: usize = 8;
+/// **Sized against the windows a run may leave standing beside the hovers**: `DETACHED_VIEWERS` of them,
+/// each a viewer that keeps the block it claimed for as long as its window stands, plus the tray's block,
+/// plus the serving viewer's, plus two replacements that may be beginning before the notice retiring the
+/// viewer before them is read. A block whose viewer has gone is claimed again by the next one (see
+/// `claim_a_block`), so what this has to hold is the windows a run is standing, not every viewer it ever
+/// began.
+const SEAM_VIEWERS: usize = DETACHED_VIEWERS + 4;
 
 /// The facts of a run: the blocks its viewers stand in, and the two things that are the run's own.
 ///
@@ -334,9 +337,20 @@ impl SeamFacts {
     ///
     /// **A block is claimed once and by one process**, with a compare and swap on its owner: two viewers
     /// begun at the same moment cannot stand in the same one, and the pid a block holds is what every
-    /// other process asks it by (see `facts_of`). `None` is every block stood in, which a viewer's
-    /// start-up is the one thing that can meet: it answers false to `join_the_seam_section` and stops,
-    /// rather than standing as a process with no facts to draw from.
+    /// other process asks it by (see `facts_of`). `None` is every block held by a running process, which
+    /// a viewer's start-up is the one thing that can meet: it answers false to `join_the_seam_section`
+    /// and stops, rather than standing as a process with no facts to draw from.
+    ///
+    /// **A block nothing is standing in is taken, whether or not it was given back.** Nothing releases a
+    /// block when its viewer ends — a detached window's block ends with the window, and a viewer that dies
+    /// ends without telling anyone — so the second pass takes one whose owner is no longer running. That is
+    /// asked of the kernel rather than recorded anywhere (see `engine_processes::is_running`), and only on
+    /// a viewer's start-up path, where the syscall costs nothing an eye can see.
+    ///
+    /// **And it is swapped away from the pid seen in it, not from zero**, which is what keeps a block out
+    /// of two processes' hands: two viewers beginning together both find this block, and the swap fails for
+    /// whichever of them comes second. A pid Windows has since handed to another process answers as
+    /// running, and the block stays claimed — a block lost rather than a block shared.
     fn claim_a_block(&'static self, pid: u32) -> Option<usize> {
         for (at, block) in self.viewers.iter().enumerate() {
             if block
@@ -348,7 +362,35 @@ impl SeamFacts {
             }
         }
 
+        for (at, block) in self.viewers.iter().enumerate() {
+            let gone = block.owner.load(Ordering::Acquire);
+            if gone == 0 || gone == pid || crate::app::engine_processes::is_running(gone) {
+                continue;
+            }
+
+            if block
+                .owner
+                .compare_exchange(gone, pid, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(at);
+            }
+        }
+
         None
+    }
+
+    /// Whether a viewer begun now could stand in the run's facts: a block free, or one whose viewer has
+    /// gone (see `claim_a_block`).
+    ///
+    /// Asked before a pin is detached into a window of its own, which is the one road on this side that
+    /// needs a block the run does not already have: the window keeps the block it stands in, and the tray
+    /// begins a viewer for the hovers that one leaves (see `pin_detach::detach_the_pinned_window`).
+    fn a_block_can_be_had(&'static self) -> bool {
+        self.viewers.iter().any(|block| {
+            let owner = block.owner.load(Ordering::Acquire);
+            owner == 0 || !crate::app::engine_processes::is_running(owner)
+        })
     }
 }
 
@@ -559,6 +601,11 @@ fn claim_a_block() -> Option<&'static ViewerFacts> {
     let at = the_run_facts().claim_a_block(std::process::id())?;
     THE_OWN_BLOCK.store(at, Ordering::Release);
     Some(&the_run_facts().viewers[at])
+}
+
+/// Whether a viewer begun now could stand in the run's facts (see `SeamFacts::a_block_can_be_had`).
+pub(crate) fn a_block_can_be_had() -> bool {
+    the_run_facts().a_block_can_be_had()
 }
 
 /// Count one press of the pin key, in every block the run has standing: what a press means is each
@@ -3201,7 +3248,6 @@ mod tests {
             SEAM_VIEWERS,
             "a block for every viewer it may have"
         );
-        assert_eq!(facts.claim_a_block(4242), None, "and none for one more");
 
         for pid in 1..=SEAM_VIEWERS as u32 {
             assert_eq!(
@@ -3211,9 +3257,155 @@ mod tests {
             );
         }
 
+        // **A pool whose every block a running process holds answers none**, which is what a detach asks
+        // before it flips anything (see `a_block_can_be_had`). The pids claimed above are not this process's
+        // own, so whether any of them is still a process is the machine's answer rather than this test's.
+        for block in facts.viewers.iter() {
+            block.owner.store(std::process::id(), Ordering::Release);
+        }
+        assert_eq!(facts.claim_a_block(4242), None, "and none for one more");
+        assert!(
+            !facts.a_block_can_be_had(),
+            "and no detach it would leave a viewer owing"
+        );
+
         for block in facts.viewers.iter() {
             block.owner.store(0, Ordering::Release);
         }
+    }
+
+    /// **A block a viewer walked out of is one the next viewer walks into.** Nothing gives a block back when
+    /// its viewer ends, so without the second pass of `claim_a_block` a run that lost viewers — a window
+    /// detached and closed, a viewer that died — would spend its blocks and then draw nothing at all for the
+    /// rest of its life, every viewer begun after that stopping at its own start-up.
+    ///
+    /// The child here is a viewer's own start and nothing else: it joins, takes a block and stops, which is
+    /// the block a viewer that exits leaves behind. Every block of the run is then marked with that gone pid,
+    /// as a run whose windows have all closed would leave them, and the viewers begun after are ones no free
+    /// block is left for.
+    #[test]
+    fn a_run_keeps_beginning_viewers_past_the_blocks_it_has() {
+        if let Some(tray) = std::env::var(THE_SECOND_PROCESS)
+            .ok()
+            .and_then(|pid| pid.parse().ok())
+        {
+            a_viewer_that_stops_once_it_has_a_block(tray);
+            return;
+        }
+
+        let _the_section_is_mine = the_one_section();
+        let Some(facts) = a_section_of_this_run() else {
+            panic!("a section a viewer can open");
+        };
+        // Safety: a view of this run's own section, and the blocks it holds are this test's to mark.
+        let facts = unsafe { &*facts };
+        for block in facts.viewers.iter() {
+            block.owner.store(0, Ordering::Release);
+        }
+
+        // The tray's own block, claimed as a run's tray claims it at its start-up.
+        assert_eq!(
+            facts.claim_a_block(std::process::id()),
+            Some(0),
+            "the tray stands in the first block of its own"
+        );
+
+        let (first, gone) = a_viewer_stops_after_its_block();
+        assert_eq!(
+            first, 1,
+            "a viewer takes the first block the tray's leaves free"
+        );
+        assert!(
+            !crate::app::engine_processes::is_running(gone),
+            "the viewer that took it has gone"
+        );
+        assert_eq!(
+            facts.viewers[first].owner.load(Ordering::Acquire),
+            gone,
+            "and its pid is still what the block says: no block is ever given back"
+        );
+
+        // Every block the run has left marked by that gone pid, a run whose windows all closed.
+        for block in facts.viewers.iter().skip(1) {
+            block.owner.store(gone, Ordering::Release);
+        }
+        assert!(facts.a_block_can_be_had(), "a block is had again");
+
+        let (second, second_pid) = a_viewer_stops_after_its_block();
+        assert_ne!(second, 0, "a viewer stands in a block the gone one held");
+        assert_eq!(
+            facts.viewers[second].owner.load(Ordering::Acquire),
+            second_pid,
+            "and the block is the one it claimed rather one it was refused"
+        );
+
+        // And the one after it: a run keeps beginning viewers against the blocks it has, not against the
+        // number of viewers it has begun.
+        let (third, third_pid) = a_viewer_stops_after_its_block();
+        assert_ne!(third, 0, "a run keeps beginning viewers past them");
+        assert_eq!(
+            facts.viewers[third].owner.load(Ordering::Acquire),
+            third_pid,
+            "and the block is the one it claimed"
+        );
+
+        for block in facts.viewers.iter() {
+            block.owner.store(0, Ordering::Release);
+        }
+    }
+
+    /// Begin a viewer of this run and answer the block it stood in and its pid: the process stops as soon as
+    /// it has claimed one, so the block it took is the one a viewer that has gone leaves behind (see
+    /// `a_run_keeps_beginning_viewers_past_the_blocks_it_has`).
+    fn a_viewer_stops_after_its_block() -> (usize, u32) {
+        let child = crate::app::engine_processes::hidden_command(
+            std::env::current_exe().expect("this test's own binary"),
+        )
+        .arg(stringify!(
+            a_run_keeps_beginning_viewers_past_the_blocks_it_has
+        ))
+        // The block index said on the child's own stdout rather than through a fact of the section: the
+        // process is gone by the time this side reads it, and what a harness captures is given up by it.
+        .arg("--nocapture")
+        .env(THE_SECOND_PROCESS, std::process::id().to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a second process of this test binary");
+        let pid = child.id();
+
+        let ended = child.wait_with_output().expect("the second process ended");
+        let said = what_it_said(&ended);
+        assert!(ended.status.success(), "the second process held: {said}");
+
+        let at = said
+            .split_whitespace()
+            .skip_while(|word| *word != "block")
+            .nth(1)
+            .and_then(|at| at.parse().ok())
+            .unwrap_or_else(|| panic!("the block it stood in was said: {said}"));
+        assert_ne!(at, NO_BLOCK, "the second process claimed a block: {said}");
+
+        (at, pid)
+    }
+
+    /// The second process: a viewer's own start and then nothing — a viewer that stops the moment it has a
+    /// block, which is what leaves a block a pid that has gone still holds (see `claim_a_block`).
+    fn a_viewer_that_stops_once_it_has_a_block(tray: u32) {
+        let joined = join_the_seam_section(tray);
+        assert!(joined, "the section the tray opened is joined");
+        let at = the_block_it_stands_in().unwrap_or(NO_BLOCK);
+        println!("joined 1 block {at}");
+    }
+
+    /// The place in the section's `viewers` of the block this process stands in, or nothing where it stands
+    /// in none (see `THE_OWN_BLOCK`).
+    fn the_block_it_stands_in() -> Option<usize> {
+        let own = the_facts() as *const ViewerFacts;
+        the_run_facts()
+            .viewers
+            .iter()
+            .position(|block| std::ptr::eq(block, own))
     }
 
     #[test]
