@@ -412,14 +412,13 @@ fn start_the_prober() {
                     continue;
                 }
 
-                let probed = audio_engine::probe_audio_track_briefly(&path);
-                audio_track::remember(
-                    &path,
-                    match probed {
-                        Some(track) => Probed::Track(track),
-                        None => Probed::Nothing,
-                    },
-                );
+                // One ask per file per sweep, and a file nothing could be read from is left
+                // unanswered for the sweep after this one rather than retried here: a folder of
+                // files no probe can read must not become a thread reading them round.
+                let Some(track) = audio_engine::probe_audio_track_briefly(&path) else {
+                    continue;
+                };
+                audio_track::remember(&path, track);
                 PROBED.fetch_add(1, Ordering::AcqRel);
                 DIRTY.store(true, Ordering::Release);
                 wake_preview_loop();

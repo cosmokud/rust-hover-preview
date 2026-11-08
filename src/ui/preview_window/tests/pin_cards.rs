@@ -98,14 +98,14 @@ fn a_remembered_sound(folder: &str) -> PathBuf {
     std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00").expect("a file");
     audio_track::remember(
         &path,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
 
     path
@@ -392,14 +392,14 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
     std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00").expect("a file");
     audio_track::remember(
         &path,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
 
     let options = current_audio_options();
@@ -494,14 +494,14 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
     std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00").expect("a file");
     audio_track::remember(
         &path,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
 
     // The card the hover drew, which is the card a pin inherits until it lays its own out.
