@@ -149,6 +149,74 @@ fn a_wrapped_line_says_which_characters_each_of_its_parts_holds() {
     );
 }
 
+/// **A line's own indentation is drawn, and a find's mark starts on the character it names.**
+///
+/// The whitespace a document line begins with is part of the line: a find, a caret and a press are
+/// all measured in the characters the file holds. A row that began at its first non-space character
+/// put every mark that followed the indent as many characters too far along — a query for `janitor`
+/// in `  janitor a human` marked `nitor a` instead (see `find_all` and `wrap_line`).
+#[test]
+fn a_line_keeps_its_indent_and_a_find_lands_on_the_word_it_names() {
+    let dir = scratch("indented-find");
+    let source = dir.join("indented.txt");
+    fs::write(&source, "  janitor a human\n").expect("a written page");
+
+    let options = options();
+    let plain = render_scrolled(&source, 0, 320, 160, 96, options, None, None).expect("a page");
+    let found = find_all(&source, options, "janitor", false, false);
+    assert_eq!(
+        found.len(),
+        1,
+        "the query is found once, past the indent the line begins with"
+    );
+    let marked = render_scrolled(
+        &source,
+        0,
+        320,
+        160,
+        96,
+        options,
+        None,
+        Some(FindHighlights {
+            matches: found,
+            current: Some(0),
+        }),
+    )
+    .expect("a page with a find on it");
+
+    let line = plain.lines.first().expect("a painted line");
+    assert_eq!(
+        line.runs.first().map(|run| run.text.as_str()),
+        Some("  "),
+        "the indentation is drawn rather than dropped"
+    );
+    let word = line
+        .runs
+        .iter()
+        .find(|run| run.text.starts_with("janitor"))
+        .expect("the word's own run");
+
+    let columns: Vec<i32> = (0..plain.width as i32)
+        .filter(|x| {
+            (line.top..line.top + line.height).any(|y| {
+                frame_pixel(&plain, *x as u32, y as u32)
+                    != frame_pixel(&marked, *x as u32, y as u32)
+            })
+        })
+        .collect();
+    let first = columns.first().copied().expect("the match is marked");
+    let last = columns.last().copied().expect("the match is marked");
+
+    assert_eq!(
+        first, word.x,
+        "the mark begins on the character the search found, not inside the word"
+    );
+    assert!(
+        last < word.x + word.width,
+        "and it ends where the word does rather than running into the text after it"
+    );
+}
+
 /// A copy is taken from the document rather than from the frame: a line too long for the box comes
 /// back whole and unbroken, the two ends are cut to the characters the selection names, and a
 /// selection reaching past the frame reaches past it here too (see `text_of`).
