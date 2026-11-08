@@ -52,9 +52,13 @@ pub(crate) struct PlaylistLayout {
     pub(crate) visible: i32,
     /// Where a row's name begins: past the pad, the stripe the shown row carries and a gap.
     pub(crate) text_left: i32,
-    /// The last column the left half of a row may reach: the clock's own room is taken off the
-    /// width, so a name never runs under the length.
+    /// The last column a row's name may reach: the length is right-aligned in its column and drawn
+    /// narrower than it, so the name is held off the drawn text's own left edge — at the widest
+    /// shape a length is ever drawn as, which is one cut for every row whatever its clock says.
     pub(crate) name_right: i32,
+    /// The last column a row's facts line may reach: the clock's whole column taken off the width,
+    /// which is the edge the note under the name has always kept.
+    pub(crate) facts_right: i32,
     pub(crate) clock_left: i32,
     pub(crate) clock_right: i32,
     /// The scrollbar's own track, left and right, whenever the rows do not all fit.
@@ -102,7 +106,7 @@ fn line_boxes(layout: &PlaylistLayout, row_top: i32, scale: f32) -> (RECT, RECT)
         RECT {
             left: layout.text_left,
             top: top + name_cell,
-            right: layout.name_right.max(layout.text_left),
+            right: layout.facts_right.max(layout.text_left),
             bottom: top + name_cell + facts_cell,
         },
     )
@@ -120,6 +124,7 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let track_margin = text_paint::scaled(TRACK_MARGIN_PIXELS as i32, scale).max(0);
     let clock = text_paint::scaled(CLOCK_PIXELS as i32, scale).max(0);
     let clock_gap = text_paint::scaled(CLOCK_GAP_PIXELS as i32, scale).max(0);
+    let name_gap = text_paint::scaled(NAME_GAP_PIXELS as i32, scale).max(0);
 
     let rows_top = pad.min(height);
     let rows_bottom = (height - pad).max(rows_top);
@@ -142,6 +147,12 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let text_left = pad + stripe + gap;
     let clock_right = (width - margin).max(text_left);
     let clock_left = (clock_right - clock).max(text_left);
+    // The name is cut against the length as it is drawn rather than against the column holding it:
+    // the column is wider than its own text, so a cut on the column's left edge leaves a gap no
+    // clock asked for. Nothing to measure on leaves it there, which overlaps no text either way.
+    let drawn_left = widest_clock(scale).map_or(clock_left, |widest| {
+        clock_origin(clock_right, clock_left, widest)
+    });
 
     PlaylistLayout {
         width,
@@ -150,7 +161,8 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
         rows_bottom,
         visible,
         text_left,
-        name_right: (clock_left - clock_gap).max(text_left),
+        name_right: (drawn_left - name_gap).max(text_left),
+        facts_right: (clock_left - clock_gap).max(text_left),
         clock_left,
         clock_right,
         track: scrolling.then_some((track_left, track_right)),
@@ -531,7 +543,7 @@ pub(crate) fn paint_playlist(
                 // `audio_preview::page`).
                 painter.draw(
                     clock,
-                    (clock_box.right - measured).max(clock_box.left),
+                    clock_origin(clock_box.right, clock_box.left, measured),
                     clock_box,
                     &facts_style,
                     palette.accent,
@@ -598,6 +610,21 @@ fn measure(surface: &DibSurface, style: &text_paint::TextStyle, text: &str, scal
     super::primitives::measure_text(surface, style, text, scale)
 }
 
+/// Where a length is drawn from: its column is a fixed room and the text is set off the right of it,
+/// so the column's own left edge is the furthest a short clock can start and the widest one starts
+/// there.
+pub(crate) fn clock_origin(right: i32, left: i32, measured: i32) -> i32 {
+    (right - measured).max(left)
+}
+
+/// The width the widest length is drawn at, at a band's own scale: what the name column is cut
+/// against (see `CLOCK_REFERENCE`). Nothing where there is no DC to measure on.
+fn widest_clock(scale: f32) -> Option<i32> {
+    let surface = DibSurface::create(1, 1)?;
+
+    Some(measure(&surface, &facts_style(), CLOCK_REFERENCE, scale))
+}
+
 /// The style a row's name is set in: the card's own header level, on the face a caption is set in
 /// — a row is chrome under a card, and the two are one window.
 fn name_style() -> text_paint::TextStyle {
@@ -607,7 +634,7 @@ fn name_style() -> text_paint::TextStyle {
 /// The style a row's facts and its clock are set in: the theme's own body text, at the size one
 /// pixel under it — a facts line is the note under the name rather than a second name, and a pixel
 /// is the whole of the difference a row needs.
-fn facts_style() -> text_paint::TextStyle {
+pub(crate) fn facts_style() -> text_paint::TextStyle {
     styled(FACTS_LEVEL)
 }
 
@@ -690,16 +717,24 @@ const STRIPE_PIXELS: f32 = 3.0;
 
 /// The scrollbar in the band's right margin: how wide its track is, the gap that holds the rows
 /// off it, and how far a row's name may run before the scrollbar's own room is taken off.
-const SCROLLBAR_PIXELS: f32 = 4.0;
+const SCROLLBAR_PIXELS: f32 = 5.0;
 const SCROLLBAR_GAP_PIXELS: f32 = 6.0;
 /// How far the scrollbar's track is held off the window's own right edge: the bar is a mark on that
 /// edge, and a margin wider than a couple of pixels reads as a column the band does not have.
 const TRACK_MARGIN_PIXELS: f32 = 2.0;
 
 /// The clock's column: the room `1:02:03` is set in at the body level, and the gap that holds the
-/// name column off it.
+/// facts line off it.
 const CLOCK_PIXELS: f32 = 56.0;
 const CLOCK_GAP_PIXELS: f32 = 8.0;
+
+/// The widest length a row's clock is ever drawn as, which is what the name column is cut against:
+/// six zeroes are the face's widest figures, so no clock of any length or any hour runs into it.
+const CLOCK_REFERENCE: &str = "0:00:00";
+
+/// How far the name column is held off the left of the drawn length: the column is wider than the
+/// text it holds, so a name held off the column's edge stops short of the ink.
+const NAME_GAP_PIXELS: f32 = 5.0;
 
 /// The face a row is set in: the one Windows writes a window's title in, which is the caption's
 /// own, so a row of a band and the strip above the card read as one window.
