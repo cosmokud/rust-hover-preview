@@ -173,14 +173,14 @@ pub(crate) type ScreenRegion = (i32, i32, i32, i32);
 #[derive(Clone, Copy)]
 pub(crate) struct AvoidRegion {
     /// Where the region is on screen: left, top, right, bottom.
-    pub(super) region: ScreenRegion,
+    pub(crate) region: ScreenRegion,
     /// Whether it is a column of the view rather than the item's own text.
-    pub(super) column: bool,
+    pub(crate) column: bool,
 }
 
 impl AvoidRegion {
     /// The text the item itself draws, which a preview is stepped off in either axis.
-    pub(super) fn text(region: ScreenRegion) -> Self {
+    pub(crate) fn text(region: ScreenRegion) -> Self {
         Self {
             region,
             column: false,
@@ -189,7 +189,7 @@ impl AvoidRegion {
 
     /// A column of the view — a region every row of it draws its text in — which a
     /// preview is stepped off to one of its two sides.
-    pub(super) fn column(region: ScreenRegion) -> Self {
+    pub(crate) fn column(region: ScreenRegion) -> Self {
         Self {
             region,
             column: true,

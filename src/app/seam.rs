@@ -40,7 +40,10 @@
 
 use crate::ui::preview_window::{AvoidRegion, PinPlanned, ScreenRegion};
 use once_cell::sync::Lazy;
+use std::cell::UnsafeCell;
+use std::ffi::OsString;
 use std::ops::Deref;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicIsize, AtomicPtr, AtomicU32, AtomicU64, Ordering,
@@ -109,7 +112,19 @@ pub(crate) struct SeamFacts {
     pin_presses: AtomicU32,
     toggle_presses: AtomicU32,
     pin_main_down: AtomicU32,
+    /// Messages the tray side sends the preview side, and the other way, each with an event of its own
+    /// to wake the reader (see `SeamRing`).
+    // `allow`: what reads and writes these is the send and drain the split switches on.
+    #[allow(dead_code)]
+    preview_ring: SeamRing,
+    #[allow(dead_code)]
+    tray_ring: SeamRing,
 }
+
+// Safety: every field is an atomic or a slot in one of the two rings, and a slot is written only by the
+// sender that claimed it and read only once `filled` names that claim (see `SeamRing::push`). Nothing
+// here is a reference into this process, which is what makes the same type usable as a section.
+unsafe impl Sync for SeamFacts {}
 
 impl SeamFacts {
     /// Every fact at rest: no box published, no pin up, nothing counted.
@@ -139,7 +154,111 @@ impl SeamFacts {
             pin_presses: AtomicU32::new(0),
             toggle_presses: AtomicU32::new(0),
             pin_main_down: AtomicU32::new(0),
+            preview_ring: SeamRing::new(),
+            tray_ring: SeamRing::new(),
         }
+    }
+}
+
+/// How many messages one direction's ring holds, which is how far a sender may be behind before a
+/// message is dropped rather than kept.
+const SEAM_RING_SLOTS: usize = 64;
+
+/// How many UTF-16 units of text a slot carries, which is how long a path it can name (see
+/// `SeamMessage`).
+const SEAM_TEXT_UNITS: usize = 512;
+
+/// How many numbers a slot carries, which is as many as the widest variant writes.
+const SEAM_NUMBERS: usize = 10;
+
+/// One direction's ring of fixed slots: messages claimed in one order and read in that same order.
+///
+/// It is a ring rather than a queue because it lives in a section two processes share, where nothing may
+/// be allocated and no pointer may be handed across: the slots are the storage, and the two counters say
+/// how far each end has got. **A full ring is a message lost, never a wait.** A sender is a low-level
+/// hook callback as often as it is a tick, and a hook held until the other side read would stop every
+/// wheel message on the desktop with it; so a claim that finds no room drops the message and traces the
+/// loss (see `note_a_lost_message`). A ring this size over a pointer-paced hover is a loss that does not
+/// happen.
+///
+/// The senders of a direction are not always one thread — a hover is sent from a hook as well as from
+/// the pointer's own drag — so a slot is claimed with a compare and swap, and the payload is written
+/// after the claim and before the slot is said to be filled. The reader is one thread per direction: the
+/// preview loop for one, the hook loop for the other.
+#[repr(C)]
+struct SeamRing {
+    /// Slots claimed so far, monotonic: the slot a claim takes is `claimed % SEAM_RING_SLOTS`.
+    claimed: AtomicU32,
+    /// Slots read so far, monotonic. `claimed - read` is how full the ring is.
+    read: AtomicU32,
+    /// Per slot, one more than the claim that wrote it, or zero while it holds nothing: a reader that
+    /// finds the number it is waiting for knows the payload under it is whole.
+    filled: [AtomicU32; SEAM_RING_SLOTS],
+    /// The messages themselves, written through a claim rather than through a `&self`.
+    slots: [UnsafeCell<SeamMessage>; SEAM_RING_SLOTS],
+}
+
+// `allow`: the rings and the line a lost message is traced with are the transport the split switches
+// on, and nothing in this process reads or writes one yet; what exercises them today is the round trip
+// test at the end of this module.
+#[allow(dead_code)]
+impl SeamRing {
+    const fn new() -> Self {
+        Self {
+            claimed: AtomicU32::new(0),
+            read: AtomicU32::new(0),
+            filled: [const { AtomicU32::new(0) }; SEAM_RING_SLOTS],
+            slots: [const { UnsafeCell::new(SeamMessage::EMPTY) }; SEAM_RING_SLOTS],
+        }
+    }
+
+    /// Put `message` in the next free slot, or answer `false` where the ring was full (see the type).
+    fn push(&self, message: SeamMessage, direction: &str) -> bool {
+        let mut claimed = self.claimed.load(Ordering::Relaxed);
+        loop {
+            let read = self.read.load(Ordering::Acquire);
+            if claimed.wrapping_sub(read) as usize >= SEAM_RING_SLOTS {
+                note_a_lost_message(direction);
+                return false;
+            }
+
+            match self.claimed.compare_exchange_weak(
+                claimed,
+                claimed.wrapping_add(1),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => claimed = actual,
+            }
+        }
+
+        let slot = claimed as usize % SEAM_RING_SLOTS;
+        // Safety: the claim above is this sender's own, so no other sender writes this slot until the
+        // ring has been read a whole turn past it, and the reader reads it only once `filled` names it.
+        unsafe {
+            self.slots[slot].get().write(message);
+        }
+        // The write is what makes the slot whole: nothing reads it before this names it.
+        // shortcut: after 2^32 messages the claim that fills a slot wraps onto the value a reader reads as
+        // empty; upgrade if one direction of a session ever carries that many.
+        self.filled[slot].store(claimed.wrapping_add(1), Ordering::Release);
+        true
+    }
+
+    /// Take the next message, or `None` where there is nothing to read yet.
+    fn pop(&self) -> Option<SeamMessage> {
+        let read = self.read.load(Ordering::Relaxed);
+        let slot = read as usize % SEAM_RING_SLOTS;
+        if self.filled[slot].load(Ordering::Acquire) != read.wrapping_add(1) {
+            return None;
+        }
+
+        // Safety: `filled` names this claim, so the payload under it is whole, and no sender touches the
+        // slot again until the ring has been read a whole turn past it.
+        let message = unsafe { self.slots[slot].get().read() };
+        self.read.store(read.wrapping_add(1), Ordering::Release);
+        Some(message)
     }
 }
 
@@ -702,6 +821,396 @@ pub(crate) enum TrayMessage {
     PinClick(String),
 }
 
+/// One message as the bytes a ring carries: which message it is, the text it names, and the numbers its
+/// variant carries.
+///
+/// It has a fixed shape because a slot in a shared section does: nothing in it is a pointer, so a message
+/// the tray writes reads the same in the viewer, and nothing in it is allocated, so a message is written
+/// on a hook's own thread without a lock and without a heap. A variant whose payload is not a fixed
+/// number of bytes is not carried at all (see `of_preview`).
+///
+/// **The text is the path a message names, or the line a notice carries**, and it is one field for the
+/// reason a slot is one shape: a line of a click trace is not a path and is short, and a second buffer
+/// would be a second length to keep in step with the first.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SeamMessage {
+    /// Which variant this is, as one of the `TAG_*` constants below.
+    tag: u8,
+    /// `text_len` units of UTF-16: the path a variant names, or the line a notice carries.
+    text: [u16; SEAM_TEXT_UNITS],
+    text_len: u32,
+    /// What the variant carries besides its text, in the order the variant writes its fields.
+    numbers: [i64; SEAM_NUMBERS],
+}
+
+// `allow`: what reads and writes these is the send and drain the split switches on.
+#[allow(dead_code)]
+impl SeamMessage {
+    /// No message: what a slot holds before anything is written in it.
+    const EMPTY: Self = Self {
+        tag: 0,
+        text: [0; SEAM_TEXT_UNITS],
+        text_len: 0,
+        numbers: [0; SEAM_NUMBERS],
+    };
+
+    // What each variant is tagged with. A tag is a number rather than a `repr` enum's discriminant because a
+    // tag read out of a section is a byte this build may not know, and a byte that is not a variant of a
+    // fieldless enum is not a value to hand the compiler.
+    const SHOW: u8 = 1;
+    const SHOW_KEYBOARD: u8 = 2;
+    const HIDE: u8 = 3;
+    const REFRESH: u8 = 4;
+    const REFRESH_TYPES: u8 = 5;
+    const PIN: u8 = 6;
+    const PIN_BOX: u8 = 7;
+    const PIN_UPDATE: u8 = 8;
+    const PIN_PRESS: u8 = 9;
+    const PIN_NO_PICK: u8 = 10;
+    const PIN_CHANGED: u8 = 11;
+    const TRAY_VOLUME: u8 = 12;
+    const TRAY_TEXT_SIZE: u8 = 13;
+    const FORGET_VIDEO_GEOMETRY: u8 = 14;
+    const KEEP_EXTRACTION: u8 = 15;
+    const OFFICE_RENDER_READY: u8 = 16;
+    const VIDEO_PROBED: u8 = 17;
+    const MEASURE_PROBED: u8 = 18;
+    const VIDEO_SUBTITLES_READY: u8 = 19;
+    const MAGICK_READY: u8 = 20;
+    const PEAZIP_READY: u8 = 21;
+    const TOGGLE_PIN_ALWAYS_ON_TOP: u8 = 22;
+    const TOGGLE_PREVIEW_ENABLED: u8 = 23;
+    const PIN_CLICK: u8 = 24;
+
+    /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
+    fn of(tag: u8, numbers: &[i64]) -> Self {
+        let mut carried = [0; SEAM_NUMBERS];
+        // A variant wider than a slot would lose its last numbers here, which is what the round trip of
+        // every variant is a test of.
+        for (into, from) in carried.iter_mut().zip(numbers) {
+            *into = *from;
+        }
+
+        Self {
+            tag,
+            numbers: carried,
+            ..Self::EMPTY
+        }
+    }
+
+    /// Fill in the text the message carries, or answer `None` where it does not fit a slot.
+    ///
+    /// shortcut: a path longer than `SEAM_TEXT_UNITS` units is a message lost rather than a path
+    /// truncated into another file's; upgrade if a user ever meets a path that long.
+    fn with_text(mut self, text: impl Iterator<Item = u16>) -> Option<Self> {
+        for unit in text {
+            let at = self.text_len as usize;
+            if at == SEAM_TEXT_UNITS {
+                return None;
+            }
+
+            self.text[at] = unit;
+            self.text_len += 1;
+        }
+
+        Some(self)
+    }
+
+    /// The text as the path it names, or `None` where it names none.
+    fn path(&self) -> Option<PathBuf> {
+        if self.text_len == 0 {
+            return None;
+        }
+
+        Some(PathBuf::from(OsString::from_wide(
+            &self.text[..self.text_len as usize],
+        )))
+    }
+
+    /// The text as the line a notice carries.
+    fn line(&self) -> String {
+        String::from_utf16_lossy(&self.text[..self.text_len as usize])
+    }
+
+    /// A preview message as the slot it travels in, or `None` for one that is not carried at all.
+    ///
+    /// **A planner's answer is the one that is not carried.** What it holds is a whole playlist and the
+    /// name of a program, and neither is a fixed number of bytes; nothing of it crosses either, because
+    /// the question is asked of the planner by the preview side and answered on it (see `PinPlanned`).
+    fn of_preview(message: &PreviewMessage) -> Option<Self> {
+        match message {
+            PreviewMessage::Show(path, x, y, region) => {
+                let column = a_flag(region.is_some_and(|region| region.column));
+                let (left, top, right, bottom) = a_box(region.map(|region| region.region));
+                Self::of(
+                    Self::SHOW,
+                    &[
+                        *x as i64,
+                        *y as i64,
+                        a_flag(region.is_some()),
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        column,
+                    ],
+                )
+                .with_text(path.as_os_str().encode_wide())
+            }
+            PreviewMessage::ShowKeyboard(path, x, y, width, height, region, row) => {
+                let (left, top, right, bottom) = a_box(*region);
+                Self::of(
+                    Self::SHOW_KEYBOARD,
+                    &[
+                        *x as i64,
+                        *y as i64,
+                        *width as i64,
+                        *height as i64,
+                        a_flag(region.is_some()),
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        a_flag(*row),
+                    ],
+                )
+                .with_text(path.as_os_str().encode_wide())
+            }
+            PreviewMessage::Hide => Some(Self::of(Self::HIDE, &[])),
+            PreviewMessage::Refresh => Some(Self::of(Self::REFRESH, &[])),
+            PreviewMessage::RefreshTypes => Some(Self::of(Self::REFRESH_TYPES, &[])),
+            PreviewMessage::Pin {
+                path,
+                rect,
+                arriving,
+            } => {
+                let (left, top, right, bottom) = a_box(Some(*rect));
+                Self::of(Self::PIN, &[left, top, right, bottom, a_flag(*arriving)])
+                    .with_text(path.as_os_str().encode_wide())
+            }
+            PreviewMessage::PinBox(rect) => {
+                let (left, top, right, bottom) = a_box(Some(*rect));
+                Some(Self::of(Self::PIN_BOX, &[left, top, right, bottom]))
+            }
+            PreviewMessage::PinUpdate(path) => {
+                Self::of(Self::PIN_UPDATE, &[]).with_text(path.as_os_str().encode_wide())
+            }
+            PreviewMessage::PinPress { window } => {
+                Some(Self::of(Self::PIN_PRESS, &[*window as i64]))
+            }
+            PreviewMessage::PinNoPick { window } => {
+                Some(Self::of(Self::PIN_NO_PICK, &[*window as i64]))
+            }
+            PreviewMessage::PinChanged => Some(Self::of(Self::PIN_CHANGED, &[])),
+            PreviewMessage::TrayVolume { audio } => {
+                Some(Self::of(Self::TRAY_VOLUME, &[a_flag(*audio)]))
+            }
+            PreviewMessage::TrayTextSize { percent } => {
+                Some(Self::of(Self::TRAY_TEXT_SIZE, &[*percent as i64]))
+            }
+            PreviewMessage::ForgetVideoGeometry => Some(Self::of(Self::FORGET_VIDEO_GEOMETRY, &[])),
+            PreviewMessage::KeepExtraction { path } => {
+                let numbers = [a_flag(path.is_some())];
+                match path {
+                    Some(path) => Self::of(Self::KEEP_EXTRACTION, &numbers)
+                        .with_text(path.as_os_str().encode_wide()),
+                    None => Some(Self::of(Self::KEEP_EXTRACTION, &numbers)),
+                }
+            }
+            PreviewMessage::OfficeRenderReady {
+                path,
+                generation,
+                ok,
+            } => Self::of(
+                Self::OFFICE_RENDER_READY,
+                &[*generation as i64, a_flag(*ok)],
+            )
+            .with_text(path.as_os_str().encode_wide()),
+            PreviewMessage::VideoProbed { path, generation } => {
+                Self::of(Self::VIDEO_PROBED, &[*generation as i64])
+                    .with_text(path.as_os_str().encode_wide())
+            }
+            PreviewMessage::MeasureProbed { path, size } => {
+                let (width, height) =
+                    size.map_or((0, 0), |(width, height)| (width as i64, height as i64));
+                Self::of(
+                    Self::MEASURE_PROBED,
+                    &[a_flag(size.is_some()), width, height],
+                )
+                .with_text(path.as_os_str().encode_wide())
+            }
+            PreviewMessage::PinAnswered(_) => None,
+            PreviewMessage::VideoSubtitlesReady(path) => {
+                Self::of(Self::VIDEO_SUBTITLES_READY, &[]).with_text(path.as_os_str().encode_wide())
+            }
+            PreviewMessage::MagickReady {
+                path,
+                generation,
+                ok,
+            } => Self::of(Self::MAGICK_READY, &[*generation as i64, a_flag(*ok)])
+                .with_text(path.as_os_str().encode_wide()),
+            PreviewMessage::PeazipReady {
+                path,
+                generation,
+                ok,
+            } => Self::of(Self::PEAZIP_READY, &[*generation as i64, a_flag(*ok)])
+                .with_text(path.as_os_str().encode_wide()),
+        }
+    }
+
+    /// A tray message as the slot it travels in.
+    fn of_tray(message: &TrayMessage) -> Option<Self> {
+        match message {
+            TrayMessage::TogglePinAlwaysOnTop => {
+                Some(Self::of(Self::TOGGLE_PIN_ALWAYS_ON_TOP, &[]))
+            }
+            TrayMessage::TogglePreviewEnabled => Some(Self::of(Self::TOGGLE_PREVIEW_ENABLED, &[])),
+            TrayMessage::PinClick(line) => {
+                Self::of(Self::PIN_CLICK, &[]).with_text(line.encode_utf16())
+            }
+        }
+    }
+
+    /// The preview message this slot carries, or `None` where it carries none of them.
+    ///
+    /// The `_` arm is the tag of a message the other way, or a byte this build does not know. Losing that
+    /// message is better than reading another one out of it: the tag is the only thing a slot says about
+    /// itself, and a slot is not a thing to trust a variant out of.
+    fn as_preview(self) -> Option<PreviewMessage> {
+        let numbers = &self.numbers;
+        Some(match self.tag {
+            Self::SHOW => {
+                let region = (numbers[2] != 0).then(|| {
+                    let region = box_of(numbers, 3);
+                    if numbers[7] != 0 {
+                        AvoidRegion::column(region)
+                    } else {
+                        AvoidRegion::text(region)
+                    }
+                });
+                PreviewMessage::Show(self.path()?, numbers[0] as i32, numbers[1] as i32, region)
+            }
+            Self::SHOW_KEYBOARD => PreviewMessage::ShowKeyboard(
+                self.path()?,
+                numbers[0] as i32,
+                numbers[1] as i32,
+                numbers[2] as i32,
+                numbers[3] as i32,
+                (numbers[4] != 0).then(|| box_of(numbers, 5)),
+                numbers[9] != 0,
+            ),
+            Self::HIDE => PreviewMessage::Hide,
+            Self::REFRESH => PreviewMessage::Refresh,
+            Self::REFRESH_TYPES => PreviewMessage::RefreshTypes,
+            Self::PIN => PreviewMessage::Pin {
+                path: self.path()?,
+                rect: box_of(numbers, 0),
+                arriving: numbers[4] != 0,
+            },
+            Self::PIN_BOX => PreviewMessage::PinBox(box_of(numbers, 0)),
+            Self::PIN_UPDATE => PreviewMessage::PinUpdate(self.path()?),
+            Self::PIN_PRESS => PreviewMessage::PinPress {
+                window: numbers[0] as isize,
+            },
+            Self::PIN_NO_PICK => PreviewMessage::PinNoPick {
+                window: numbers[0] as isize,
+            },
+            Self::PIN_CHANGED => PreviewMessage::PinChanged,
+            Self::TRAY_VOLUME => PreviewMessage::TrayVolume {
+                audio: numbers[0] != 0,
+            },
+            Self::TRAY_TEXT_SIZE => PreviewMessage::TrayTextSize {
+                percent: numbers[0] as u32,
+            },
+            Self::FORGET_VIDEO_GEOMETRY => PreviewMessage::ForgetVideoGeometry,
+            Self::KEEP_EXTRACTION => PreviewMessage::KeepExtraction {
+                path: if numbers[0] == 0 {
+                    None
+                } else {
+                    Some(self.path()?)
+                },
+            },
+            Self::OFFICE_RENDER_READY => PreviewMessage::OfficeRenderReady {
+                path: self.path()?,
+                generation: numbers[0] as u64,
+                ok: numbers[1] != 0,
+            },
+            Self::VIDEO_PROBED => PreviewMessage::VideoProbed {
+                path: self.path()?,
+                generation: numbers[0] as u64,
+            },
+            Self::MEASURE_PROBED => PreviewMessage::MeasureProbed {
+                path: self.path()?,
+                size: (numbers[0] != 0).then(|| (numbers[1] as u32, numbers[2] as u32)),
+            },
+            Self::VIDEO_SUBTITLES_READY => PreviewMessage::VideoSubtitlesReady(self.path()?),
+            Self::MAGICK_READY => PreviewMessage::MagickReady {
+                path: self.path()?,
+                generation: numbers[0] as u64,
+                ok: numbers[1] != 0,
+            },
+            Self::PEAZIP_READY => PreviewMessage::PeazipReady {
+                path: self.path()?,
+                generation: numbers[0] as u64,
+                ok: numbers[1] != 0,
+            },
+            _ => return None,
+        })
+    }
+
+    /// The tray message this slot carries, or `None` where it carries none of them (see `as_preview`).
+    fn as_tray(self) -> Option<TrayMessage> {
+        Some(match self.tag {
+            Self::TOGGLE_PIN_ALWAYS_ON_TOP => TrayMessage::TogglePinAlwaysOnTop,
+            Self::TOGGLE_PREVIEW_ENABLED => TrayMessage::TogglePreviewEnabled,
+            Self::PIN_CLICK => TrayMessage::PinClick(self.line()),
+            _ => return None,
+        })
+    }
+}
+
+/// One for a yes and zero for a no, which is how a slot carries a flag.
+const fn a_flag(flag: bool) -> i64 {
+    if flag {
+        1
+    } else {
+        0
+    }
+}
+
+/// A box as the four numbers a slot carries, or four zeros where there is none.
+fn a_box(region: Option<ScreenRegion>) -> (i64, i64, i64, i64) {
+    region.map_or((0, 0, 0, 0), |(left, top, right, bottom)| {
+        (
+            i64::from(left),
+            i64::from(top),
+            i64::from(right),
+            i64::from(bottom),
+        )
+    })
+}
+
+/// The box four of a slot's numbers are, read from `at`.
+fn box_of(numbers: &[i64], at: usize) -> ScreenRegion {
+    let edge = |at: usize| numbers[at] as i32;
+    (edge(at), edge(at + 1), edge(at + 2), edge(at + 3))
+}
+
+/// Say that a message did not fit the ring it was sent on, on the trace a run asks for when what is under
+/// the seam is being measured.
+///
+/// The line is built only where a run asked for it, and it is written on whatever thread the sender was:
+/// a loss is the exceptional case already, and a lost message reported is a session whose rings are too
+/// small rather than one where a sender should have waited.
+fn note_a_lost_message(direction: &str) {
+    if std::env::var_os("RHP_SEAM_TRACE").is_none() {
+        return;
+    }
+
+    eprintln!("seam: the {direction} ring is full, message dropped");
+}
+
 /// The channel the two, and the one event its sends are announced on.
 ///
 /// Both ends are made here rather than handed in by whoever starts first: the tray side's reader is a
@@ -1112,3 +1621,162 @@ pub(crate) use crate::ui::preview_window::{
     show_preview_keyboard, take_pin_handed_off, take_pin_menu_pressed, take_pin_resumed,
     trim_image_cache, trim_subtitle_cache, update_pinned_preview, PreviewCursorHover,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every preview message a slot carries, with something in every field of each.
+    fn carried_preview_messages() -> Vec<PreviewMessage> {
+        let path = PathBuf::from("listing/film.mkv");
+
+        vec![
+            PreviewMessage::Show(path.clone(), 10, 20, Some(AvoidRegion::text((1, 2, 3, 4)))),
+            PreviewMessage::Show(
+                path.clone(),
+                10,
+                20,
+                Some(AvoidRegion::column((-1, -2, -3, -4))),
+            ),
+            PreviewMessage::Show(path.clone(), 10, 20, None),
+            PreviewMessage::ShowKeyboard(path.clone(), 1, 2, 3, 4, Some((5, 6, 7, 8)), true),
+            PreviewMessage::ShowKeyboard(path.clone(), 1, 2, 3, 4, None, false),
+            PreviewMessage::Hide,
+            PreviewMessage::Refresh,
+            PreviewMessage::RefreshTypes,
+            PreviewMessage::Pin {
+                path: path.clone(),
+                rect: (9, 10, 11, 12),
+                arriving: true,
+            },
+            PreviewMessage::PinBox((13, 14, 15, 16)),
+            PreviewMessage::PinUpdate(path.clone()),
+            PreviewMessage::PinPress { window: 4242 },
+            PreviewMessage::PinNoPick { window: -4242 },
+            PreviewMessage::PinChanged,
+            PreviewMessage::TrayVolume { audio: true },
+            PreviewMessage::TrayTextSize { percent: 175 },
+            PreviewMessage::ForgetVideoGeometry,
+            PreviewMessage::KeepExtraction {
+                path: Some(path.clone()),
+            },
+            PreviewMessage::KeepExtraction { path: None },
+            PreviewMessage::OfficeRenderReady {
+                path: path.clone(),
+                generation: 7,
+                ok: false,
+            },
+            PreviewMessage::VideoProbed {
+                path: path.clone(),
+                generation: 8,
+            },
+            PreviewMessage::MeasureProbed {
+                path: path.clone(),
+                size: Some((1920, 1080)),
+            },
+            PreviewMessage::MeasureProbed {
+                path: path.clone(),
+                size: None,
+            },
+            PreviewMessage::VideoSubtitlesReady(path.clone()),
+            PreviewMessage::MagickReady {
+                path: path.clone(),
+                generation: 9,
+                ok: true,
+            },
+            PreviewMessage::PeazipReady {
+                path: path.clone(),
+                generation: 10,
+                ok: true,
+            },
+        ]
+    }
+
+    /// A message through a slot and back is the message it went in as, compared as a slot again: what a
+    /// conversion drops shows up here as a difference rather than as a preview drawn from less.
+    fn a_preview_round_trip(message: PreviewMessage) {
+        let carried = SeamMessage::of_preview(&message).expect("a message that fits a slot");
+        let back = carried.as_preview().expect("a message back");
+        assert_eq!(SeamMessage::of_preview(&back), Some(carried));
+    }
+
+    #[test]
+    fn every_carried_preview_message_survives_a_slot() {
+        for message in carried_preview_messages() {
+            a_preview_round_trip(message);
+        }
+    }
+
+    #[test]
+    fn every_tray_message_survives_a_slot() {
+        for message in [
+            TrayMessage::TogglePinAlwaysOnTop,
+            TrayMessage::TogglePreviewEnabled,
+            TrayMessage::PinClick("pin: the press named no file".to_owned()),
+        ] {
+            let carried = SeamMessage::of_tray(&message).expect("a notice that fits a slot");
+            let back = carried.as_tray().expect("a notice back");
+            assert_eq!(SeamMessage::of_tray(&back), Some(carried));
+        }
+    }
+
+    #[test]
+    fn a_region_and_the_column_it_is_come_back_as_they_went() {
+        let message = PreviewMessage::Show(
+            PathBuf::from("listing/note.txt"),
+            10,
+            20,
+            Some(AvoidRegion::column((1, 2, 3, 4))),
+        );
+        let back = SeamMessage::of_preview(&message)
+            .expect("a message that fits a slot")
+            .as_preview()
+            .expect("a message back");
+
+        let PreviewMessage::Show(path, x, y, Some(region)) = back else {
+            panic!("a preview of a hovered file, which came with a region");
+        };
+        assert_eq!(path, PathBuf::from("listing/note.txt"));
+        assert_eq!((x, y), (10, 20));
+        assert_eq!(region.region, (1, 2, 3, 4));
+        assert!(region.column);
+    }
+
+    #[test]
+    fn a_path_that_does_not_fit_a_slot_is_a_message_that_is_not_carried() {
+        let long = PathBuf::from("a".repeat(SEAM_TEXT_UNITS + 1));
+
+        assert!(SeamMessage::of_preview(&PreviewMessage::PinUpdate(long)).is_none());
+    }
+
+    #[test]
+    fn a_ring_keeps_its_order_and_drops_what_it_cannot_hold() {
+        let ring = SeamRing::new();
+        assert_eq!(ring.pop(), None);
+
+        for press in 0..SEAM_RING_SLOTS as i64 {
+            assert!(ring.push(SeamMessage::of(SeamMessage::HIDE, &[press]), "test"));
+        }
+        assert!(
+            !ring.push(SeamMessage::of(SeamMessage::HIDE, &[]), "test"),
+            "a full ring keeps nothing"
+        );
+
+        for press in 0..SEAM_RING_SLOTS as i64 {
+            let message = ring.pop().expect("a message that was pushed");
+            assert_eq!(message.numbers[0], press);
+        }
+        assert_eq!(ring.pop(), None);
+    }
+
+    #[test]
+    fn a_ring_wraps_onto_its_first_slots() {
+        let ring = SeamRing::new();
+
+        for press in 0..(SEAM_RING_SLOTS as i64 * 3) {
+            assert!(ring.push(SeamMessage::of(SeamMessage::HIDE, &[press]), "test"));
+            let message = ring.pop().expect("the message just pushed");
+            assert_eq!(message.numbers[0], press);
+        }
+    }
+}
