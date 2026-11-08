@@ -33,7 +33,7 @@ picture: the ones this app decodes itself and the ones a codec Windows ships dec
 `heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, a still `webp`, the icon and cursor resources
 `ico`/`icon`/`cur`, the bitmap shapes `dib`/`rle`/`exif`, and every camera raw from `3fr` to
 `x3f`.  Everything an extension provides has to be installed once — the ones a codec Windows ships (`heic`, `heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, `webp`) come from the [Store
-extensions](#optional-enable-heic-avif-jpeg-xl-and-webp-preview-windows-codecs), and the camera
+extensions](#optional-enable-heic-avif-jpeg-xl-webp-camera-raws-preview-windows-codecs), and the camera
 raws from the **Raw Image Extension** beside them — and every other entry of `[image]` needs
 nothing installed. Where a codec is missing, a [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick)
 install develops the picture instead of Windows.
@@ -52,22 +52,22 @@ For video, **mpv is recommended** for performance, hardware acceleration, reliab
 ### Audio
 
 
-| Engine                                                                                                                                   | `config.ini` | Default extensions                                                                                                                                                                                     |
+| Engine | `config.ini` | Default extensions |
 | --- | --- | --- |
-| The media engine Windows 11 ships — FLAC, ALAC, AAC, MP3 and MPEG audio, AMR-NB, WMA, AIFF and WAV are decoded by codecs Windows has | `[audio]`    | aac, aif, aifc, aiff, amr, flac, m4a, m4b, mp2, mp3, mpa, wav, wave, wma |
-| The media engine with the Store's media extension — the Ogg demuxer and Vorbis, which Windows 11 does not always ship | `[audio]` (the same list) | oga, ogg, opus |
+| The media engine Windows 11 ships — FLAC, ALAC, AAC, MP3 and MPEG audio, AMR-NB, WMA, AIFF and WAV are decoded by codecs Windows has | `[audio]` | aac, aif, aifc, aiff, amr, flac, m4a, m4b, mp2, mp3, mpa, wav, wave, wma |
+| The media engine with the [Store's media extension](#optional-enable-ogg-vorbis-and-opus-preview-windows-media-extension) — the Ogg demuxer and Vorbis, which Windows 11 does not always ship | `[audio]` (the same list) | oga, ogg, opus |
 | [FFmpeg](#optional-enable-video-preview-and-advanced-audio-processing-with-ffmpeg)'s player — nothing Windows ships decodes these | `[audio]` (the same list) | ac3, ape, au, awb, caf, dff, dsf, dts, dtshd, eac3, mka, mpc, ofr, ofs, ra, shn, snd, spx, tak, tta, voc, wv |
 
 `[audio]` is the master list for sounds: it names every file the app treats as audio, and the
 engine is the machine's answer rather than a setting — the media engine Windows ships is asked
 first, and only what it cannot open is handed to
 [FFmpeg](#optional-enable-video-preview-and-advanced-audio-processing-with-ffmpeg)'s player. The
-first row above is what Windows 11 decodes on its own. The second needs the Store's media
-extension installed, or an FFmpeg install where it is not. Nothing in the third row has a Windows
-decoder at all: AC-3, E-AC-3 and DTS are shipped as IEC-61937 *passthrough* converters rather than
-decoders, so they reach a speaker only through a receiver — to hear one inside this app, FFmpeg's
-player is what opens it.
-
+first row above is what Windows 11 decodes on its own. The second needs the [Store's media
+extension](#optional-enable-ogg-vorbis-and-opus-preview-windows-media-extension) installed, or an
+FFmpeg install where it is not. Nothing in the third row has a Windows decoder at all: AC-3,
+E-AC-3 and DTS are shipped as IEC-61937 *passthrough* converters rather than decoders, so they
+reach a speaker only through a receiver — to hear one inside this app, FFmpeg's player is what
+opens it.
 
 ### Text
 
@@ -237,6 +237,23 @@ All are free, official from Microsoft. Windows 11 often has HEIF, AV1, and WebP 
 Which of these a moving file needs is under [Supported Formats](#supported-formats) above.
 
 A `.webp` is the exception: it needs none of them, because the app carries its own libwebp decoder, so WebP previews even on Windows 10.
+
+### Optional: Enable Ogg, Vorbis and Opus Preview (Windows Media Extension)
+
+Windows 11 decodes Opus, but not always the Ogg container it travels in. Without the extension
+below, an `ogg`, `oga` or `opus` file is handed to FFmpeg instead, and shows no preview where
+FFmpeg is not installed.
+
+
+| Audio format | Needs |
+| --- | --- |
+| `ogg`, `oga` (Vorbis, Theora), `opus` | [Web Media Extensions](https://apps.microsoft.com/detail/9N5TDP8VCMHS) |
+
+
+It is free and official from Microsoft. Windows 11 does not always ship it. Installing it takes
+effect the next time the tray's **Components** menu is opened — no restart, nothing to configure.
+
+Which of these a sound needs is under [Supported Formats](#supported-formats) above.
 
 ### Optional: Enable CorelDRAW and Other Documents (LibreOffice)
 
