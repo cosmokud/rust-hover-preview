@@ -1563,7 +1563,15 @@ pub(super) fn hand_the_picture_over(host: HWND) {
         .is_some_and(|held| held.registration != 0 && held.registered == pending.source);
     if already_the_picture {
         if let Some((width, height)) = unsafe { client_size(source) } {
-            let _ = the_source_drew(pending, source, (width.max(1), height.max(1)));
+            // **A source that is already the picture and has drawn is nothing left waiting.** The record
+            // is the wait for the drawn answer, and a source with no second registration to be swapped
+            // for it owes no swap at all: kept, it would answer `the_source_is_taking_the_picture_over`
+            // yes for that very source, and the placement a re-adoption of it makes would be held back
+            // for a handover that never comes (see `adopt_the_source`). An absent record is a source
+            // that drew as far as the host's own show is concerned (see `the_picture_is_composed_in`).
+            if the_source_drew(pending, source, (width.max(1), height.max(1))) {
+                forget_the_pending_source_of(pending.source, pending.process);
+            }
         }
         return;
     }

@@ -6104,6 +6104,24 @@ unsafe fn a_hover_drawn_through_a_thumbnail(
     (host, source, pid)
 }
 
+/// A window of the players' own that the suite puts away when the guard goes out of scope, **the body
+/// of a test panicking included**.
+///
+/// The windows of the suite are owed by the test that made them (see `the_room_to_itself`), and a test
+/// that dies between its make and its own put-away leaves a 1920x1080 window on the desktop for every
+/// window test after it to trip over — the one assertion that failed turns into a run of failures that
+/// have nothing to do with it. This is the same road the test's own end takes and not a second one: what
+/// destroys the window is `put_away_a_window_of_the_suite`, so the ledger the tripwire reads stays
+/// honest.
+struct AWindowOfThePlayersOwn(HWND);
+
+impl Drop for AWindowOfThePlayersOwn {
+    fn drop(&mut self) {
+        // Safety: the window is one the suite holds and this is the call that takes it off the desktop.
+        unsafe { put_away_a_window_of_the_suite(self.0) };
+    }
+}
+
 /// **A film pinned from a hover on the thumbnail road is the same player and the same source.**
 /// The take-up begins nothing, asks the player for no box, and leaves the one registration where it
 /// already is — in the window that was the hover's host and is the pin's (see `pin_film_thumbnail`
@@ -6485,7 +6503,7 @@ fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
     let path = PathBuf::from("a-film.mkv");
     let (host, first, pid) =
         unsafe { a_hover_drawn_through_a_thumbnail(&film, &path, VideoRoute::Ffplay) };
-    let _ = host;
+    let _first = AWindowOfThePlayersOwn(first);
 
     stand_mpv_in(Some(false));
     stand_ffplay_in(Some(true));
@@ -6495,6 +6513,20 @@ fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
     pin_film_thumbnail::clear_the_unregistrations();
     pin_trace::clear_noted();
     let hides = pin_film_host::host_hides_asked();
+
+    // The pass that watches the player, run before the copy lands: the source the hover made is the
+    // picture and has drawn, so the adoption is nothing still waiting to be handed over (see
+    // `pin_film_thumbnail::hand_the_picture_over`). Without it the adoption itself would be waiting
+    // under an assertion that is about the copy.
+    pin_film_thumbnail::hand_the_picture_over(host);
+    assert!(
+        pin_film_thumbnail::the_standing_source_is_the_current_one(),
+        "the source on screen is the picture"
+    );
+    assert!(
+        !pin_film_thumbnail::a_source_is_waiting_to_take_the_picture(),
+        "and it has drawn, so nothing of its own is waiting to be handed over"
+    );
 
     assert!(
         reload_pinned_subtitles(&path),
@@ -6560,7 +6592,6 @@ fn a_late_subtitle_swaps_nothing_and_rides_the_relaunch_the_user_asks_for() {
     mpv_ipc::clear_reads();
     clear_pending_pinned_relaunch();
     pin_trace::clear_noted();
-    unsafe { put_away_a_window_of_the_suite(first) };
 }
 
 /// **A seek is one read of the numbers the frame it lands on is drawn from, and nothing of the picture
