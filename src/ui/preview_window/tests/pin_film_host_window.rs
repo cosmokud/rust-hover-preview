@@ -4889,6 +4889,7 @@ fn a_release_no_window_of_the_pairs_was_sent_ends_a_models_turn() {
     unsafe { show_pinned_window(film.pin_hwnd) };
     let host = pin_film_host::film_host().expect("the pin's host");
     let source = unsafe { a_source_of_the_host(host) };
+    let _source = AWindowOfThePlayersOwn(source);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(media) = current.as_mut() {
             media.media_type = MediaType::Model;
@@ -4938,8 +4939,6 @@ fn a_release_no_window_of_the_pairs_was_sent_ends_a_models_turn() {
         vec![WM_LBUTTONUP],
         "it posts the release the engine was never sent, and lets the band go"
     );
-
-    unsafe { put_away_a_window_of_the_suite(source) };
 }
 
 /// **All three of a scene's buttons are the scene's**: f3d binds the middle press to its pan and the
