@@ -50,7 +50,7 @@ use windows::Win32::Foundation::RECT;
 const FIND_BAR_WIDTH: i32 = 380;
 const FIND_BAR_ROW_HEIGHT: i32 = 22;
 const FIND_BAR_PADDING: f32 = 7.0;
-const FIND_BAR_MARGIN: f32 = 10.0;
+pub(super) const FIND_BAR_MARGIN: f32 = 10.0;
 const FIND_BAR_RADIUS: f32 = 9.0;
 const FIND_BAR_SHADOW: f32 = 2.0;
 /// The room the count keeps at the right end of the query's row, where `current/total` is drawn, at
@@ -202,9 +202,24 @@ pub(crate) fn count_text(current: Option<usize>, total: usize) -> String {
 /// than a page searched for one it holds nine of, and the room is taken out of the field rather than
 /// out of the count's last digits (see `count_text`).
 ///
+/// **The card keeps clear of the page's scrollbar.** A page longer than its frame draws a bar in its
+/// own right margin — the track ends a page padding in from the edge and is a bar's width across (see
+/// `text_preview::layout::scrollbar_geometry`) — and a card laid out against the frame's edge would be
+/// painted over it, hiding the one sign of how much document is left and swallowing the drag that
+/// reaches it. So on a page that scrolls the card's margin is measured from the scrollbar's left edge
+/// rather than from the frame's, which is the same rule the page's own text column follows and keeps
+/// the card clear at every width and every scale the reader resizes to (see `scrollbar_room`).
+///
 /// Every rectangle is in the window's coordinates rather than the page's: the page is the band between
 /// the pin's chrome, and a press arrives in the window's own points (see `text_find::find_bar`).
-pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32, count: &str) -> FindBar {
+pub(crate) fn find_bar_layout(
+    width: i32,
+    height: i32,
+    top: i32,
+    dpi: u32,
+    count: &str,
+    scrollbar: bool,
+) -> FindBar {
     let scale = dpi as f32 / 96.0;
     let margin = text_paint::scaled(FIND_BAR_MARGIN as i32, scale);
     let padding = text_paint::scaled(FIND_BAR_PADDING as i32, scale);
@@ -222,7 +237,7 @@ pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32, count
 
     // The card keeps its margin where the page has room for it and gives it up rather than paint past
     // the page's edge on one that does not.
-    let right = (width - margin).max(1);
+    let right = (width - margin - scrollbar_room(scrollbar, scale)).max(1);
     let panel_width = text_paint::scaled(FIND_BAR_WIDTH, scale)
         .min((right - margin).max(padding * 2 + side))
         .min(right);
@@ -322,6 +337,19 @@ fn tooltip_room(dpi: u32) -> i32 {
 /// The card's text height and the numbers a switch's tooltip is drawn from at one scale: the room it
 /// keeps about its name, the gap it hangs below the card by, its corner radius and the shadow under
 /// it — the four the caption's own tooltip is drawn with (see `paint_tooltip`).
+/// The room the page's scrollbar takes out of the card's right edge, in device pixels: nothing on a
+/// page short enough not to scroll, and on one that does the page's own right margin plus the bar's
+/// width across, so that the card's margin lands against the scrollbar rather than against the frame
+/// (see `text_preview::layout::scrollbar_geometry`). Measuring it here rather than handing in a
+/// rectangle keeps the card's placement and the bar's the same arithmetic at every display scale.
+fn scrollbar_room(scrollbar: bool, scale: f32) -> i32 {
+    if !scrollbar {
+        return 0;
+    }
+    text_paint::scaled(text_paint::PADDING_PIXELS as i32, scale)
+        + text_paint::scaled(text_paint::SCROLLBAR_WIDTH_PIXELS, scale).max(1)
+}
+
 fn tooltip_cell(scale: f32) -> i32 {
     text_paint::scaled(
         text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],

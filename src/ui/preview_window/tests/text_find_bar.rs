@@ -1800,3 +1800,43 @@ fn a_copy_with_nothing_selected_in_the_query_is_the_page_s() {
         "typing moves the caret and selects nothing, so the page is still what is copied"
     );
 }
+
+/// The card is placed on the page the reader has. A page longer than its frame draws its scrollbar in
+/// its own right margin, so a card laid out against the frame's edge would be painted over the one sign
+/// of how much document is left; the bar is laid out clear of it instead (see `find_bar_over` and
+/// `pin_chrome::find_bar_layout`).
+#[test]
+fn the_card_is_laid_out_clear_of_the_pages_scrollbar() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_tall_page_with_two_needles("a-bar-scrollbar.txt");
+    text_find::open_text_find();
+
+    let card = text_find::find_bar().expect("the bar is up").card;
+    let (track_left, page_right) = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.text_state.as_ref())
+                .map(|state| {
+                    (
+                        state.scrollbar.expect("more lines than the box holds"),
+                        state.width,
+                    )
+                })
+        })
+        .map(|(scrollbar, width)| (scrollbar.track.0, width as i32))
+        .expect("a pinned page keeps its scrollbar");
+
+    assert!(
+        card.panel.right <= track_left,
+        "the card ends at or left of the scrollbar's own column"
+    );
+    assert!(
+        card.panel.right < page_right,
+        "which is inside the page's right edge it used to reach"
+    );
+}
