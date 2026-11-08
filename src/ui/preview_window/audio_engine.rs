@@ -321,7 +321,50 @@ pub(super) fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
 /// folder's worth of files to read, and the measure a card waits for on its one file would be the
 /// whole of a list waiting a minute for its facts.
 pub(super) fn probe_audio_track_briefly(path: &Path) -> Option<audio_track::Track> {
-    video_player::audio_probe(path).or_else(|| ffprobe_audio_track(path))
+    video_player::audio_probe(path)
+        .or_else(|| ffprobe_audio_track(path))
+        .map(|track| with_a_bit_rate(track, path))
+}
+
+/// The track with a bit rate filled in where the probe that answered one left it out, since a
+/// card draws no `kbps` fact without one (see `audio_preview::facts_of`).
+///
+/// What a probe states is authoritative and kept as it is. Failing that, the file's own size over
+/// the length the probe stated is the average its container would have stated — the same number,
+/// read off the file rather than off the container. Only a file with no length either is asked
+/// FFmpeg, whose report states the container's average beside the stream's (see
+/// `ffprobe_audio_track`); that ask happens once per file, with the answer the memo holds.
+pub(super) fn with_a_bit_rate(track: audio_track::Track, path: &Path) -> audio_track::Track {
+    if track.bitrate.is_some() {
+        return track;
+    }
+
+    let bitrate = track
+        .duration
+        .and_then(|duration| average_bit_rate(path, duration))
+        .or_else(|| ffprobe_audio_track(path).and_then(|probed| probed.bitrate));
+
+    match bitrate {
+        Some(bitrate) => audio_track::Track {
+            bitrate: Some(bitrate),
+            ..track
+        },
+        None => track,
+    }
+}
+
+/// The rate a file of its own size over `duration` seconds averages, in bits a second — the unit
+/// `Track::bitrate` is stated in by both probes, and the one `bitrate_label` draws.
+///
+/// Nothing where the length is not a length (a probe can state `0`, and a division by it is no
+/// rate at all) and nothing where the file is smaller than a hundredth of a second's worth.
+fn average_bit_rate(path: &Path, duration: f64) -> Option<u32> {
+    let bytes = std::fs::metadata(path).ok()?.len();
+    let bitrate = (bytes as f64 * 8.0 / duration).round();
+
+    (duration > 0.0 && bitrate <= u32::MAX as f64)
+        .then_some(bitrate as u32)
+        .filter(|bitrate| *bitrate > 0)
 }
 
 /// The track a sound is held as, with the length its own frames answer for in place of the
@@ -372,7 +415,10 @@ pub(super) fn ffprobe_audio_track(path: &Path) -> Option<audio_track::Track> {
             "-fflags",
             "+genpts+discardcorrupt+igndts",
             "-show_entries",
-            "format=duration:stream=codec_type,codec_name,sample_rate,channels,bit_rate",
+            // The container's own average, which is the one rate a stream that states none leaves:
+            // it is written after the streams, once the length has been (see
+            // `audio_track_from_report`).
+            "format=duration,bit_rate:stream=codec_type,codec_name,sample_rate,channels,bit_rate",
             "-of",
             "default=noprint_wrappers=1",
         ])
@@ -408,7 +454,11 @@ pub(super) fn audio_track_from_report(report: &str) -> Option<audio_track::Track
     let mut rate: Option<u32> = None;
     let mut channels: Option<u16> = None;
     let mut bitrate: Option<u32> = None;
+    let mut overall: Option<u32> = None;
     let mut duration: Option<f64> = None;
+    // Set by the first line of the file's own entries, which arrive after every stream's: a bit
+    // rate read past this is the container's average and not a stream's.
+    let mut in_file = false;
 
     for line in report.lines() {
         let Some((key, value)) = line.split_once('=') else {
@@ -432,8 +482,12 @@ pub(super) fn audio_track_from_report(report: &str) -> Option<audio_track::Track
             "codec_name" => held_codec = Some(codec_label(value)),
             "sample_rate" if in_audio => rate = value.parse().ok(),
             "channels" if in_audio => channels = value.parse().ok(),
-            "bit_rate" if in_audio => bitrate = value.parse().ok(),
-            "duration" => duration = value.parse().ok(),
+            "bit_rate" if in_audio && !in_file => bitrate = value.parse().ok(),
+            "bit_rate" if in_file => overall = value.parse().ok(),
+            "duration" => {
+                duration = value.parse().ok();
+                in_file = true;
+            }
             _ => {}
         }
     }
@@ -443,7 +497,8 @@ pub(super) fn audio_track_from_report(report: &str) -> Option<audio_track::Track
         codec,
         rate: rate.filter(|rate| *rate > 0),
         channels: channels.filter(|channels| *channels > 0),
-        bitrate: bitrate.filter(|bitrate| *bitrate > 0),
+        // The sound's own stream where it states one, and the file's average where it does not.
+        bitrate: bitrate.or(overall).filter(|bitrate| *bitrate > 0),
         duration: duration.filter(|duration| *duration > 0.0),
     })
 }

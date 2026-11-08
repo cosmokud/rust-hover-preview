@@ -33,6 +33,19 @@ bit_rate=N/A
 duration=358.960000
 ";
 
+/// A file whose sound stream states no rate of its own and whose container
+/// does: the container's entries are written after every stream's and behind
+/// the length, which is the order that tells its rate from a stream's.
+const OPUS_WITHOUT_A_STREAM_RATE: &str = "\
+codec_name=opus
+codec_type=audio
+sample_rate=48000
+channels=2
+bit_rate=N/A
+duration=222.227500
+bit_rate=96000
+";
+
 /// A film's report: the picture stream first and the soundtrack behind it,
 /// which is the same order read from the other end — the sound's own name
 /// arrives ahead of the line that says the stream is the sound.
@@ -98,6 +111,103 @@ fn a_track(codec: &str, duration: f64) -> audio_track::Track {
         bitrate: Some(128_000),
         duration: Some(duration),
     }
+}
+
+/// A rate a container states where its sound stream states none of its own: the file's own
+/// average is the one rate there is, and a card with no rate draws no `kbps` fact at all.
+#[test]
+fn a_rate_the_container_states_is_read_where_the_stream_states_none() {
+    let track = audio_track_from_report(OPUS_WITHOUT_A_STREAM_RATE).expect("a track");
+
+    assert_eq!(
+        track.bitrate,
+        Some(96_000),
+        "the file's own rate is the answer where the stream's is nothing"
+    );
+}
+
+/// And a stream's own rate is drawn where the file states one as well: what the sound is encoded
+/// at is the number the card is about, and the file's average is that plus the container's own.
+#[test]
+fn a_streams_own_rate_is_drawn_rather_than_the_files_average() {
+    let report = "codec_name=ac3\ncodec_type=audio\nsample_rate=48000\nchannels=6\n\
+                  bit_rate=448000\nduration=7331.000000\nbit_rate=12000000\n";
+
+    let track = audio_track_from_report(report).expect("a track");
+
+    assert_eq!(track.bitrate, Some(448_000));
+}
+
+/// A file whose rate the probe left out and whose length it read: the average a card draws is the
+/// file's own size over that length, which is the rate its container would have stated.
+#[test]
+fn a_length_the_probe_read_is_enough_for_the_file_average() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-audio-bitrate");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("no-rate.flac");
+    std::fs::write(&path, vec![0u8; 320_000]).expect("a written file");
+
+    // Twenty seconds of three hundred and twenty thousand bytes, which is a hundred and
+    // twenty-eight kilobits a second.
+    let track = audio_track::Track {
+        bitrate: None,
+        ..a_track("FLAC", 20.0)
+    };
+    let filled = with_a_bit_rate(track, &path);
+
+    assert_eq!(
+        filled.bitrate,
+        Some(128_000),
+        "the size over the length the probe stated, in bits a second"
+    );
+
+    let facts: Vec<String> = audio_preview::facts_of(&filled, &path)
+        .into_iter()
+        .map(|fact| fact.text)
+        .collect();
+    assert!(
+        facts.iter().any(|fact| fact == "128 kbps"),
+        "a card whose probe states no rate still draws one: {facts:?}"
+    );
+
+    // And a rate the probe did state is kept as it is, whatever the file's size says.
+    let stated = with_a_bit_rate(a_track("FLAC", 20.0), &path);
+    assert_eq!(stated.bitrate, Some(128_000), "the probe's own answer");
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// A file nothing states a rate for and nothing states a length for draws no rate at all: a size
+/// on its own is no rate, and a zero would be a rate the file does not have.
+#[test]
+fn a_file_with_no_rate_and_no_length_draws_no_rate() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-audio-bitrate-none");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let path = folder.join("junk.mp3");
+    std::fs::write(&path, b"\0\0\0\x18ftypM4A ").expect("a written file");
+
+    let track = audio_track::Track {
+        bitrate: None,
+        duration: None,
+        ..a_track("MP3", 180.0)
+    };
+    let filled = with_a_bit_rate(track, &path);
+
+    assert_eq!(
+        filled.bitrate, None,
+        "a length nothing read leaves the size unusable, and FFmpeg has no sound to answer for"
+    );
+
+    let facts: Vec<String> = audio_preview::facts_of(&filled, &path)
+        .into_iter()
+        .map(|fact| fact.text)
+        .collect();
+    assert!(
+        !facts.iter().any(|fact| fact.contains("bps")),
+        "nothing is not zero: {facts:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
 }
 
 /// A raw AAC stream's length is the one thing neither engine can read off the file — both read an
