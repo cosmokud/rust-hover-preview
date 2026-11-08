@@ -11,14 +11,17 @@ use super::*;
 fn three_rows() -> Vec<MenuRow> {
     vec![
         MenuRow {
+            disabled: false,
             label: "Shuffle".to_string(),
             mark: MenuMark::Check(true),
         },
         MenuRow {
+            disabled: false,
             label: "Loop".to_string(),
             mark: MenuMark::Check(false),
         },
         MenuRow {
+            disabled: false,
             label: "Seek".to_string(),
             mark: MenuMark::Door,
         },
@@ -31,14 +34,17 @@ fn three_rows() -> Vec<MenuRow> {
 fn card_rows() -> Vec<MenuRow> {
     vec![
         MenuRow {
+            disabled: false,
             label: "End of File".to_string(),
             mark: MenuMark::Door,
         },
         MenuRow {
+            disabled: false,
             label: "Shuffle".to_string(),
             mark: MenuMark::Check(true),
         },
         MenuRow {
+            disabled: false,
             label: "Seek".to_string(),
             mark: MenuMark::Door,
         },
@@ -51,14 +57,17 @@ fn card_rows() -> Vec<MenuRow> {
 fn two_doors() -> Vec<MenuRow> {
     vec![
         MenuRow {
+            disabled: false,
             label: "Jump".to_string(),
             mark: MenuMark::Door,
         },
         MenuRow {
+            disabled: false,
             label: "Shuffle".to_string(),
             mark: MenuMark::Check(true),
         },
         MenuRow {
+            disabled: false,
             label: "Seek".to_string(),
             mark: MenuMark::Door,
         },
@@ -114,24 +123,29 @@ fn the_menu_opens_at_the_point_the_click_landed() {
 fn a_rule_between_two_groups_of_rows_takes_half_a_row() {
     let ruled = vec![
         MenuRow {
+            disabled: false,
             label: "Pause".to_string(),
             mark: MenuMark::None,
         },
         MenuRow {
+            disabled: false,
             label: String::new(),
             mark: MenuMark::Separator,
         },
         MenuRow {
+            disabled: false,
             label: "Seek".to_string(),
             mark: MenuMark::Door,
         },
     ];
     let plain = vec![
         MenuRow {
+            disabled: false,
             label: "Pause".to_string(),
             mark: MenuMark::None,
         },
         MenuRow {
+            disabled: false,
             label: "Seek".to_string(),
             mark: MenuMark::Door,
         },
@@ -224,14 +238,17 @@ fn the_main_menu_is_only_as_wide_as_its_longest_row() {
     // a label no other row comes near.
     let longer_rows = vec![
         MenuRow {
+            disabled: false,
             label: "A Longer Choice Than Any Other".to_string(),
             mark: MenuMark::Check(true),
         },
         MenuRow {
+            disabled: false,
             label: "Loop".to_string(),
             mark: MenuMark::Check(false),
         },
         MenuRow {
+            disabled: false,
             label: "Seek".to_string(),
             mark: MenuMark::None,
         },
@@ -311,14 +328,17 @@ fn the_main_menu_panel_is_the_longest_row_plus_the_marks_and_the_rooms() {
 fn a_menu_of_one_character_rows_does_not_collapse_below_the_floor() {
     let rows = vec![
         MenuRow {
+            disabled: false,
             label: "I".to_string(),
             mark: MenuMark::Check(true),
         },
         MenuRow {
+            disabled: false,
             label: "O".to_string(),
             mark: MenuMark::Check(false),
         },
         MenuRow {
+            disabled: false,
             label: "S".to_string(),
             mark: MenuMark::None,
         },
@@ -432,6 +452,7 @@ fn both_panels_stay_painted_inside_a_window_narrower_than_they_are() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        number: [209, 154, 102],
         dark: true,
     };
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
@@ -512,24 +533,133 @@ fn both_panels_stay_painted_inside_a_window_narrower_than_they_are() {
     );
 }
 
+/// A row the window is not offering is the panel's own text given up toward the panel, mark and
+/// all, and it is the one row the panel is painted with nothing under: a hand over it is a hand over
+/// a row that is not one, and a wash would be the panel saying it is (see `MenuRow::disabled`).
+///
+/// The comparison is made on whole panels rather than on one ink at a time: a row painted faded with
+/// its band still washed would be a row that reads as a row that answers, which is the one thing the
+/// ink alone cannot undo.
+#[test]
+fn a_row_the_window_is_not_offering_is_faded_and_washed_by_nothing() {
+    let (width, height) = (240i32, 160i32);
+    let palette = ChromePalette {
+        background: [30, 34, 42],
+        foreground: [198, 202, 210],
+        accent: [86, 182, 194],
+        number: [209, 154, 102],
+        dark: true,
+    };
+    let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
+
+    // Two rows of the panel, the second of them the hand-off: a rule above them keeps the panel's
+    // own geometry out of the comparison, and a check on the second says the mark is faded with the
+    // label rather than instead of it.
+    let rows = |disabled: bool| {
+        vec![
+            MenuRow {
+                disabled: false,
+                label: "To Bubble".to_string(),
+                mark: MenuMark::None,
+            },
+            MenuRow {
+                disabled,
+                label: "Detach Window".to_string(),
+                mark: MenuMark::Check(true),
+            },
+        ]
+    };
+    let hovered_rows = rows(true);
+    let menu = menu_popup_from_point((40, 30), width, height, 96, &hovered_rows);
+
+    let painted = |rows: &[MenuRow], hover: Option<usize>| -> Vec<u8> {
+        let mut buffer = vec![0u8; (width * height * 4) as usize];
+        paint_menu_popup(
+            &mut buffer,
+            width,
+            &palette,
+            &menu,
+            rows,
+            hover,
+            &surface,
+            1.0,
+        );
+        buffer
+    };
+
+    // The band the hand-off row is drawn in, and the colours it is made of: the surface's own order
+    // is blue, green, red, alpha, and a pixel is a colour read backwards out of it.
+    let band = menu.bands[1];
+    let colors = |buffer: &[u8]| -> Vec<[u8; 3]> {
+        let mut seen: Vec<[u8; 3]> = Vec::new();
+        for y in band.top..band.top + band.height {
+            for x in menu.panel.left..menu.panel.right {
+                let at = (y as usize * width as usize + x as usize) * 4;
+                let pixel = [buffer[at + 2], buffer[at + 1], buffer[at]];
+                if !seen.contains(&pixel) {
+                    seen.push(pixel);
+                }
+            }
+        }
+        seen
+    };
+
+    // Nothing under the hand: the row the window offers is drawn in the panel's own ink, and the one
+    // it does not offer in the ink of what a window no longer offers.
+    let resting = painted(&rows(false), None);
+    let offered = colors(&painted(&rows(false), None));
+    let given_up = colors(&painted(&rows(true), None));
+    assert!(
+        offered.contains(&palette.foreground),
+        "a row that answers is drawn in the panel's own text"
+    );
+    assert!(
+        given_up.contains(&palette.faded()),
+        "and one that is not offered in the text given up toward the panel"
+    );
+    assert!(
+        !given_up.contains(&palette.foreground),
+        "with nothing of the ink a row that answers wears left on it"
+    );
+
+    // A hand on the row the window offers washes it, and the same hand on the one it does not offer
+    // changes nothing at all: the two panels are the same bytes.
+    assert_ne!(
+        painted(&rows(false), Some(1)),
+        resting,
+        "a hand on a row that answers is a wash under it"
+    );
+    assert_eq!(
+        painted(&rows(true), Some(1)),
+        painted(&rows(true), None),
+        "and a hand on a row that is not one is nothing at all"
+    );
+    // The panel is a picture of two rows either way, so the faded row is a row and not a hole.
+    assert!(given_up.len() > 2, "the row is still drawn: {:?}", given_up);
+}
+
 /// The rows the seek flyout holds: the four seek
 /// choices, in the order the menu lists them in, with
 /// the one in force carrying its disc.
 fn four_choices() -> Vec<MenuRow> {
     vec![
         MenuRow {
+            disabled: false,
             label: "Remember".to_string(),
             mark: MenuMark::None,
         },
         MenuRow {
+            disabled: false,
             label: "From the Start".to_string(),
             mark: MenuMark::None,
         },
         MenuRow {
+            disabled: false,
             label: "From the Middle".to_string(),
             mark: MenuMark::None,
         },
         MenuRow {
+            disabled: false,
             label: "Random".to_string(),
             mark: MenuMark::Bullet,
         },
@@ -543,14 +673,17 @@ fn four_choices() -> Vec<MenuRow> {
 fn longer_flyout_rows() -> Vec<MenuRow> {
     vec![
         MenuRow {
+            disabled: false,
             label: "Remember".to_string(),
             mark: MenuMark::None,
         },
         MenuRow {
+            disabled: false,
             label: "A Choice Longer Than Any Other".to_string(),
             mark: MenuMark::None,
         },
         MenuRow {
+            disabled: false,
             label: "Random".to_string(),
             mark: MenuMark::Bullet,
         },
@@ -1285,23 +1418,28 @@ fn a_check_row_carries_a_check_alone_and_a_choice_its_disc() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        number: [209, 154, 102],
         dark: true,
     };
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
     let rows = vec![
         MenuRow {
+            disabled: false,
             label: "Shuffle".to_string(),
             mark: MenuMark::Check(true),
         },
         MenuRow {
+            disabled: false,
             label: "Loop".to_string(),
             mark: MenuMark::Check(false),
         },
         MenuRow {
+            disabled: false,
             label: "Seek".to_string(),
             mark: MenuMark::None,
         },
         MenuRow {
+            disabled: false,
             label: "From the Start".to_string(),
             mark: MenuMark::Bullet,
         },
@@ -1434,6 +1572,7 @@ fn the_row_under_the_pointer_is_washed() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        number: [209, 154, 102],
         dark: true,
     };
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
@@ -1508,6 +1647,7 @@ fn a_door_row_carries_the_arrow_and_a_row_that_answers_carries_none() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        number: [209, 154, 102],
         dark: true,
     };
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
@@ -1615,6 +1755,7 @@ fn the_flyout_s_panel_is_not_painted_while_the_flyout_is_down() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        number: [209, 154, 102],
         dark: true,
     };
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
@@ -1682,6 +1823,7 @@ fn a_menu_is_painted_as_a_panel_of_the_theme_over_what_is_behind_it() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        number: [209, 154, 102],
         dark: true,
     };
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");

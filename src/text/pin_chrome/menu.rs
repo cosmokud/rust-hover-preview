@@ -190,14 +190,21 @@ pub(crate) enum MenuMark {
     Separator,
 }
 
-/// One row of a card's menu: the label it is written with, and
-/// the mark it carries, which is what says what the row is — a
-/// check for a mode that is on or off, a disc for the seek
-/// that is the one the pin plays by, and a door for a row that
-/// opens another panel rather than answering.
+/// One row of a card's menu: the label it is written with, the mark it carries, which is what says
+/// what the row is — a check for a mode that is on or off, a disc for the seek that is the one the
+/// pin plays by, and a door for a row that opens another panel rather than answering — and whether
+/// it is a row a hand can have at all.
 pub(crate) struct MenuRow {
     pub(crate) label: String,
     pub(crate) mark: MenuMark,
+    /// Whether the row is one the window is still showing and no longer offering, which is drawn
+    /// faded and answered with nothing: a row a menu carries for the shape of the menu's own group
+    /// rather than for what a press can do (see `PinMenuRow::Detach`).
+    ///
+    /// It is asked of the window rather than of the row list, so that a menu whose rows are the same
+    /// rows in the same order keeps answering by the row it was painted with — a faded row is a row
+    /// still there, and nothing about it is a band a hand falls through.
+    pub(crate) disabled: bool,
 }
 
 /// The sizes a menu's panels are placed by, at a display's
@@ -848,8 +855,10 @@ pub(crate) fn paint_menu_popup(
         // The row under the pointer is washed before anything is drawn in
         // it, so that its label, its mark and its arrow are all read over
         // the wash rather than under it. It is the row a hand counts that is
-        // compared (see `MenuRowBand`).
-        let washed = hover == Some(band.answers);
+        // compared (see `MenuRowBand`), and a row the window is not offering is
+        // washed by nothing: a hand on it is a hand over a row that is not a
+        // hand's (see `MenuRow::disabled`).
+        let washed = !row.disabled && hover == Some(band.answers);
         if washed {
             fill_box(
                 buffer,
@@ -864,6 +873,15 @@ pub(crate) fn paint_menu_popup(
                 1.0,
             );
         }
+
+        // What the row is drawn in: the panel's own text, or the text given up toward
+        // the panel for a row the window is not offering — the label, the mark at its
+        // left and the arrow at its right are one ink, because they are one row.
+        let ink = if row.disabled {
+            palette.faded()
+        } else {
+            palette.foreground
+        };
 
         let top = band.top + ((band.height - cell) / 2).max(0);
         let measured = measure_text(surface, &style, &row.label, scale);
@@ -881,7 +899,7 @@ pub(crate) fn paint_menu_popup(
             box_.left,
             box_,
             &style,
-            palette.foreground,
+            ink,
             if washed { wash } else { base },
         );
 
@@ -895,20 +913,14 @@ pub(crate) fn paint_menu_popup(
         match row.mark {
             MenuMark::None => {}
             MenuMark::Check(true) => {
-                paint_menu_check(buffer, width, marker, row_middle, scale, palette.foreground)
+                paint_menu_check(buffer, width, marker, row_middle, scale, ink)
             }
             // A setting that is off carries nothing at all: the check alone
             // says whether it is on, and an empty box is not drawn.
             MenuMark::Check(false) => {}
-            MenuMark::Bullet => fill_disc(
-                buffer,
-                width,
-                marker,
-                row_middle,
-                marker_radius,
-                palette.foreground,
-                1.0,
-            ),
+            MenuMark::Bullet => {
+                fill_disc(buffer, width, marker, row_middle, marker_radius, ink, 1.0)
+            }
             // A door carries nothing in the marker column: what says a door is a door is the
             // arrow at its own right, drawn below.
             MenuMark::Door => {}
@@ -948,7 +960,17 @@ pub(crate) fn paint_menu_popup(
                 ],
                 MenuArrow::None => [(0.0, 0.0); 3],
             };
-            fill_polygon(buffer, width, &points, palette.foreground, 1.0);
+            fill_polygon(
+                buffer,
+                width,
+                &points,
+                if row.disabled {
+                    palette.faded()
+                } else {
+                    palette.foreground
+                },
+                1.0,
+            );
         }
     }
 

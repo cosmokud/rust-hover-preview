@@ -94,6 +94,9 @@ mod audio_guard;
 mod audio_meter;
 mod audio_session;
 mod bubble_stream;
+// A window handed to a process of its own: what that process opens with, and the pin's road out to
+// one (see `crate::app::detach`).
+mod detach_open;
 mod dimensions;
 mod displays;
 mod engine_render;
@@ -118,6 +121,7 @@ mod paint;
 mod pin_bubble;
 mod pin_chrome_layout;
 mod pin_chrome_strips;
+mod pin_detach;
 mod pin_drag;
 mod pin_film_host;
 mod pin_film_thumbnail;
@@ -331,6 +335,12 @@ pub(crate) use pin_drag::publish_pin_media_press;
 pub(crate) use pin_input::pin_volume_keep_alive_try;
 pub(crate) use pin_lifecycle::band_place;
 pub(crate) use pin_lifecycle::pin_always_on_top;
+/// Whether the tray's **Pin Mode → Enable** row has pinning switched on.
+///
+/// Asked by a detached window's own configuration watch, which must not hand itself the message the
+/// tray's row sends for a switch that is about taking pins from a listing rather than about a window
+/// that was taken long ago (see `watch_the_configuration` and `PreviewMessage::PinChanged`).
+pub(crate) use pin_lifecycle::pin_enabled as pin_mode_is_enabled;
 pub(crate) use pin_lifecycle::pin_holds_the_front;
 pub(crate) use pin_lifecycle::PinCommand;
 pub(crate) use pin_menu_window::PIN_MENU_HWND;
@@ -420,6 +430,7 @@ pub(crate) fn note_a_playback_trace_line(line: &str) {
 }
 pub(crate) use pin_window::take_pin_handed_off;
 pub(crate) use requests::is_preview_window;
+pub(crate) use requests::note_the_pin_was_handed_off;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;
 pub(crate) use requests::notify_peazip_ready;

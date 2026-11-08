@@ -21,9 +21,9 @@
 
 use super::page_marks::{READ_ONLY_PILL_GAP_PIXELS, READ_ONLY_PILL_PIXELS};
 use super::primitives::{
-    caption_style, draw_chevron, draw_cross, draw_open_with, draw_open_with_list, draw_pin_top,
-    fill_box, measure_text, stroke_box, surface_pixels, ChromePalette, GLYPH_PIXELS,
-    GLYPH_STROKE_PIXELS,
+    caption_style, draw_chevron, draw_cross, draw_detached_window, draw_open_with,
+    draw_open_with_list, draw_pin_top, fill_box, measure_text, stroke_box, surface_pixels,
+    ChromePalette, GLYPH_PIXELS, GLYPH_STROKE_PIXELS,
 };
 use crate::text::text_paint::{self, DibSurface};
 use std::cell::RefCell;
@@ -88,6 +88,14 @@ pub(crate) enum CaptionButton {
     OpenWithList,
     /// Keep the pinned window on top of all other windows.
     AlwaysOnTop,
+    /// Hand this window to a process of its own, where the file in it is nobody's preview: no
+    /// hover, no listing, nothing this app's Explorer watch can reach (see
+    /// `ui::preview_window::pin_detach` and `app::detach`).
+    ///
+    /// It sits at the seam between the two groups — after the pin's own four, before the window's
+    /// own three — because that is what it is: a road out of *being a pin* rather than one of the
+    /// two things the groups are about.
+    Detach,
     Minimize,
     Maximize,
     Close,
@@ -110,6 +118,16 @@ pub(crate) struct Caption<'a> {
     /// size, so there is no larger box to give it and the button would be one that does nothing
     /// (see `pin_frame`).
     pub(crate) maximizable: bool,
+    /// Whether this pin's **Detach** button is a hand's to have. A window of its own has no more to
+    /// hand over: it *is* the window the pin was made into, so its own detach answers nothing and
+    /// says so in the ink a state of the window's own is read in rather than the ink of a choice it
+    /// still offers (see `app::detach`, `ui::preview_window::pin_detach` and `paint_button`).
+    ///
+    /// It is the same kind of fact as `maximizable` — a button the strip carries and the window has
+    /// no use for — and it is said by the ink rather than by leaving the button out, so that the row
+    /// of buttons does not move under a hand the moment the window it is on became a window of its
+    /// own.
+    pub(crate) detachable: bool,
     pub(crate) always_on_top: bool,
     pub(crate) hovered: Option<CaptionButton>,
     pub(crate) pressed: Option<CaptionButton>,
@@ -131,22 +149,24 @@ pub(crate) struct Caption<'a> {
 /// That order is the order they are given up in, reversed, which is why it is written down once
 /// (see `button_boxes`): close is the last button on the right and the last to go.
 fn caption_button_kinds(maximizable: bool) -> &'static [CaptionButton] {
-    const MAXIMIZABLE_KINDS: [CaptionButton; 8] = [
+    const MAXIMIZABLE_KINDS: [CaptionButton; 9] = [
         CaptionButton::Previous,
         CaptionButton::Next,
         CaptionButton::OpenWith,
         CaptionButton::OpenWithList,
         CaptionButton::AlwaysOnTop,
+        CaptionButton::Detach,
         CaptionButton::Minimize,
         CaptionButton::Maximize,
         CaptionButton::Close,
     ];
-    const KINDS: [CaptionButton; 7] = [
+    const KINDS: [CaptionButton; 8] = [
         CaptionButton::Previous,
         CaptionButton::Next,
         CaptionButton::OpenWith,
         CaptionButton::OpenWithList,
         CaptionButton::AlwaysOnTop,
+        CaptionButton::Detach,
         CaptionButton::Minimize,
         CaptionButton::Close,
     ];
@@ -469,12 +489,14 @@ pub(crate) fn paint_caption(
             maximized: caption.maximized,
             read_only: caption.read_only,
             maximizable: caption.maximizable,
+            detachable: caption.detachable,
             always_on_top: caption.always_on_top,
             hovered: caption.hovered,
             pressed: caption.pressed,
             background: palette.background,
             foreground: palette.foreground,
             accent: palette.accent,
+            number: palette.number,
             dark: palette.dark,
             pixels: painted,
         });
@@ -499,12 +521,14 @@ struct CaptionStrip {
     maximized: bool,
     read_only: bool,
     maximizable: bool,
+    detachable: bool,
     always_on_top: bool,
     hovered: Option<CaptionButton>,
     pressed: Option<CaptionButton>,
     background: [u8; 3],
     foreground: [u8; 3],
     accent: [u8; 3],
+    number: [u8; 3],
     dark: bool,
     pixels: Vec<u8>,
 }
@@ -516,8 +540,9 @@ impl CaptionStrip {
     ///
     /// All four theme colors are compared and not only the two the strip's own pixels are mostly
     /// made of, because the close button is washed with a red that does not come from the theme
-    /// at all and every other wash is the background moved toward the text — which branches on
-    /// `dark`. A key left off the background would hand a dark theme's caption to a light one,
+    /// at all, every other wash is the background moved toward the text — which branches on
+    /// `dark` — and the two buttons that say a state of the window's own are drawn in the numbers'
+    /// ink. A key left off the background would hand a dark theme's caption to a light one,
     /// and one left off the hovered button would leave the wash under a pointer that has since
     /// walked away.
     fn painted_from(
@@ -534,12 +559,14 @@ impl CaptionStrip {
             && self.maximized == caption.maximized
             && self.read_only == caption.read_only
             && self.maximizable == caption.maximizable
+            && self.detachable == caption.detachable
             && self.always_on_top == caption.always_on_top
             && self.hovered == caption.hovered
             && self.pressed == caption.pressed
             && self.background == palette.background
             && self.foreground == palette.foreground
             && self.accent == palette.accent
+            && self.number == palette.number
             && self.dark == palette.dark
     }
 }
@@ -551,10 +578,31 @@ fn paint_button(
     button: CaptionButtonBox,
     scale: f32,
 ) {
-    let pressed = caption.pressed == Some(button.kind);
-    let hovered = caption.hovered == Some(button.kind);
+    // A button the window does not offer anymore is not one a press or a pointer can be on: nothing
+    // in answer to the hand is washed under it, and the ink it keeps is the one that says what became
+    // of the window rather than a choice it is still offering (see `Caption::detachable`).
+    let offered = caption.detachable || button.kind != CaptionButton::Detach;
+    let pressed = offered && caption.pressed == Some(button.kind);
+    let hovered = offered && caption.hovered == Some(button.kind);
 
-    if button.kind == CaptionButton::AlwaysOnTop && caption.always_on_top {
+    // The two buttons that say a state of the window's own rather than a choice it still offers — that
+    // it is kept on top, that it is a window of its own — stand in a wash in every state, because a
+    // button that is saying something about the window is not a bare button waiting for a hand. The ink
+    // they are drawn in is the one those states are read in, and it is the ink the same two buttons wear
+    // on a sound's card rather than the strip's own (see `ChromePalette::number` and
+    // `audio_preview::page`).
+    //
+    // A window of its own is one whose detach has nothing left to hand over, which is the same question
+    // as `Caption::detachable` answered the other way: the mark keeps saying what became of the window,
+    // in the same ink and the same wash as the pin beside it, while a press on it reaches
+    // `pin_detach::detach_the_pinned_window` and is refused there.
+    let wearing_state = match button.kind {
+        CaptionButton::AlwaysOnTop => caption.always_on_top,
+        CaptionButton::Detach => !caption.detachable,
+        _ => false,
+    };
+
+    if wearing_state {
         let wash = if pressed {
             palette.hover(0.18)
         } else if hovered {
@@ -582,14 +630,24 @@ fn paint_button(
         text_paint::fill_rect(surface, button.rect, wash);
     }
 
+    // The inks that are not the strip's own: the white a washed close cross is drawn in, the one a state
+    // of the window's own is read in — lit a step further toward white while the hand is on it, the way
+    // the same button is drawn on a sound's card — and the faded ink of the pin button that says the
+    // window is not kept on top.
     let ink = if button.kind == CaptionButton::Close && (pressed || hovered) {
         [255, 255, 255]
-    } else if button.kind == CaptionButton::AlwaysOnTop
-        && !caption.always_on_top
-        && !pressed
-        && !hovered
+    } else if wearing_state {
+        match pressed || hovered {
+            true => palette.lit(palette.number),
+            false => palette.number,
+        }
+    } else if !offered
+        || (button.kind == CaptionButton::AlwaysOnTop
+            && !caption.always_on_top
+            && !pressed
+            && !hovered)
     {
-        text_paint::blend(palette.foreground, palette.background, 0.45)
+        palette.faded()
     } else {
         palette.foreground
     };
@@ -633,6 +691,9 @@ pub(super) fn paint_glyph(
         }
         CaptionButton::AlwaysOnTop => {
             draw_pin_top(buffer, width, center_x, center_y, glyph, stroke, ink)
+        }
+        CaptionButton::Detach => {
+            draw_detached_window(buffer, width, center_x, center_y, glyph, stroke, ink)
         }
         CaptionButton::Minimize => {
             let top = center_y;

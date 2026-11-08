@@ -174,11 +174,12 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
 
     let _settings = MenuSettings::put(AudioSeek::Middle, PinEndOfFile::Continue, true);
 
-    let top = menu_rows();
+    let top = menu_rows(false);
     let labels: Vec<&str> = top.iter().map(|row| row.label.as_str()).collect();
     assert_eq!(
         labels,
         [
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -197,7 +198,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         ]
     );
     assert!(
-        matches!(top[3].mark, pin_chrome::MenuMark::Separator),
+        matches!(top[4].mark, pin_chrome::MenuMark::Separator),
         "the rule between the ways out of the pin and the playback is a rule, not a row"
     );
     assert!(
@@ -265,7 +266,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
         DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
     );
-    let top = menu_rows();
+    let top = menu_rows(false);
     assert!(
         matches!(
             top[row_at(&top, "Shuffle")].mark,
@@ -309,7 +310,7 @@ fn the_hold_row_is_named_for_what_it_will_do() {
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
 
     // Nothing behind the card: the row offers to set the sound going.
-    let rows = menu_rows();
+    let rows = menu_rows(false);
     assert_eq!(
         rows[row_at(&rows, "Play")].label,
         "Play",
@@ -330,7 +331,7 @@ fn the_hold_row_is_named_for_what_it_will_do() {
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
         *slot = Some(media);
     }
-    let rows = menu_rows();
+    let rows = menu_rows(false);
     assert_eq!(
         rows[row_at(&rows, "Pause")].label,
         "Pause",
@@ -381,6 +382,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     assert_eq!(
         labels,
         [
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -500,6 +502,7 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
             "Minimize to Bubble",
             "Minimize to Taskbar",
             "",
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -536,6 +539,7 @@ fn a_right_click_on_the_media_holds_no_setting_rows() {
             "",
             "Maximize",
             "",
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -570,6 +574,7 @@ fn a_standing_menu_opens_on_the_walk_and_the_maximize_under_it() {
             BubbleMenuRow::Maximize,
             BubbleMenuRow::Toggle,
             BubbleMenuRow::Separator,
+            BubbleMenuRow::Detach,
             BubbleMenuRow::ToBubble,
             BubbleMenuRow::ToTaskbar,
             BubbleMenuRow::Close,
@@ -586,6 +591,7 @@ fn a_standing_menu_opens_on_the_walk_and_the_maximize_under_it() {
             BubbleMenuRow::Separator,
             BubbleMenuRow::Maximize,
             BubbleMenuRow::Separator,
+            BubbleMenuRow::Detach,
             BubbleMenuRow::ToBubble,
             BubbleMenuRow::ToTaskbar,
             BubbleMenuRow::Close,
@@ -778,6 +784,7 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
             "",
             "Maximize",
             "",
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -821,6 +828,7 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
             "",
             "Maximize",
             "",
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -1198,6 +1206,7 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
     assert_eq!(
         labels,
         [
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -1265,7 +1274,7 @@ fn a_press_on_the_shuffle_row_turns_it_over_and_writes_it_down() {
     }
 
     // The rows show the setting as it now is: the check row is ticked.
-    let rows = menu_rows();
+    let rows = menu_rows(false);
     assert!(
         matches!(
             rows[row_at(&rows, "Shuffle")].mark,
@@ -1832,6 +1841,7 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     assert_eq!(
         labels,
         [
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -2017,6 +2027,60 @@ fn menu_row_point(paint: &PinMenuPaint, index: usize) -> (i32, i32) {
 /// Where a row of a menu sits in it, counted by what it says: the rows a hand counts are the
 /// rows themselves, and the number one of them sits at moves the moment another is put above
 /// it (see `pin_menu::PIN_MENU_ROWS`).
+/// The row that hands the window to a process of its own is a road a pin has and a window of its own
+/// has spent: it is still listed — it is where the road out of being a pin stood — and it is listed
+/// faded, in the card's own menu and in the menu a bubble and a standing window share, alike (see
+/// `pin_chrome::MenuRow::disabled` and `app::detach`).
+#[test]
+fn a_detached_window_lists_its_own_hand_off_faded() {
+    // The rows only, and no pin: what is asked here is the words and the marks a menu is drawn with,
+    // and the one row of them that a window of its own gives up (see `menu_rows`).
+    //
+    // A pin's own menu and the one a window of its own draws: the same rows in the same order, with
+    // the hand-off the one row the second no longer offers.
+    let of_a_pin = menu_rows(false);
+    let of_a_window_of_its_own = menu_rows(true);
+    assert!(
+        !of_a_pin[row_at(&of_a_pin, "Detach Window")].disabled,
+        "a pin hands the window it is standing in on"
+    );
+    for (row, own) in of_a_pin.iter().zip(&of_a_window_of_its_own) {
+        assert_eq!(
+            row.label, own.label,
+            "a window of its own lists the same rows"
+        );
+        assert_eq!(
+            own.disabled,
+            row.label == "Detach Window",
+            "and gives up the hand-off alone: {}",
+            row.label
+        );
+    }
+
+    // And the same in the menu a bubble's or a standing window's right-click opens, which is the one
+    // every kind that is not a sound is drawn with.
+    let bubble_of_a_pin =
+        bubble_menu_chrome_rows(Some(MediaType::Audio), false, false, true, false, false);
+    let bubble_of_an_own =
+        bubble_menu_chrome_rows(Some(MediaType::Audio), false, false, true, false, true);
+    assert!(
+        !bubble_of_a_pin[row_at(&bubble_of_a_pin, "Detach Window")].disabled,
+        "a bubble is a pin too, and hands its window on"
+    );
+    for (row, own) in bubble_of_a_pin.iter().zip(&bubble_of_an_own) {
+        assert_eq!(
+            row.label, own.label,
+            "a window of its own lists the same rows"
+        );
+        assert_eq!(
+            own.disabled,
+            row.label == "Detach Window",
+            "and gives up the hand-off alone: {}",
+            row.label
+        );
+    }
+}
+
 fn row_at(rows: &[pin_chrome::MenuRow], label: &str) -> usize {
     rows.iter()
         .position(|row| row.label == label)
@@ -2329,7 +2393,7 @@ fn the_same_ask_puts_the_bubbles_menu_away() {
     // in the slot the loop's tick reads it from — a window nobody has to put on a screen
     // for a menu to be stood up in a slot (see `open_bubble_menu`).
     let _bubble = BubblePutBack::put(HWND(0x2000 as *mut _));
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false, false);
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
@@ -2378,7 +2442,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     // tick reads it from, the way the dismiss test above stands it (see `open_bubble_menu`).
     let hwnd = HWND(0x2000 as *mut _);
     let _bubble = BubblePutBack::put(hwnd);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false, false);
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {
         *menu = Some(BubbleMenu {
@@ -2392,7 +2456,7 @@ fn a_press_on_the_bubbles_pause_switch_turns_it_over() {
     // The middle of the switch's own band, named by what the row says rather than by the number
     // it happens to sit at.
     let index = row_at(
-        &bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false),
+        &bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false, false),
         "Pause on Minimize",
     );
     let (x, y) = bubble_row_point(index);
@@ -2445,7 +2509,7 @@ fn a_press_on_the_bubbles_minimize_pick_writes_the_setting() {
     // stands it (see `open_bubble_menu`).
     let hwnd = HWND(0x2000 as *mut _);
     let _bubble = BubblePutBack::put(hwnd);
-    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false);
+    let rows = bubble_menu_chrome_rows(Some(MediaType::Audio), true, false, true, false, false);
     let index = row_at(&rows, "Minimize to Taskbar");
     let popup = bubble_menu_popup((0, 44), 400, 400, 96, &rows);
     if let Ok(mut menu) = BUBBLE_MENU.lock() {

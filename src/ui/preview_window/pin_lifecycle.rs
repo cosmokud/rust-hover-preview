@@ -359,7 +359,7 @@ pub(crate) enum PinCommand {
 // `pin_window::take_pin_commands`).
 
 /// Whether the pin key is watched, as the configuration has it.
-pub(super) fn pin_enabled() -> bool {
+pub fn pin_enabled() -> bool {
     CONFIG
         .lock()
         .map(|config| config.pin_enabled)
@@ -3104,6 +3104,10 @@ pub(super) fn pinned_audio_chrome(paused: Option<f64>) -> Option<CardChrome> {
         playing,
         volume: pin.volume.level,
         always_on_top: pin_always_on_top(),
+        // The card drawn in this process's window says what became of the window: a pin, or one
+        // that was handed to a process of its own and drew its own card from then on (see
+        // `app::detach`).
+        detached: crate::app::detach::is_detached(),
         hovered: pin.audio_hovered,
         pressed: pin.audio_pressed,
         window_buttons: pin.audio_window_buttons,
@@ -3147,6 +3151,9 @@ pub(super) fn pinned_audio_card_box(
         playing: false,
         volume: current_audio_volume(),
         always_on_top: pin_always_on_top(),
+        // A box measured for a pin that is about to stand: no mark's ink is part of a card's layout,
+        // so what the detach button would say is not asked here.
+        detached: false,
         hovered: None,
         pressed: None,
         window_buttons: false,
@@ -3281,7 +3288,7 @@ pub(super) fn pin_audio_control_revealed(
 ) -> bool {
     if matches!(
         control,
-        CardControl::AlwaysOnTop | CardControl::Minimize | CardControl::Close
+        CardControl::AlwaysOnTop | CardControl::Detach | CardControl::Minimize | CardControl::Close
     ) {
         return true;
     }

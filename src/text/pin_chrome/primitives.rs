@@ -27,6 +27,12 @@ pub(crate) struct ChromePalette {
     pub(crate) foreground: [u8; 3],
     /// The bubble's ring, and the played part of a transport's bar.
     pub(crate) accent: [u8; 3],
+    /// The ink a state of the window's own is read in rather than a choice it still offers — that it
+    /// is kept on top, that it is a window of its own — and the one a sound's card reads the numbers
+    /// on its facts line in, so that a caption's button and that card's button say the same thing in
+    /// one color rather than two near neighbours (see `caption::paint_button` and
+    /// `audio_preview::build_page`).
+    pub(crate) number: [u8; 3],
     /// Whether the theme is a dark one, which decides which way a hairline is shaded.
     pub(crate) dark: bool,
 }
@@ -45,11 +51,19 @@ impl ChromePalette {
         // chrome and the track on that card are one color rather than two near neighbours (see
         // `audio_preview::build_page`).
         let accent = text_paint::rgb(theme.style_for_scopes(&["support.function"]).foreground);
+        // The numbers' ink, read against the bar it is drawn on rather than as the theme writes it, so
+        // that a state said in it is legible on either of the bundled themes (see
+        // `audio_preview::build_page`, which reads the same scope the same way for its card).
+        let number = text_paint::readable(
+            text_paint::rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
+            background,
+        );
 
         Some(Self {
             background,
             foreground,
             accent,
+            number,
             dark: text_paint::luminance(background) <= 0.5,
         })
     }
@@ -64,7 +78,39 @@ impl ChromePalette {
         };
         text_paint::blend(self.background, toward, amount)
     }
+
+    /// The ink of something a window is still showing and no longer offering: the theme's own
+    /// text given up part of the way toward its page, which is what a button or a row that is not
+    /// a hand's to have is drawn in (see the pin button that says the window is not kept on top,
+    /// and `menu::MenuRow::disabled`).
+    ///
+    /// Given up toward the page and not replaced with a grey of this app's, because what is faded
+    /// here is a mark the window still means — the file in it is not a window to be detached, it is
+    /// already one — and it has to be read on either of the bundled themes, in a dark one and in a
+    /// light one alike.
+    pub(crate) fn faded(&self) -> [u8; 3] {
+        text_paint::blend(self.foreground, self.background, FADED_INK)
+    }
+
+    /// The ink of something that is already saying a state of the window's own, a step further toward
+    /// white while the hand is on it: it keeps the color its state is read in and becomes the
+    /// brightest thing on the strip, which is what a button of a sound's card does in the same place
+    /// (see `caption::paint_button`).
+    pub(crate) fn lit(&self, ink: [u8; 3]) -> [u8; 3] {
+        text_paint::blend(ink, [255, 255, 255], LIT_INK)
+    }
 }
+
+/// How far the ink of what a window no longer offers is given up toward the window's own page.
+///
+/// It is the same amount the caption's unpressed, unhovered **Always On Top** button gives up when
+/// the pin is not kept on top, so that everything a pin is showing and not offering is faded by one
+/// amount rather than by a handful of near neighbours.
+const FADED_INK: f32 = 0.45;
+
+/// How far a mark that is already saying a state of the window's own is moved toward white while the
+/// pointer is on it or a press is held in it (see `ChromePalette::lit`).
+const LIT_INK: f32 = 0.35;
 
 /// The face a caption's title is set in: the one Windows writes a window's title in, so a
 /// pinned preview's caption reads like the caption of anything else on the desktop.
@@ -950,6 +996,82 @@ pub(super) fn draw_open_with_list(
     let tip = (center_x as f32 + 0.5, center_y as f32 + half as f32 + 0.5);
     stroke_segment(buffer, width, left, tip, edge, color, 1.0);
     stroke_segment(buffer, width, right, tip, edge, color, 1.0);
+}
+
+/// Two windows, one stepped out behind the other: the window handed to a process of its own.
+///
+/// It is the one mark of the caption's that says nothing about the *file* being previewed and
+/// everything about the window it is previewed in, which is what the button beside the band and
+/// the minimize does: the first three of the pin's own open the file in another program, and this
+/// one opens it in another window of this app's. So it is drawn as two windows rather than as a
+/// box with a mark in it — the same pair, one behind the other.
+///
+/// The window behind is drawn as the two edges that are not under the one in front. Its whole
+/// outline would be a thicker square rather than two windows, and a square drawn inside a square
+/// reads as the smaller mark in a row of marks, however far it is stepped out. Everything is laid
+/// down in whole pixels for the reason `draw_open_with` gives: this mark is asked to be sharp at
+/// every display scale, and a stroked edge is a ramp either side of itself.
+pub(super) fn draw_detached_window(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    span: i32,
+    thickness: f32,
+    color: [u8; 3],
+) {
+    let thick = thickness.round().max(1.0) as i32;
+    let half = (span / 2).max(1);
+    // How far the window behind is stepped out from the one in front: a quarter of the mark, and
+    // never so far that the window in front has no room left to be one.
+    let step = (span / 4).max(2).min(half);
+
+    let left = center_x - half;
+    let top = center_y - half;
+    let right = center_x + half + 1;
+    let bottom = center_y + half + 1;
+
+    // The window in front: the whole outline, stepped down and left of the one behind it.
+    stroke_box(
+        buffer,
+        width,
+        RECT {
+            left,
+            top: top + step,
+            right: right - step,
+            bottom,
+        },
+        thick as f32,
+        color,
+        1.0,
+    );
+
+    // The window behind: its top edge, across the whole square, and its right edge down to where
+    // the window in front takes the corner.
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: left + step,
+            top,
+            right,
+            bottom: (top + thick).min(bottom),
+        },
+        color,
+        1.0,
+    );
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: (right - thick).max(left),
+            top: top + thick,
+            right,
+            bottom: bottom - step,
+        },
+        color,
+        1.0,
+    );
 }
 
 /// The style every piece of caption text is drawn in, whatever colour it is asked for.

@@ -1,4 +1,5 @@
 pub(crate) mod afk;
+pub(crate) mod detach;
 pub(crate) mod dialogs;
 pub(crate) mod engine_processes;
 pub(crate) mod single_instance;
