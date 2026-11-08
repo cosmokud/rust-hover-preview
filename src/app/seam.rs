@@ -54,7 +54,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE};
+use windows::Win32::Foundation::{HANDLE, HWND, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, OpenFileMappingW, FILE_MAP_ALL_ACCESS, PAGE_READWRITE,
 };
@@ -351,6 +351,18 @@ static LOCAL_FACTS: SeamFacts = SeamFacts::new();
 /// Where a run's facts are once it has opened a section, or null where it has not.
 static MAPPED_FACTS: AtomicPtr<SeamFacts> = AtomicPtr::new(std::ptr::null_mut());
 
+/// The handle to this run's section, kept open for the life of the process.
+///
+/// **A view does not keep the name; the handle does.** The section is backed by the pagefile — no file
+/// behind it — and an object of that kind is deleted the moment its last handle is closed, whatever views of
+/// it are still mapped. A run that closed the handle would go on reading and writing the very same pages, so
+/// nothing would look wrong from inside it, while the name every other process is told to open had gone: a
+/// viewer cannot join, draws nothing at all, and a tray that had already made the rings the road publishes a
+/// whole session of hovers into a section no one can reach (see `app::viewer` and `main`).
+///
+/// So it is never closed, and it needs no more than that: the last handle going is the run ending.
+static THE_SECTION_HANDLE: AtomicIsize = AtomicIsize::new(0);
+
 /// The facts this process publishes to and reads from: the section where there is one, this process's
 /// own copy otherwise.
 ///
@@ -421,11 +433,9 @@ pub(crate) fn join_the_seam_section(tray: u32) -> bool {
 
     // Safety: a whole view of the section the handle names.
     let view = unsafe { MapViewOfFile(mapped, FILE_MAP_ALL_ACCESS, 0, 0, size) };
-    // The view is what holds the section: the mapping's own handle is finished with here.
-    // Safety: a handle this process owns and has finished with, and it is closed once.
-    unsafe {
-        let _ = CloseHandle(mapped);
-    }
+    // The handle is kept rather than closed, for the reason the creator keeps its own (see
+    // `THE_SECTION_HANDLE`).
+    THE_SECTION_HANDLE.store(mapped.0 as isize, Ordering::Release);
     if view.Value.is_null() {
         return false;
     }
@@ -461,12 +471,8 @@ fn a_section_of_this_run() -> Option<*mut SeamFacts> {
 
     // Safety: a whole view of the section just made, mapped read and write for this process.
     let view = unsafe { MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, size) };
-    // The view holds the section: the mapping's own handle is not what keeps the facts alive, and a
-    // section nothing holds is one the other side cannot find.
-    // Safety: a handle this process owns and has finished with, and it is closed once.
-    unsafe {
-        let _ = CloseHandle(mapping);
-    }
+    // **The handle is kept rather than closed, and the name goes with it** (see `THE_SECTION_HANDLE`).
+    THE_SECTION_HANDLE.store(mapping.0 as isize, Ordering::Release);
     if view.Value.is_null() {
         return None;
     }
@@ -868,10 +874,12 @@ pub(crate) static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
 /// `pin_drag::Carry::drain`).
 pub(crate) fn next_preview_message(rx: &Receiver<PreviewMessage>) -> Option<PreviewMessage> {
     if the_rings_carry_messages() {
-        return the_facts()
+        let message = the_facts()
             .preview_ring
             .pop()
             .and_then(|slot| slot.as_preview());
+
+        return message;
     }
 
     rx.try_recv().ok()
@@ -2303,6 +2311,37 @@ pub(crate) use crate::ui::preview_window::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    use windows::Win32::Foundation::WAIT_OBJECT_0;
+
+    /// **The one section a test binary can make is named for this process** (see `a_section_of_this_run`),
+    /// so the two tests that make one take turns rather than resetting the other's facts under it.
+    static THE_ONE_SECTION: Mutex<()> = Mutex::new(());
+
+    fn the_one_section() -> std::sync::MutexGuard<'static, ()> {
+        THE_ONE_SECTION
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The variable that makes a run of the transport test the second process rather than the first, and
+    /// the pid of the run it draws for in it.
+    const THE_SECOND_PROCESS: &str = "RHP_SEAM_SECOND_PROCESS";
+
+    /// How long the first process waits on anything the second one owes it.
+    const AN_ANSWER: Duration = Duration::from_secs(10);
+
+    /// How long the second process's own waits are given: the bound a wake that never came sits out, and
+    /// the whole of what a broken seam can cost this test.
+    const A_WAKE: u32 = 4000;
+
+    /// How long the first process paces before it signals, so that the wait it is signalling is one that is
+    /// already armed: a wake answered before the wait exists proves the ring, not the wake.
+    const AN_ARMED_WAIT: Duration = Duration::from_millis(200);
+
+    /// How often the first process looks at a fact the second one publishes.
+    const A_LOOK: Duration = Duration::from_millis(2);
 
     /// Every preview message a slot carries, with something in every field of each.
     fn carried_preview_messages() -> Vec<PreviewMessage> {
@@ -2484,6 +2523,8 @@ mod tests {
 
     #[test]
     fn a_section_carries_the_facts_and_a_ring_of_the_messages() {
+        let _the_section_is_mine = the_one_section();
+
         // Mapped and not published: every other test in this binary reads and writes the facts as it finds
         // them, and moving them under it is not this test's to do.
         let Some(facts) = a_section_of_this_run() else {
@@ -2521,6 +2562,162 @@ mod tests {
             assert!(ring.push(SeamMessage::of(SeamMessage::HIDE, &[press]), "test"));
             let message = ring.pop().expect("the message just pushed");
             assert_eq!(message.numbers[0], press);
+        }
+    }
+
+    /// **The seam over a real process boundary, which is the one road no other test here takes.**
+    ///
+    /// Every other test reads the facts from this process's own copy (see `LOCAL_FACTS`), and that is
+    /// exactly why a run of two processes could lose every preview with the suite green: the section, the
+    /// three events named for the tray's pid and the ring the hovers cross on are all of them a second
+    /// process's business, and nothing here had ever been a second process. So this test is two. The first
+    /// opens the section and the events and waits; the second — this same test binary, begun again with
+    /// `THE_SECOND_PROCESS` set — joins them through the very calls a viewer makes at its own start (see
+    /// `join_the_seam_section`), and answers.
+    ///
+    /// What it proves, each in the direction the app uses it: a fact the tray publishes is read by the
+    /// viewer; a hover the tray pushes is popped by the viewer with its path and its numbers whole; the wake
+    /// the tray signals ends a wait in the viewer that was already armed; and the same two in reverse — a
+    /// fact and a notice the viewer publishes are read by the tray.
+    #[test]
+    fn a_viewer_of_another_process_draws_from_the_section_the_tray_opened() {
+        if let Some(tray) = std::env::var(THE_SECOND_PROCESS)
+            .ok()
+            .and_then(|pid| pid.parse().ok())
+        {
+            a_viewer_answers(tray);
+            return;
+        }
+
+        let _the_section_is_mine = the_one_section();
+        let Some(facts) = a_section_of_this_run() else {
+            panic!("a section a viewer can open");
+        };
+        // Safety: a view of this run's own section, freshly written with the at-rest facts and told to the
+        // second process by its name alone; nothing else in this process writes it.
+        let facts = unsafe { &*facts };
+
+        let child = crate::app::engine_processes::hidden_command(
+            std::env::current_exe().expect("this test's own binary"),
+        )
+        // The name of this test rather than a harness flag of its own: the second process runs this same
+        // test, and `THE_SECOND_PROCESS` is what makes it the second process (see above).
+        .arg(stringify!(
+            a_viewer_of_another_process_draws_from_the_section_the_tray_opened
+        ))
+        .env(THE_SECOND_PROCESS, std::process::id().to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a second process of this test binary");
+
+        // The second process says it is up by publishing a fact rather than by making an event of its own:
+        // it is the first thing it does once it has joined, and the fact this wait is looking at.
+        let deadline = Instant::now() + AN_ANSWER;
+        while facts.preview_under_pointer.load(Ordering::Acquire) == 0 && Instant::now() < deadline
+        {
+            std::thread::sleep(A_LOOK);
+        }
+        let it_said_it_was_up = facts.preview_under_pointer.load(Ordering::Acquire) != 0;
+
+        // A fact the tray publishes, and the hover it pushes at the same point the hook's road does.
+        facts.pin_zoom_delta.store(7, Ordering::Release);
+        let hover = PreviewMessage::Show(
+            PathBuf::from("listing/a note.txt"),
+            10,
+            20,
+            Some(AvoidRegion::column((1, 2, 3, 4))),
+        );
+        assert!(
+            facts.preview_ring.push(
+                SeamMessage::of_preview(&hover).expect("a hover that fits a slot"),
+                "test"
+            ),
+            "the preview ring has room for one hover"
+        );
+        std::thread::sleep(AN_ARMED_WAIT);
+        // Safety: an event of this run's own, signalled: nothing here is dereferenced. The wake the tray's
+        // own `send_preview` sends, on the same event.
+        unsafe {
+            let _ = SetEvent(preview_channel_event());
+        }
+
+        // Safety: an event of this run's own, waited on for a bound: nothing here is dereferenced.
+        let woken =
+            unsafe { WaitForSingleObject(tray_channel_event(), AN_ANSWER.as_millis() as u32) };
+        let notice = facts.tray_ring.pop().and_then(|slot| slot.as_tray());
+        let the_fact = facts.text_scroll_delta.load(Ordering::Acquire);
+
+        let ended = child.wait_with_output().expect("the second process ended");
+        // Both streams: what the process held is a panic, and the harness prints that to its own output
+        // rather than to the one a panic would have gone to.
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&ended.stdout),
+            String::from_utf8_lossy(&ended.stderr)
+        );
+
+        assert!(it_said_it_was_up, "the section is joined: {said}");
+        assert!(ended.status.success(), "the second process held: {said}");
+        assert_eq!(
+            woken, WAIT_OBJECT_0,
+            "the notice it pushed woke this wait: {said}"
+        );
+        assert!(
+            matches!(notice, Some(TrayMessage::PinClick(..))),
+            "and it is the notice it pushed: {said}"
+        );
+        assert_eq!(the_fact, -3, "a fact it published is read here: {said}");
+    }
+
+    /// The second process: a viewer's own start, and then the answers a viewer owes the tray.
+    fn a_viewer_answers(tray: u32) {
+        assert!(
+            join_the_seam_section(tray),
+            "the section the tray opened is joined rather than made"
+        );
+        let facts = the_facts();
+
+        // It is up: a fact, because a fact is the one thing both processes read without an event of their
+        // own (see the wait above). Nothing here waits for the tray's signal until this is written.
+        facts.preview_under_pointer.store(1, Ordering::Release);
+
+        // Safety: an event of this run's own, named for the tray's pid, waited on for a bound: nothing
+        // here is dereferenced.
+        assert_eq!(
+            unsafe { WaitForSingleObject(preview_channel_event(), A_WAKE) },
+            WAIT_OBJECT_0,
+            "the wait the tray's wake had to reach ends on that signal rather than on the bound"
+        );
+
+        let Some(PreviewMessage::Show(path, x, y, Some(region))) =
+            facts.preview_ring.pop().and_then(|slot| slot.as_preview())
+        else {
+            panic!("the hover the tray pushed is in the ring");
+        };
+        assert_eq!(path, PathBuf::from("listing/a note.txt"), "the name, whole");
+        assert_eq!((x, y), (10, 20), "and the point it was hovered at");
+        assert_eq!(region.region, (1, 2, 3, 4), "and the box that came with it");
+        assert!(region.column, "and that the box is a column of the view");
+        assert_eq!(
+            facts.pin_zoom_delta.load(Ordering::Acquire),
+            7,
+            "a fact the tray published is read here"
+        );
+
+        // And the other way: a fact the tray reads and a notice on the ring it drains.
+        facts.text_scroll_delta.store(-3, Ordering::Release);
+        assert!(
+            facts.tray_ring.push(
+                SeamMessage::of_tray(&TrayMessage::PinClick("the second process".to_owned()))
+                    .expect("a notice that fits a slot"),
+                "test"
+            ),
+            "the tray ring has room for one notice"
+        );
+        // Safety: an event of this run's own, signalled: nothing here is dereferenced.
+        unsafe {
+            let _ = SetEvent(tray_channel_event());
         }
     }
 }
