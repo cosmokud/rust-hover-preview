@@ -487,14 +487,14 @@ pub(super) fn the_band_in_hand() -> Option<(Option<usize>, Option<usize>, usize)
     Some((playlist.hovered, playlist.picked, playlist.scroll))
 }
 
-/// The row a marquee is set up for and how far its name has to travel — nothing at all where the row
-/// has room for the whole of it.
+/// The row a marquee is set up for, how far its name has to travel and how far it has gone — nothing
+/// at all where the row has room for the whole of it.
 #[cfg(test)]
-pub(super) fn the_marquee_in_hand() -> Option<(usize, i32)> {
+pub(super) fn the_marquee_in_hand() -> Option<(usize, i32, i32)> {
     let playlist = THE_PLAYLIST.lock().ok()?;
     playlist
         .marquee
-        .map(|marquee| (marquee.row, marquee.travel))
+        .map(|marquee| (marquee.row, marquee.travel, marquee.offset))
 }
 
 /// Move the marqueed name on by one tick, answering whether it moved: it rests at either end for
@@ -544,12 +544,23 @@ fn advance_the_marquee() -> bool {
 /// `y` is the window's own row, which the band's begins some way down: a hand above the band is a
 /// hand on no row at all, and one on the card's own bar is not one either.
 pub(super) unsafe fn hover(y: i32) -> bool {
-    let Some((top, height, width, scale)) = the_band_of_the_pin() else {
+    let Some(band) = the_band_of_the_pin() else {
         return false;
     };
 
-    let local = y - top;
-    let local = (0..height).contains(&local).then_some(local);
+    hover_at_the_band(band, Some(y))
+}
+
+/// The band's answer to a pointer at a row of the window, or at no row at all — **the one place the
+/// band's own top is taken off the window's row**, so that a move the window is sent and a tick that
+/// reads the cursor off the screen cannot name two different rows of one band.
+///
+/// It is handed the band's own geometry rather than asking the pin for it because the tick stands
+/// inside the pin's lock, which `the_band_of_the_pin` would block on (see `set_the_hover`).
+fn hover_at_the_band((top, height, width, scale): (i32, i32, i32, f32), y: Option<i32>) -> bool {
+    let local = y
+        .map(|y| y - top)
+        .filter(|local| (0..height).contains(local));
 
     set_the_hover((height, width, scale), local)
 }
@@ -559,20 +570,25 @@ pub(super) unsafe fn hover(y: i32) -> bool {
 /// marqueed under a pointer that has gone is a name travelling for nobody (see
 /// `pin_audio_hover_refresh`, which is the same question asked of the card's own buttons).
 ///
-/// It is asked of the pin in hand rather than through `hover`, which takes this lock again.
+/// It is asked of the pin in hand rather than through `hover`, which takes this lock again — but the
+/// row it names is `hover`'s own question and not a second reading of the band's geometry: the screen
+/// is turned into a row of the window here, the way the find bar's and the card's own buttons are
+/// asked on this same tick, and the band's top comes off it in one place (see `hover_at_the_band`).
+///
+/// The window's own box is asked for the one thing a row cannot say: a pointer beside the window at
+/// the band's own height is on no row of it, whatever row the subtraction makes of it.
 pub(super) fn pin_playlist_hover_refresh(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
     let Some((top, height)) = pin_playlist_band(pin) else {
         return false;
     };
     let (width, _) = pin.window_size();
     let (left, window_top, right, _) = pin.window_box();
-    let band_top = window_top + top;
 
-    let local = cursor.and_then(|(x, y)| {
-        (x >= left && x < right && y >= band_top && y < band_top + height).then(|| y - band_top)
-    });
+    let y = cursor
+        .filter(|(x, _)| *x >= left && *x < right)
+        .map(|(_, y)| y - window_top);
 
-    set_the_hover((height, width, pin.dpi as f32 / 96.0), local)
+    hover_at_the_band((top, height, width, pin.dpi as f32 / 96.0), y)
 }
 
 /// The band's hover, written in the one place: which row a band-local row of the window is on, and
