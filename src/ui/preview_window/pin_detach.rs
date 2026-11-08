@@ -1,22 +1,24 @@
-//! The pin's road out of this process: the caption's **Detach Window** button, the same row in both
-//! menus, and the hand-off they make.
+//! The pin's road out of being a pin: the caption's **Detach Window** button, the same row in both
+//! menus, and the sound card's own button. Every one of them funnels into
+//! [`detach_the_pinned_window`].
 //!
-//! What it hands over is the whole of what a window needs to be the same window somewhere else —
-//! the file, the box it is drawn in, and whether it is maximized — and nothing about the pin's own
-//! state, because there is no state to hand over: the window the hand-off becomes is a take-up of
-//! the same file at the same box (see `crate::app::detach`).
+//! **Nothing is reopened.** The file is already open here, the player that plays it is already begun,
+//! and a sound is already at its own second — so detaching reads no file, starts no player and seeks
+//! nothing. The pin becomes a window of this process's own, the tray is told that the viewer which
+//! serves the hovers has left, and the process the tray began begins another (see `crate::app::detach`
+//! and `app::viewer`). The notifications here are two published facts and one seam message, which is
+//! why this is answered on whatever thread pressed the button.
 //!
-//! Ask stays here rather than in the window's own procedure for one reason: the hand-off begins a
-//! process, and a process is not something the thread that draws a window and pumps its own messages
-//! should be waiting on. The ask is made on a thread of its own, and the pin it came from is taken
-//! down by the answer — the new window's first paint — rather than by this call.
+//! What is left of the old road — the hand-off, the box, the second a sound had got to — is kept for the
+//! `--detach` process to be deleted with (see `crate::app::detach`).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 
 use once_cell::sync::Lazy;
 
-use super::pin_window::pin_state;
+use super::pin_window::{pin_state, PIN_UP};
 
 /// Where the sound on screen had got to, as the card last drew it, and the file it is a position in.
 ///
@@ -58,6 +60,7 @@ pub(super) fn note_the_sounds_position(path: &Path, position: Option<f64>) {
 
 /// Where the sound of `path` had got to, or nothing where the card on screen is of another file or
 /// is a card with no clock behind it.
+#[allow(dead_code)]
 fn the_sounds_position(path: &Path) -> Option<f64> {
     THE_SOUNDS_POSITION
         .lock()
@@ -67,35 +70,43 @@ fn the_sounds_position(path: &Path) -> Option<f64> {
         .map(|(_, at)| at)
 }
 
-/// Hand the pinned window to a process of its own.
+/// Detach the pinned window: it stops being a pin of the tray's and becomes a window of its own, here,
+/// with everything it is holding left as it is.
 ///
-/// Does nothing where there is no pin to hand over, which is every road that reaches here after the
-/// pin it was drawn for has gone.
+/// Does nothing where there is no pin to detach — every road that reaches here after the pin it was drawn
+/// for has gone — and nothing where this window is one of its own already.
 pub(super) fn detach_the_pinned_window() {
-    // A window of its own has nothing left to hand on: it *is* the window a pin was handed over to
-    // become, and a second hand-off would be one process handing its own window to a third for no
-    // choice the user made (see `app::detach::is_detached`). Every road that offers the hand-off —
-    // the caption's button, a sound card's window button and both menus — draws itself saying the
-    // same, and this is the one place that is true whatever is drawn.
-    if crate::app::detach::is_detached() {
+    // A window of its own has nothing left to become: it *is* the window a pin is detached to be, and
+    // every road that offers the button — the caption's mark, a sound card's own button and both menus —
+    // draws itself saying so. This is the one place that is true whatever is drawn.
+    if crate::app::detach::is_detached() || !a_pin_is_standing() {
         return;
     }
 
-    let Some((path, region, maximized, at)) = the_pin_to_hand_over() else {
-        return;
-    };
+    // **The notice goes first, because the rings are the road only until the flip below.** It is what
+    // begins the viewer that draws the hovers from here on, and this process stops reading that ring the
+    // moment it is a window of its own (see `app::seam::the_preview_ring_is_ours`).
+    crate::app::seam::send_tray(crate::app::seam::TrayMessage::ViewerDetached(
+        std::process::id(),
+    ));
 
-    // The hook reads the end this brings as a hand-off rather than as a close, so no hover of the
-    // file under the pointer is opened over the window that has just come up — said where that end
-    // is asked for rather than here, because a hand-off this machine refuses ends no pin at all (see
-    // `crate::app::detach::wait_for_the_hand_over`).
+    // The tray's half: the file is no longer what a click in the listing would be sent to, and no pin is up —
+    // so a hover is admitted again over a window that keeps standing. Written through the published copies
+    // and not through `pin_window::publish_pin_up`, because this process's own copy is the window this call
+    // keeps (see `pin_window::PIN_UP_HERE`).
+    crate::app::seam::publish_the_pinned_path(None);
+    PIN_UP.store(false, Ordering::Release);
 
-    std::thread::spawn(move || {
-        // A hand-off this machine refuses — a second process that cannot be begun at all — is a
-        // hand-off that never happened: nothing was noted as handed over, no window came up, and
-        // the pin it came from is still standing with the file in it.
-        let _ = crate::app::detach::hand_off(&path, region, maximized, at);
-    });
+    // And the window's own, last: nothing is taken up, nothing is read, no box is rebuilt, and every press
+    // the chrome draws from here on reads the window as one of its own (see
+    // `crate::app::detach::this_window_is_its_own`).
+    crate::app::detach::this_window_is_its_own();
+}
+
+/// Whether there is a pin on this screen to detach: the state rather than either published copy, because
+/// the copies answer the chrome's question and this one is the road's own.
+fn a_pin_is_standing() -> bool {
+    pin_state().is_some_and(|state| state.pin().is_some())
 }
 
 /// What is handed over: the file, the media box it is drawn in, whether the window is maximized,
@@ -108,8 +119,11 @@ pub(super) fn detach_the_pinned_window() {
 /// window that comes up is the window this one is with a second frame of chrome around it. And the
 /// maximize is asked for rather than carried: `restore` is written only while a window is maximized,
 /// so a window that has one is a window whose restore box exists and whose box is the display's.
+#[allow(dead_code)]
 type HandedOver = (std::path::PathBuf, (i32, i32, i32, i32), bool, Option<f64>);
 
+// What the `--detach` road carries: kept with it and unused until it is deleted (see the module doc).
+#[allow(dead_code)]
 fn the_pin_to_hand_over() -> Option<HandedOver> {
     let pinned = pin_state()?;
     let pin = pinned.pin()?;

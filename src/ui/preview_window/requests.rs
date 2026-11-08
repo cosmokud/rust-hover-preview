@@ -10,8 +10,13 @@ use crate::engines::document_cache;
 /// is closed. The Explorer hook asks this every tick: while it is true nothing is spawned
 /// and nothing is taken down, which is the whole of what "the preview mode is paused"
 /// means (see `pin_window::pin_is_up`).
+///
+/// **It is this process's own answer and not the published one.** The hook's copy is the fact in
+/// `app::seam`, which a pin that has been detached clears; what the loop and the chrome of this process
+/// ask is whether there is a window here to draw, and a detached pin is still one (see
+/// `pin_window::pin_is_up_here`).
 pub fn pinned() -> bool {
-    pin_window::pin_is_up()
+    pin_window::pin_is_up_here()
 }
 
 /// Note that the pin being asked for its end was handed to a window of this app's own — a detached
@@ -22,6 +27,8 @@ pub fn pinned() -> bool {
 /// Said where the end is asked for rather than where the hand-off is made, which is the difference
 /// between a note about a road and a note about a fact: a hand-off this machine refuses ends no pin,
 /// and a note left behind by one would be read against the next pin's ordinary close.
+// The `--detach` road's own note: kept until that road is deleted (see `app::detach`).
+#[allow(dead_code)]
 pub fn note_the_pin_was_handed_off() {
     pin_window::note_pin_handed_off();
 }

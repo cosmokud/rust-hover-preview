@@ -112,6 +112,13 @@ pub(crate) fn another_viewer_is_owed(pid: u32) {
 }
 
 fn begin_the_viewer_again() {
+    // A hover may have got there first and begun the viewer this run needs (see
+    // `make_sure_a_viewer_is_standing`): what is owed then is nothing, and a second one begun here would be
+    // two processes reading one preview ring.
+    if the_viewer_is_standing() && !crate::app::seam::the_viewer_has_left() {
+        return;
+    }
+
     // `begin_one` notes the new process as this run's viewer before it can answer, which is what makes the
     // retarget the first thing that happens: every hover that lands while the new one is starting is a
     // message in the preview ring, waiting for the one process that reads it.

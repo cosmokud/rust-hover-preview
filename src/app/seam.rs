@@ -2062,6 +2062,13 @@ pub(crate) fn pin_is_on_its_way_to(path: &Path) -> bool {
 /// nothing rather than with another file's name — the update road is then off for that pin; upgrade if a
 /// user ever meets a path that long.
 pub(crate) fn publish_the_pinned_path(path: Option<&Path>) {
+    // A window of its own publishes none of the tray's: the file was unpublished when the pin was
+    // detached, and one swapped into the window afterwards does not publish it again (see
+    // `app::detach::is_detached`).
+    if crate::app::detach::is_detached() {
+        return;
+    }
+
     let facts = the_facts();
     // Odd for the length of the write: a reader that sees the count move reads the name again on its next
     // tick rather than acting on the two halves of two names.
@@ -2422,6 +2429,13 @@ pub(crate) fn note_a_detached_viewer(pid: u32) {
 
     let at = NEXT_DETACHED_VIEWER.fetch_add(1, Ordering::Relaxed) % DETACHED_VIEWERS;
     DETACHED_VIEWER_PIDS[at].store(pid, Ordering::Release);
+}
+
+/// Whether the process this run's previews are drawn in has become a window of its own: the viewer the
+/// hovers are served by has left, and one is owed (see `app::detach` and `app::viewer`).
+pub(crate) fn the_viewer_has_left() -> bool {
+    let noted = THE_VIEWER.load(Ordering::Acquire);
+    noted != 0 && is_a_window_of_its_own(noted)
 }
 
 /// Whether `pid` is a process of this run that has a window of its own standing (see

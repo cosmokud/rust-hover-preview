@@ -30,10 +30,15 @@
 //!   written into `end_pin`, because the loop that draws the window is the only thing that can end
 //!   the process that owns it.
 //!
-//! Nothing here runs in the tray app. `is_detached` is false there and the whole module is a
-//! function call that answers at once.
+//! **A viewer whose pin was detached answers the second of those and nothing else.** It was handed no
+//! file, so there is no open of a window to wait on: the one window it has is the pin it was already
+//! drawing, and the latch below is what says that window has been on the screen — so its going is this
+//! process's own end, and a closed window does not leave a process behind `main` would keep forever.
+//!
+//! Nothing here runs in the tray app, and nothing of the first half runs in a viewer: `is_detached` is
+//! false there and the whole module is a function call that answers at once.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -102,6 +107,10 @@ struct Opening {
 
 static OPENING: Lazy<Mutex<Opening>> = Lazy::new(|| Mutex::new(Opening::default()));
 
+/// Whether this process's own window has been on the screen, which is what makes its going the process's
+/// own end for a viewer whose pin was detached (see `settle`).
+static THIS_WINDOW_WAS_UP: AtomicBool = AtomicBool::new(false);
+
 /// Open the window this process was handed over: a preview of the file, kept out of sight, which the
 /// tick below takes up as a pin the moment it is settled.
 ///
@@ -139,7 +148,19 @@ pub(super) fn settle(current_show: Option<&PreviewMessage>, pending: bool) {
     if !detach::is_detached() {
         return;
     }
+
     let Some(request) = detach::open_request() else {
+        // **A viewer whose pin became a window of its own was handed nothing**, so it has none of the road
+        // below: it has the pin it was already drawing, and that pin is the only window this process has.
+        // Once that window has gone there is nothing left for the process to be — nobody is waiting on it and
+        // no other window of its own is on the screen — so it goes the way a handed-over window's does (see
+        // `the_process_may_go`). Said with a latch rather than with "nothing is pinned", because the tick a
+        // hover is taken up on has nothing pinned either.
+        if pinned() {
+            THIS_WINDOW_WAS_UP.store(true, Ordering::Release);
+        } else if THIS_WINDOW_WAS_UP.load(Ordering::Acquire) {
+            detach::the_process_may_go();
+        }
         return;
     };
 

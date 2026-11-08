@@ -514,7 +514,12 @@ pub fn run_preview_window() {
                 || first_frame_wait.is_some();
             let tick_generation = current_generation;
             let tick_pinned = pinned();
-            if PIN_END_REQUESTED.swap(false, Ordering::AcqRel) {
+            // A tray's ask is the tray's to make of the pin it was standing over: **a window of its own is
+            // not ended by it**, because the pin that came down on that side was a different window's (see
+            // `app::detach`). The ask is spent either way, so it is not left lying for the next pin this
+            // process draws.
+            if PIN_END_REQUESTED.swap(false, Ordering::AcqRel) && !crate::app::detach::is_detached()
+            {
                 pin_request = Some(end_pin_state(Reason::Asked));
             }
             // A press the pin's own window never saw — on another app's window, the tray, or

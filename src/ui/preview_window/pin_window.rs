@@ -65,7 +65,7 @@
 //! `resize_pinned_window`).
 
 use std::collections::VecDeque;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use windows::Win32::Foundation::HWND;
@@ -290,6 +290,38 @@ pub(super) fn pin_state_try() -> Option<MutexGuard<'static, PinState>> {
     PIN_STATE.try_lock().ok()
 }
 
+/// Whether a pin is on *this* screen, which is the question this process's own loop and chrome ask.
+///
+/// **Two copies of one fact, because a detach splits them.** `PIN_UP` is the copy the tray reads, and a
+/// pin that has been detached clears it — the tray has no pin any more, and the hovers come back. This
+/// copy is not cleared by that: the window is still on the screen, drawn by this process, and every road
+/// that asks whether there is a pin to draw is asking about the window rather than about the tray (see
+/// `requests::pinned` and `app::detach`). Written beside `PIN_UP` everywhere it is a pin's own end that
+/// writes it (`publish_pin_up`), so the two say the same thing until a detach splits them.
+static PIN_UP_HERE: AtomicBool = AtomicBool::new(false);
+
+/// Publish whether a pin is up, in both copies (see `PIN_UP_HERE`).
+///
+/// The tray's copy is not written by a window of its own: that window took itself out of the tray's pin
+/// when it was detached, and a file stepped into it afterwards — a **Previous** in its own caption puts one
+/// there — does not put it back among the pins the tray drives.
+fn publish_pin_up(up: bool) {
+    PIN_UP_HERE.store(up, Ordering::Release);
+    if !crate::app::detach::is_detached() {
+        PIN_UP.store(up, Ordering::Release);
+    }
+}
+
+/// Whether a pin is on this screen (see `PIN_UP_HERE`).
+pub(super) fn pin_is_up_here() -> bool {
+    PIN_UP_HERE.load(Ordering::Acquire)
+}
+
+/// The same question under the name the tests that stand a pin up and take it down already ask it by: what
+/// they assert about is the copy this process draws by, which is the one that outlives a detach.
+#[cfg(test)]
+pub(super) use pin_is_up_here as pin_is_up;
+
 /// Whether a pin is up: the published copy, and the answer every thread may take without a lock.
 ///
 /// The Explorer hook asks this on every tick, and it cannot be answered off the lock: a hook
@@ -320,10 +352,6 @@ use crate::app::seam::PIN_RESUMED;
 /// for, and a preview raised over that program is a card the click did not mean. The hook holds
 /// hovers back on it until the pointer moves (see `take_pin_handed_off`).
 use crate::app::seam::PIN_HANDED_OFF;
-
-/// Whether a preview is pinned, answered without a lock and without waiting for one (see
-/// [`PIN_UP`]).
-pub(super) use crate::app::seam::the_pin_is_up as pin_is_up;
 
 /// Whether a pin has been closed since this was last asked (see [`PIN_RESUMED`]).
 pub(super) fn take_pin_resumed() -> bool {
@@ -389,7 +417,7 @@ pub(super) fn install(pin: PinnedPreview) {
             commands,
             walk,
         });
-        PIN_UP.store(true, Ordering::Release);
+        publish_pin_up(true);
     }
 }
 
@@ -709,7 +737,7 @@ pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
     // `subtitle_files::keep_extraction_for`).
     subtitle_files::keep_extraction_for(None);
 
-    PIN_UP.store(false, Ordering::Release);
+    publish_pin_up(false);
     // A pin that is over is a pointer that is on something new: the file the pin was of is not
     // a hover the hook has already answered, and one is due the moment the pin is gone rather
     // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
@@ -923,7 +951,7 @@ pub(super) fn take_pin_for_a_test() -> Option<PinnedPreview> {
         let PinState::Up(up) = std::mem::replace(&mut *state, PinState::Down) else {
             return None;
         };
-        PIN_UP.store(false, Ordering::Release);
+        publish_pin_up(false);
         Some(up.pin)
     })
 }
@@ -947,7 +975,7 @@ pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
             super::pin_input::clear_pin_volume_region();
             if let Some(mut state) = pin_state() {
                 *state = PinState::Down;
-                PIN_UP.store(false, Ordering::Release);
+                publish_pin_up(false);
             }
         }
     }
