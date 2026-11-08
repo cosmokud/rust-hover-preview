@@ -286,6 +286,23 @@ pub(super) fn audio_facts_marquee(
     ))
 }
 
+/// The row a sound's facts line is drawn in, in the card's own pixels: where a pointer resting on the
+/// line is, which is what engages the line's scroll (see `audio_preview::NameScroll::set_engaged`).
+///
+/// Nothing for a file no probe answers for, which is a file with no card and so no line either (see
+/// `audio_facts_marquee`).
+pub(super) fn audio_facts_rect(
+    path: &Path,
+    elapsed: Option<f64>,
+    duration: Option<f64>,
+    width: u32,
+    dpi: u32,
+) -> Option<RECT> {
+    let card = audio_card(path, elapsed, duration, 0, 0, None)?;
+
+    audio_preview::facts_rect(&card, width, dpi, current_audio_options())
+}
+
 /// The card a sound is previewed as, painted into the box the layout settled on.
 pub(super) fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<MediaData> {
     // No controls: this is the card a *hover* shows, whose own window is a window nobody is in

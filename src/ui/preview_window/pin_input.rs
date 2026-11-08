@@ -195,9 +195,13 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
             let hovered = pin_audio_control_at(pin, x, y)
                 .filter(|control| pin_audio_control_revealed(pin, y, *control));
             let shown = pin_audio_window_buttons_at(pin, x, y);
-            let changed = pin.audio_hovered != hovered || pin.audio_window_buttons != shown;
+            let on_the_line = pin_audio_facts_at(pin, x, y);
+            let changed = pin.audio_hovered != hovered
+                || pin.audio_window_buttons != shown
+                || pin.audio_facts_hovered != on_the_line;
             pin.audio_hovered = hovered;
             pin.audio_window_buttons = shown;
+            pin.audio_facts_hovered = on_the_line;
 
             // The card's own paint is what shows the wash, and a card is a media frame rather than
             // chrome: repainting the window alone would redraw the *old* card with the old button

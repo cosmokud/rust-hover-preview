@@ -379,6 +379,62 @@ fn a_hover_off_the_card_leaves_its_buttons_unlit() {
     stand_pin(previous_pin);
 }
 
+/// The facts line of a card travels only under a pointer resting on it: the row it is drawn in is
+/// the card's own — stored in the card's pixels, and taken to the card by the media band's top row,
+/// the same subtraction a press on one of its buttons is answered by (see `pin_audio_facts_at`).
+#[test]
+fn the_facts_line_is_engaged_by_a_pointer_on_its_own_row() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let mut pin = sound_pin();
+    // The row the take-up writes down, in the card's own pixels (see `note_audio_facts_rect`).
+    pin.audio_facts_rect = Some((8, 24, 380, 40));
+    let (top, _) = pinned_media_band_rows(&pin);
+    let window = pin.window_box();
+    let on_the_line = (window.0 + 100, window.1 + top + 30);
+
+    assert!(
+        pin_audio_facts_at(&pin, 100, top + 30),
+        "a point on the row is taken to the card through the media band's own top"
+    );
+    assert!(
+        !pin_audio_facts_at(&pin, 100, top + 60),
+        "and the bar's own row below it is not the facts line"
+    );
+
+    stand_pin(Some(pin));
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+
+    let now = Instant::now();
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, now, Some(on_the_line)))
+    });
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_facts_hovered)),
+        Some(true),
+        "a pointer on the line is what engages the line's scroll"
+    );
+    assert!(
+        AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and the card is asked to be painted again, as much as a lit button does"
+    );
+
+    // And off it, which lets the line go: what the loop's own step winds back to the first fact.
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, now, Some((-1000, -1000))))
+    });
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_facts_hovered)),
+        Some(false),
+        "a pointer that has walked away leaves the line to wind home"
+    );
+
+    stand_pin(previous_pin);
+}
+
 /// A pin of a sound keeps the box its hover had: the card a hover is measured with and the card a
 /// pin shows are the same size, because the row of buttons on the pinned one is the bar's own row
 /// and the bar is what they are carved out of.

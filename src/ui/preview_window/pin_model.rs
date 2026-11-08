@@ -604,6 +604,15 @@ pub(super) struct PinnedPreview {
     /// across their columns, asked on every move and every tick (see
     /// `pinned_mouse_move` and `pin_audio_hover_refresh`).
     pub(super) audio_window_buttons: bool,
+    /// Whether the pointer is resting on the card's facts line, which is what engages that line's
+    /// scroll: asked on every move and every tick beside the window buttons (see
+    /// `pin_audio_facts_at`), and read by the loop's own step of the marquee.
+    pub(super) audio_facts_hovered: bool,
+    /// The row that facts line is drawn in, in the card's own pixels — the box the two questions
+    /// above are asked of, written down where the card's clock is (see `note_audio_facts_rect`) so
+    /// that a hit test reads it rather than laying a card out on every move. Nothing for a pin
+    /// showing no sound's card, which is the card with no facts line on it.
+    pub(super) audio_facts_rect: Option<(i32, i32, i32, i32)>,
     /// The card's own menu: whether its panel is up, and
     /// whether the Seek row's flyout is (see `PinMenu`).
     pub(super) menu: PinMenu,
@@ -645,6 +654,8 @@ impl PinnedPreview {
             audio_hovered: None,
             audio_pressed: None,
             audio_window_buttons: false,
+            audio_facts_hovered: false,
+            audio_facts_rect: None,
             menu: PinMenu::default(),
         }
     }

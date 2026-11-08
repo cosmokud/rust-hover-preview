@@ -112,6 +112,28 @@ pub(super) struct BarRow {
     pub(super) track_height: i32,
 }
 
+/// The row the facts line is drawn in: where it begins under the rule, and how tall it is.
+///
+/// These are the numbers the line is drawn from *and* the band a pointer engages its scroll on, for
+/// the reason [`BarRow`] is one set rather than two: a row laid out by one arithmetic and hit-tested
+/// by another answers a hand somewhere else on the card (see `audio_preview::facts_rect`).
+#[derive(Clone, Copy)]
+pub(super) struct FactsRow {
+    pub(super) top: i32,
+    pub(super) height: i32,
+}
+
+/// The facts line's row: the same walk down the page `build_page` makes, from the rule under the name
+/// to the line itself, whose height is the body line's.
+pub(super) fn facts_row(metrics: &TextMetrics) -> FactsRow {
+    let (_, rule_top) = header_line(metrics);
+
+    FactsRow {
+        top: rule_top + scaled(RULE_PIXELS, metrics.scale) + scaled(RULE_GAP_PIXELS, metrics.scale),
+        height: metrics.line_height[BODY_LEVEL as usize],
+    }
+}
+
 /// The bar's row: the bar's own height, whether or not buttons are standing in it. A button is
 /// taller than that line, and stands centred on it rather than growing the row — which is what
 /// makes a card a pin shows the same size as the card a hover shows, with the four buttons carved
@@ -604,12 +626,11 @@ pub(super) fn build_page(
     let header_advance = metrics.advance[HEADER_LEVEL as usize].max(1);
     let body_advance = metrics.advance[BODY_LEVEL as usize].max(1);
     let header_height = metrics.line_height[HEADER_LEVEL as usize];
-    let body_height = metrics.line_height[BODY_LEVEL as usize];
     let padding = metrics.padding;
 
-    let rule_gap = scaled(RULE_GAP_PIXELS, metrics.scale);
     let rule_height = scaled(RULE_PIXELS, metrics.scale);
     let bar_row = bar_row(metrics);
+    let facts_row = facts_row(metrics);
 
     let page_color = rgb(theme.background());
     let foreground = rgb(theme.foreground());
@@ -669,7 +690,7 @@ pub(super) fn build_page(
     }];
 
     let (header_top, rule_top) = header_line(metrics);
-    let facts_top = rule_top + rule_height + rule_gap;
+    let facts_top = facts_row.top;
 
     let bar_width = content_right - content_left;
     // The facts line ends where the clock's readout begins, less the gap kept off it: the room it is
@@ -682,6 +703,7 @@ pub(super) fn build_page(
         card.facts_offset,
         body_advance,
         muted,
+        foreground,
         number,
     );
     facts.extend(clock_runs(card, content_right, body_advance, muted, accent));
@@ -699,7 +721,7 @@ pub(super) fn build_page(
         rule_height,
         facts,
         facts_top,
-        facts_height: body_height,
+        facts_height: facts_row.height,
         bar: Bar {
             left: bar_left,
             width: bar_span,
@@ -890,6 +912,9 @@ pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
 /// so a fact that fits is never the one dropped. A line the room has no space for is the card's second
 /// scroll rather than a cut line: `offset` is how far the whole line has been carried back under the
 /// box, and what the box cannot hold is out of sight for now (see `Card::facts_offset`).
+// Eight: the line, the room it is drawn in, and the three inks a fact can be set in — the page
+// reads all of them in one place and hands them to the one walk that lays them out.
+#[allow(clippy::too_many_arguments)]
 fn fact_runs(
     facts: &[Fact],
     left: i32,
@@ -897,6 +922,7 @@ fn fact_runs(
     offset: i32,
     advance: i32,
     muted: [u8; 3],
+    foreground: [u8; 3],
     number: [u8; 3],
 ) -> Vec<PageRun> {
     let mut runs = Vec::new();
@@ -909,6 +935,7 @@ fn fact_runs(
 
         let ink = match fact.kind {
             FactKind::Format => number,
+            FactKind::Reading => foreground,
             FactKind::Note => muted,
         };
         x = push_fact_run(&mut runs, &fact.text, x, left, right, advance, ink);

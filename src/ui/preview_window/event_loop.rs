@@ -1420,6 +1420,12 @@ pub fn run_preview_window() {
                 Some(chrome) => chrome.playing,
                 None => !pinned() && a_sound_is_playing(),
             };
+            // Whether the facts line of the card on screen is under a pointer, which is what its
+            // scroll is engaged by: asked here beside the pin's own answer and for the same reason,
+            // because the step the marquee is taken by runs with the media's lock held and a pin's
+            // lock asked from under it is the re-entrancy `toggle_pinned_playback` is written down
+            // for (see `audio_facts_line_engaged`).
+            let facts_line_engaged = audio_facts_line_engaged();
 
             let media_lock = need_media_check.then(|| CURRENT_MEDIA.lock());
             if let Some(Ok(mut media_guard)) = media_lock {
@@ -1582,6 +1588,14 @@ pub fn run_preview_window() {
                         // the fall until they are home, which is a second or so and then nothing
                         // (see `audio_meter::beat_fade`).
                         let falling = audio_beat > 0.0;
+                        // The facts line travels only under a pointer resting on it: a card whose
+                        // hand has left the line winds it back to its first fact and rests there,
+                        // which is what stops a card at rest repainting at the marquee's cadence for
+                        // as long as it stands (see `NameScroll::set_engaged` and
+                        // `audio_facts_line_engaged`).
+                        if let Some(facts) = audio_facts_scroll.as_mut() {
+                            facts.set_engaged(facts_line_engaged);
+                        }
                         let cadence = match (&audio_name_scroll, &audio_facts_scroll) {
                             (Some(name), _) if name.moves() => AUDIO_NAME_REPAINT,
                             (_, Some(facts)) if facts.moves() => AUDIO_NAME_REPAINT,
@@ -4298,6 +4312,25 @@ pub fn run_preview_window() {
                                     &mut audio_started,
                                     &mut audio_start_offset,
                                     audio_paused,
+                                );
+
+                                // The row the card's facts line is drawn in, written down where
+                                // that card's clock is in hand: a pointer resting on the line
+                                // engages its scroll, and the hit test reads this rather than
+                                // laying a card out on every move (see
+                                // `note_audio_facts_rect`).
+                                let (elapsed, duration) = audio_clock(
+                                    &path,
+                                    audio_started,
+                                    audio_start_offset,
+                                    audio_paused,
+                                );
+                                note_audio_facts_rect(
+                                    &path,
+                                    elapsed,
+                                    duration,
+                                    (content.2 - content.0).max(1) as u32,
+                                    audio_card_dpi,
                                 );
 
                                 let card = AudioCardClock {

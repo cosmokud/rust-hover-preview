@@ -48,9 +48,9 @@ mod card;
 mod page;
 
 pub(crate) use card::{
-    bar_share_at, clock, control_at, control_box, extension_of, facts_of, facts_scroll, measure,
-    name_of, render, AudioPreviewOptions, Card, CardChrome, CardControl, Fact, FactKind,
-    NameScroll, NAME_ADVANCE_MS, NAME_HOLD,
+    bar_share_at, clock, control_at, control_box, extension_of, facts_of, facts_rect, facts_scroll,
+    measure, name_of, render, size_label, AudioPreviewOptions, Card, CardChrome, CardControl, Fact,
+    FactKind, NameScroll, NAME_ADVANCE_MS, NAME_HOLD,
 };
 pub(crate) use page::{window_button_band, window_button_span};
 
@@ -69,7 +69,9 @@ use card::{
     WINDOW_BUTTON_GAP_PIXELS,
 };
 #[cfg(test)]
-use page::{bar_band, bar_row, build_page, clock_runs, fill_span, text_width, CardBoxes, Page};
+use page::{
+    bar_band, bar_row, build_page, clock_runs, facts_right, fill_span, text_width, CardBoxes, Page,
+};
 #[cfg(test)]
 use std::path::Path;
 #[cfg(test)]

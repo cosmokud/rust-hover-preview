@@ -645,6 +645,19 @@ pub(super) fn pin_audio_hover_refresh(pin: &mut PinnedPreview, cursor: Option<(i
     pin.audio_hovered = hovered;
     pin.audio_window_buttons = shown;
 
+    // And the facts line, which is the one band of the card that is not a control: a pointer resting
+    // on it is what engages its scroll, and one that has left it winds the line home (see
+    // `pin_audio_facts_at` and `audio_preview::NameScroll::set_engaged`).
+    let on_the_line = cursor.is_some_and(|(x, y)| {
+        x >= window.0
+            && x < window.2
+            && y >= window.1
+            && y < window.3
+            && pin_audio_facts_at(pin, x - window.0, y - window.1)
+    });
+    let changed = changed || pin.audio_facts_hovered != on_the_line;
+    pin.audio_facts_hovered = on_the_line;
+
     // The card is a media frame and not chrome, so repainting the window alone would redraw the
     // *old* card with the old button still lit under it: what shows the wash is the card's own
     // paint, and this is the one place in the pin that has to know that.

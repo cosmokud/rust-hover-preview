@@ -3235,6 +3235,58 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
     )
 }
 
+/// Whether the pointer is on the facts line of the card a pin is showing, which is the whole of what
+/// engages that line's scroll (see `NameScroll::set_engaged`).
+///
+/// The row is stored in the card's own pixels, taken at the take-up where the card's clock is (see
+/// `note_audio_facts_rect`), so the point is taken to the card the way a press on it is: the media
+/// band's own top row is the one thing between the window and the card (see `pin_audio_control_at`).
+/// Nothing for a pin showing no sound's card — and no line, and no box.
+pub(super) fn pin_audio_facts_at(pin: &PinnedPreview, x: i32, y: i32) -> bool {
+    let Some((left, top, right, bottom)) = pin.audio_facts_rect else {
+        return false;
+    };
+
+    let (band_top, _) = pinned_media_band_rows(pin);
+    let y = y - band_top;
+
+    x >= left && x < right && y >= top && y < bottom
+}
+
+/// Write down the row of the facts line the card a pin is showing is drawn in, asked of the card's own
+/// arithmetic at the one moment its clock is in hand — the take-up every install ends on, and the
+/// take-up a pin comes up at (see `event_loop`'s own `PreviewMessage::Pin` arm).
+pub(super) fn note_audio_facts_rect(
+    path: &Path,
+    elapsed: Option<f64>,
+    duration: Option<f64>,
+    width: u32,
+    dpi: u32,
+) {
+    let row = audio_facts_rect(path, elapsed, duration, width, dpi)
+        .map(|rect| (rect.left, rect.top, rect.right, rect.bottom));
+
+    if let Some(mut state) = pin_state() {
+        if let Some(pin) = state.pin_mut() {
+            pin.audio_facts_rect = row;
+        }
+    }
+}
+
+/// Whether the facts line of the card on screen is to travel: a pin answers with the pointer resting
+/// on its line, which is asked on the move and on the tick (see `pin_audio_facts_at`), and a card with
+/// no pin behind it is a hover's, whose line travels as it always has — nobody's pointer is on a
+/// window nobody is in.
+pub(super) fn audio_facts_line_engaged() -> bool {
+    if !pinned() {
+        return true;
+    }
+
+    pin_state()
+        .and_then(|state| state.pin().map(|pin| pin.audio_facts_hovered))
+        .unwrap_or(true)
+}
+
 /// Whether the card's two window buttons are showing at the window's own point: the top band as
 /// tall as the buttons' own hit boxes (see `audio_preview::window_button_band`) *and* the columns
 /// from the leftmost button to the rightmost widened by a hand's margin (see

@@ -11,7 +11,7 @@ fn card() -> Card {
             },
             Fact {
                 text: "44.1 kHz".to_string(),
-                kind: FactKind::Note,
+                kind: FactKind::Reading,
             },
             Fact {
                 text: "stereo".to_string(),
@@ -19,6 +19,10 @@ fn card() -> Card {
             },
             Fact {
                 text: "1006 kbps".to_string(),
+                kind: FactKind::Reading,
+            },
+            Fact {
+                text: "12.3 MB".to_string(),
                 kind: FactKind::Note,
             },
         ],
@@ -590,7 +594,11 @@ fn writes_the_facts_a_file_has_and_no_others() {
     };
     let facts = facts_of(&track, Path::new("C:/music/track.flac"));
     let words: Vec<&str> = facts.iter().map(|fact| fact.text.as_str()).collect();
-    assert_eq!(words, ["FLAC", "44.1 kHz", "stereo", "1006 kbps"]);
+    assert_eq!(
+        words,
+        ["FLAC", "44.1 kHz", "stereo", "1006 kbps", "0.0 MB"],
+        "the four the probe read, and the room the file takes — which is nothing for a file that is not there"
+    );
 
     let bare = Track {
         player: Player::Ffmpeg,
@@ -601,23 +609,26 @@ fn writes_the_facts_a_file_has_and_no_others() {
         duration: None,
     };
     let facts = facts_of(&bare, Path::new("C:/music/track.ape"));
-    assert_eq!(facts.len(), 1, "nothing is said that the file did not say");
+    assert_eq!(facts.len(), 2, "nothing is said that the file did not say");
     assert_eq!(facts[0].text, "APE");
     assert_eq!(facts[0].kind, FactKind::Format);
+    assert_eq!(facts[1].text, "0.0 MB");
+    assert_eq!(facts[1].kind, FactKind::Note);
 }
 
 /// The ink a fact is drawn in is what it says rather than where it stands on the line: the format
-/// is the one fact set in the numbers' ink, and the rate, the channels and the bitrate beside it are
-/// the card's own muted gray — which is the rule a band's row draws its facts line by as well (see
-/// `pin_chrome::playlist`).
+/// is the one fact set in the numbers' ink, the readings of the sound — its rate and its bitrate —
+/// are set in the ordinary ink the name is, and the notes beside them are the card's own muted gray.
+/// It is the rule a band's row draws its facts line by as well (see `pin_chrome::playlist`).
 #[test]
 fn the_facts_are_inked_by_what_they_say() {
     let (width, _) = measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
     let page = scrolled(&card(), width, 0);
 
-    // The two inks the page reads, worked out here the way `build_page` works them out.
+    // The three inks the page reads, worked out here the way `build_page` works them out.
     let theme = text_theme::loaded(options().theme).expect("the bundled theme");
     let page_color = rgb(theme.background());
+    let foreground = rgb(theme.foreground());
     let number = readable(
         rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
         page_color,
@@ -638,11 +649,18 @@ fn the_facts_are_inked_by_what_they_say() {
         number,
         "the format is the one fact the numbers' ink is kept for"
     );
-    for note in ["44.1 kHz", "stereo", "1006 kbps"] {
+    for reading in ["44.1 kHz", "1006 kbps"] {
+        assert_eq!(
+            ink_of(reading),
+            foreground,
+            "{reading} is what the sound is, and is set in the ink the name is"
+        );
+    }
+    for note in ["stereo", "12.3 MB"] {
         assert_eq!(
             ink_of(note),
             muted,
-            "{note} is a note about the sound, and a note is muted"
+            "{note} is a note about the file, and a note is muted"
         );
     }
 }
@@ -677,7 +695,7 @@ fn the_card_is_headed_with_the_name_and_not_the_extension() {
 fn the_facts_have_the_room_the_clock_leaves_them() {
     let card = card();
     let advance = body_advance();
-    let line = text_width("FLAC · 44.1 kHz · stereo · 1006 kbps", advance);
+    let line = text_width("FLAC · 44.1 kHz · stereo · 1006 kbps · 12.3 MB", advance);
     let readout = text_width("1:07 / 9:22", advance);
 
     // The box the whole of the line and the readout beside it want, cut to a card of that width.
@@ -694,6 +712,8 @@ fn the_facts_have_the_room_the_clock_leaves_them() {
             "stereo",
             " · ",
             "1006 kbps",
+            " · ",
+            "12.3 MB",
             "1:07",
             " / ",
             "9:22"
@@ -729,7 +749,7 @@ fn the_facts_line_is_scrolled_where_the_room_has_no_place_for_it() {
     let narrow = narrowest_card();
     let advance = body_advance();
     let padding = metrics_padding();
-    let line = text_width("FLAC · 44.1 kHz · stereo · 1006 kbps", advance);
+    let line = text_width("FLAC · 44.1 kHz · stereo · 1006 kbps · 12.3 MB", advance);
     let readout = text_width("1:07 / 9:22", advance);
     let room = narrow as i32 - padding * 2 - readout - advance * TIME_GAP_ADVANCES;
 
@@ -757,7 +777,7 @@ fn the_facts_line_is_scrolled_where_the_room_has_no_place_for_it() {
         .map(|run| run.text.as_str())
         .collect();
     assert!(
-        drawn.ends_with("1006 kbps"),
+        drawn.ends_with("12.3 MB"),
         "the end of the line comes into sight: {drawn:?}"
     );
     for run in &page.facts[..facts] {
@@ -775,6 +795,95 @@ fn the_facts_line_is_scrolled_where_the_room_has_no_place_for_it() {
         !facts_scroll(&card(), wide, 96, options()).moves(),
         "a facts line that fits never moves"
     );
+}
+
+/// The facts line travels only while a pointer rests on it: let go of, it is a card at rest, which
+/// asks for no repaint of its own and steps nowhere.
+#[test]
+fn a_facts_line_let_go_of_rests_at_its_start() {
+    let step = Duration::from_millis(33);
+    let mut scroll = facts_scroll(&card(), narrowest_card(), 96, options());
+    assert!(
+        scroll.travel > 0,
+        "the line is one the card has no room for"
+    );
+
+    scroll.set_engaged(false);
+    assert!(!scroll.moves(), "a line nothing is on it is a card at rest");
+    for _ in 0..10 {
+        scroll.advance(Instant::now(), step);
+    }
+    assert_eq!(scroll.offset(), 0, "it steps nowhere while it rests");
+
+    // A hand that comes to it takes it out again from the start of the line.
+    scroll.set_engaged(true);
+    assert!(scroll.moves(), "a line a pointer is on is one that travels");
+    let after_the_hold = Instant::now() + NAME_HOLD + Duration::from_millis(1);
+    scroll.advance(after_the_hold, step);
+    assert!(
+        scroll.offset() > 0,
+        "it goes out from its resting place: {}",
+        scroll.offset()
+    );
+}
+
+/// Let go of from anywhere on the line, the scroll winds back to its first fact and stays there —
+/// neither left where the hand left it nor travelling on to the far end first.
+#[test]
+fn a_facts_line_let_go_of_winds_back_from_wherever_it_stands() {
+    let mut scroll = facts_scroll(&card(), narrowest_card(), 96, options());
+    let step = Duration::from_millis(33);
+    let then = Instant::now() + NAME_HOLD + Duration::from_millis(1);
+    while scroll.offset() < scroll.travel / 2 {
+        scroll.advance(then, step);
+    }
+    let halfway = scroll.offset();
+    assert!(
+        halfway > 0 && halfway < scroll.travel,
+        "the line is part way along itself: {halfway}"
+    );
+
+    scroll.set_engaged(false);
+    for _ in 0..halfway + 2 {
+        scroll.advance(then, step);
+    }
+    assert_eq!(scroll.offset(), 0, "the line is home");
+    assert!(!scroll.moves(), "and asks for no repaint once it is there");
+
+    for _ in 0..10 {
+        scroll.advance(then, step);
+    }
+    assert_eq!(scroll.offset(), 0, "and stays where it is left");
+}
+
+/// The row a pointer engages the line's scroll from is the row the line is drawn in: the card's own
+/// facts band, from its left margin to the room its clock leaves.
+#[test]
+fn the_facts_row_is_the_band_the_line_is_drawn_in() {
+    let card = card();
+    let narrow = narrowest_card();
+    let page = scrolled(&card, narrow, 0);
+    let rect = facts_rect(&card, narrow, 96, options()).expect("a card with a facts line");
+
+    assert_eq!(rect.top, page.facts_top, "the row the page sets it in");
+    assert_eq!(rect.bottom - rect.top, page.facts_height, "as tall as it");
+    assert_eq!(rect.left, metrics_padding(), "from the content box's edge");
+    assert_eq!(
+        rect.right,
+        facts_right(&card, narrow as i32 - metrics_padding(), body_advance()),
+        "to the room the clock leaves"
+    );
+
+    // And the whole of the line, at rest, is drawn inside it.
+    let clock_runs = 3;
+    let facts = page.facts.len() - clock_runs;
+    for run in &page.facts[..facts] {
+        assert!(
+            run.x >= rect.left && run.x + run.width <= rect.right,
+            "{:?} is drawn outside the row a pointer engages",
+            run.text
+        );
+    }
 }
 
 /// The numbers a card is written with, at the lengths and rates a file can have.
