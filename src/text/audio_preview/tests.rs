@@ -3,7 +3,7 @@ use crate::readers::audio_track::Player;
 
 fn card() -> Card {
     Card {
-        name: "Kind of Blue - So What.flac".to_string(),
+        name: "Kind of Blue - So What".to_string(),
         facts: vec![
             Fact {
                 text: "FLAC".to_string(),
@@ -644,6 +644,28 @@ fn the_facts_are_inked_by_what_they_say() {
             "{note} is a note about the sound, and a note is muted"
         );
     }
+}
+
+/// The card is headed with the file's own name and not the extension the format fact beside it
+/// already says — and a file whose whole name is an extension is headed with that rather than with
+/// nothing.
+#[test]
+fn the_card_is_headed_with_the_name_and_not_the_extension() {
+    assert_eq!(
+        name_of(Path::new("C:/music/Kind of Blue - So What.flac")),
+        "Kind of Blue - So What",
+        "the extension is the format fact's to say, not the name's"
+    );
+    assert_eq!(
+        name_of(Path::new("C:/music/no-extension")),
+        "no-extension",
+        "a name with no extension is the whole of the name"
+    );
+    assert_eq!(
+        name_of(Path::new("C:/music/.flac")),
+        ".flac",
+        "and a name that is only an extension is kept whole rather than left empty"
+    );
 }
 
 /// The numbers a card is written with, at the lengths and rates a file can have.
