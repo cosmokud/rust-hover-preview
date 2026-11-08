@@ -74,12 +74,28 @@ fn the_sounds_position(path: &Path) -> Option<f64> {
 /// with everything it is holding left as it is.
 ///
 /// Does nothing where there is no pin to detach — every road that reaches here after the pin it was drawn
-/// for has gone — and nothing where this window is one of its own already.
+/// for has gone — nothing where this window is one of its own already, and nothing where the run has no
+/// block for the viewer the detach would leave it owing.
 pub(super) fn detach_the_pinned_window() {
     // A window of its own has nothing left to become: it *is* the window a pin is detached to be, and
     // every road that offers the button — the caption's mark, a sound card's own button and both menus —
     // draws itself saying so. This is the one place that is true whatever is drawn.
     if crate::app::detach::is_detached() || !a_pin_is_standing() {
+        return;
+    }
+
+    // **A window of its own is one the run has to be able to draw in.** The viewer that becomes it keeps the
+    // block it claimed, and the tray begins another to serve the hovers it leaves, so a run with no block
+    // left for that one would leave a window standing and the hovers with nobody — every hover after it put
+    // in a ring nothing reads. Refused here, before the flip: the pin stays a pin and the hovers keep working
+    // (see `seam::SEAM_VIEWERS` and `seam::a_block_can_be_had`).
+    if !crate::app::seam::a_block_can_be_had() {
+        // shortcut: a block claimed between this question and the tray's spawn still costs the replacement,
+        // which the next hover begins again once a block is had; upgrade to one reserved for it.
+        if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+            eprintln!("seam: no block for the window this pin would become; it stays a pin");
+        }
+
         return;
     }
 

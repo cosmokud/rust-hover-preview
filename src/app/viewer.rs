@@ -124,8 +124,12 @@ pub(crate) fn another_viewer_is_owed(pid: u32) {
 fn begin_the_viewer_again() {
     // A hover may have got there first and begun the viewer this run needs (see
     // `make_sure_a_viewer_is_standing`): what is owed then is nothing, and a second one begun here would be
-    // two processes reading one preview ring.
-    if the_viewer_is_standing() && !crate::app::seam::the_viewer_has_left() {
+    // two processes reading one preview ring. The pause between attempts is that call's own, so the two
+    // roads together begin one viewer per `RESPITE` rather than one each — and a viewer begun by neither is
+    // begun by the next hover, which asks after the viewer that left as well (see `an_attempt_is_due`).
+    if (the_viewer_is_standing() && !crate::app::seam::the_viewer_has_left())
+        || !an_attempt_is_due()
+    {
         return;
     }
 
@@ -142,9 +146,17 @@ fn begin_the_viewer_again() {
     }
 
     // A viewer that answered nothing draws nothing, and the road back is the one every lost viewer's is:
-    // the next show begins another (see `make_sure_a_viewer_is_standing`).
+    // the next show begins another (see `make_sure_a_viewer_is_standing`). Said on the trace before it is
+    // killed, because a run losing this one has lost the hovers until a hover brings another (see
+    // `note_the_road`).
+    note_a_silent_replacement(child.id());
     let _ = child.kill();
     crate::app::seam::note_the_viewer_process(0);
+    // **And the handle of the viewer that left the ring goes with it.** What is recorded there is the
+    // detached window's process, which stands alive with its own window for as long as the user keeps it: left
+    // answering for this run's viewer it would make every later hover read a viewer as standing when nothing
+    // reads the ring at all, and no hover would ever begin one again (see `the_viewer_is_standing`).
+    forget_the_handle();
 }
 
 /// Say which road this run took, on the trace a run asks for when what is under the seam is measured: the
@@ -168,7 +180,13 @@ pub(crate) fn note_the_road(two_processes: bool) {
 /// to the user about a viewer's death: the tray has no window of its own that could say anything, and the
 /// answer is a replacement begun on the next hover that would otherwise have been drawn by nobody.
 pub(crate) fn make_sure_a_viewer_is_standing() {
-    if the_viewer_is_standing() || !an_attempt_is_due() {
+    // **A viewer standing is not one serving.** The viewer a detached pin became stands with the pin's own
+    // window and reads no preview ring of the run's from then on, so asking after the handle alone would keep
+    // answering that there is a viewer where there is a window, and every hover after it would be a message
+    // nobody reads (see `another_viewer_is_owed` and `seam::the_viewer_has_left`).
+    if (the_viewer_is_standing() && !crate::app::seam::the_viewer_has_left())
+        || !an_attempt_is_due()
+    {
         return;
     }
 
@@ -181,9 +199,20 @@ pub(crate) fn make_sure_a_viewer_is_standing() {
 }
 
 /// One viewer, begun and recorded as the process this run's previews are drawn in.
+///
+/// Answers nothing where an attempt was taken less than `RESPITE` ago, which is what keeps two roads that
+/// both find no viewer standing — a hover and the notice a detach sends — to one process between them.
 fn begin_one() -> Option<std::process::Child> {
     let now = THE_CLOCK.elapsed().as_millis() as u64;
-    NEXT_ATTEMPT.store(now + RESPITE.as_millis() as u64, Ordering::Release);
+    let due = NEXT_ATTEMPT.load(Ordering::Acquire);
+    let claim = now + RESPITE.as_millis() as u64;
+    if now < due
+        || NEXT_ATTEMPT
+            .compare_exchange(due, claim, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return None;
+    }
 
     let exe = std::env::current_exe().ok()?;
     let child = crate::app::engine_processes::hidden_command(exe)
@@ -218,6 +247,21 @@ fn keep_the_handle(child: std::process::Child) {
     }
 }
 
+/// Let go of the viewer's handle, closing it: nothing is standing there any more, and the next hover is what
+/// begins one (see `make_sure_a_viewer_is_standing`).
+fn forget_the_handle() {
+    let before = THE_VIEWER.swap(0, Ordering::AcqRel);
+    if before == 0 {
+        return;
+    }
+
+    // Safety: the handle recorded for a viewer that is not this run's any more, which this process owns and
+    // nothing asks about any more: the process itself is not touched by closing it.
+    unsafe {
+        let _ = CloseHandle(HANDLE(before as *mut core::ffi::c_void));
+    }
+}
+
 fn the_viewer_is_standing() -> bool {
     let handle = THE_VIEWER.load(Ordering::Acquire);
     if handle == 0 {
@@ -239,5 +283,13 @@ fn an_attempt_is_due() -> bool {
 fn note_a_replacement(pid: u32) {
     if std::env::var_os("RHP_SEAM_TRACE").is_some() {
         eprintln!("seam: the viewer had gone, {pid} begun in its place");
+    }
+}
+
+/// Say that a replacement was begun and answered nothing, on the seam's own trace (see
+/// `note_a_replacement`).
+fn note_a_silent_replacement(pid: u32) {
+    if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+        eprintln!("seam: {pid} begun in the viewer's place answered nothing, killed");
     }
 }
