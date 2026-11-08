@@ -5,7 +5,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetWindow, GetWindowRect, IsIconic, IsWindow, IsWindowVisible,
     SendMessageW, ShowWindow, GW_HWNDPREV, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
-    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE, WM_SYSCOMMAND, WS_POPUP,
+    SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_CLOSE, WM_SYSCOMMAND, WS_CHILD,
+    WS_POPUP,
 };
 
 /// A SPACE with a focused bubble holds a film or a sound, and nothing else.
@@ -534,6 +535,29 @@ unsafe fn a_window_of_the_tests_own() -> HWND {
     .expect("a window of the test's own")
 }
 
+/// A window of the test's own that stands inside another one, as the Shell's view stands inside the
+/// frame a folder is drawn in: the window a press made inside a listing is read off (see
+/// `window_classes::the_frame_of`, which is what puts a pin behind the frame rather than behind this).
+///
+/// Safety: the window is the caller's to destroy, with the frame it stands in.
+unsafe fn a_window_inside(frame: HWND) -> HWND {
+    CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        w!("STATIC"),
+        w!(""),
+        WS_CHILD,
+        NOWHERE,
+        NOWHERE,
+        320,
+        240,
+        frame,
+        None,
+        None,
+        None,
+    )
+    .expect("a window inside another")
+}
+
 /// The pin put away into its bubble, with its own window on the desktop and a window of the test's
 /// opened over it — the arrangement a restore is asked in, with `Pin Mode → Always On Top` off.
 ///
@@ -1056,6 +1080,98 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
     unsafe {
         let _ = DestroyWindow(in_front);
         let _ = DestroyWindow(pin_hwnd);
+    }
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = always_on_top;
+        config.pin_update_move_to_top = move_to_top;
+    }
+    stand_pin(previous_pin);
+}
+
+/// **A press inside a listing is a press on a child of it**, and a pin put behind that child is a
+/// pin the desktop never moves: the window a top-level pin can be put behind is the frame, and a
+/// child of it is no place in the z-order at all. So the lowering resolves the window it is handed
+/// to the frame that window stands in (see `window_classes::the_frame_of`).
+///
+/// This is the half of the demotion a click inside the file view reaches — the tree, the gap between
+/// the rows, the list itself — and the half a click on Explorer's title bar never needed: a press on
+/// the frame named the frame the pin was already behind.
+#[test]
+fn a_press_inside_the_listing_puts_the_pin_behind_the_whole_window() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let always_on_top = pin_always_on_top();
+    let move_to_top = CONFIG
+        .lock()
+        .map(|config| config.pin_update_move_to_top)
+        .unwrap_or(true);
+
+    // Safety: every window here is this test's own, opened where no display is. The frame is made
+    // first and the pin after it, which is what puts the pin in front of the listing it follows.
+    let (frame, view, pin_hwnd) = unsafe {
+        let frame = a_window_of_the_tests_own();
+        let view = a_window_inside(frame);
+        let pin_hwnd = a_window_of_the_tests_own();
+        PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(frame, SW_SHOWNOACTIVATE);
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        (frame, view, pin_hwnd)
+    };
+
+    // A pin that is up and on the screen, with `Always On Top` off.
+    stand_pin(Some(overlay_pin(
+        (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        PinChrome::always(),
+    )));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_move_to_top = true;
+    }
+
+    // The pick raises the pin over the listing, which is the state the press in it finds.
+    PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pin_hwnd, false) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, frame) },
+        "an update puts the pin at the front of the ordinary band, over the listing it follows"
+    );
+
+    // The press is the child's — the view the click landed in — and the pin goes behind the frame.
+    unsafe { lower_pinned_preview(pin_hwnd, view) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(frame, pin_hwnd) },
+        "a press read off a child of the listing puts the pin behind the listing whole, not behind a \
+         child no window can be placed under"
+    );
+    assert!(
+        !pin_holds_the_front(),
+        "and the pin no longer owes the front: the next press decides it again"
+    );
+
+    // A press on the pin's own window is not a press in the listing, however its chrome is nested:
+    // the window resolved is the pin, and the lowering leaves it where it is.
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pin_hwnd, false) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(pin_hwnd, frame) },
+        "a later pick raises the pin again"
+    );
+
+    // Safety: every window is this test's own, and the handles the app holds are put back as they
+    // were.
+    unsafe {
+        let _ = DestroyWindow(view);
+        let _ = DestroyWindow(pin_hwnd);
+        let _ = DestroyWindow(frame);
     }
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);

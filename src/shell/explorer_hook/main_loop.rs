@@ -589,9 +589,17 @@ pub fn run_explorer_hook() {
                     // Safety: asks the desktop which window is in front; dereferences nothing.
                     let foreground = unsafe { GetForegroundWindow() };
                     if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+                        // What the pin goes behind, and the two windows the answer was read from: a
+                        // press inside a listing is the frame's child, and the frame is what the
+                        // pin is put behind (see `the_frame_of`).
+                        let frame = crate::shell::window_classes::the_frame_of(foreground);
                         eprintln!(
-                            "seam: pin lower asked: Explorer took the foreground back from the pin, behind {}",
-                            foreground.0 as isize
+                            "seam: pin lower asked: Explorer took the foreground back from the pin, \
+                             behind {} ({}) in frame {} ({})",
+                            foreground.0 as isize,
+                            window_class_of(foreground),
+                            frame.0 as isize,
+                            window_class_of(frame),
                         );
                     }
                     crate::app::seam::ask_the_pin_to_go_behind(foreground.0 as isize);
