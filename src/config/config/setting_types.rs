@@ -165,6 +165,11 @@ pub const DEFAULT_VECTOR_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// answers is how much of the display to give it, and the answer that asks for nothing in
 /// particular is the room the display has.
 pub const DEFAULT_DESIGN_SCALE: PreviewScale = PreviewScale::FitToScreen;
+/// The same for a model, at the whole of the room: a scene has no size of its own — the
+/// picture f3d draws of one is drawn at whatever box it is asked for — so the question the
+/// setting answers is how much of the display to give that box, and the answer that asks for
+/// nothing in particular is all of it, the way it is for a page or a drawing.
+pub const DEFAULT_MODEL_SCALE: PreviewScale = PreviewScale::FitToScreen;
 /// The same for a font specimen, at the share rather than the whole of the room: a specimen
 /// is a page of text rather than a document to be studied, and half the display holds the
 /// pangram at a size that can be read at a glance.

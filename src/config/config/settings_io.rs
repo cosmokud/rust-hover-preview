@@ -129,6 +129,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "document_scale",
             "ebook_scale",
             "font_scale",
+            "model_scale",
             "preview_scale",
             "text_scale",
             "vector_scale",

@@ -31,13 +31,14 @@ pub(super) use setters::{
     set_document_cache_mb, set_document_scale, set_ebook_scale, set_f3d_idle, set_follow_cursor,
     set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
     set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
-    set_libreoffice_idle, set_markdown_mode, set_mpv_engine_idle, set_mpv_path, set_office_engine,
-    set_office_engine_idle, set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek,
-    set_pin_nav_audio, set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_preview_scale,
-    set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
-    set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
-    set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
-    set_zoom_background, toggle_loop, toggle_pin_shuffle, PinShuffle,
+    set_libreoffice_idle, set_markdown_mode, set_model_scale, set_mpv_engine_idle, set_mpv_path,
+    set_office_engine, set_office_engine_idle, set_pin_end_of_file, set_pin_minimize_to,
+    set_pin_mode_audio_seek, set_pin_nav_audio, set_pin_nav_image, set_pin_nav_others,
+    set_pin_nav_video, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
+    set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
+    set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
+    set_video_scale, set_video_volume, set_webview_idle, set_zoom_background, toggle_loop,
+    toggle_pin_shuffle, PinShuffle,
 };
 pub(crate) use toggles::toggle_pin_always_on_top;
 pub(crate) use toggles::toggle_preview_enabled;

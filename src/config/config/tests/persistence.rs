@@ -726,6 +726,7 @@ const ANOTHER_VALUE: &[(&str, &str)] = &[
     ("image_background", "black"),
     ("libreoffice_idle", "30"),
     ("markdown_mode", "source"),
+    ("model_scale", "50"),
     ("office_engine", "libreoffice"),
     ("office_engine_idle", "30"),
     ("pin_minimize_to", "taskbar"),

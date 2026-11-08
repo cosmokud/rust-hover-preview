@@ -958,6 +958,22 @@ pub(in super::super) fn set_vector_scale(index: u16) {
     }
 }
 
+/// How much of the display a model is drawn over, by the position the item was listed at.
+/// The same rule as the documents beside it: a scene has no size of its own — the picture
+/// an installed f3d draws of one is drawn at whatever box it is asked for — so the share is
+/// of the display, and it applies to the next hover rather than resizing a preview that is
+/// already up.
+pub(in super::super) fn set_model_scale(index: u16) {
+    let Some(scale) = document_scale_at(index) else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.model_scale = scale;
+        config.save();
+    }
+}
+
 /// How much of the display a page of text is measured in, by the position the item was listed
 /// at. The same rule as the documents beside it: the box a text page is measured for is part of
 /// the placement that was made when the preview was opened, so this applies to the next hover

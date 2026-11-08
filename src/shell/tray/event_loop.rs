@@ -18,21 +18,21 @@ use super::commands::{
     set_document_cache_mb, set_document_scale, set_ebook_scale, set_f3d_idle, set_follow_cursor,
     set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
     set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
-    set_libreoffice_idle, set_markdown_mode, set_mpv_engine_idle, set_mpv_path, set_office_engine,
-    set_office_engine_idle, set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek,
-    set_pin_nav_audio, set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_preview_scale,
-    set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
-    set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
-    set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
-    set_zoom_background, toggle_check_for_updates, toggle_loop, toggle_normalize_video_volume,
-    toggle_normalize_volume, toggle_pin_always_on_top, toggle_pin_enabled, toggle_pin_pause_audio,
-    toggle_pin_pause_video, toggle_pin_shuffle, toggle_pin_update_enabled,
-    toggle_pin_update_move_to_top, toggle_pin_update_on_hover, toggle_preview_enabled,
-    toggle_preview_type, toggle_prioritize_keyboard, toggle_remember_audio_volume,
-    toggle_remember_video_volume, toggle_render_html, toggle_startup,
-    toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
-    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
-    toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
+    set_libreoffice_idle, set_markdown_mode, set_model_scale, set_mpv_engine_idle, set_mpv_path,
+    set_office_engine, set_office_engine_idle, set_pin_end_of_file, set_pin_minimize_to,
+    set_pin_mode_audio_seek, set_pin_nav_audio, set_pin_nav_image, set_pin_nav_others,
+    set_pin_nav_video, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
+    set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
+    set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
+    set_video_scale, set_video_volume, set_webview_idle, set_zoom_background,
+    toggle_check_for_updates, toggle_loop, toggle_normalize_video_volume, toggle_normalize_volume,
+    toggle_pin_always_on_top, toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video,
+    toggle_pin_shuffle, toggle_pin_update_enabled, toggle_pin_update_move_to_top,
+    toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
+    toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
+    toggle_render_html, toggle_startup, toggle_text_dont_preview_secrets,
+    toggle_text_show_extensionless, toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled,
+    toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
@@ -52,7 +52,7 @@ use super::ids::{
     ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE,
     ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE,
     ID_TRAY_INSTALL_BASE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
-    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
+    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
     ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
@@ -595,6 +595,14 @@ unsafe extern "system" fn tray_window_proc(
                         .contains(&cmd) =>
                     {
                         set_design_scale(cmd - ID_TRAY_DESIGN_SCALE_BASE)
+                    }
+                    // And how much of the display a model is drawn over, the same question
+                    // asked of a scene an installed f3d draws at whatever box it is given.
+                    cmd if (ID_TRAY_MODEL_SCALE_BASE
+                        ..ID_TRAY_MODEL_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_model_scale(cmd - ID_TRAY_MODEL_SCALE_BASE)
                     }
                     // And how much of the display a page of text is measured in, the same
                     // question the rows above it are asked of a document.

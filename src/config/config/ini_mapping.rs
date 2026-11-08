@@ -367,6 +367,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "model_scale",
+            Some(self.model_scale.as_str()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "ttc_face",
             Some(sanitize_ttc_face(self.ttc_face).to_string()),
         );
@@ -1067,6 +1072,13 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "design_scale") {
             if let Some(scale) = PreviewScale::from_str(&value) {
                 self.design_scale = scale;
+            }
+        }
+        // And a model's, against the room the display has for the picture an installed f3d
+        // draws of the scene — a scene has no size of its own to take a share of.
+        if let Some(value) = ini.get(CONFIG_SECTION, "model_scale") {
+            if let Some(scale) = PreviewScale::from_str(&value) {
+                self.model_scale = scale;
             }
         }
         // A page of text's is the one read the same way again, against the room it is

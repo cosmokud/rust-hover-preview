@@ -615,6 +615,40 @@ fn a_designs_scale_is_read_from_its_own_key() {
     assert_eq!(config.font_scale, PreviewScale::Percent(50));
 }
 
+/// A model's scale is the sixth of them and a setting of its own like the five: a scene has
+/// no size of its own to take a share of, so it starts at the whole of the room, and one key
+/// changing leaves the others where they were.
+#[test]
+fn a_models_scale_is_read_from_its_own_key() {
+    assert_eq!(DEFAULT_MODEL_SCALE, PreviewScale::FitToScreen);
+    assert_eq!(AppConfig::default().model_scale, DEFAULT_MODEL_SCALE);
+
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "vector_scale", Some("75".to_string()));
+    ini.set(CONFIG_SECTION, "ebook_scale", Some("25".to_string()));
+    ini.set(CONFIG_SECTION, "document_scale", Some("fit".to_string()));
+    ini.set(CONFIG_SECTION, "font_scale", Some("50".to_string()));
+    ini.set(CONFIG_SECTION, "design_scale", Some("75".to_string()));
+    ini.set(
+        CONFIG_SECTION,
+        "model_scale",
+        Some(" screen 50 ".to_string()),
+    );
+
+    let config = read_file(&mut ini);
+
+    assert_eq!(
+        config.model_scale,
+        PreviewScale::FitToScreenReduced(50),
+        "a model is a share of the display, so it is offered the display's shares"
+    );
+    assert_eq!(config.design_scale, PreviewScale::Percent(75));
+    assert_eq!(config.vector_scale, PreviewScale::Percent(75));
+    assert_eq!(config.ebook_scale, PreviewScale::Percent(25));
+    assert_eq!(config.document_scale, PreviewScale::FitToScreen);
+    assert_eq!(config.font_scale, PreviewScale::Percent(50));
+}
+
 /// Which face of a collection a specimen is of is a key of its own: a file that has never
 /// named one previews the first face, one that names a face is read at it, and a number
 /// outside the range the menu offers is brought back into it rather than kept.

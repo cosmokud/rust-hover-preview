@@ -813,6 +813,7 @@ fn the_avoid_submenu_carries_ids_of_its_own() {
         ID_TRAY_DOCUMENT_SCALE_BASE,
         ID_TRAY_FONT_SCALE_BASE,
         ID_TRAY_DESIGN_SCALE_BASE,
+        ID_TRAY_MODEL_SCALE_BASE,
     ]
     .map(|base| base..base + DOCUMENT_SCALE_CHOICES.len() as u16);
 
@@ -1009,6 +1010,7 @@ fn the_document_scale_ranges_are_not_another_submenus_range() {
         ID_TRAY_DOCUMENT_SCALE_BASE,
         ID_TRAY_FONT_SCALE_BASE,
         ID_TRAY_DESIGN_SCALE_BASE,
+        ID_TRAY_MODEL_SCALE_BASE,
     ] {
         let scales = base..base + DOCUMENT_SCALE_CHOICES.len() as u16;
 
@@ -1092,6 +1094,10 @@ fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
         ID_TRAY_DESIGN_SCALE_BASE,
         ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
     );
+    let model_scales = (
+        ID_TRAY_MODEL_SCALE_BASE,
+        ID_TRAY_MODEL_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+    );
     let ebook_scales = (
         ID_TRAY_EBOOK_SCALE_BASE,
         ID_TRAY_EBOOK_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
@@ -1129,6 +1135,7 @@ fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
         for document in [
             font_scales,
             design_scales,
+            model_scales,
             ebook_scales,
             document_scales,
             vector_scales,
@@ -1161,6 +1168,7 @@ fn the_bitmap_scaling_submenus_carry_ids_of_their_own() {
     for document in [
         font_scales,
         design_scales,
+        model_scales,
         ebook_scales,
         document_scales,
         vector_scales,
@@ -1258,6 +1266,10 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
         (
             ID_TRAY_DESIGN_SCALE_BASE,
             ID_TRAY_DESIGN_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
+        ),
+        (
+            ID_TRAY_MODEL_SCALE_BASE,
+            ID_TRAY_MODEL_SCALE_BASE + DOCUMENT_SCALE_CHOICES.len() as u16,
         ),
         (
             ID_TRAY_TEXT_SCALE_BASE,

@@ -617,7 +617,8 @@ pub(super) fn media_dimensions_of_kind(kind: PreviewType, path: &Path) -> Option
         PreviewType::Images => picture_box(path).or_else(|| magick_box(path)),
         // A model has no size of the file's own to be placed at: the picture f3d draws of one is
         // drawn at whatever box it is asked for, so what the layout is given is this box of the
-        // app's own scaled by the picture share (see `f3d_render::model_box`). A machine with no
+        // app's own scaled by the share `model_scale` names (see `f3d_render::model_box`).
+        // A machine with no
         // f3d reports no size, which is how a model comes to show nothing rather than a box nothing
         // would be drawn into.
         PreviewType::Models => f3d_render::available().then(f3d_render::model_box),
