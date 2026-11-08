@@ -888,21 +888,27 @@ pub(super) fn facts_right(card: &Card, content_right: i32, advance: i32) -> i32 
     }
 }
 
-/// How wide the whole facts line wants to be, its parting marks included: the length a card the room
+/// The facts a line draws, in the order it draws them: a fact with nothing to say is left out whole
+/// rather than given a parting mark of its own — `channels` is empty for a sound that states none,
+/// and a mark with nothing behind it is a mark between nothing and nothing.
+fn laid_facts(facts: &[Fact]) -> impl Iterator<Item = &Fact> {
+    facts.iter().filter(|fact| !fact.text.is_empty())
+}
+
+/// How wide the whole facts line wants to be, its parting marks included — the marks it really draws,
+/// one between two facts rather than one before every fact but the first: the length a card the room
 /// has no place for scrolls across itself (see `Card::facts_offset`).
 pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
-    facts
-        .iter()
-        .enumerate()
-        .map(|(index, fact)| {
-            text_width(&fact.text, advance)
-                + if index > 0 {
-                    text_width(FACT_SEPARATOR, advance)
-                } else {
-                    0
-                }
-        })
-        .sum()
+    let mut width = 0;
+
+    for (index, fact) in laid_facts(facts).enumerate() {
+        if index > 0 {
+            width += text_width(FACT_SEPARATOR, advance);
+        }
+        width += text_width(&fact.text, advance);
+    }
+
+    width
 }
 
 /// The facts as runs, each in its own ink, laid from `left` into the room that ends at `right` — the
@@ -912,6 +918,9 @@ pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
 /// so a fact that fits is never the one dropped. A line the room has no space for is the card's second
 /// scroll rather than a cut line: `offset` is how far the whole line has been carried back under the
 /// box, and what the box cannot hold is out of sight for now (see `Card::facts_offset`).
+///
+/// A parting mark is laid only where the fact after it is: the line ends on a character at every
+/// offset of its travel, never on the mark of a fact that has not come into the room yet.
 // Eight: the line, the room it is drawn in, and the three inks a fact can be set in — the page
 // reads all of them in one place and hands them to the one walk that lays them out.
 #[allow(clippy::too_many_arguments)]
@@ -927,18 +936,32 @@ fn fact_runs(
 ) -> Vec<PageRun> {
     let mut runs = Vec::new();
     let mut x = left - offset.max(0);
+    let mut first = true;
 
-    for (index, fact) in facts.iter().enumerate() {
-        if index > 0 {
-            x = push_fact_run(&mut runs, FACT_SEPARATOR, x, left, right, advance, muted);
+    for fact in laid_facts(facts) {
+        let mark = if first {
+            0
+        } else {
+            text_width(FACT_SEPARATOR, advance)
+        };
+        let start = x + mark;
+        let width = text_width(&fact.text, advance);
+
+        if (start + width).min(right) > start.max(left) {
+            if !first {
+                push_fact_run(&mut runs, FACT_SEPARATOR, x, left, right, advance, muted);
+            }
+
+            let ink = match fact.kind {
+                FactKind::Format => number,
+                FactKind::Reading => foreground,
+                FactKind::Note => muted,
+            };
+            push_fact_run(&mut runs, &fact.text, start, left, right, advance, ink);
         }
 
-        let ink = match fact.kind {
-            FactKind::Format => number,
-            FactKind::Reading => foreground,
-            FactKind::Note => muted,
-        };
-        x = push_fact_run(&mut runs, &fact.text, x, left, right, advance, ink);
+        x = start + width;
+        first = false;
     }
 
     runs

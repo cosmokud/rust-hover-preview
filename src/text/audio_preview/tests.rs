@@ -2448,3 +2448,87 @@ fn the_pin_says_it_is_on_top_in_the_ink_the_numbers_are_read_in() {
         );
     }
 }
+
+/// The facts line travels only as far as the runs it really draws want: a fact with nothing to say
+/// is no fact and no parting mark of its own, so a line whose channels fact is empty is a line of
+/// single marks whose travel is the width of the runs drawn and not one mark more.
+#[test]
+fn a_facts_line_is_no_wider_than_the_runs_it_draws() {
+    let mut card = card();
+    card.facts[2].text = channel_label(0);
+    assert!(
+        card.facts[2].text.is_empty(),
+        "a sound that states no channels says nothing"
+    );
+
+    let narrow = narrowest_card();
+    let advance = body_advance();
+    let room = facts_right(&card, narrow as i32 - metrics_padding(), advance) - metrics_padding();
+    let scroll = facts_scroll(&card, narrow, 96, options());
+    assert!(
+        scroll.moves(),
+        "the line is wider than the room the clock leaves for it"
+    );
+
+    // The room the card the whole line fits in draws it in, whole: what is laid there is what the
+    // travel was measured from.
+    let want = scroll.travel + room;
+    let wide = (want + metrics_padding() * 2 + body_advance() * 40) as u32;
+    let page = scrolled(&card, wide, 0);
+    let facts = page.facts.len() - 3;
+    let drawn: Vec<&str> = page.facts[..facts]
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect();
+    assert_eq!(
+        drawn,
+        [
+            "FLAC",
+            " · ",
+            "44.1 kHz",
+            " · ",
+            "1006 kbps",
+            " · ",
+            "12.3 MB"
+        ],
+        "an empty fact leaves one mark between the facts either side of it, not two"
+    );
+    let width: i32 = page.facts[..facts].iter().map(|run| run.width).sum();
+    assert_eq!(
+        width, want,
+        "the travel is the room short of the width of the runs the line draws"
+    );
+}
+
+/// A facts line scrolled across a card that has no room for it ends on a character at every offset
+/// of its travel: the parting mark before a fact is drawn only where that fact is, so the line never
+/// comes to rest on a dangling ` · `.
+#[test]
+fn a_scrolled_facts_line_never_ends_on_a_parting_mark() {
+    let card = card();
+    let narrow = narrowest_card();
+    let scroll = facts_scroll(&card, narrow, 96, options());
+    assert!(
+        scroll.travel > 0,
+        "the line is one the card has no room for"
+    );
+
+    for offset in 0..=scroll.travel {
+        let mut scrolled_card = card.clone();
+        scrolled_card.facts_offset = offset;
+        let page = scrolled(&scrolled_card, narrow, 0);
+        let facts = page.facts.len() - 3;
+        let drawn: String = page.facts[..facts]
+            .iter()
+            .map(|run| run.text.as_str())
+            .collect();
+        assert!(
+            !drawn.ends_with(" · "),
+            "at {offset} the line ends on a mark of a fact out of sight: {drawn:?}"
+        );
+        assert!(
+            !drawn.is_empty() && !drawn.ends_with(' '),
+            "at {offset} the line ends on a character of a fact: {drawn:?}"
+        );
+    }
+}
