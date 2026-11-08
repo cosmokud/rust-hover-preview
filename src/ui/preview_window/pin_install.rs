@@ -590,6 +590,9 @@ pub(super) struct PinInstall<'a> {
     /// The marquee a name too long for its card scrolls across, which is the card's own box —
     /// the frame that has just been loaded, rather than the one it replaced.
     pub(super) audio_name_scroll: &'a mut Option<audio_preview::NameScroll>,
+    /// The marquee a facts line the room the clock leaves has no place for scrolls across, which is
+    /// the same card's box (see `audio_preview::facts_scroll`).
+    pub(super) audio_facts_scroll: &'a mut Option<audio_preview::NameScroll>,
     /// Where a player's window belongs while a pin is up: the pin's media band, which is what the
     /// tick's own re-assertion of the order reads.
     pub(super) video_pos: &'a mut (i32, i32, i32, i32),
@@ -606,7 +609,7 @@ pub(super) struct PinInstall<'a> {
 /// Borrow the loop's own bookkeeping about what the pin is showing, for one install or one
 /// refusal.
 ///
-/// The fifteen arguments are the fifteen the struct carries and the order is the struct's, so
+/// The sixteen arguments are the sixteen the struct carries and the order is the struct's, so
 /// that reading the two side by side is reading one list rather than two that have to be matched
 /// up by hand — which is the only way a list this long can be kept right when a swap grows
 /// another thing to write. Nothing is copied and nothing is read: every one of them is a mutable
@@ -623,6 +626,7 @@ pub(super) fn pin_install<'a>(
     audio_repaint_at: &'a mut Instant,
     audio_card_dpi: &'a mut u32,
     audio_name_scroll: &'a mut Option<audio_preview::NameScroll>,
+    audio_facts_scroll: &'a mut Option<audio_preview::NameScroll>,
     video_pos: &'a mut (i32, i32, i32, i32),
     current_video_path: &'a mut Option<PathBuf>,
     current_show: &'a mut Option<PreviewMessage>,
@@ -639,6 +643,7 @@ pub(super) fn pin_install<'a>(
         audio_repaint_at,
         audio_card_dpi,
         audio_name_scroll,
+        audio_facts_scroll,
         video_pos,
         current_video_path,
         current_show,
@@ -739,6 +744,12 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
             dpi,
             current_audio_options(),
         ));
+        // And the facts line of that card, against the room the clock in it leaves: a file whose
+        // facts are wider than the card is scrolled by them rather than drawn without the tail of
+        // them (see `audio_preview::facts_scroll`).
+        let (elapsed, duration) = audio_clock(&path, start.started, start.from, None);
+        *install.audio_facts_scroll =
+            audio_facts_marquee(&path, elapsed, duration, card_width, dpi);
     }
 
     // Where a player's window belongs while a pin is up is the pin's media band, which is what

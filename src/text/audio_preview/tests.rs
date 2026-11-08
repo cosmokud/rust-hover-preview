@@ -25,6 +25,7 @@ fn card() -> Card {
         duration: Some(562.0),
         elapsed: Some(67.0),
         name_offset: 0,
+        facts_offset: 0,
         beat: 0.0,
         controls: None,
     }
@@ -718,6 +719,62 @@ fn the_facts_have_the_room_the_clock_leaves_them() {
             run.text
         );
     }
+}
+
+/// A facts line the room the clock leaves has no place for is scrolled across the card the way the
+/// name is — the offset carries the whole line, parting marks and all, under the box that clips it —
+/// and the far end of that travel is the last fact shown beside the clock.
+#[test]
+fn the_facts_line_is_scrolled_where_the_room_has_no_place_for_it() {
+    let narrow = narrowest_card();
+    let advance = body_advance();
+    let padding = metrics_padding();
+    let line = text_width("FLAC · 44.1 kHz · stereo · 1006 kbps", advance);
+    let readout = text_width("1:07 / 9:22", advance);
+    let room = narrow as i32 - padding * 2 - readout - advance * TIME_GAP_ADVANCES;
+
+    let scroll = facts_scroll(&card(), narrow, 96, options());
+    assert!(
+        scroll.moves(),
+        "the line is wider than the room the clock leaves for it"
+    );
+    assert_eq!(scroll.offset(), 0, "it starts at the start");
+    assert_eq!(
+        scroll.travel,
+        line - room,
+        "the travel is the whole of what the line runs past the room"
+    );
+
+    // At the far end of the travel the last fact is in sight, and none of the line is drawn over the
+    // clock it is scrolling beside.
+    let mut scrolled_card = card();
+    scrolled_card.facts_offset = scroll.travel;
+    let page = scrolled(&scrolled_card, narrow, 0);
+    let facts = page.facts.len() - 3;
+    let room_right = page.facts[facts].x - advance * TIME_GAP_ADVANCES;
+    let drawn: String = page.facts[..facts]
+        .iter()
+        .map(|run| run.text.as_str())
+        .collect();
+    assert!(
+        drawn.ends_with("1006 kbps"),
+        "the end of the line comes into sight: {drawn:?}"
+    );
+    for run in &page.facts[..facts] {
+        assert!(
+            run.x >= padding && run.x + run.width <= room_right,
+            "{:?} is drawn outside the room the clock leaves it",
+            run.text
+        );
+    }
+
+    // And a card with room for the whole line beside its clock never travels: it is drawn once and
+    // held, the way a name that fits is.
+    let wide = (line + readout + advance * TIME_GAP_ADVANCES + padding * 2) as u32;
+    assert!(
+        !facts_scroll(&card(), wide, 96, options()).moves(),
+        "a facts line that fits never moves"
+    );
 }
 
 /// The numbers a card is written with, at the lengths and rates a file can have.

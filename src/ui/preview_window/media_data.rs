@@ -296,9 +296,9 @@ impl MediaData {
     /// A painted preview is drawn once and held, so the two things about a card that move are
     /// drawn by asking for the page again — the same arrangement a text preview's scrolling has
     /// (see `repaint_text_preview`), and what keeps the card's own layout in one place: the box
-    /// it was painted in is the box it is painted in again, and only the clock, the bar under
-    /// it, the scroll of a name the card has no room for, what the card's own controls are
-    /// saying and the pulse of the mark beside the name differ.
+    /// the box it is painted in the box it is painted in again, and only the clock, the bar under
+    /// it, the scroll of a name or a facts line the card has no room for, what the card's own
+    /// controls are saying and the pulse of the mark beside the name differ.
     ///
     /// `chrome` carries the whole of that last one, the loop's `playing` included — it is read in
     /// one look by `pinned_audio_chrome` rather than handed over beside itself, because both
@@ -312,6 +312,7 @@ impl MediaData {
         duration: Option<f64>,
         dpi: u32,
         name_offset: i32,
+        facts_offset: i32,
         chrome: Option<CardChrome>,
         beat: f32,
     ) -> bool {
@@ -320,7 +321,8 @@ impl MediaData {
         };
         let (width, height) = (frame.width, frame.height);
 
-        let Some(mut card) = audio_card(path, elapsed, duration, name_offset, chrome) else {
+        let Some(mut card) = audio_card(path, elapsed, duration, name_offset, facts_offset, chrome)
+        else {
             return false;
         };
         card.beat = beat;
@@ -363,8 +365,14 @@ impl MediaData {
         duration: Option<f64>,
         size: (u32, u32),
     ) -> bool {
-        let Some(card) = audio_card(path, elapsed, duration, clock.name_offset, clock.chrome)
-        else {
+        let Some(card) = audio_card(
+            path,
+            elapsed,
+            duration,
+            clock.name_offset,
+            clock.facts_offset,
+            clock.chrome,
+        ) else {
             return false;
         };
         // The layout a maximize or a resize asks for is asked of the frame

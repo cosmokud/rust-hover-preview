@@ -9,10 +9,13 @@
 //! another answers a press in the middle of the facts line, so the boxes are rebuilt from the
 //! page's own row rather than kept beside the card.
 
-use super::page::{bar_band, bar_row, build_page, control_boxes, holds, paint, text_width};
+use super::page::{
+    bar_band, bar_row, build_page, control_boxes, facts_right, facts_width, holds, paint,
+    text_width,
+};
 use crate::config::config::TextTheme;
 use crate::readers::audio_track::Track;
-use crate::text::text_paint::{DibSurface, TextMetrics};
+use crate::text::text_paint::{DibSurface, TextMetrics, BODY_LEVEL};
 use crate::text::text_theme;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -144,6 +147,10 @@ pub(crate) struct Card {
     /// it: what a repaint of a card whose name moves hands over, and nothing at all for the
     /// card a hover is measured with or the first frame of one (see [`NameScroll`]).
     pub name_offset: i32,
+    /// How far the facts line is scrolled, in pixels, where the card has no room for the whole of
+    /// it — the same arrangement the name has, settled against the room the clock leaves rather than
+    /// the card's own box (see [`NameScroll`] and [`facts_scroll`]).
+    pub facts_offset: i32,
     /// The beat the mark beside the name is beating at, 0.0..=1.0: how loud the bass under the
     /// sound is now, which is how far the ripples around the mark have travelled out. Zero —
     /// the mark at rest, with the dot and nothing around it — is a card with no player behind
@@ -249,19 +256,24 @@ impl NameScroll {
     /// the name fits — a card whose name is drawn once and held.
     pub(crate) fn of(name: &str, width: u32, dpi: u32, options: AudioPreviewOptions) -> Self {
         let Some((advance, room)) = name_room(width, dpi, options) else {
-            return Self {
-                offset: 0,
-                travel: 0,
-                advance: 1,
-                direction: 1,
-                hold_until: Instant::now(),
-            };
+            return Self::fitted(0, 0, 1);
         };
 
+        Self::fitted(text_width(name, advance), room, advance)
+    }
+
+    /// The scroll a run `want` pixels wide needs in `room` pixels of it, at the advance of the font it
+    /// is drawn in: how far it travels before its end is in sight, and nothing at all where it fits — a
+    /// run drawn once and held.
+    ///
+    /// It is the arithmetic a card's facts line is scrolled by as well as its name: the two things
+    /// about a card that move sideways are one motion, at one speed, ping-ponged one way (see
+    /// [`facts_scroll`]).
+    pub(super) fn fitted(want: i32, room: i32, advance: i32) -> Self {
         Self {
             offset: 0,
-            travel: (text_width(name, advance) - room).max(0),
-            advance,
+            travel: (want - room).max(0),
+            advance: advance.max(1),
             direction: 1,
             hold_until: Instant::now() + NAME_HOLD,
         }
@@ -336,6 +348,49 @@ fn name_room(width: u32, dpi: u32, options: AudioPreviewOptions) -> Option<(i32,
     }
 
     result
+}
+
+/// The scroll a card's facts line needs: how far the whole line runs past the room the clock leaves
+/// for it, at the font the line is drawn in — and nothing at all where the line fits, which is every
+/// card wide enough for its facts (see [`Card::facts_offset`]).
+///
+/// Worked out here for the same reason `NameScroll::of` is: the preview loop owns the scroll and has
+/// none of the page's layout in hand, so the line it is measured from is measured with the page's own
+/// arithmetic rather than a second one beside it.
+///
+/// shortcut: the room is read of the clock the card is put up with, so a clock that grows a digit while
+/// the line is scrolling leaves the last fact a few pixels out of sight until the next card; upgrade if
+/// a scrolling card is ever on screen across a minute an hour long.
+pub(crate) fn facts_scroll(
+    card: &Card,
+    width: u32,
+    dpi: u32,
+    options: AudioPreviewOptions,
+) -> NameScroll {
+    let dc = unsafe { CreateCompatibleDC(None) };
+    if dc.0.is_null() {
+        return NameScroll::fitted(0, 0, 1);
+    }
+
+    let scroll = TextMetrics::new(dc, dpi, options.font_scale_percent)
+        .map(|metrics| {
+            let advance = metrics.advance[BODY_LEVEL as usize].max(1);
+            let left = metrics.padding;
+            let right = facts_right(card, width as i32 - metrics.padding, advance);
+
+            NameScroll::fitted(
+                facts_width(&card.facts, advance),
+                (right - left).max(0),
+                advance,
+            )
+        })
+        .unwrap_or_else(|| NameScroll::fitted(0, 0, 1));
+
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    scroll
 }
 
 /// The box the card wants, bounded by what the display can give it.

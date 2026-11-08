@@ -406,7 +406,7 @@ pub(super) fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(
 
             // Nothing: this is the card a *hover* is measured with, and a hover's own window is a window
             // nobody is in (see `audio_card`).
-            let card = audio_card(&source, None, None, 0, None)?;
+            let card = audio_card(&source, None, None, 0, 0, None)?;
             audio_preview::measure(&card, room.width, room.height, dpi, options)
         },
     )

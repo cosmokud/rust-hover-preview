@@ -228,9 +228,10 @@ pub(super) fn drawn_as_audio(path: &Path) -> bool {
 /// What a sound's card says, with the clock as it stands — or nothing for a file with no track
 /// behind it, which is a file no probe has answered for or one nothing here can play.
 ///
-/// `name_offset` is how far a name the card has no room for has been scrolled: it is nothing
-/// for the card a hover is measured with and for the first frame of one, and what the repaints
-/// of a moving card hand over (see `audio_preview::NameScroll`).
+/// `name_offset` is how far a name the card has no room for has been scrolled and `facts_offset`
+/// how far its facts line has been, in the same way: both are nothing for the card a hover is
+/// measured with and for the first frame of one, and both are what the repaints of a moving card
+/// hand over (see `audio_preview::NameScroll`).
 ///
 /// `chrome` is what the card's own controls are saying, and nothing at all for a card a hover
 /// shows — a hover's own window is a window nobody is in, so a click on one of its buttons would
@@ -242,6 +243,7 @@ pub(super) fn audio_card(
     elapsed: Option<f64>,
     duration: Option<f64>,
     name_offset: i32,
+    facts_offset: i32,
     chrome: Option<CardChrome>,
 ) -> Option<Card> {
     let Probed::Track(track) = audio_track::probed(path) else {
@@ -254,16 +256,41 @@ pub(super) fn audio_card(
         duration: duration.or(track.duration),
         elapsed,
         name_offset,
+        facts_offset,
         beat: 0.0,
         controls: chrome,
     })
+}
+
+/// The scroll a sound's facts line needs, if it needs one: the line the card is drawn with, measured
+/// against the room the clock in it leaves. Nothing for a file no probe answers for, which is a file
+/// with no card, and so no facts line above its bar either (see `audio_preview::facts_scroll`).
+///
+/// It is asked at the two moments a card is put up — a preview that has just arrived and a file
+/// swapped into a pin — for the same reason the name's own scroll is: a scroll is put up with the
+/// card rather than left over from the file before it.
+pub(super) fn audio_facts_marquee(
+    path: &Path,
+    elapsed: Option<f64>,
+    duration: Option<f64>,
+    width: u32,
+    dpi: u32,
+) -> Option<audio_preview::NameScroll> {
+    let card = audio_card(path, elapsed, duration, 0, 0, None)?;
+
+    Some(audio_preview::facts_scroll(
+        &card,
+        width,
+        dpi,
+        current_audio_options(),
+    ))
 }
 
 /// The card a sound is previewed as, painted into the box the layout settled on.
 pub(super) fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<MediaData> {
     // No controls: this is the card a *hover* shows, whose own window is a window nobody is in
     // (see `audio_card`).
-    let card = audio_card(path, None, None, 0, None)?;
+    let card = audio_card(path, None, None, 0, 0, None)?;
     // The share the frame is painted at is the frame's own from
     // here on: every repaint of it paints with the options that
     // share names rather than asking the configuration again (see

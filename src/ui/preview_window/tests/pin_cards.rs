@@ -403,11 +403,12 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
     );
 
     let options = current_audio_options();
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let pinned = audio_card(
         &path,
         None,
         None,
+        0,
         0,
         Some(CardChrome {
             detached: false,
@@ -505,7 +506,7 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
     );
 
     // The card the hover drew, which is the card a pin inherits until it lays its own out.
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) = audio_preview::measure(&hover, 4096, 2160, 96, current_audio_options())
         .expect("a measured card");
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
@@ -543,6 +544,7 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
             from: 0.0,
             paused: None,
             name_offset: 0,
+            facts_offset: 0,
             dpi: 96,
             chrome: Some(CardChrome {
                 detached: false,
@@ -594,7 +596,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
     // frame's first painting, at the anchor's share.
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let painted_with = current_audio_scale();
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) =
         audio_preview::measure(&hover, 4096, 2160, 96, audio_options_of(painted_with))
             .expect("a measured card");
@@ -623,7 +625,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
         always_on_top: true,
     });
     assert!(
-        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome, 0.0),
+        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, 0, chrome, 0.0),
         "the card is repainted"
     );
 
@@ -640,7 +642,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
         (width, height),
         "the repainted frame keeps the box it was painted at"
     );
-    let card = audio_card(&path, Some(67.0), Some(180.0), 0, chrome).expect("a card");
+    let card = audio_card(&path, Some(67.0), Some(180.0), 0, 0, chrome).expect("a card");
     let (pixels, ..) =
         audio_preview::render(&card, width, height, 96, audio_options_of(painted_with))
             .expect("a painted card");
@@ -676,7 +678,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
     // A card in the media slot at the anchor, which is what a
     // take-up of a sound takes its options from: the frame's
     // first painting, at the share the card is to be drawn at.
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) = audio_preview::measure(&hover, 4096, 2160, 96, current_audio_options())
         .expect("a measured card");
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
@@ -808,7 +810,7 @@ fn a_repaint_still_follows_the_theme_setting() {
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let painted_with = current_audio_scale();
     let painted_theme = current_audio_theme();
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) =
         audio_preview::measure(&hover, 4096, 2160, 96, audio_options_of(painted_with))
             .expect("a measured card");
@@ -848,7 +850,7 @@ fn a_repaint_still_follows_the_theme_setting() {
         always_on_top: true,
     });
     assert!(
-        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome, 0.0),
+        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, 0, chrome, 0.0),
         "the card is repainted"
     );
 
@@ -858,7 +860,7 @@ fn a_repaint_still_follows_the_theme_setting() {
     // is a different painting, so the equality is the assertion
     // that the repaint followed the theme and nothing else.
     let frame = media.frames.first().expect("a frame").clone();
-    let card = audio_card(&path, Some(67.0), Some(180.0), 0, chrome).expect("a card");
+    let card = audio_card(&path, Some(67.0), Some(180.0), 0, 0, chrome).expect("a card");
     let (pixels, ..) =
         audio_preview::render(&card, width, height, 96, audio_options_of(painted_with))
             .expect("a painted card");
@@ -894,7 +896,7 @@ fn a_pin_taken_up_after_a_change_keeps_the_hovers_size() {
     // The hover's card, loaded into the media slot at the
     // anchor, and the hover's box measured at the anchor: the
     // box the hover was given.
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let anchor = current_audio_scale();
     let room = audio_box_room(work_area_at(100, 100), anchor, 96);
     let (hover_width, hover_height) = audio_preview::measure(
@@ -1000,7 +1002,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
     // The frame's first painting, at the anchor's share.
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let anchor = current_audio_scale();
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) = audio_preview::measure(&hover, 4096, 2160, 96, audio_options_of(anchor))
         .expect("a measured card");
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
@@ -1037,6 +1039,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
                 from: 0.0,
                 paused: None,
                 name_offset: 0,
+                facts_offset: 0,
                 dpi: 96,
                 chrome,
             },
@@ -1060,7 +1063,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
         size,
         "the relaid-out frame fills the box it was given"
     );
-    let card = audio_card(&path, Some(67.0), Some(180.0), 0, chrome).expect("a card");
+    let card = audio_card(&path, Some(67.0), Some(180.0), 0, 0, chrome).expect("a card");
     let (pixels, ..) = audio_preview::render(&card, size.0, size.1, 96, audio_options_of(anchor))
         .expect("a painted card");
     assert_eq!(

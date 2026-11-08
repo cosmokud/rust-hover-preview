@@ -679,6 +679,7 @@ pub(super) fn build_page(
         &card.facts,
         content_left,
         facts_right(card, content_right, body_advance),
+        card.facts_offset,
         body_advance,
         muted,
         number,
@@ -855,7 +856,7 @@ fn clock_width(card: &Card, advance: i32) -> i32 {
 ///
 /// A card with no clock behind it ends the line at the content box's own edge: there is nothing to
 /// keep the room off.
-fn facts_right(card: &Card, content_right: i32, advance: i32) -> i32 {
+pub(super) fn facts_right(card: &Card, content_right: i32, advance: i32) -> i32 {
     let clock = clock_width(card, advance);
 
     if clock == 0 {
@@ -865,23 +866,41 @@ fn facts_right(card: &Card, content_right: i32, advance: i32) -> i32 {
     }
 }
 
+/// How wide the whole facts line wants to be, its parting marks included: the length a card the room
+/// has no place for scrolls across itself (see `Card::facts_offset`).
+pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
+    facts
+        .iter()
+        .enumerate()
+        .map(|(index, fact)| {
+            text_width(&fact.text, advance)
+                + if index > 0 {
+                    text_width(FACT_SEPARATOR, advance)
+                } else {
+                    0
+                }
+        })
+        .sum()
+}
+
 /// The facts as runs, each in its own ink, laid from `left` into the room that ends at `right` — the
 /// room the clock leaves — with a parting mark before every fact after the first.
 ///
 /// A fact is drawn whole where the whole of it fits: the room is the room the readout really leaves,
-/// so a fact that fits is never the one dropped. What the room cannot hold is out of sight past its
-/// edge rather than ellipsised or dropped, because a line with no room for it is a line that is
-/// scrolled (see `Card::facts_offset`).
+/// so a fact that fits is never the one dropped. A line the room has no space for is the card's second
+/// scroll rather than a cut line: `offset` is how far the whole line has been carried back under the
+/// box, and what the box cannot hold is out of sight for now (see `Card::facts_offset`).
 fn fact_runs(
     facts: &[Fact],
     left: i32,
     right: i32,
+    offset: i32,
     advance: i32,
     muted: [u8; 3],
     number: [u8; 3],
 ) -> Vec<PageRun> {
     let mut runs = Vec::new();
-    let mut x = left;
+    let mut x = left - offset.max(0);
 
     for (index, fact) in facts.iter().enumerate() {
         if index > 0 {
