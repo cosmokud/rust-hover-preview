@@ -12,6 +12,14 @@
 
 - **The two switches of a page's find bar say what they are while the pointer rests on them** — `Aa` and `W` are glyphs rather than words, so `Match Case` and `Match Whole Word` are drawn as a small card below the card, centred under the switch the hand is on, in the same panel and shadow a caption button's own name is floated in.
 
+### Changed
+
+- **A page's find bar is one row, the widget an editor's find box is** — the query, `Aa`, `W`, the count, the two steps and the close now sit side by side on a single row rather than the query taking a row of its own above the controls: the card is shorter, so it covers less of the page it is searching, and the query is what the rest of the row is left as (a page narrower than the card gives up the field's room rather than a control's).
+
+- **`Ctrl`+`F` selects the text it seeds the box with** — a page's selection is put in the query whole and all of it selected, with the caret at its end, so the next character typed is the new search rather than an append to the word that was picked out: the same box VS Code puts a seeded selection in.
+
+- **`↑` and `↓` step the find box through the queries this run has searched** — the last fifty, most recent first, with a query that is already in it moved to the front rather than repeated, written down when a query is committed (by a step through the matches, by `Esc` emptying it or by the bar being closed). `↑` from a query being typed keeps it as the draft that `↓` comes back to, and either end of the list stops rather than wrapping. The matches are stepped by `Enter`/`Shift`+`Enter` and `F3`/`Shift`+`F3` now — `↑`/`↓` are the field's own keys, an editor's, and `PgUp`/`PgDn` are nothing under a bar at all.
+
 ### Fixed
 
 - **A page's find count is drawn whole, however many places the query was found** — `1210/19000` was cut after its first digits, because the count was given a fixed column measured for a count of four figures; the column is the room its own text needs now, taken out of the query's field rather than out of the count, so a page of nineteen thousand matches reads as `1210/19000` with every digit on it.

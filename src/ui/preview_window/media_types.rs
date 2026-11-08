@@ -758,6 +758,11 @@ pub(super) struct FindState {
     /// Which surface the keyboard is aimed at, which is what a `Ctrl`+`C` under the bar copies from
     /// (see `FindFocus` and `text_find::copy_target`).
     pub(super) focused: FindFocus,
+    /// Which query of the run's history the field is showing, or nothing while it is showing what the
+    /// reader is typing, and the query they were typing before the history was walked — what `↓` comes
+    /// back to (see `text_find::step_the_history`).
+    pub(super) history_at: Option<usize>,
+    pub(super) history_draft: Option<String>,
 }
 
 /// The two surfaces a pinned page with a find bar over it has, and which of them was focused last.
@@ -817,6 +822,10 @@ pub(super) enum FindEdit {
     Redo,
     /// The reader stepped forward or back through the matches, wrapping at either end.
     Step(i32),
+    /// The reader stepped back through the queries this run has searched (`-1`), or forward again to
+    /// the one they were typing (`1`): what `↑` and `↓` ask of a find field, the widget an editor
+    /// answers them in (see `text_find::step_the_history`).
+    History(i32),
     /// The case switch flipped, and the search is to run again under it (see `text_find::press`).
     ToggleCase,
     /// The whole-word switch flipped, and the search is to run again under it.

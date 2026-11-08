@@ -34,6 +34,108 @@ pub(super) const HOLD_REPEAT_MS: u64 = 90;
 /// that arrived a second late owes a hand the step it missed, not a walk through half the page.
 const HOLD_CATCH_UP: usize = 3;
 
+/// How many queries the run keeps to step back through, and the text one step puts in the field.
+///
+/// The list is what `↑` and `↓` walk, an editor's find widget's own history: the last fifty queries
+/// this run searched, most recent first, with a query that is already in it moved to the front rather
+/// than repeated (see `remember_the_query` and `step_the_history`).
+const HISTORY_LIMIT: usize = 50;
+
+/// The queries this run has searched, most recent first — the history `↑` and `↓` walk in a find
+/// bar's field (see `step_the_history`).
+///
+/// **The run's rather than the page's.** A page's state goes with the file it belongs to, so a reader
+/// searching the same word in the next document would find an empty list there; an editor's find
+/// widget keeps one history for the session, which is what this is.
+static SEARCHED: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Forget every query this run has searched, which a test of the history does before it asks: the list
+/// is the run's rather than a page's, so every test that searched into it shares one (see `SEARCHED`).
+#[cfg(test)]
+pub(super) fn forget_the_history() {
+    if let Ok(mut searched) = SEARCHED.lock() {
+        searched.clear();
+    }
+}
+
+/// Remember a query the reader has finished asking: what a step through the matches, an emptied field
+/// and a closed bar commit — the moments an editor's find widget writes its history (see
+/// `step_the_history`).
+///
+/// Nothing is written for an empty query, and a query already in the list is moved to the front rather
+/// than added again: the list is what a hand reaches back through, and the same word twice in a row is
+/// one entry.
+fn remember_the_query(query: &str) {
+    let query = query.trim();
+    if query.is_empty() {
+        return;
+    }
+
+    let Ok(mut searched) = SEARCHED.lock() else {
+        return;
+    };
+    searched.retain(|kept| kept != query);
+    searched.insert(0, query.to_string());
+    searched.truncate(HISTORY_LIMIT);
+}
+
+/// Step the field back through the queries this run has searched, or forward again to the one the
+/// reader was typing.
+///
+/// **`↑` from a query being typed keeps it.** The first step back stores what the field held as the
+/// draft, so `↓` returns to it — a history that swallowed a half-typed query would be a search the
+/// reader lost for pressing the wrong arrow. `↑` at the oldest entry stays on it, and `↓` with the
+/// field already showing the draft does nothing, which is the two ends of the list.
+///
+/// The entry is put in the field the way a seed is — whole, one line, all of it selected — so the next
+/// character typed is the new query rather than an append to the one stepped to (see
+/// `text_find_field::Field::seed`).
+fn step_the_history(find: &mut FindState, delta: i32) {
+    let history = SEARCHED
+        .lock()
+        .map(|searched| searched.clone())
+        .unwrap_or_default();
+    if history.is_empty() {
+        return;
+    }
+
+    let Some(at) = find.history_at else {
+        // A step forward with nothing stepped back is the end of the list the reader is already at.
+        if delta > 0 {
+            return;
+        }
+
+        find.history_draft = Some(find.field.text().to_string());
+        if !find.field.seed(&history[0]) {
+            return;
+        }
+        find.history_at = Some(0);
+        return;
+    };
+
+    // `-1` is a step back, and the list is most recent first: a step back is a step *up* the list.
+    let next = at as i32 - delta;
+    if next < 0 {
+        // Back past the newest entry is the query the reader was typing, which is where the list ends.
+        let draft = find.history_draft.take().unwrap_or_default();
+        if draft.is_empty() {
+            find.field.clear();
+        } else {
+            find.field.seed(&draft);
+            find.field.select_all();
+        }
+        find.history_at = None;
+        return;
+    }
+
+    let Some(entry) = history.get(next as usize) else {
+        return;
+    };
+    if find.field.seed(entry) {
+        find.history_at = Some(next as usize);
+    }
+}
+
 /// Whether the bar is up over the page on screen.
 pub(super) fn is_open() -> bool {
     CURRENT_MEDIA
@@ -478,6 +580,10 @@ pub(super) fn open_text_find() {
         };
 
         find.focused = FindFocus::Field;
+        // A query put in the bar is a new search rather than a step through the run's history: what the
+        // reader stepped to is behind them (see `step_the_history`).
+        find.history_at = None;
+        find.history_draft = None;
 
         if find.open {
             // A bar that is up takes a seed and searches it; with nothing seeded — the reader who is
@@ -645,10 +751,10 @@ pub(super) fn key_edit(vk: i32) -> Option<FindEdit> {
 }
 
 /// What one key means to a bar that is up: `←`/`→` move the caret (`Ctrl` by a word, `Shift`
-/// extending), `Home`/`End` take the ends of the query (`Shift` extending), `↑`/`PgUp` and
-/// `↓`/`PgDn` step the matches, `Enter`/`Shift`+`Enter` step on and back, `F3` steps on, `Esc`
-/// clears the query or closes the bar, `Backspace`/`Delete` delete (`Ctrl` by a word), and `Tab` is
-/// inert.
+/// extending), `Home`/`End` take the ends of the query (`Shift` extending), `↑` and `↓` step back and
+/// forward through the queries this run has searched, `Enter`/`Shift`+`Enter` step the matches on and
+/// back, `F3`/`Shift`+`F3` step them the same way, `Esc` clears the query or closes the bar,
+/// `Backspace`/`Delete` delete (`Ctrl` by a word), and `Tab` is inert.
 ///
 /// **This is the only table that reads a key, and a message is its only road.** The keyboard hook
 /// stands down for the whole of a bar's life (see `key_input::publish_find_bar_up`), so every one of
@@ -656,14 +762,11 @@ pub(super) fn key_edit(vk: i32) -> Option<FindEdit> {
 /// that used to shadow it is what let a `Space` and a `T` rot unnoticed — the two keys a query
 /// cannot be written without, and the two the hook ate before a character could exist.
 ///
-/// The order is the one every find bar a reader has used before this one has: `Enter` and the down
-/// arrow step on, `Shift`+`Enter` and the up arrow step back, and both wrap at the ends. The page
-/// keys step the matches rather than turning the page, which is what a find bar's up and down are
-/// for; a key the field does not name is swallowed before it can reach the page's own table (see
-/// `window_proc`).
-///
-/// `key_edit_with` is named for its modifiers so a test can ask about `Ctrl`+`←` without holding
-/// `Ctrl` down; `key_edit` is the window's call, and it polls them (see `Modifiers`).
+/// **The order is an editor's find widget's, not a browser's.** `↑` and `↓` are the run's search
+/// history rather than the matches, `Enter` and `Shift`+`Enter` are the two steps through the matches
+/// and `F3` repeats `Enter`; the page keys are nothing here at all, because a find widget's up and
+/// down belong to its own field and a hard page is a scroll the reader has not asked for. A key the
+/// field does not name is swallowed before it can reach the page's own table (see `window_proc`).
 pub(super) fn key_edit_with(vk: i32, held: Modifiers) -> Option<FindEdit> {
     let Modifiers { shift, control } = held;
 
@@ -675,14 +778,20 @@ pub(super) fn key_edit_with(vk: i32, held: Modifiers) -> Option<FindEdit> {
         return Some(FindEdit::Step(if shift { -1 } else { 1 }));
     }
 
-    // The two arrows, the two page keys and `F3` step the matches whether or not `Ctrl` is down: they
-    // are the find's own keys, and the bar must not stop stepping the moment a hand rests on `Ctrl`.
-    if vk == VK_DOWN.0 as i32 || vk == VK_NEXT.0 as i32 || vk == VK_F3.0 as i32 {
-        return Some(FindEdit::Step(1));
+    // `F3` repeats `Enter`, and `Shift` makes it the step back — the pair a reader's hand knows from
+    // every find a document window has ever had. The two arrows are the field's own history, so they
+    // are answered whether or not `Ctrl` is down: a hand resting on the modifier is not a hand asking
+    // for something else (see `step_the_history`).
+    if vk == VK_F3.0 as i32 {
+        return Some(FindEdit::Step(if shift { -1 } else { 1 }));
     }
 
-    if vk == VK_UP.0 as i32 || vk == VK_PRIOR.0 as i32 {
-        return Some(FindEdit::Step(-1));
+    if vk == VK_UP.0 as i32 {
+        return Some(FindEdit::History(-1));
+    }
+
+    if vk == VK_DOWN.0 as i32 {
+        return Some(FindEdit::History(1));
     }
 
     if control {
@@ -871,6 +980,10 @@ pub(super) unsafe fn settle(hwnd: HWND) {
                     let before = find.field.text().to_string();
                     find.field.paste(&pasted);
                     if find.field.text() != before {
+                        // A pasted query is the reader's own, not a step through the history they had
+                        // walked to (see `step_the_history`).
+                        find.history_at = None;
+                        find.history_draft = None;
                         find.blink.restart(Instant::now(), caret_blink());
                         settled.query = find.field.text().to_string();
                         settled.search = true;
@@ -1055,6 +1168,10 @@ fn take_settled() -> Option<Settled> {
     };
     let before = find.field.text().to_string();
     let ends_before = (find.field.caret(), find.field.anchor());
+    // The query as a step through the run's history left it, or nothing while this batch stepped
+    // through none: what tells a field the reader typed over from one the history put there (see
+    // `step_the_history`).
+    let mut after_the_history: Option<String> = None;
 
     for edit in std::mem::take(&mut find.pending) {
         match edit {
@@ -1106,14 +1223,30 @@ fn take_settled() -> Option<Settled> {
                 settled.search = true;
             }
             FindEdit::SearchAgain => settled.search = true,
-            FindEdit::Step(delta) => settled.step += delta,
+            FindEdit::Step(delta) => {
+                settled.step += delta;
+                // A query stepped through is a query the reader is done asking, and that is what the
+                // run's history is written from: `Enter`, `F3` and the two chevrons commit it (see
+                // `remember_the_query`).
+                remember_the_query(find.field.text());
+            }
+            FindEdit::History(delta) => {
+                step_the_history(find, delta);
+                after_the_history = Some(find.field.text().to_string());
+            }
             FindEdit::ClearOrClose => {
                 // `Esc` is the field's clear first and the bar's close second: a query with text is
                 // emptied and left standing, and a query already empty is the bar going away. One
                 // key does both in turn rather than two keys doing one each, which is what makes it
                 // the clearing key a reader reaches for without closing what they were in.
                 if !find.field.text().is_empty() {
+                    // A query emptied is a query finished with, so it goes into the history the
+                    // reader can step back to — and the history it was stepped from is left behind
+                    // (see `remember_the_query`).
+                    remember_the_query(find.field.text());
                     find.field.clear();
+                    find.history_at = None;
+                    find.history_draft = None;
                     continue;
                 }
 
@@ -1129,6 +1262,9 @@ fn take_settled() -> Option<Settled> {
                 break;
             }
             FindEdit::Close => {
+                // A bar put away is a search finished with: what it was asking goes into the run's
+                // history, where `Ctrl`+`F` and `↑` can bring it back (see `remember_the_query`).
+                remember_the_query(find.field.text());
                 find.open = false;
                 find.matches.clear();
                 find.current = None;
@@ -1155,6 +1291,16 @@ fn take_settled() -> Option<Settled> {
     // field's blink lit while the screen still shows the phase it was in (see `settle`).
     if (find.field.caret(), find.field.anchor()) != ends_before || find.field.text() != before {
         find.blink.restart(Instant::now(), caret_blink());
+    }
+
+    // A query the reader is typing is the draft that `↓` comes back to, so the history they had stepped
+    // to is behind them the moment the field changes by hand: what they type is their own search, not a
+    // correction of the one they stepped to (see `step_the_history`). Compared against the query the
+    // history left rather than against the one the batch began with, so a character typed *after* a step
+    // is a change of the reader's own and a step after a typed one is not.
+    if find.history_at.is_some() && after_the_history.as_deref() != Some(find.field.text()) {
+        find.history_at = None;
+        find.history_draft = None;
     }
 
     settled.query = find.field.text().to_string();

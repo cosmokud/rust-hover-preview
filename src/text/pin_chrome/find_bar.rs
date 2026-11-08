@@ -41,8 +41,13 @@ use crate::text::text_paint::{self, DibSurface};
 use std::cell::RefCell;
 use windows::Win32::Foundation::RECT;
 
-/// The card's size and the room its rows are given, in the pixels a display's scale multiplies.
-const FIND_BAR_WIDTH: i32 = 320;
+/// The card's size and the room its row is given, in the pixels a display's scale multiplies.
+///
+/// **One row, and wide enough to be one.** Everything a search is asked and stepped with is on the
+/// row beside the query, so a card narrow enough for two rows of it would leave a field a word wide:
+/// the width is what an editor's find widget takes, and a page that has less than that gives up the
+/// margin and then the card rather than the field (see `find_bar_layout`).
+const FIND_BAR_WIDTH: i32 = 380;
 const FIND_BAR_ROW_HEIGHT: i32 = 22;
 const FIND_BAR_PADDING: f32 = 7.0;
 const FIND_BAR_MARGIN: f32 = 10.0;
@@ -87,11 +92,13 @@ const FIND_BAR_SELECTION_WASH: f32 = 0.25;
 /// shown instead.
 pub(super) const FIND_BAR_CARET_MARGIN: i32 = 2;
 
-/// Where a find bar is, in the window's own coordinates: the card, the row a query is typed into, the
-/// count at its right end, and the five controls under it.
+/// Where a find bar is, in the window's own coordinates: the card, and one row across it carrying the
+/// query, the two switches, the count and the three commands — the find widget a reader has used in an
+/// editor, where everything a search is asked and stepped with sits beside the query it is asked of.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct FindBar {
     pub(crate) panel: RECT,
+    /// The query's own field: the part of the row a press places the caret in.
     pub(crate) query: RECT,
     pub(crate) count: RECT,
     /// The case switch, written `Aa`.
@@ -219,10 +226,10 @@ pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32, count
     let panel_width = text_paint::scaled(FIND_BAR_WIDTH, scale)
         .min((right - margin).max(padding * 2 + side))
         .min(right);
-    let wanted_height = padding * 2 + row * 2;
+    let wanted_height = padding * 2 + row;
     let panel_top = top + margin;
-    // A page too short to hold the card's two rows draws no card at all rather than a card painted
-    // over the transport bar below it: there is nowhere for a hand to type on such a page anyway.
+    // A page too short to hold the card's row draws no card at all rather than a card painted over the
+    // transport bar below it: there is nowhere for a hand to type on such a page anyway.
     if height - margin < wanted_height {
         return FindBar::default();
     }
@@ -235,53 +242,52 @@ pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32, count
         bottom: panel_top + panel_height,
     };
 
+    // One row, read from the right: the close, the two steps, the count, then the two switches — each
+    // in a box of its own, with the commands tighter together than the switches are and the count kept
+    // apart from both (see `FIND_BAR_GROUP_GAP`). The query is what the rest of the row is left as.
     let inner_right = panel.right - padding;
-    let query_row = RECT {
-        left: panel.left + padding,
-        top: panel.top + padding,
-        right: (inner_right - count_width - padding).max(panel.left + padding + 1),
-        bottom: panel.top + padding + row,
-    };
-    let count = RECT {
-        left: (inner_right - count_width).max(query_row.right),
-        top: query_row.top,
-        right: inner_right,
-        bottom: query_row.bottom,
-    };
-
-    let command_row_top = query_row.bottom + padding;
-
-    // The commands from the right: close, then the two steps, then the two switches, each in a box of
-    // its own with the commands tighter together than the switches are (see `FIND_BAR_GROUP_GAP`).
+    let row_top = panel.top + padding;
     let close = RECT {
         left: inner_right - side,
-        top: command_row_top,
+        top: row_top,
         right: inner_right,
-        bottom: command_row_top + row,
+        bottom: row_top + row,
     };
     let next = RECT {
         left: close.left - gap - side,
-        top: command_row_top,
+        top: row_top,
         right: close.left - gap,
-        bottom: command_row_top + row,
+        bottom: row_top + row,
     };
     let previous = RECT {
         left: next.left - gap - side,
-        top: command_row_top,
+        top: row_top,
         right: next.left - gap,
-        bottom: command_row_top + row,
+        bottom: row_top + row,
+    };
+    let count = RECT {
+        left: previous.left - group_gap - count_width,
+        top: row_top,
+        right: previous.left - group_gap,
+        bottom: row_top + row,
     };
     let whole_word = RECT {
-        left: previous.left - group_gap - side,
-        top: command_row_top,
-        right: previous.left - group_gap,
-        bottom: command_row_top + row,
+        left: count.left - group_gap - side,
+        top: row_top,
+        right: count.left - group_gap,
+        bottom: row_top + row,
     };
     let case = RECT {
         left: whole_word.left - gap - side,
-        top: command_row_top,
+        top: row_top,
         right: whole_word.left - gap,
-        bottom: command_row_top + row,
+        bottom: row_top + row,
+    };
+    let query_row = RECT {
+        left: panel.left + padding,
+        top: row_top,
+        right: (case.left - group_gap).max(panel.left + padding + 1),
+        bottom: row_top + row,
     };
 
     // A page narrow enough to push a mark off the card's left edge keeps every box on it: an
