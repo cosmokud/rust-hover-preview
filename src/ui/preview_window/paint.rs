@@ -853,8 +853,8 @@ pub(super) struct PinnedPaint {
     /// Whether this pin's caption offers a maximize at all (see `PinFrame`).
     pub(super) maximizable: bool,
     /// Whether this pin's caption offers its **Detach** button as one a hand can have: a window of its
-    /// own has no more to hand over, so its detach is drawn faded and answers nothing (see
-    /// `pin_chrome::Caption::detachable` and `app::detach`).
+    /// own has no more to hand over, so its detach answers nothing and says so in the ink a state of the
+    /// window's own is read in (see `pin_chrome::Caption::detachable` and `app::detach`).
     pub(super) detachable: bool,
     pub(super) always_on_top: bool,
     pub(super) hovered: Option<pin_chrome::CaptionButton>,

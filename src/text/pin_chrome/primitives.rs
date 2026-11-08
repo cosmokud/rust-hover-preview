@@ -27,6 +27,12 @@ pub(crate) struct ChromePalette {
     pub(crate) foreground: [u8; 3],
     /// The bubble's ring, and the played part of a transport's bar.
     pub(crate) accent: [u8; 3],
+    /// The ink a state of the window's own is read in rather than a choice it still offers — that it
+    /// is kept on top, that it is a window of its own — and the one a sound's card reads the numbers
+    /// on its facts line in, so that a caption's button and that card's button say the same thing in
+    /// one color rather than two near neighbours (see `caption::paint_button` and
+    /// `audio_preview::build_page`).
+    pub(crate) number: [u8; 3],
     /// Whether the theme is a dark one, which decides which way a hairline is shaded.
     pub(crate) dark: bool,
 }
@@ -45,11 +51,19 @@ impl ChromePalette {
         // chrome and the track on that card are one color rather than two near neighbours (see
         // `audio_preview::build_page`).
         let accent = text_paint::rgb(theme.style_for_scopes(&["support.function"]).foreground);
+        // The numbers' ink, read against the bar it is drawn on rather than as the theme writes it, so
+        // that a state said in it is legible on either of the bundled themes (see
+        // `audio_preview::build_page`, which reads the same scope the same way for its card).
+        let number = text_paint::readable(
+            text_paint::rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
+            background,
+        );
 
         Some(Self {
             background,
             foreground,
             accent,
+            number,
             dark: text_paint::luminance(background) <= 0.5,
         })
     }
@@ -67,8 +81,8 @@ impl ChromePalette {
 
     /// The ink of something a window is still showing and no longer offering: the theme's own
     /// text given up part of the way toward its page, which is what a button or a row that is not
-    /// a hand's to have is drawn in (see `caption::Caption::detachable` and
-    /// `menu::MenuRow::disabled`).
+    /// a hand's to have is drawn in (see the pin button that says the window is not kept on top,
+    /// and `menu::MenuRow::disabled`).
     ///
     /// Given up toward the page and not replaced with a grey of this app's, because what is faded
     /// here is a mark the window still means — the file in it is not a window to be detached, it is
@@ -76,6 +90,14 @@ impl ChromePalette {
     /// light one alike.
     pub(crate) fn faded(&self) -> [u8; 3] {
         text_paint::blend(self.foreground, self.background, FADED_INK)
+    }
+
+    /// The ink of something that is already saying a state of the window's own, a step further toward
+    /// white while the hand is on it: it keeps the color its state is read in and becomes the
+    /// brightest thing on the strip, which is what a button of a sound's card does in the same place
+    /// (see `caption::paint_button`).
+    pub(crate) fn lit(&self, ink: [u8; 3]) -> [u8; 3] {
+        text_paint::blend(ink, [255, 255, 255], LIT_INK)
     }
 }
 
@@ -85,6 +107,10 @@ impl ChromePalette {
 /// the pin is not kept on top, so that everything a pin is showing and not offering is faded by one
 /// amount rather than by a handful of near neighbours.
 const FADED_INK: f32 = 0.45;
+
+/// How far a mark that is already saying a state of the window's own is moved toward white while the
+/// pointer is on it or a press is held in it (see `ChromePalette::lit`).
+const LIT_INK: f32 = 0.35;
 
 /// The face a caption's title is set in: the one Windows writes a window's title in, so a
 /// pinned preview's caption reads like the caption of anything else on the desktop.

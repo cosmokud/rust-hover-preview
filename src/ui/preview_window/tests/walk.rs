@@ -173,6 +173,7 @@ fn a_failed_file_with_nowhere_to_step_to_is_left_standing_as_the_mark() {
         background: [10, 20, 30],
         foreground: [240, 240, 240],
         accent: [0, 0, 0],
+        number: [209, 154, 102],
         dark: true,
     };
     let mut pixels = vec![0u8; 128 * 128 * 4];

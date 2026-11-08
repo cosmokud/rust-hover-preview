@@ -94,6 +94,7 @@ fn a_real_font_cuts_the_name_where_the_measured_width_runs_out() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let surface = DibSurface::create(600, 30).expect("a surface");
@@ -289,6 +290,7 @@ fn a_caption_too_narrow_for_close_still_paints_its_bar() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let (width, height) = (30u32, 30u32);
@@ -345,6 +347,7 @@ fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let strip = |width: u32, title: &str| {
@@ -468,6 +471,7 @@ fn a_caption_is_opaque_everywhere_it_is_painted() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let width = 600u32;
@@ -522,12 +526,14 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let dark = ChromePalette {
         background: [30, 30, 30],
         foreground: [220, 220, 220],
         accent: [10, 140, 240],
+        number: [209, 154, 102],
         dark: true,
     };
     // A name short enough to be drawn whole on the strip: a caption whose name is cut away
@@ -1156,48 +1162,55 @@ fn the_chevrons_arms_carry_a_share_of_the_ink() {
     );
 }
 
-/// A window of its own has nothing left to hand over, so its caption's **Detach** is the one button
-/// the strip carries and does not offer: its mark is the theme's own text given up toward the bar in
-/// every state, and a pointer resting on it lights nothing — a wash under a button that would begin a
-/// second process is a button that reads as one that would (see `Caption::detachable`).
+/// The two buttons that say a state of the window's own rather than a choice it still offers — that it is
+/// kept on top, that it is a window of its own — say it in the ink those states are read in, standing in
+/// the wash a button that is saying something about its window stands in, and light a step further toward
+/// white under the hand: the same two inks a sound's card says the same two things in (see
+/// `ChromePalette::number` and `paint_button`).
 #[test]
-fn a_detached_window_s_detach_is_faded_and_washes_nothing_under_the_pointer() {
+fn a_window_s_own_states_are_said_in_the_ink_they_are_read_in() {
     let palette = ChromePalette {
         background: [40, 44, 52],
         foreground: [171, 178, 191],
         accent: [97, 175, 239],
+        number: [209, 154, 102],
         dark: true,
     };
-    // A strip wide enough for every button the caption carries, so that the detach is drawn at all.
+    // A strip wide enough for every button the caption carries, so that both of these are drawn at all.
     let (width, height) = (9 * 46, 30);
     let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
 
-    let strip = |detachable: bool, hovered: Option<CaptionButton>| {
+    let strip = |detachable: bool,
+                 always_on_top: bool,
+                 hovered: Option<CaptionButton>,
+                 pressed: Option<CaptionButton>| {
         let caption = Caption {
             title: "picture.png",
             read_only: false,
             maximized: false,
             maximizable: true,
             detachable,
-            always_on_top: true,
+            always_on_top,
             hovered,
-            pressed: None,
+            pressed,
         };
         paint_caption(&surface, &palette, &caption, 96);
         surface.pixels().to_vec()
     };
 
-    let box_ = button_boxes(width, height, 96, true)
-        .into_iter()
-        .find(|button| button.kind == CaptionButton::Detach)
-        .expect("a caption this wide carries the detach");
+    let box_of = |kind: CaptionButton| {
+        button_boxes(width, height, 96, true)
+            .into_iter()
+            .find(|button| button.kind == kind)
+            .expect("a caption this wide carries every button")
+    };
 
-    // The colours a pixel of the button's own box is made of, in the order of the surface, which is
-    // the desktop's own: the bar, and the ink of what is drawn on it.
-    let inks = |painted: &[u8]| -> Vec<[u8; 3]> {
+    // The colours a pixel of one button's own box is made of, in the order of the surface, which is the
+    // desktop's own: the bar, the wash under it, and the ink of what is drawn on it.
+    fn inks(button: &CaptionButtonBox, width: i32, painted: &[u8]) -> Vec<[u8; 3]> {
         let mut seen: Vec<[u8; 3]> = Vec::new();
-        for y in box_.rect.top..box_.rect.bottom {
-            for x in box_.rect.left..box_.rect.right {
+        for y in button.rect.top..button.rect.bottom {
+            for x in button.rect.left..button.rect.right {
                 let index = (y as usize * width as usize + x as usize) * 4;
                 let pixel = [painted[index + 2], painted[index + 1], painted[index]];
                 if !seen.contains(&pixel) {
@@ -1206,11 +1219,86 @@ fn a_detached_window_s_detach_is_faded_and_washes_nothing_under_the_pointer() {
             }
         }
         seen
-    };
+    }
 
-    // A pin's own detach, with the hand on it: the mark in the strip's own ink, and the button washed
-    // behind it, which is what every button of the strip that answers does.
-    let live = inks(&strip(true, Some(CaptionButton::Detach)));
+    let pin = box_of(CaptionButton::AlwaysOnTop);
+    let detach = box_of(CaptionButton::Detach);
+
+    // A pin that is kept on top: the numbers' ink on the mark and the wash a button saying something
+    // about its window stands in, and under the hand the same ink a step toward white — not the strip's
+    // own ink, which is what a button that says nothing but that it is a button wears.
+    let kept = inks(&pin, width, &strip(true, true, None, None));
+    assert!(
+        kept.contains(&palette.number),
+        "a pin kept on top is drawn in the ink that state is read in: {kept:?}"
+    );
+    assert!(
+        kept.contains(&palette.hover(0.10)),
+        "and stands in the wash of a button that is saying something"
+    );
+    assert!(
+        !kept.contains(&palette.foreground),
+        "with nothing of a bare button left on it: {:?}",
+        palette.foreground
+    );
+
+    let held = inks(
+        &pin,
+        width,
+        &strip(true, true, Some(CaptionButton::AlwaysOnTop), None),
+    );
+    assert!(
+        held.contains(&palette.lit(palette.number)),
+        "and under the hand the same ink a step further toward white: {held:?}"
+    );
+    assert!(
+        held.contains(&palette.hover(0.15)),
+        "washed the way a hovered button of the strip is"
+    );
+
+    // The same button on a pin that is not kept on top is a mark the window is showing and not offering,
+    // which is the one thing that is still drawn faded.
+    let free = inks(&pin, width, &strip(true, false, None, None));
+    assert!(
+        free.contains(&palette.faded()),
+        "a pin that is not kept on top is drawn in the faded ink: {free:?}"
+    );
+    assert!(!free.contains(&palette.number));
+
+    // A window of its own: its detach says what became of the window, in the same two inks as the pin
+    // beside it — and it is still not a hand's to have, so a pointer on it changes nothing at all.
+    let own = inks(&detach, width, &strip(false, false, None, None));
+    assert!(
+        own.contains(&palette.number),
+        "a window's own detach wears the ink its state is read in: {own:?}"
+    );
+    assert!(
+        own.contains(&palette.hover(0.10)),
+        "and stands in the wash the pin beside it stands in"
+    );
+    assert_eq!(
+        own,
+        inks(
+            &detach,
+            width,
+            &strip(false, false, Some(CaptionButton::Detach), None)
+        ),
+        "a pointer on a detach the window does not offer is a pointer on nothing"
+    );
+    for absent in [palette.faded(), palette.foreground] {
+        assert!(
+            !own.contains(&absent),
+            "with nothing of a spent road left on it: {absent:?}"
+        );
+    }
+
+    // And a pin that still has its detach to hand over wears the plain ink of a button, washed under the
+    // pointer: the state ink belongs to the window being one of its own, not to the button.
+    let live = inks(
+        &detach,
+        width,
+        &strip(true, false, Some(CaptionButton::Detach), None),
+    );
     assert!(
         live.contains(&palette.foreground),
         "a detach a pin still has is drawn in the caption's own ink"
@@ -1219,26 +1307,7 @@ fn a_detached_window_s_detach_is_faded_and_washes_nothing_under_the_pointer() {
         live.contains(&palette.hover(0.10)),
         "and is washed by the pointer, the way its neighbours are"
     );
-
-    // The same button on a window of its own: the mark is the faded ink, and the pointer changes
-    // nothing at all about it — the same bytes with a hand on the button as with none.
-    let dead = strip(false, Some(CaptionButton::Detach));
-    assert_eq!(
-        inks(&dead),
-        inks(&strip(false, None)),
-        "a pointer on a detach the window does not offer is a pointer on nothing"
-    );
-    let faded = inks(&dead);
-    assert!(
-        faded.contains(&palette.faded()),
-        "and the mark it still carries is drawn in the ink a window says what it does not offer in"
-    );
-    for absent in [palette.foreground, palette.accent, palette.hover(0.10)] {
-        assert!(
-            !faded.contains(&absent),
-            "with nothing of the button that answers left on it: {absent:?}"
-        );
-    }
+    assert!(!live.contains(&palette.number));
 }
 
 /// A caption is narrowed in steps, and each is the width the one before it stopped being worth it at:
@@ -1311,6 +1380,7 @@ fn a_page_says_it_is_read_only_and_a_caption_for_another_kind_does_not() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
 
@@ -1380,6 +1450,7 @@ fn a_name_stops_at_the_pill_and_is_only_given_up_where_the_pill_takes_its_room()
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
 
@@ -1467,6 +1538,7 @@ fn the_pills_ring_closes_at_the_end_the_words_stop_at() {
         background: [30, 32, 40],
         foreground: [220, 220, 220],
         accent: [80, 170, 240],
+        number: [209, 154, 102],
         dark: true,
     };
 
