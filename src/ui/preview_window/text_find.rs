@@ -96,7 +96,16 @@ fn find_bar_over(pin: &PinnedPreview) -> Option<FindBarPlacement> {
     }
 
     Some(FindBarPlacement {
-        card: pin_chrome::find_bar_layout(state.width as i32, state.height as i32, page_top, dpi),
+        // The count's own column is laid out from the count itself: `1210/19000` is wider than the
+        // room a four-figure count was given, and a count cut at its last digits is a count that is
+        // wrong (see `pin_chrome::find_bar_layout`).
+        card: pin_chrome::find_bar_layout(
+            state.width as i32,
+            state.height as i32,
+            page_top,
+            dpi,
+            &pin_chrome::find_bar_count_text(find.current, find.matches.len()),
+        ),
         state: pin_chrome::FindBarPaint {
             query: find.field.text().to_string(),
             caret: find.field.caret(),
@@ -440,7 +449,18 @@ pub(super) fn step_the_hold(now: Instant) {
 /// because a bar closed and opened again comes back at the query it was left with rather than at its
 /// matches (see `FindState`). A bar that was already up has nothing to search again: its query has
 /// not changed, and the reader asked for the field rather than for the document.
+///
+/// **A page with something selected seeds the query with it**, which is what an editor's own find box
+/// does: a word double pressed in the page, or a run of it dragged over, is the thing the reader is
+/// asking to find, and reaching for the key is the whole of what they asked. It replaces the query
+/// the bar was left holding rather than joining it, and the caret is left after it — the reader who
+/// wants the rest of a word typed appends to it, and the one who wants a different query presses
+/// `Ctrl`+`F` again over a page with nothing selected, or `Ctrl`+`A` in the field.
 pub(super) fn open_text_find() {
+    // Asked before the bar is written to, and outside the lock the bar is opened under, because it
+    // reads the document rather than the bar's own state (see `the_pages_selection`).
+    let seed = the_pages_selection();
+
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         let Some(find) = media
             .as_mut()
@@ -456,11 +476,39 @@ pub(super) fn open_text_find() {
             find.field.select_all();
         } else {
             find.open = true;
-            find.field.select_all();
+            // A bar opened over a selection comes back at that and not at the query it was left
+            // holding; opened over nothing it comes back at the query it was left with, selected so
+            // that a typed character replaces it (see `Field::seed` and `Field::select_all`).
+            if !seed.is_some_and(|text| find.field.seed(&text)) {
+                find.field.select_all();
+            }
             find.pending.push(FindEdit::SearchAgain);
         }
         find.blink.restart(Instant::now(), caret_blink());
     }
+}
+
+/// What the reader selected in the page, or nothing while the bar is already up or the page holds no
+/// selection: the seed `Ctrl`+`F` puts in the query (see `open_text_find`).
+///
+/// It is read of the page rather than of the frame that shows it, so a selection reaching past the
+/// box is seeded whole, and it is read before the bar's own lock is taken because it reads the
+/// document.
+fn the_pages_selection() -> Option<String> {
+    let (path, options, selection) = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        let media = media.as_ref()?;
+        let state = media.text_state.as_ref()?;
+        if state.find.open {
+            return None;
+        }
+
+        state
+            .selection
+            .filter(|selection| !selection.is_empty())
+            .map(|selection| (state.path.clone(), state.options, selection))
+    })?;
+
+    text_preview::text_of(&path, options, selection)
 }
 
 /// Write down one thing the bar was told, for the tick that can run the search it asks for.

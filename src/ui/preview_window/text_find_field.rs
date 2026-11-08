@@ -123,6 +123,37 @@ impl Field {
         self.typing = false;
     }
 
+    /// Put a run of text in the query whole, in place of what it held: what `Ctrl`+`F` over a page
+    /// with something selected seeds the bar with (see `text_find::open_text_find`).
+    ///
+    /// **A seed is not a paste.** `paste` tidies what it is given, and tidying is right for text
+    /// from another program and wrong for this one: a reader who selected two spaces and pressed the
+    /// key asked for a query of two spaces, so the run is taken as written, capped at `QUERY_LIMIT`
+    /// and cut at its first line break — the query is one line, and what follows a break in a
+    /// selection is a second line of it rather than more of the same query. The caret is left at
+    /// the end of it, where the next character typed lands.
+    ///
+    /// Answers whether there was anything to seed, so that a page with an empty selection leaves the
+    /// query the bar was last left holding alone (see `select_all`).
+    pub(super) fn seed(&mut self, seeded: &str) -> bool {
+        let line = seeded.split(['\r', '\n']).next().unwrap_or_default();
+        let taken: String = line
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(QUERY_LIMIT)
+            .collect();
+        if taken.is_empty() {
+            return false;
+        }
+
+        self.snapshot();
+        self.text = taken;
+        self.caret = self.text.len();
+        self.anchor = self.caret;
+        self.typing = false;
+        true
+    }
+
     /// Put the caret at `at`, or with `extend` keep the anchor where it is and grow the selection
     /// from it. `at` is clamped to a character boundary, so a place the card measured off a glyph
     /// can never split one.

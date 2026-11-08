@@ -34,7 +34,7 @@ fn card_state(query: &str, current: Option<usize>, total: usize) -> FindBarPaint
 /// below that (see `find_bar_layout`).
 #[test]
 fn the_card_sits_against_the_pages_top_right_corner_under_its_caption() {
-    let card = find_bar_layout(400, 300, 30, 96);
+    let card = find_bar_layout(400, 300, 30, 96, "1/3");
 
     assert_eq!(
         card.panel.top,
@@ -78,8 +78,8 @@ fn the_card_sits_against_the_pages_top_right_corner_under_its_caption() {
 /// size, rather than a small card in a large corner (see `find_bar_layout`).
 #[test]
 fn every_metric_of_the_card_scales_with_the_display() {
-    let at_96 = find_bar_layout(800, 600, 0, 96);
-    let at_192 = find_bar_layout(800, 600, 0, 192);
+    let at_96 = find_bar_layout(800, 600, 0, 96, "1/3");
+    let at_192 = find_bar_layout(800, 600, 0, 192, "1/3");
 
     let width = |card: FindBar| card.panel.right - card.panel.left;
     let height = |card: FindBar| card.panel.bottom - card.panel.top;
@@ -104,7 +104,7 @@ fn every_metric_of_the_card_scales_with_the_display() {
 /// `FindBar::part_at`).
 #[test]
 fn every_control_answers_at_its_own_box_and_the_card_holds_the_rest() {
-    let card = find_bar_layout(400, 300, 0, 96);
+    let card = find_bar_layout(400, 300, 0, 96, "1/3");
 
     for (rect, part) in [
         (card.case, FindBarPart::Case),
@@ -141,7 +141,7 @@ fn every_control_answers_at_its_own_box_and_the_card_holds_the_rest() {
 #[test]
 fn the_card_is_painted_over_the_page_and_its_pressed_switches_and_count_change_it() {
     let (page_width, page_height) = (400, 300);
-    let card = find_bar_layout(page_width, page_height, 0, 96);
+    let card = find_bar_layout(page_width, page_height, 0, 96, "1/3");
     let surface = DibSurface::create(
         (card.panel.right - card.panel.left) as u32,
         (card.panel.bottom - card.panel.top) as u32,
@@ -208,7 +208,7 @@ fn the_card_is_painted_over_the_page_and_its_pressed_switches_and_count_change_i
 /// pixels of, and the card it stood on (see `paint_find_bar`).
 fn painted_card(state: &FindBarPaint, dpi: u32) -> (Vec<u8>, FindBar) {
     let (page_width, page_height) = (400, 300);
-    let card = find_bar_layout(page_width, page_height, 0, dpi);
+    let card = find_bar_layout(page_width, page_height, 0, dpi, "1/3");
     let surface = DibSurface::create(
         (card.panel.right - card.panel.left) as u32,
         (card.panel.bottom - card.panel.top) as u32,
@@ -301,7 +301,7 @@ fn the_caret_stands_after_the_last_character_of_a_query_too_long_for_its_field()
     let state = card_state(query, Some(0), 1);
 
     // The text, measured the way the paint measures it, is wider than the room the field has.
-    let probe = find_bar_layout(400, 300, 0, 96);
+    let probe = find_bar_layout(400, 300, 0, 96, "1/3");
     let surface = DibSurface::create(
         (probe.panel.right - probe.panel.left) as u32,
         (probe.panel.bottom - probe.panel.top) as u32,
@@ -431,7 +431,7 @@ fn the_control_under_the_pointer_is_washed_and_a_press_is_washed_further() {
 /// `query_index_at`).
 #[test]
 fn a_press_names_a_place_in_the_query_from_the_column_it_is_drawn_at() {
-    let card = find_bar_layout(400, 300, 0, 96);
+    let card = find_bar_layout(400, 300, 0, 96, "1/3");
 
     // The boundary nearest the point: a point on a character's left half is before it and one on its
     // right half after it, which is the same rule for a real run and for these columns.
@@ -745,7 +745,7 @@ fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
 /// `query_index_at`).
 #[test]
 fn a_press_on_a_scrolled_run_names_the_character_under_the_pointer() {
-    let card = find_bar_layout(400, 300, 0, 96);
+    let card = find_bar_layout(400, 300, 0, 96, "1/3");
     let long =
         "When the same word runs on far past the width of this card's own field it keeps going";
     let surface = DibSurface::create(
@@ -834,5 +834,130 @@ fn select_all_on_a_long_query_washes_only_the_part_of_the_run_the_field_holds() 
         strays_on_the_query_row(&all.0, &plain, card),
         Vec::new(),
         "and no column of it is the card's padding"
+    );
+}
+
+/// A count wider than the room a small one is given is drawn whole: the count's own column is laid
+/// out from the count's text, and the field beside it is what gives up the room — a count cut at its
+/// last digits is a count that is wrong, and `1210/19000` is the count a page of nineteen thousand
+/// places really has (see `find_bar_layout` and `count_text`).
+#[test]
+fn a_count_too_wide_for_its_room_takes_the_room_rather_than_being_cut() {
+    let (page_width, page_height) = (400, 300);
+    let small = find_bar_layout(page_width, page_height, 0, 96, "1/3");
+    let long = find_bar_layout(page_width, page_height, 0, 96, "1210/19000");
+
+    let surface = DibSurface::create(1, 1).expect("a surface");
+    let style = caption_style([30, 30, 30]);
+    let needed = measure_text(&surface, &style, "1210/19000", 1.0);
+    assert!(
+        long.count.right - long.count.left >= needed,
+        "the count's column is as wide as the count it holds"
+    );
+    assert!(
+        long.query.left < long.query.right,
+        "and the field beside it is still a field"
+    );
+    assert_eq!(
+        small.count.right - small.count.left,
+        text_paint::scaled(FIND_BAR_COUNT_WIDTH, 1.0),
+        "a count that fits its room moves nothing"
+    );
+
+    // The card a page of nineteen thousand places draws: the count is whole on it, rather than the
+    // first digits of it in a column laid out for a count of three.
+    let surface = DibSurface::create(
+        (long.panel.right - long.panel.left) as u32,
+        (long.panel.bottom - long.panel.top) as u32,
+    )
+    .expect("a surface");
+    let mut buffer = image_buffer(page_width as u32, page_height as u32);
+    paint_find_bar(
+        &mut buffer,
+        page_width,
+        &palette(),
+        &long,
+        &card_state("needle", Some(1209), 19000),
+        &surface,
+        96,
+    );
+    let drawn = (long.count.left..long.count.right)
+        .filter(|x| {
+            (long.count.top..long.count.bottom)
+                .any(|y| pixel_at(&buffer, page_width, *x, y)[3] != 0)
+        })
+        .count();
+    assert!(
+        drawn as i32 >= needed,
+        "the whole count is on the card, not the first digits of it"
+    );
+}
+
+/// A switch says what it is while a pointer rests on it: a name hanging below the card, centred under
+/// the switch it belongs to, drawn only where the surface the bar is written on keeps the row for it
+/// (see `switch_tooltip` and `find_bar_surface_size`).
+#[test]
+fn a_switch_names_itself_while_the_pointer_rests_on_it() {
+    let (page_width, page_height) = (400, 300);
+    let card = find_bar_layout(page_width, page_height, 0, 96, "1/3");
+    let (surface_width, surface_height) = find_bar_surface_size(&card, 96);
+    let surface = DibSurface::create(surface_width, surface_height).expect("a surface");
+
+    let paint = |state: &FindBarPaint| {
+        let mut buffer = image_buffer(page_width as u32, page_height as u32);
+        paint_find_bar(
+            &mut buffer,
+            page_width,
+            &palette(),
+            &card,
+            state,
+            &surface,
+            96,
+        );
+        buffer
+    };
+    let plain = paint(&card_state("needle", Some(0), 2));
+    let named = paint(&FindBarPaint {
+        hovered: Some(FindBarPart::Case),
+        ..card_state("needle", Some(0), 2)
+    });
+    let other = paint(&FindBarPaint {
+        hovered: Some(FindBarPart::WholeWord),
+        ..card_state("needle", Some(0), 2)
+    });
+
+    // Below the card, where the page is: nothing while no pointer rests on a switch, and a panel under
+    // the switch the pointer is on once one does.
+    let under_the_card = card.panel.bottom + 8;
+    let named_below = |buffer: &[u8]| {
+        (0..page_width).find(|x| pixel_at(buffer, page_width, *x, under_the_card)[3] != 0)
+    };
+    assert_eq!(
+        named_below(&plain),
+        None,
+        "a card no pointer rests on is a card and nothing below it"
+    );
+    let case_left = named_below(&named).expect("a switch under the pointer says its name");
+    let word_left = named_below(&other).expect("and so does the other one");
+    assert!(
+        case_left < word_left,
+        "each name hangs under its own switch"
+    );
+    let styled = caption_style(palette().foreground);
+    let name_width = measure_text(&surface, &styled, "Match Case", 1.0);
+    let panel_width = (0..page_width)
+        .filter(|x| pixel_at(&named, page_width, *x, under_the_card)[3] != 0)
+        .count();
+    assert!(
+        panel_width as i32 > name_width,
+        "and the panel under it is the name and the room it keeps about it"
+    );
+
+    // The card's own controls are not touched by it: a name is a card below the card, not a wash over
+    // the row it hangs from.
+    assert_ne!(
+        pixel_at(&named, page_width, card.case.left + 1, card.case.top + 2),
+        pixel_at(&plain, page_width, card.case.left + 1, card.case.top + 2),
+        "the switch under the pointer is still drawn as the one it is"
     );
 }

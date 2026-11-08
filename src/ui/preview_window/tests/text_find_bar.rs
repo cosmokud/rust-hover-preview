@@ -1307,6 +1307,55 @@ fn a_ctrl_f_over_an_open_bar_selects_the_query_rather_than_appending_to_it() {
     assert_eq!(bar_now().1, "x", "so the next character replaces it");
 }
 
+/// `Ctrl`+`F` over a page with something selected seeds the query with it, the way an editor's own
+/// find box does: a word double pressed in the page, or a run dragged over, is what the reader is
+/// asking to find, and it comes in place of the query the bar was left holding (see
+/// `text_find::open_text_find` and `text_find_field::Field::seed`).
+#[test]
+fn a_ctrl_f_over_a_page_with_a_selection_seeds_the_query_with_it() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-seeded.txt");
+
+    // A bar left holding another query and closed with it still in it, so that what is seeded is told
+    // apart from what the bar already had (see `FindState`).
+    text_find::open_text_find();
+    type_into_the_bar("nothing");
+    text_find::note(FindEdit::Close);
+    unsafe { text_find::settle(a_pin_window()) };
+    assert!(!bar_now().0, "the bar is away");
+
+    // The needle the page holds on its sixth line, selected the way a double press selects a word.
+    let (at, line) = (5, "line 5 needle here");
+    let start = line.find("needle").expect("the line holds a needle");
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(state) = media.as_mut().and_then(|media| media.text_state.as_mut()) {
+            state.selection = Some(text_preview::Selection {
+                anchor: (at, start),
+                caret: (at, start + "needle".len()),
+            });
+        }
+    }
+
+    text_find::open_text_find();
+    unsafe { text_find::settle(a_pin_window()) };
+
+    let (open, query, matches, current, ..) = bar_now();
+    assert!(open, "the bar comes up over the page");
+    assert_eq!(
+        query, "needle",
+        "and the query is what was selected rather than what the bar was left holding"
+    );
+    assert_eq!(matches, 2, "which the page is searched for");
+    assert_eq!(current, Some(0), "with the reader on the first of them");
+    assert_eq!(
+        caret_now(),
+        ("needle".len(), "needle".len()),
+        "and the caret after it, where the next character typed lands"
+    );
+}
+
 /// The keys that step the matches keep stepping them with the field under the caret: `↓`, `Enter`
 /// and `F3` go on and `↑` comes back, and none of them moves the caret or the query (see
 /// `text_find::key_edit`).
@@ -1465,6 +1514,11 @@ fn a_page_and_a_query_both_selected(name: &str) {
     );
 
     text_find::open_text_find();
+    // The bar comes up holding the page's own selection, which is what a `Ctrl`+`F` over a page with
+    // something selected seeds it with: it is emptied here so that the query this test is about is the
+    // one typed into it (see `text_find::open_text_find`).
+    text_find::note(FindEdit::ClearOrClose);
+    unsafe { text_find::settle(a_pin_window()) };
     type_into_the_bar("needle");
     text_find::note(FindEdit::SelectAll);
     unsafe { text_find::settle(a_pin_window()) };

@@ -43,7 +43,8 @@ pub(crate) use caption::{
     CaptionButton,
 };
 pub(crate) use find_bar::{
-    find_bar_layout, paint_find_bar, query_index_at, FindBar, FindBarPaint, FindBarPart,
+    count_text as find_bar_count_text, find_bar_layout, find_bar_surface_size, paint_find_bar,
+    query_index_at, FindBar, FindBarPaint, FindBarPart,
 };
 pub(crate) use menu::{
     menu_flyout_from_menu, menu_flyout_gap_holds, menu_popup_from_point, menu_popup_shifted,
@@ -64,7 +65,7 @@ use caption::{fit_title, longest_prefix_that_fits, paint_glyph, CaptionButtonBox
 #[cfg(test)]
 use find_bar::{
     index_at_column, query_origin, query_run, step_mark_legs, step_mark_shape,
-    FIND_BAR_CARET_MARGIN,
+    FIND_BAR_CARET_MARGIN, FIND_BAR_COUNT_WIDTH,
 };
 #[cfg(test)]
 use primitives::{

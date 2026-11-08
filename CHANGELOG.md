@@ -6,6 +6,14 @@
 
 - **`Scaling → 3D` gives a model a share of the display of its own** — the tray's `Scaling` submenu gained a `3D` row beside `Design`, listing the same display shares the documents above it list (`Fit to Screen`, `75%`, `50%`, `25%`, `10%`) and starting at `Fit to Screen` like them, written as `model_scale` in `config.ini`. Until now a model was placed by the `Image` share, which asked a photograph's question of a scene: a model has no size of its own — the picture an installed f3d draws of one is drawn at whatever box it is asked for — so what the share is of is the room the display has, the question a page, a drawing and a design document answer. A share of the room is quality the picture gets for free rather than an enlargement, and a hover and a pin both lay a model out at it: the share applies to the next hover and the next take-up, not to a preview already up. A hand-edited value is read the way the documents' are, and a file that names no `model_scale` starts at the whole of the room — the size a model was drawn at before the setting existed.
 
+- **`Ctrl`+`F` over a pinned page seeds the find box with what is selected in the page** — the chord is the one an editor answers the same way: a word double pressed in the page, or a run dragged over, is what the reader is asking to find, so the query comes up holding it rather than the query the bar was last left with, its caret after it and its places already searched and highlighted. The seed is taken as written — two spaces selected are two spaces searched for — and cut at the first line break, because the query is one line. A page with nothing selected is unchanged: the chord brings back the query the bar was left holding, all of it selected.
+
+- **The two switches of a page's find bar say what they are while the pointer rests on them** — `Aa` and `W` are glyphs rather than words, so `Match Case` and `Match Whole Word` are drawn as a small card below the card, centred under the switch the hand is on, in the same panel and shadow a caption button's own name is floated in.
+
+### Fixed
+
+- **A page's find count is drawn whole, however many places the query was found** — `1210/19000` was cut after its first digits, because the count was given a fixed column measured for a count of four figures; the column is the room its own text needs now, taken out of the query's field rather than out of the count, so a page of nineteen thousand matches reads as `1210/19000` with every digit on it.
+
 ## [0.4.11] - 2026-11-08
 
 ### Added

@@ -1520,10 +1520,10 @@ pub(super) fn paint_pin_find_bar(out: &mut [u8], width: i32, paint: &PinnedPaint
     };
 
     let card = &placed.card;
-    let wanted = (
-        (card.panel.right - card.panel.left).max(1) as u32,
-        (card.panel.bottom - card.panel.top).max(1) as u32,
-    );
+    // The surface is the card's own size plus the row a switch's tooltip hangs in below it: the card's
+    // text and that name are written on the one surface, and the name is carried across the window
+    // below the card (see `find_bar_surface_size` and `paint_find_bar`).
+    let wanted = pin_chrome::find_bar_surface_size(card, paint.dpi);
     FIND_SURFACE.with(|cell| {
         let mut surface = cell.borrow_mut();
         if surface
