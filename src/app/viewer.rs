@@ -62,15 +62,7 @@ pub(crate) fn begin_the_viewer() -> bool {
         return false;
     };
 
-    // Safety: an event of this run's own, waited on for a bound and nothing else: nothing here is
-    // dereferenced.
-    let answered = unsafe {
-        WaitForSingleObject(
-            crate::app::seam::preview_ready_event(),
-            THE_VIEWER_ANSWERS_IN.as_millis() as u32,
-        ) == WAIT_OBJECT_0
-    };
-    if !answered {
+    if !wait_for_a_viewer(child.id(), THE_VIEWER_ANSWERS_IN) {
         // Ended rather than left standing: a viewer that answered nothing draws nothing, and a second
         // process holding a preview loop of its own is one this run has no use for. And this process's own
         // windows are once again the ones the hook judges a press by (see `seam::window_is_a_viewers`).
@@ -81,6 +73,61 @@ pub(crate) fn begin_the_viewer() -> bool {
 
     keep_the_handle(child);
     true
+}
+
+/// Wait for the viewer `viewer` to answer that its preview loop is running (see
+/// `seam::preview_ready_event`).
+///
+/// The event is the viewer's own, so the handle is this call's to close: the tray waits on it once, and the
+/// process that made the name keeps it for as long as it is the answer (see `begin_one`).
+fn wait_for_a_viewer(viewer: u32, bound: Duration) -> bool {
+    let event = crate::app::seam::preview_ready_event(viewer);
+    if event.is_invalid() {
+        return false;
+    }
+
+    // Safety: an event of this run's own, waited on for a bound and nothing else: nothing here is
+    // dereferenced.
+    let answered = unsafe { WaitForSingleObject(event, bound.as_millis() as u32) == WAIT_OBJECT_0 };
+
+    // Safety: the handle this call made and nothing else holds, closed by the call that made it.
+    unsafe {
+        let _ = CloseHandle(event);
+    }
+    answered
+}
+
+/// Begin the viewer that draws the hovers of a run whose viewer has become a window of its own, and make it
+/// the one the rings are read by (see `app::detach`).
+///
+/// **The wait is a viewer's start, so it is a thread's own.** Called from the tray side that read the
+/// notice, which is the hook's loop: a loop that sat out a process's start-up would be a hook that stopped
+/// answering Explorer for as long as the launch took.
+pub(crate) fn another_viewer_is_owed(pid: u32) {
+    // The window that left is still this app's own, standing over the desktop: the run keeps it in the
+    // record a press on it is judged by (see `seam::window_is_a_viewers`).
+    crate::app::seam::note_a_detached_viewer(pid);
+
+    std::thread::spawn(begin_the_viewer_again);
+}
+
+fn begin_the_viewer_again() {
+    // `begin_one` notes the new process as this run's viewer before it can answer, which is what makes the
+    // retarget the first thing that happens: every hover that lands while the new one is starting is a
+    // message in the preview ring, waiting for the one process that reads it.
+    let Some(mut child) = begin_one() else {
+        return;
+    };
+
+    if wait_for_a_viewer(child.id(), THE_VIEWER_ANSWERS_IN) {
+        keep_the_handle(child);
+        return;
+    }
+
+    // A viewer that answered nothing draws nothing, and the road back is the one every lost viewer's is:
+    // the next show begins another (see `make_sure_a_viewer_is_standing`).
+    let _ = child.kill();
+    crate::app::seam::note_the_viewer_process(0);
 }
 
 /// Say which road this run took, on the trace a run asks for when what is under the seam is measured: the
