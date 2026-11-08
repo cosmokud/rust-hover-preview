@@ -2650,6 +2650,76 @@ fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
     stand_pin(previous_pin);
 }
 
+/// The flip is a process's own for the rest of its life, and the test process outlives more windows than
+/// one: the flag is turned back off when this goes out of scope, including when a body panics.
+struct AWindowOfItsOwnNoLonger;
+
+impl Drop for AWindowOfItsOwnNoLonger {
+    fn drop(&mut self) {
+        crate::app::detach::forget_this_window_is_its_own();
+    }
+}
+
+/// **A window of its own answers its own close.** The row on the window's taskbar button, and what the
+/// group's *Close all windows* sends every window of the app's, is the close of the window it belongs to —
+/// so it ends the pin the way the caption's cross does, rather than being asked the tray's ask, which a
+/// window of its own spends without acting on it (see `window_proc::close_asked_of_the_window`).
+#[test]
+fn a_window_of_its_own_ends_the_pin_when_the_shell_closes_it() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_end = PIN_END_REQUESTED.swap(false, Ordering::SeqCst);
+
+    let box_ = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+    stand_pin(Some(overlay_pin(box_, PinChrome::always())));
+    let pin_hwnd = unsafe {
+        pin_real_window::stand_real_pin_window_for_a_test(None);
+        pin_real_window::real_pin_window_at(box_)
+    }
+    .expect("the pin's own window");
+
+    // The flip: from here on this process is the window rather than a pin of the tray's, and the tray's ask
+    // is a road its own window spends.
+    crate::app::detach::this_window_is_its_own();
+    let _flipped = AWindowOfItsOwnNoLonger;
+    while take_pin_command().is_some() {}
+
+    // The button's own row, and the `SC_CLOSE` the Shell's group command arrives as.
+    for (msg, wparam, named) in [
+        (WM_CLOSE, WPARAM(0), "the button's Close"),
+        (WM_SYSCOMMAND, WPARAM(SC_CLOSE as usize), "`SC_CLOSE`"),
+    ] {
+        unsafe {
+            let _ = SendMessageW(pin_hwnd, msg, wparam, LPARAM(0));
+        }
+
+        assert!(
+            !PIN_END_REQUESTED.load(Ordering::SeqCst),
+            "{named} is not the tray's ask: a window of its own spends that without acting on it"
+        );
+        assert_eq!(
+            take_pin_command(),
+            Some(PinCommand::Close),
+            "and it is the pin's own close, the road its caption's cross takes"
+        );
+    }
+
+    assert!(
+        unsafe { IsWindow(pin_hwnd).as_bool() },
+        "the window is left standing for the take-down that ends it, and the process with it"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    PIN_END_REQUESTED.store(previous_end, Ordering::SeqCst);
+    stand_pin(previous_pin);
+}
+
 /// A picture pin owns the topmost band for the moment it appears, and gives it back — whatever the
 /// setting says, and never again after that moment.
 ///

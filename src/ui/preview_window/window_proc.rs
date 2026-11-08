@@ -211,6 +211,24 @@ pub(super) fn media_point(x: i32, y: i32) -> (i32, i32) {
     }
 }
 
+/// Answer a close asked of one of this app's windows: the Shell's **Close** on its taskbar button, its
+/// group's **Close all windows**, and `Alt`+`F4` where the key is not swallowed.
+///
+/// **The tray's ask is a different road, and this one exists because it is.** `request_pin_end` is the tray
+/// speaking to the pin it stood over, and a window of its own spends that without acting on it (see
+/// `PIN_END_REQUESTED`) — so a close pressed on the window standing on the screen would be swallowed by the
+/// very window it was pressed on. A close of the window's own is answered as the pin's own close instead,
+/// the road its caption's cross takes, which is what a window of its own needs: its window *is* it, and the
+/// loop's own take-down is what carries the process away with the window (see `detach_open::settle`).
+pub(super) fn close_asked_of_the_window() {
+    if crate::app::detach::is_detached() {
+        ask_pin(PinCommand::Close);
+        return;
+    }
+
+    request_pin_end();
+}
+
 pub(super) unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
@@ -361,7 +379,7 @@ pub(super) unsafe extern "system" fn window_proc(
             // all, exactly as it was before this window could be activated (see
             // `pin_window::Reason::Closed`).
             if pinned() {
-                request_pin_end();
+                close_asked_of_the_window();
             }
             LRESULT(0)
         }
@@ -387,7 +405,7 @@ pub(super) unsafe extern "system" fn window_proc(
             // with.
             if (wparam.0 & 0xFFF0) as u32 == SC_CLOSE {
                 if pinned() {
-                    request_pin_end();
+                    close_asked_of_the_window();
                 }
                 return LRESULT(0);
             }

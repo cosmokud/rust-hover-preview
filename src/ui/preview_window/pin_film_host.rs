@@ -256,7 +256,7 @@ fn answer_the_hosts_close(msg: u32, wparam: WPARAM) -> Option<LRESULT> {
     }
 
     if pinned() {
-        request_pin_end();
+        super::window_proc::close_asked_of_the_window();
     }
     Some(LRESULT(0))
 }
