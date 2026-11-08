@@ -24,8 +24,6 @@ use crate::app::seam::{
 };
 use crate::app::startup;
 use crate::config::config::PreviewType;
-use crate::engines::office_render;
-use crate::engines::webview_preview;
 use crate::CONFIG;
 
 pub(in super::super) fn toggle_startup() {
@@ -196,19 +194,21 @@ pub(in super::super) fn toggle_preview_type(kind: PreviewType) {
 
     if !kind.enabled() {
         // An engine only one kind of preview is ever started for goes with that
-        // kind's gate. The Office processes are ended from here rather than through
-        // the worker — a worker inside a call it cannot cut short would hold one of
-        // them for good, and this thread may not wait on one — while the browser
-        // needs nothing said to it at all: its own thread reads this gate and lets
-        // the engine go.
+        // kind's gate. The Office processes are asked for as a whole rather than
+        // through the worker — a worker inside a call it cannot cut short would hold
+        // one of them for good, and this thread may not wait on one — while the
+        // browser needs nothing said to it at all: its own thread reads this gate and
+        // lets the engine go. Both are the viewer's processes, ended where they run
+        // (see `PreviewMessage::StopEngines`).
         if let PreviewType::Document = kind {
-            office_render::stop_engines();
+            send_preview(PreviewMessage::StopEngines);
         }
 
         // A page of HTML the browser is drawing rides the text kind's gate: switched off,
-        // the page comes down with it (see `webview_preview::hide_html_preview`).
+        // the page comes down with it, in the process drawing it (see
+        // `refresh_render_html`).
         if let PreviewType::Text = kind {
-            webview_preview::hide_html_preview();
+            refresh_render_html();
         }
     }
 

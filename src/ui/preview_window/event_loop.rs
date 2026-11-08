@@ -2631,6 +2631,17 @@ pub fn run_preview_window() {
                             }
                         }
                     }
+                    // A switch that ends the engines behind a kind of preview was turned off in
+                    // the tray, which has no engine of its own to end: the processes are this
+                    // process's children and they go whether the worker is looking or not — a
+                    // worker inside a call it cannot cut short would hold one of them for good
+                    // (see `office_render::stop_engines`).
+                    PreviewMessage::StopEngines => office_render::stop_engines(),
+                    // And a page the engine is drawing comes down here, where the page and the pin
+                    // that may own it are: the tray has no engine in it and no pin standing, so
+                    // neither what is wanted there nor what is showing is the page the switch was
+                    // turned off under (see `hide_html_page`).
+                    PreviewMessage::HideHtmlPage => hide_html_page(),
                     // The tray's `Pin Mode → Enable` row, and the configuration behind it having
                     // been reloaded. Whether there is a pin to take down is a question only this
                     // thread can answer, and a pin left standing by a feature that was switched
@@ -4097,6 +4108,11 @@ pub fn run_preview_window() {
                     // `PreviewMessage::KeepExtraction`).
                     PreviewMessage::ForgetVideoGeometry => forget_video_geometry(),
                     PreviewMessage::KeepExtraction { path } => keep_extraction_for(path.as_deref()),
+                    // And the two asks a switch in the tray makes are answered above, where the
+                    // engines and the page are: neither is a hover's, and neither is a thing a
+                    // layout is made for (see `PreviewMessage::StopEngines` and
+                    // `PreviewMessage::HideHtmlPage`).
+                    PreviewMessage::StopEngines | PreviewMessage::HideHtmlPage => {}
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the
                     // transport bar below it where the kind has one. A kind whose chrome is

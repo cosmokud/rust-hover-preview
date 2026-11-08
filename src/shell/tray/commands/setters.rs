@@ -31,7 +31,8 @@ use super::super::submenus::{
 
 use crate::app::dialogs;
 use crate::app::seam::{
-    refresh_preview, refresh_preview_types, trim_image_cache, trim_subtitle_cache,
+    refresh_preview, refresh_preview_types, send_preview, trim_image_cache, trim_subtitle_cache,
+    PreviewMessage,
 };
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
@@ -41,7 +42,6 @@ use crate::config::config::{
     VOLUME_CHOICES,
 };
 use crate::engines::document_cache;
-use crate::engines::office_render;
 use crate::formats::codecs;
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
@@ -236,9 +236,10 @@ pub(in super::super) fn reset_settings_from_tray() {
     }
 
     // What a reset can turn off as easily as on, and the one setting whose engines are
-    // ended from here when it does — the same call its own toggle makes.
+    // asked to go when it does — the same ask its own toggle makes, in the process holding
+    // them (see `PreviewMessage::StopEngines`).
     if !PreviewType::Document.enabled() {
-        office_render::stop_engines();
+        send_preview(PreviewMessage::StopEngines);
     }
 
     refresh_preview_types();
@@ -327,7 +328,7 @@ pub(in super::super) fn set_office_engine(engine: OfficeEngine) {
     }
 
     if engine == OfficeEngine::LibreOffice {
-        office_render::stop_engines();
+        send_preview(PreviewMessage::StopEngines);
     }
 }
 

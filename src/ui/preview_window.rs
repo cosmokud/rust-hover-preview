@@ -358,6 +358,7 @@ pub(crate) use pointer::ScreenRegion;
 pub(crate) use crate::app::seam::{
     ENGINE_PAGE_DRAG, ENGINE_PAGE_RUNS, TEXT_PREVIEW_HOLDING, WAITING_PREVIEW_HOLDING,
 };
+pub(crate) use requests::hide_html_page;
 pub(crate) use requests::hide_preview;
 
 /// Whether a screen point is on one of a standing pin's own buttons — the caption's, or a sound's
