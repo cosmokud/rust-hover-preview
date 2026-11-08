@@ -33,12 +33,7 @@
 //! `text_find::key_edit_with`).
 
 #[cfg(test)]
-pub(crate) use crate::app::seam::pin_key_counted;
-#[cfg(test)]
 use crate::app::seam::PIN_KEY_COUNTED;
-pub(crate) use crate::app::seam::{
-    publish_find_bar_up, publish_pin_always_on_top, publish_pin_key_owner, take_pin_key_presses,
-};
 use crate::app::seam::{
     PIN_FIND_BAR_UP, PIN_KEYS_OWNER, PIN_KEYS_TOPMOST, PIN_KEYS_VIDEO, PIN_KEY_PRESSES,
 };
@@ -60,78 +55,40 @@ static PIN_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
 static TOGGLE_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
     [const { AtomicU64::new(0) }; crate::shell::key_binding::MAX_ALTERNATIVES];
 
-/// Pin-key presses seen since startup, swapped to zero by the preview loop.
-static PIN_PRESSES: AtomicU32 = AtomicU32::new(0);
-
-/// Preview-toggle presses seen in Explorer since this was last drained.
-static TOGGLE_PRESSES: AtomicU32 = AtomicU32::new(0);
-
-/// Whether each chord's main key is held, as a bit per `PIN_CHORDS` slot, which is what
-/// tells a press from a repeat.
-static PIN_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
+/// Pin-key presses seen since startup, swapped to zero by the preview loop; the preview shortcut's own
+/// count beside it, and whether each chord's main key is held — a bit per `PIN_CHORDS` slot, which is
+/// what tells a press from a repeat.
+///
+/// All three are counted here and read on the other side, so they are published in `app::seam` and these
+/// are the names they are counted by.
+pub(crate) use crate::app::seam::PIN_MAIN_DOWN;
+pub(crate) use crate::app::seam::PIN_PRESSES;
+pub(crate) use crate::app::seam::TOGGLE_PRESSES;
 
 /// The same bits for the preview shortcut's own chords.
 static TOGGLE_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
 
-/// The keys a standing pin answers, as the commands they mean.
+/// The keys a standing pin answers, as the commands they mean, and the two questions asked of that
+/// table — which command a virtual key is, and whether a message about one is a message the pin's own
+/// window would act on.
 ///
-/// The set is the pin's own (`pinned_key_command`), read here as numbers because the hook thread
-/// cannot take the pin's lock to ask. The order of the arms is the order of the pin's own, and the
-/// two must be kept in step: a key listed in one and not the other is a key this app acts on and
-/// also passes on, which is a double action rather than a missing one.
-///
-/// `VK_RIGHT`/`VK_DOWN` used to be the same command and `VK_LEFT`/`VK_UP` the other, which was
-/// right while a pin only ever held a file: an up arrow had nowhere to walk to. A pin that holds a
-/// page of text has somewhere for the two of them to go, and which of the two a window means is
-/// asked where the file is known rather than here (see `PinCommand::CaretUp`).
-///
-/// **The arrows and the page keys are four commands rather than two**, for that reason: a page's
-/// caret moves a line and a page key moves a screenful, and a table that gave them one command each
-/// would leave the caret's line moves indistinguishable from the folder's walk. A pin holding no
-/// page still walks on `VK_UP`/`VK_DOWN` — that is the loop's answer rather than this table's (see
-/// `pin_command_request`).
-pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
-    (0x25, 0),  // VK_LEFT   -> Previous
-    (0x27, 1),  // VK_RIGHT  -> Next
-    (0x1B, 2),  // VK_ESCAPE -> Close
-    (0x20, 3),  // VK_SPACE  -> TogglePlayback
-    (0x54, 4),  // VK_T      -> NextSubtitle
-    (0x26, 5),  // VK_UP     -> CaretUp
-    (0x21, 6),  // VK_PRIOR  -> PageBack
-    (0x28, 7),  // VK_DOWN   -> CaretDown
-    (0x22, 8),  // VK_NEXT   -> PageOn
-    (0x24, 9),  // VK_HOME   -> PageTop
-    (0x23, 10), // VK_END   -> PageBottom
-    (0x72, 11), // VK_F3    -> FindNext
-];
+/// All three are published in `app::seam`, because the pin's own window procedure reads them too and the
+/// two sides have to agree about the table (see `PIN_KEY_COMMANDS` there). The order of the arms is the
+/// order of the pin's own commands, and the two must be kept in step: a key listed in one and not the
+/// other is a key this app acts on and also passes on, which is a double action rather than a missing
+/// one.
+pub(crate) use crate::app::seam::{pin_key_command, pin_key_message_acts};
+#[cfg(test)]
+use crate::app::seam::{PIN_COMMAND_COUNT, PIN_KEY_COMMANDS};
 
-/// How many commands `PIN_KEY_COMMANDS` names, which is how many counters are kept for them.
+/// The command that means `PinCommand::TogglePlayback`, which is the one row of `PIN_KEY_COMMANDS` whose
+/// repeats are not commands.
 ///
-/// Named rather than written as the `12` of an array length so that a command added to the table
-/// above is a command this count has to be told about, rather than a command whose presses are
-/// counted into a counter that was never reserved for it.
-pub(crate) const PIN_COMMAND_COUNT: usize = 12;
-
-/// The command that means `PinCommand::TogglePlayback`, which is the one row of
-/// `PIN_KEY_COMMANDS` whose repeats are not commands.
-///
-/// It is the pin's own arrangement (`pinned_key_down_command`), and it is the whole of what the
-/// flag below is for: a Space is a toggle, so a hand resting on it would otherwise leave a film
-/// flickering between playing and held at Windows' repeat rate, while a held arrow is a hand
-/// walking the folder and a held `T` is a hand asking for the next track.
+/// It is the pin's own arrangement (`pinned_key_down_command`), and it is the whole of what the flag
+/// beside it is for: a Space is a toggle, so a hand resting on it would otherwise leave a film flickering
+/// between playing and held at Windows' repeat rate, while a held arrow is a hand walking the folder and a
+/// held `T` is a hand asking for the next track.
 const PIN_COMMAND_TOGGLE_PLAYBACK: usize = 3;
-
-/// Which command of `PIN_KEY_COMMANDS` a virtual key is listed under, or `None` for a key this app
-/// does not answer.
-///
-/// Split out of the callback below so that the table is one list of facts and this is the one place
-/// it is read.
-pub(crate) fn pin_key_command(vk: i32) -> Option<u8> {
-    PIN_KEY_COMMANDS
-        .iter()
-        .find(|(key, _)| *key == vk)
-        .map(|(_, command)| *command)
-}
 
 /// Whether the toggle is held, which is what tells a Space press from a Space still held down.
 ///
@@ -152,24 +109,6 @@ static PIN_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 /// a left press cleared out from under a Space that was still down.
 fn pin_key_press_is_a_command(command: u8, toggle_was_down: bool) -> bool {
     command as usize != PIN_COMMAND_TOGGLE_PLAYBACK || !toggle_was_down
-}
-
-/// Whether a message about a key a standing pin answers is one the pin's own window would act on.
-///
-/// The class of the message is part of the question rather than an accident of which arm of a
-/// window procedure it arrived on: a pinned window answers a key pressed plainly and answers no
-/// chord at all (`WM_SYSKEYDOWN` is swallowed there so that `Alt+F4` cannot close it and `Alt+Tab`
-/// cannot leave it, and nothing is asked of it), so **this hook must not count a system key either**.
-/// It did, and the difference was a chord acted on for a caret this app is in: `Ctrl`+Left walked
-/// the pin's folder and `Ctrl`+Space held its film, each of them for a chord the pin's own window
-/// had just thrown away.
-///
-/// It is one function rather than a pattern in each file because the pin's window asks it too — the
-/// answer belongs to the arrangement of the pin rather than to the hook, and a hook standing in for
-/// that arrangement is a hook that has to be told what it is standing in for (see
-/// `preview_window::pinned_key_message_command`).
-pub(crate) fn pin_key_message_acts(message: u32) -> bool {
-    message == WM_KEYDOWN
 }
 
 /// What the hook does with one message about a key of `PIN_KEY_COMMANDS`, once the caret is known to
@@ -446,26 +385,12 @@ fn install_chords(
     }
 }
 
-/// Pin-key presses since this was last called. The preview loop polls it once a
-/// tick, the way the Explorer hook polls the wheel's own counter.
-///
-/// Both low-level hooks count the main key: the keyboard hook for keys, and the mouse
-/// hook for `mouse3` through `mouse5`, which never reach it (see `wheel_input`).
-pub(crate) fn take_presses() -> u32 {
-    PIN_PRESSES.swap(0, Ordering::AcqRel)
-}
-
-/// Preview-toggle presses seen in Explorer since this was last called, one per key-down.
-pub(crate) fn take_preview_toggle_presses() -> u32 {
-    TOGGLE_PRESSES.swap(0, Ordering::AcqRel)
-}
-
 /// Count a mouse pin button's edge the way the keyboard hook counts a key's.
 ///
 /// Called from the mouse hook, so it touches atomics only: no lock, no desktop call.
 pub(crate) fn note_mouse_button(vk: i32, down: bool) {
     if note_key_edge(&PIN_CHORDS, &PIN_MAIN_DOWN, &PIN_PRESSES, vk, down, || true) {
-        crate::ui::preview_window::wake_preview_loop();
+        crate::app::seam::wake_preview_loop();
     }
 }
 
@@ -477,13 +402,6 @@ pub(crate) fn note_mouse_button(vk: i32, down: bool) {
 /// before it is a pin put under the listing it was just taken up over, which is why the take-up asks
 /// this of the hand rather than of a duration (see `pin_lifecycle::A_PRESS_BAND_IS_HELD_FOR`).
 ///
-/// What it reads is the same table the hook counts presses in, so the answer is the edge the hook
-/// itself saw and no desktop call (see `PIN_MAIN_DOWN`). A release the hook never saw leaves a bit
-/// standing, which is why the caller has a bound as well as this.
-pub(crate) fn the_pin_key_is_down() -> bool {
-    PIN_MAIN_DOWN.load(Ordering::Acquire) != 0
-}
-
 /// Record a main key's down or up edge against a chord table, answering whether it is a
 /// press that was counted.
 ///
@@ -602,9 +520,9 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
             &TOGGLE_PRESSES,
             vk,
             down,
-            crate::shell::explorer_hook::is_foreground_explorer_without_cache,
+            crate::shell::window_classes::the_foreground_is_explorer,
         ) {
-            crate::ui::preview_window::wake_preview_loop();
+            crate::app::seam::wake_preview_loop();
         }
     }
 
@@ -674,7 +592,7 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
                     // read at the end of a pinned static page's wait is 50 ms late, rounded up to
                     // the system timer's own 15.6 ms tick, and the caret is a mark the reader who
                     // pressed the key is watching for (see `wake_preview_loop`).
-                    crate::ui::preview_window::wake_preview_loop();
+                    crate::app::seam::wake_preview_loop();
                     return LRESULT(1);
                 }
                 PinKeyAnswer::Swallowed => return LRESULT(1),

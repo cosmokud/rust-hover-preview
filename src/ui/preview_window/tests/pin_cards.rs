@@ -1963,6 +1963,9 @@ fn a_sounds_always_on_top_button_toggles_pin_always_on_top() {
         unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) },
         "the release triggers AlwaysOnTop toggle"
     );
+    // The release asks the tray side for the flip rather than making it, because the setting is a row of
+    // that side's with a file behind it (see `crate::app::seam::TrayMessage::TogglePinAlwaysOnTop`).
+    crate::shell::explorer_hook::answer_what_the_preview_side_asked();
     assert_eq!(
         pin_always_on_top(),
         !before,
@@ -1973,6 +1976,7 @@ fn a_sounds_always_on_top_button_toggles_pin_always_on_top() {
     // Toggle back to restore initial state
     assert!(unsafe { pinned_press(HWND(0x1000 as *mut _), x, y) });
     assert!(unsafe { pinned_release(HWND(0x1000 as *mut _), x, y, &window) });
+    crate::shell::explorer_hook::answer_what_the_preview_side_asked();
     assert_eq!(pin_always_on_top(), before, "restored to original state");
 
     stand_pin(previous_pin);

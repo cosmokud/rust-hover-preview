@@ -124,13 +124,6 @@ pub fn update_pinned_preview(path: &Path) {
     send_preview(PreviewMessage::PinUpdate(path.to_path_buf()));
 }
 
-/// The file a pin is being shown next while it is still in flight — a load that has not answered, a
-/// box nothing has measured yet, a swap held for its picture — if there is one (see
-/// `update_pinned_preview`).
-pub fn pin_file_in_flight() -> Option<PathBuf> {
-    pin_install::pin_file_in_flight()
-}
-
 /// Note that the hand pressed the listing behind the pin, before the file the press picked is
 /// known.
 ///

@@ -1010,10 +1010,7 @@ impl PinUpdateWatch {
         // restarts the swap, which drops the film the pin was keeping across it (see
         // `update_pinned_preview` and `pin_install::THE_FILE_IN_FLIGHT`). The answer is `true` rather
         // than `false`: this press named a file, and the pin is already going to it.
-        if crate::ui::preview_window::pin_file_in_flight()
-            .as_deref()
-            .is_some_and(|in_flight| same_path(path, in_flight))
-        {
+        if crate::app::seam::pin_is_on_its_way_to(path) {
             note_pin_click!("PICK dropped: already in flight");
             return true;
         }

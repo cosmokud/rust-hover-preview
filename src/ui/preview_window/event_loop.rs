@@ -83,7 +83,7 @@ pub fn run_preview_window() {
         // The icon it is registered under is what the Shell draws its taskbar button with, and a
         // window class takes an icon once, as it registers — so this is the app's own icon rather
         // than whatever the button would otherwise be given (see `app_icon`).
-        let taskbar_icon = crate::shell::app_icon::app_icon();
+        let taskbar_icon = crate::app::app_icon::app_icon();
         let taskbar_class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
@@ -548,32 +548,48 @@ pub fn run_preview_window() {
             } else {
                 0
             };
-            crate::shell::key_input::publish_pin_key_owner(pin_keys_owner, pin_keys_video);
+            crate::app::seam::publish_pin_key_owner(pin_keys_owner, pin_keys_video);
             // And whether that pin is above every other window, which is the same question the
             // wheel asks before it takes a notch: a topmost pin is the window under the pointer
             // wherever the keyboard is (see `pin_owns_foreground`).
-            crate::shell::key_input::publish_pin_always_on_top(
-                pin_keys_owner != 0 && pin_always_on_top(),
-            );
+            crate::app::seam::publish_pin_always_on_top(pin_keys_owner != 0 && pin_always_on_top());
             // And whether the preview is the surface the pointer is standing on, which is what the
             // wheel asks instead of the keyboard's question once a pin is raised over the listing
             // the user is working in: the pointer is over the pin while the keyboard stays behind
             // it, and a notch turned there is the pin's either way (see
-            // `wheel_input::publish_preview_under_the_pointer`).
-            crate::shell::wheel_input::publish_preview_under_the_pointer(
-                cursor_preview_hover().any(),
-            );
+            // `crate::app::seam::publish_preview_under_the_pointer`).
+            crate::app::seam::publish_preview_under_the_pointer(cursor_preview_hover().any());
+            // And the two boxes a notch over a pinned picture or a pinned model is claimed by, published
+            // from this tick because the hook asks them from inside a system-wide callback that may take
+            // no lock: both are answered out of the pin's own state, which is settled by the time this
+            // tick draws it. One tick of staleness is what a box that moves under a hand can be wrong by,
+            // and a hand that moved the window is not also turning a wheel (see `PIN_ZOOM_REGION` and
+            // `MODELS_BAND`).
+            crate::app::seam::PIN_ZOOM_REGION.publish(pin_model::pin_zoom_keep_alive_try());
+            crate::app::seam::MODELS_BAND.publish(pin_model::the_models_band());
+            // And a notch the hook turned over that band, which it cannot hand to the engine itself: the
+            // window to post it to is this thread's to ask, and the point is where the hand turned it
+            // rather than where the engine's client starts (see `crate::app::seam::MODELS_NOTCHES`).
+            if let Some((point, notches)) = crate::app::seam::take_the_models_notch() {
+                f3d_player::post_a_notch_to_the_model(
+                    POINT {
+                        x: point.0,
+                        y: point.1,
+                    },
+                    notches,
+                );
+            }
 
             // A press of the preview shortcut, counted by the hook only while Explorer was in
             // front. It is drained here rather than acted on in the hook so that the lock and
             // the file write behind the setting happen on a thread that may wait.
-            for _ in 0..crate::shell::key_input::take_preview_toggle_presses() {
-                crate::shell::tray::toggle_preview_enabled();
+            for _ in 0..crate::app::seam::take_preview_toggle_presses() {
+                crate::app::seam::send_tray(crate::app::seam::TrayMessage::TogglePreviewEnabled);
             }
 
             // The key is drained whether or not it is watched, so that a press made while the
             // feature was off is not acted on when it comes back on.
-            let pin_presses = crate::shell::key_input::take_presses();
+            let pin_presses = crate::app::seam::take_presses();
             if pin_presses > 0 && pin_enabled() {
                 if pinned() {
                     // The key no longer hides a window that is up. A pin the user has not pressed
@@ -590,7 +606,7 @@ pub fn run_preview_window() {
                     // what the window should come back up on (see `pin_bubble_pick`).
                     if pin_key_restores_bubble(
                         pin_is_collapsed(),
-                        crate::shell::explorer_hook::is_foreground_explorer(),
+                        crate::shell::window_classes::the_foreground_is_explorer(),
                     ) {
                         // The window comes back only where the swap has room to be made in the
                         // same tick: a load already in hand is a tick the pick below has no
@@ -744,7 +760,7 @@ pub fn run_preview_window() {
                 // a message to this window or was swallowed before it could become one. A find
                 // bar's keys never arrive here — the hook stands down for one, and the bar reads
                 // them where they land (see `key_input::publish_find_bar_up`).
-                for press in crate::shell::key_input::take_pin_key_presses() {
+                for press in crate::app::seam::take_pin_key_presses() {
                     if let Some(command) = hook_pin_key_command(press) {
                         ask_pin(command);
                     }
@@ -967,7 +983,7 @@ pub fn run_preview_window() {
                 // typed into the field — which is the whole of what a swallowed key costs a text
                 // field, whose characters are the `WM_CHAR` `TranslateMessage` only makes from a
                 // key-down nothing swallowed (see `key_input::publish_find_bar_up`).
-                crate::shell::key_input::publish_find_bar_up(pinned() && text_find::is_open());
+                crate::app::seam::publish_find_bar_up(pinned() && text_find::is_open());
 
                 // A window dragged by an edge owes its media a layout at the box it ended up
                 // with: the window procedure owns the drag and asks for it here, because the
@@ -2352,7 +2368,7 @@ pub fn run_preview_window() {
             // paints is the level the notch asked for. The requested level is carried in the
             // wheel's sub-notch units, so a smooth wheel's messages move it too, and a whole notch
             // is still exactly `VOLUME_WHEEL_STEP` percent (see `volume_after_wheel_delta`).
-            let volume_delta = wheel_input::take_pin_volume_delta();
+            let volume_delta = crate::app::seam::take_pin_volume_delta();
             if volume_delta != 0 {
                 if let Some(level) = pin_volume_level() {
                     let base =
@@ -2404,7 +2420,7 @@ pub fn run_preview_window() {
             // whole notch stays in `text_scroll_carry` for the tick after it, because a truncated
             // count is most of a high-resolution wheel's travel thrown away (see `notch_step` for
             // the same bargain made on the zoom road below).
-            let scroll_delta = wheel_input::take_text_scroll_delta();
+            let scroll_delta = crate::app::seam::take_text_scroll_delta();
             if scroll_delta != 0 {
                 text_scroll_carry += scroll_delta;
                 let notches = (text_scroll_carry / WHEEL_DELTA) as i64;
@@ -2425,7 +2441,7 @@ pub fn run_preview_window() {
             // And a notch turned with `Ctrl` held over a pinned page is that page's own size: the
             // page is laid out again at the step the notches have reached, in the box it already has
             // (see `step_pinned_text_size`).
-            let size_delta = wheel_input::take_text_size_delta();
+            let size_delta = crate::app::seam::take_text_size_delta();
             if size_delta != 0 {
                 step_pinned_text_size(hwnd, size_delta.signum());
             }
@@ -2440,7 +2456,7 @@ pub fn run_preview_window() {
             // rather than truncated to whole notches, because a high-resolution wheel reports less than
             // a notch per message and a truncated count is most of its travel thrown away (see
             // `notch_step`).
-            let zoom_delta = wheel_input::take_pin_zoom_delta();
+            let zoom_delta = crate::app::seam::take_pin_zoom_delta();
             if zoom_delta != 0 {
                 aim_pin_zoom(zoom_delta as f32 / WHEEL_DELTA as f32);
             }
@@ -2658,6 +2674,13 @@ pub fn run_preview_window() {
                     PreviewMessage::TrayTextSize { percent } => {
                         redraw_pinned_page(hwnd, Some(percent))
                     }
+                    // The engine choice moved, so every geometry a probe answered is given up and the
+                    // next hover probes again (see `forget_video_geometry`).
+                    PreviewMessage::ForgetVideoGeometry => forget_video_geometry(),
+                    // A film's subtitles were switched off: the extraction running for one is dropped
+                    // rather than left to read a film nobody will draw subtitles from (see
+                    // `keep_extraction_for`).
+                    PreviewMessage::KeepExtraction { path } => keep_extraction_for(path.as_deref()),
                     // The file the user picked while a preview was pinned, which the pin is to be
                     // shown instead of the one it has (see the tray's `Pin Mode → Update Preview`).
                     // It is held rather than handled here, the way a hover is: what the loop acts on
@@ -3650,7 +3673,7 @@ pub fn run_preview_window() {
             let tick_now = Instant::now();
             match (pin_front_owed.as_mut(), pin_press_band_until) {
                 (Some(owed), Some(until))
-                    if tick_now < until && crate::shell::key_input::the_pin_key_is_down() =>
+                    if tick_now < until && crate::app::seam::the_pin_key_is_down() =>
                 {
                     // The band's clock only: the answer's is already the long one, and it is the band
                     // that must not go back under a hand still holding the key (see `PinFrontOwed`).
@@ -3687,7 +3710,7 @@ pub fn run_preview_window() {
                 let foreground = GetForegroundWindow();
                 if !foreground.is_invalid()
                     && !foreground_is_ours(foreground)
-                    && !crate::shell::explorer_hook::is_foreground_explorer()
+                    && !crate::shell::window_classes::the_foreground_is_explorer()
                 {
                     if foreground_is_the_desktop(foreground) {
                         lower_pinned_preview(pinned_window(), HWND(ptr::null_mut()));
@@ -4044,6 +4067,12 @@ pub fn run_preview_window() {
                     // laid out on the receive loop's own thread for the same reason (see
                     // `PreviewMessage::TrayTextSize`).
                     PreviewMessage::TrayTextSize { .. } => {}
+                    // A geometry given up and an extraction dropped are the same answer on both loops:
+                    // neither is a hover's, and a pin showing a film of the kind the switch is about is
+                    // the case the tray's row is for (see `PreviewMessage::ForgetVideoGeometry` and
+                    // `PreviewMessage::KeepExtraction`).
+                    PreviewMessage::ForgetVideoGeometry => forget_video_geometry(),
+                    PreviewMessage::KeepExtraction { path } => keep_extraction_for(path.as_deref()),
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the
                     // transport bar below it where the kind has one. A kind whose chrome is

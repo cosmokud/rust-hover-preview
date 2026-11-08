@@ -476,7 +476,7 @@ pub(super) unsafe fn pin_taskbar_window() -> Option<HWND> {
 
     // The window's own icon, both sizes: the small one is what a taskbar button draws, and the
     // large one what anything listing the window as a window draws.
-    let icon = unsafe { crate::shell::app_icon::app_icon() };
+    let icon = unsafe { crate::app::app_icon::app_icon() };
     let icon = LPARAM(icon.0 as isize);
     let _ = unsafe { SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_BIG as usize), icon) };
     let _ = unsafe { SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_SMALL as usize), icon) };

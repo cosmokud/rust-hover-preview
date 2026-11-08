@@ -297,8 +297,9 @@ pub(super) fn pin_state_try() -> Option<MutexGuard<'static, PinState>> {
 /// Explorer, which is a worse failure than the one this answers. So the phase is *published* as
 /// well as held, and this is the published copy — written after the state under the lock at
 /// both ends, so a reader that finds a pin up finds the pin rather than the tail of one being
-/// taken down (see `install` and `end_pin`).
-static PIN_UP: AtomicBool = AtomicBool::new(false);
+/// taken down (see `install` and `end_pin`). It lives in `app::seam` because the side that asks
+/// it is the other one, and this is the name it is written and read by.
+pub(crate) use crate::app::seam::PIN_UP;
 
 /// Whether a pin has been closed since this was last asked, as a published copy for the same
 /// reason `PIN_UP` is one.
@@ -322,9 +323,7 @@ static PIN_HANDED_OFF: AtomicBool = AtomicBool::new(false);
 
 /// Whether a preview is pinned, answered without a lock and without waiting for one (see
 /// [`PIN_UP`]).
-pub(super) fn pin_is_up() -> bool {
-    PIN_UP.load(Ordering::Acquire)
-}
+pub(super) use crate::app::seam::the_pin_is_up as pin_is_up;
 
 /// Whether a pin has been closed since this was last asked (see [`PIN_RESUMED`]).
 pub(super) fn take_pin_resumed() -> bool {
@@ -939,7 +938,7 @@ pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
     super::PIN_FRONT_OWED.store(false, Ordering::SeqCst);
     match pin {
         // `install` publishes the box the wheel hook reads, so a notch can be handed to the hook
-        // without a preview loop having turned (see `pin_volume_keep_alive_try`).
+        // without a preview loop having turned (see `app::seam::PIN_VOLUME_REGION`).
         Some(pin) => install(pin),
         None => {
             super::pin_input::clear_pin_volume_region();

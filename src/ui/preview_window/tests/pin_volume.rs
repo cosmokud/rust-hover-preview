@@ -878,7 +878,7 @@ fn a_sounds_filter_is_the_files_gain_and_never_the_apps_level() {
 
 /// The box on screen a wheel notch over the volume control belongs to: the transport strip's
 /// button while the popup is closed, that button and the panel above it once it is open, and a
-/// sound's card button where the pin has no strip at all (see `pin_volume_keep_alive_try`).
+/// sound's card button where the pin has no strip at all (see `crate::app::seam::PIN_VOLUME_REGION`).
 #[test]
 fn a_wheel_notch_over_the_volume_control_is_answered_by_the_box_that_control_is_drawn_in() {
     let _room = the_room_to_itself();
@@ -892,7 +892,7 @@ fn a_wheel_notch_over_the_volume_control_is_answered_by_the_box_that_control_is_
     stand_pin(Some(pin));
 
     assert_eq!(
-        pin_volume_keep_alive_try(),
+        crate::app::seam::PIN_VOLUME_REGION.get(),
         Some((
             window.0 + button.left,
             window.1 + button.top,
@@ -910,7 +910,7 @@ fn a_wheel_notch_over_the_volume_control_is_answered_by_the_box_that_control_is_
     stand_pin(Some(pin));
 
     assert_eq!(
-        pin_volume_keep_alive_try(),
+        crate::app::seam::PIN_VOLUME_REGION.get(),
         Some((
             window.0 + button.left.min(popup.panel.left),
             window.1 + button.top.min(popup.panel.top),
@@ -935,7 +935,7 @@ fn a_wheel_notch_over_the_volume_control_is_answered_by_the_box_that_control_is_
     stand_pin(Some(sound));
 
     assert_eq!(
-        pin_volume_keep_alive_try(),
+        crate::app::seam::PIN_VOLUME_REGION.get(),
         Some((
             sound_window.0 + sound_button.left,
             sound_window.1 + sound_button.top,
@@ -946,7 +946,11 @@ fn a_wheel_notch_over_the_volume_control_is_answered_by_the_box_that_control_is_
     );
 
     stand_pin(None);
-    assert_eq!(pin_volume_keep_alive_try(), None, "and no pin is no box");
+    assert_eq!(
+        crate::app::seam::PIN_VOLUME_REGION.get(),
+        None,
+        "and no pin is no box"
+    );
     stand_pin(previous);
 }
 
@@ -967,10 +971,10 @@ fn a_wheel_notch_over_the_volume_control_is_the_levels_and_not_the_pins_zoom() {
     let window = pin.window_box();
     stand_pin(Some(pin));
 
-    crate::shell::key_input::publish_pin_always_on_top(true);
-    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
-    let _ = wheel_input::take_pin_volume_delta();
-    let _ = wheel_input::take_pin_zoom_delta();
+    crate::app::seam::publish_pin_always_on_top(true);
+    crate::app::seam::publish_preview_under_the_pointer(false);
+    let _ = crate::app::seam::take_pin_volume_delta();
+    let _ = crate::app::seam::take_pin_zoom_delta();
 
     let info = MSLLHOOKSTRUCT {
         pt: POINT {
@@ -983,7 +987,7 @@ fn a_wheel_notch_over_the_volume_control_is_the_levels_and_not_the_pins_zoom() {
         dwExtraInfo: 0,
     };
     let swallowed = unsafe {
-        wheel_input::wheel_hook_proc(
+        crate::shell::wheel_input::wheel_hook_proc(
             HC_ACTION as i32,
             WPARAM(WM_MOUSEWHEEL as usize),
             LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
@@ -991,12 +995,12 @@ fn a_wheel_notch_over_the_volume_control_is_the_levels_and_not_the_pins_zoom() {
     };
 
     assert_eq!(
-        wheel_input::take_pin_volume_delta(),
+        crate::app::seam::take_pin_volume_delta(),
         WHEEL_DELTA,
         "the notch over the button is the level being turned"
     );
     assert_eq!(
-        wheel_input::take_pin_zoom_delta(),
+        crate::app::seam::take_pin_zoom_delta(),
         0,
         "and it is not also the picture being zoomed"
     );
@@ -1006,7 +1010,7 @@ fn a_wheel_notch_over_the_volume_control_is_the_levels_and_not_the_pins_zoom() {
         "and the notch is not left for the listing behind the pin"
     );
 
-    crate::shell::key_input::publish_pin_always_on_top(false);
+    crate::app::seam::publish_pin_always_on_top(false);
     stand_pin(None);
     stand_pin(previous);
 }
@@ -1283,15 +1287,15 @@ fn a_wheel_notch_is_answered_by_the_volume_box_while_the_pin_state_is_held() {
     let window = pin.window_box();
     stand_pin(Some(pin));
 
-    crate::shell::key_input::publish_pin_always_on_top(true);
-    crate::shell::wheel_input::publish_preview_under_the_pointer(false);
-    let _ = wheel_input::take_pin_volume_delta();
+    crate::app::seam::publish_pin_always_on_top(true);
+    crate::app::seam::publish_preview_under_the_pointer(false);
+    let _ = crate::app::seam::take_pin_volume_delta();
 
     // The lock the hook used to wait on, held for the whole of the question.
     let held = pin_state().expect("the pin state the test published");
 
     assert_eq!(
-        pin_volume_keep_alive_try(),
+        crate::app::seam::PIN_VOLUME_REGION.get(),
         Some((
             window.0 + button.left,
             window.1 + button.top,
@@ -1312,21 +1316,21 @@ fn a_wheel_notch_is_answered_by_the_volume_box_while_the_pin_state_is_held() {
         dwExtraInfo: 0,
     };
     let swallowed = unsafe {
-        wheel_input::wheel_hook_proc(
+        crate::shell::wheel_input::wheel_hook_proc(
             HC_ACTION as i32,
             WPARAM(WM_MOUSEWHEEL as usize),
             LPARAM(&info as *const MSLLHOOKSTRUCT as isize),
         )
     };
     assert_eq!(
-        wheel_input::take_pin_volume_delta(),
+        crate::app::seam::take_pin_volume_delta(),
         WHEEL_DELTA,
         "the notch is the level's even with the pin held by another thread"
     );
     assert_eq!(swallowed, LRESULT(1), "and it is not left for Explorer");
     drop(held);
 
-    crate::shell::key_input::publish_pin_always_on_top(false);
+    crate::app::seam::publish_pin_always_on_top(false);
     stand_pin(None);
     stand_pin(previous);
 }

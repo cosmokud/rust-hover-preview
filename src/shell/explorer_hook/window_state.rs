@@ -7,6 +7,7 @@
 //! from being made to find out none of it.
 
 use super::*;
+use crate::shell::window_classes;
 
 /// Quick check if foreground window is Explorer (cheap, no COM)
 ///
@@ -21,20 +22,6 @@ pub(crate) fn is_foreground_explorer() -> bool {
             return false;
         }
         is_explorer_window(foreground)
-    }
-}
-
-/// The same question asked without the window cache, for the low-level keyboard hook: that
-/// callback may not take a lock, and the cache behind `is_foreground_explorer` is one. It is
-/// the foreground window and one class lookup, which is all a `WH_KEYBOARD_LL` callback can
-/// afford to ask about a key it is about to let through anyway.
-pub(crate) fn is_foreground_explorer_without_cache() -> bool {
-    unsafe {
-        let foreground = GetForegroundWindow();
-        if foreground.is_invalid() {
-            return false;
-        }
-        explorer_browser_class_matches(foreground)
     }
 }
 
@@ -212,43 +199,13 @@ pub(super) fn is_window_minimized(hwnd: HWND) -> bool {
     unsafe { IsIconic(hwnd).as_bool() }
 }
 
-/// Allocation-free equivalent of lowercasing the class name and searching for an
-/// ASCII needle. A `u16` outside ASCII becomes U+FFFD under `to_string_lossy`
-/// and can never match, so it is skipped.
-pub(super) fn utf16_contains_ascii_ignore_case(haystack: &[u16], needle: &[u8]) -> bool {
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return false;
-    }
-
-    haystack.windows(needle.len()).any(|window| {
-        window
-            .iter()
-            .zip(needle)
-            .all(|(ch, byte)| *ch < 0x80 && (*ch as u8).eq_ignore_ascii_case(byte))
-    })
-}
-
-pub(crate) fn explorer_browser_class_matches(hwnd: HWND) -> bool {
-    unsafe {
-        let mut class_name = [0u16; 256];
-        let len = GetClassNameW(hwnd, &mut class_name);
-        if len <= 0 {
-            return false;
-        }
-
-        let class_name = &class_name[..len as usize];
-        utf16_contains_ascii_ignore_case(class_name, b"cabinetwclass")
-            || utf16_contains_ascii_ignore_case(class_name, b"explorerwclass")
-    }
-}
-
 pub(super) unsafe extern "system" fn enum_explorer_windows_callback(
     hwnd: HWND,
     lparam: LPARAM,
 ) -> BOOL {
     let counts = &mut *(lparam.0 as *mut ExplorerWindowCounts);
 
-    if explorer_browser_class_matches(hwnd) {
+    if window_classes::explorer_class_matches(hwnd) {
         counts.total += 1;
         if IsWindowVisible(hwnd).as_bool() && !is_window_minimized(hwnd) {
             counts.visible += 1;
@@ -309,7 +266,7 @@ pub(super) fn get_explorer_state() -> ExplorerState {
     // Everything past here is about the Explorer windows themselves: how many there
     // are, and whether the window in front leaves any of them out from behind itself.
     let counts = get_explorer_window_counts(foreground_cover_rect());
-    explorer_state_from_counts(&counts, pinned())
+    explorer_state_from_counts(&counts, crate::app::seam::the_pin_is_up())
 }
 
 /// Whether `window` is one of this app's own rather than Explorer's: the preview window
@@ -335,10 +292,16 @@ pub(super) fn is_our_own_window(window: HWND) -> bool {
         }
 }
 
-/// Whether `window` is the preview window — the pinned one where a pin is up, and the
-/// hover's where one is not. Both are this app's own, and both stand over a listing.
+/// Whether `window` is the preview's — the hover's where there is no pin, the pinned one where there
+/// is, and every window a pin draws through besides: its film's host, the caption windows, the bubble,
+/// its menu, the stand-in wearing its taskbar button. They are all windows of a viewer process, they are
+/// all this app's own, and they all stand over a listing.
+///
+/// **The process is the whole of the answer**, and that is deliberate: the preview side makes windows as
+/// it needs them, so a list of the ones it made would be a leak every time one was made and a list this
+/// side had to be told about (see `app::seam::window_is_a_viewers`).
 pub(super) fn preview_window_is_at(window: HWND) -> bool {
-    !window.is_invalid() && crate::ui::preview_window::is_preview_window(window.0 as isize)
+    !window.is_invalid() && crate::app::seam::window_is_a_viewers(window.0 as isize)
 }
 
 /// Whether a click where the pointer is can be read out of a listing behind it.
@@ -360,7 +323,7 @@ pub(super) fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -
 /// its rows is the bubble whether the panel is up or — on the tick after a row was pressed — the
 /// listing the panel and the bubble were standing over (see `press_is_on_the_pins_own_menu`).
 pub(super) fn bubble_window_is_at(window: HWND) -> bool {
-    let bubble = crate::ui::preview_window::PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let bubble = crate::app::seam::PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     window_is_the_slot(window, bubble)
 }
 
@@ -586,7 +549,7 @@ pub(super) fn press_is_on_the_pins_own_menu(window: HWND) -> bool {
 /// its menu is up, and a press the hook reads off the panel is a row rather than the file that row
 /// covers (see `press_is_on_the_pins_own_menu`, which the bubble's own panel answers beside it).
 pub(super) fn pin_menu_window_is_at(window: HWND) -> bool {
-    let menu = crate::ui::preview_window::PIN_MENU_HWND.load(Ordering::SeqCst);
+    let menu = crate::app::seam::PIN_MENU_HWND.load(Ordering::SeqCst);
     window_is_the_slot(window, menu)
 }
 

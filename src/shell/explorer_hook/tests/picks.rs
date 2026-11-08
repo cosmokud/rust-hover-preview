@@ -428,7 +428,7 @@ struct BubbleHwndPutBack;
 
 impl BubbleHwndPutBack {
     fn put(hwnd: HWND) -> Self {
-        crate::ui::preview_window::PIN_BUBBLE_HWND
+        crate::app::seam::PIN_BUBBLE_HWND
             .store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
         Self
     }
@@ -436,7 +436,7 @@ impl BubbleHwndPutBack {
 
 impl Drop for BubbleHwndPutBack {
     fn drop(&mut self) {
-        crate::ui::preview_window::PIN_BUBBLE_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
+        crate::app::seam::PIN_BUBBLE_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -506,15 +506,14 @@ struct PinMenuHwndPutBack;
 
 impl PinMenuHwndPutBack {
     fn put(hwnd: HWND) -> Self {
-        crate::ui::preview_window::PIN_MENU_HWND
-            .store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
+        crate::app::seam::PIN_MENU_HWND.store(hwnd.0 as isize, std::sync::atomic::Ordering::SeqCst);
         Self
     }
 }
 
 impl Drop for PinMenuHwndPutBack {
     fn drop(&mut self) {
-        crate::ui::preview_window::PIN_MENU_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
+        crate::app::seam::PIN_MENU_HWND.store(0, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

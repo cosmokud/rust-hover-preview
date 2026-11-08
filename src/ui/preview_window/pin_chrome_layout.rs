@@ -1233,7 +1233,7 @@ pub(super) fn ramp_pin_volume() {
 /// and the flush are only as smooth as the ticks they land on — and what lets it drop back to the
 /// pin's own slower wait once the level has settled (see `wait_before_the_next_tick`).
 pub(super) fn pin_volume_is_moving() -> bool {
-    if crate::shell::wheel_input::pin_volume_delta_pending() {
+    if crate::app::seam::pin_volume_delta_pending() {
         return true;
     }
 

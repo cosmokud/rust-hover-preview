@@ -159,6 +159,44 @@ macro_rules! note_pin_click {
 // travels with the counter it is written beside.
 pub(crate) use note_pin_click;
 
+/// Whether `RHP_PIN_TRACE` asks for the pin's road to be written out — asked here, of this process's
+/// own environment, rather than of the preview side's gate.
+///
+/// An environment variable is a process's own, and the step after this one makes the two sides two
+/// processes: the preview side reads its own copy of this and the hook reads this one, both writing the
+/// same file, and neither one asking the other whether the run wanted it at all.
+pub(super) fn pin_trace_asked() -> bool {
+    std::env::var_os("RHP_PIN_TRACE").is_some()
+}
+
+/// Write one line of that road's log: `%TEMP%\rhp-pin-trace.log`, stamped, appended and flushed so a run
+/// that ends badly leaves what it wrote — the same file and the same form the preview side writes its
+/// own lines in, so a run reads one sequence rather than two.
+pub(super) fn note_a_pin_trace_line(line: &str) {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| format!("{}.{:03}", elapsed.as_secs(), elapsed.subsec_millis()))
+        .unwrap_or_else(|_| "-".to_string());
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("rhp-pin-trace.log"))
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{stamp} {line}");
+        let _ = file.flush();
+    }
+}
+
+/// Write one line the preview side asked to be written here (see `TrayMessage::PinClick`), gated the
+/// same way: a line whose sender already gave up on the gate is not written twice, and a run with no
+/// trace writes nothing at all.
+pub(super) fn note_a_pin_click_line(line: &str) {
+    if pin_trace_asked() {
+        note_a_pin_trace_line(line);
+    }
+}
+
 /// A path as the name of the file in it, for the lines above: the folder is the same on
 /// both sides of every question they ask, and a path long enough to be worth reading is a
 /// path too long to read.

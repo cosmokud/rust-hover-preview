@@ -176,7 +176,7 @@ pub(super) fn pinned_key_message_command(
     vk: i32,
     lparam: isize,
 ) -> Option<PinCommand> {
-    if !crate::shell::key_input::pin_key_message_acts(message) {
+    if !crate::app::seam::pin_key_message_acts(message) {
         return None;
     }
 

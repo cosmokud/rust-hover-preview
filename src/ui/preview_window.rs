@@ -223,8 +223,7 @@ use crate::readers::tone_map;
 use crate::readers::video_player;
 use crate::readers::webp_image;
 use crate::readers::wic_image;
-use crate::shell::pin_navigation;
-use crate::shell::wheel_input;
+mod pin_navigation;
 use crate::text::archive_preview::{self, ArchivePreviewOptions};
 use crate::text::audio_preview::{self, AudioPreviewOptions, Card, CardChrome, CardControl};
 use crate::text::pin_chrome;
@@ -325,16 +324,13 @@ use pin_window::{
 // What the rest of the crate asks for by name.
 pub(crate) use dimensions::monitor_dpi_from_point;
 pub(crate) use event_loop::run_preview_window;
-pub(crate) use f3d_player::post_a_notch_to_the_model;
 pub(crate) use ffplay_window::kill_stray_video_process;
 pub(crate) use hover_facts::cursor_preview_hover;
 pub(crate) use hover_facts::PreviewCursorHover;
 pub(crate) use image_cache::trim_image_cache;
 pub(crate) use media_types::PreviewMessage;
 pub(crate) use mpv_resident::shut_down_the_resident;
-pub(crate) use pin_bubble::PIN_BUBBLE_HWND;
 pub(crate) use pin_drag::publish_pin_media_press;
-pub(crate) use pin_input::pin_volume_keep_alive_try;
 pub(crate) use pin_lifecycle::band_place;
 pub(crate) use pin_lifecycle::pin_always_on_top;
 /// Whether the tray's **Pin Mode → Enable** row has pinning switched on.
@@ -345,10 +341,7 @@ pub(crate) use pin_lifecycle::pin_always_on_top;
 pub(crate) use pin_lifecycle::pin_enabled as pin_mode_is_enabled;
 pub(crate) use pin_lifecycle::pin_holds_the_front;
 pub(crate) use pin_lifecycle::PinCommand;
-pub(crate) use pin_menu_window::PIN_MENU_HWND;
 pub(crate) use pin_model::pin_is_focused;
-pub(crate) use pin_model::pin_zoom_keep_alive_try;
-pub(crate) use pin_model::the_models_band;
 pub(crate) use pin_walk::PinPlanned;
 pub(crate) use pin_walk::PinStep;
 pub(crate) use pixels::rgba_to_bgra;
@@ -357,11 +350,6 @@ pub(crate) use pointer::pointer_item_box;
 pub(crate) use pointer::pointer_item_holds;
 pub(crate) use pointer::preview_pointer_hold;
 pub(crate) use pointer::publish_pointer_item_box;
-// The one of these nothing asks for, kept reachable rather than dropped: a move is not a change.
-#[allow(unused_imports)]
-pub(crate) use pointer::text_preview_scrollable;
-pub(crate) use pointer::text_scroll_keep_alive_try;
-pub(crate) use pointer::text_size_keep_alive_try;
 pub(crate) use pointer::AvoidRegion;
 pub(crate) use pointer::ScreenRegion;
 pub(crate) use requests::hide_preview;
@@ -398,23 +386,6 @@ pub(crate) fn pin_button_covers(point: (i32, i32)) -> bool {
             && pin_chrome::button_at(x, y, width, pin.caption, pin.dpi, framed).is_some())
 }
 
-/// Whether `RHP_PIN_TRACE` asks for the preview's road to be written out — asked by the one module
-/// outside this one that writes a line of that log, so that a run without the variable builds no
-/// line at all (see `pin_trace`).
-pub(crate) fn pin_trace_asked() -> bool {
-    pin_trace::asked()
-}
-
-/// Write one line of that log from outside this module: the Explorer hook's own gate, whose answer
-/// is the one that stops every preview with the pointer over a listing.
-pub(crate) fn note_a_trace_line(line: &str) {
-    if pin_trace::asked() {
-        pin_trace::write(line);
-    }
-    #[cfg(test)]
-    pin_trace::note_a_line_for_a_test(line.to_string());
-}
-
 /// Whether `RHP_PLAYBACK_TRACE` asks for a launch's sound to be written out — asked by the one module
 /// outside this one that ends a process, so that a run without the variable pays a read of an atomic
 /// and builds no line at all (see `playback_trace`).
@@ -437,7 +408,6 @@ pub(crate) use requests::note_the_pin_was_handed_off;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;
 pub(crate) use requests::notify_peazip_ready;
-pub(crate) use requests::pin_file_in_flight;
 pub(crate) use requests::pin_press_was_not_a_pick;
 pub(crate) use requests::pinned;
 pub(crate) use requests::pinned_path;

@@ -129,7 +129,7 @@ pub(super) fn is_explorer_window(hwnd: HWND) -> bool {
         }
     }
 
-    let is_explorer = explorer_browser_class_matches(hwnd);
+    let is_explorer = crate::shell::window_classes::explorer_class_matches(hwnd);
 
     if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
         if cache.len() >= 512 {

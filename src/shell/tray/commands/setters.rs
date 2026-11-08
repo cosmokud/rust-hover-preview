@@ -30,6 +30,9 @@ use super::super::submenus::{
 };
 
 use crate::app::dialogs;
+use crate::app::seam::{
+    refresh_preview, refresh_preview_types, trim_image_cache, trim_subtitle_cache,
+};
 use crate::config::config::{
     sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
     sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent,
@@ -40,10 +43,6 @@ use crate::config::config::{
 use crate::engines::document_cache;
 use crate::engines::office_render;
 use crate::formats::codecs;
-use crate::ui::preview_window::{
-    publish_text_font_size, publish_tray_volume, refresh_preview, refresh_preview_types,
-    trim_image_cache, trim_subtitle_cache,
-};
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
 use windows::core::{w, PCWSTR};
@@ -560,7 +559,7 @@ pub(in super::super) fn set_text_font_scale(percent: u32) {
     // the one thing that puts a page already up to another size. A page a reader has wheeled, or
     // a size hand-edited into the file, is left alone by everything but this row (see
     // `publish_text_font_size`).
-    publish_text_font_size(percent);
+    crate::app::seam::send_preview(crate::app::seam::PreviewMessage::TrayTextSize { percent });
     refresh_preview();
 }
 
@@ -636,7 +635,7 @@ pub(in super::super) fn set_video_volume(index: u16) {
 
     // A film already playing in a pin is playing at a level of its own, so it is told this one
     // now rather than at the next file it is shown (see `tray_volume_moved`).
-    publish_tray_volume(false);
+    crate::app::seam::send_preview(crate::app::seam::PreviewMessage::TrayVolume { audio: false });
 }
 
 /// A level of the `Volume → Audio` submenu, by the position it was listed at: the volume a
@@ -654,7 +653,7 @@ pub(in super::super) fn set_audio_volume(index: u16) {
 
     // A sound already playing in a pin is playing at a level of its own, so it is told this one
     // now rather than at the next file it is shown (see `tray_volume_moved`).
-    publish_tray_volume(true);
+    crate::app::seam::send_preview(crate::app::seam::PreviewMessage::TrayVolume { audio: true });
 }
 
 /// A way of starting a sound, by the position it was listed at: where in a file a hover drops

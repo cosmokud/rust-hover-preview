@@ -15,11 +15,11 @@
 //!
 //! It is the same hook again for a pinned picture, whose window is one nobody is in
 //! either: a notch over it is the picture being zoomed, and the count is left for the
-//! window procedure to take (see `pin_zoom_keep_alive_try`).
+//! window procedure to take (see `PIN_ZOOM_REGION`).
 //!
 //! And for a pinned page, where the notch is its own text size rather than its place:
 //! a `Ctrl` held over one steps the size, and a page short enough to fit its box is
-//! resized even though it has no scroll to give (see `text_size_keep_alive_try`).
+//! resized even though it has no scroll to give (see `TEXT_SIZE_REGION`).
 //!
 //! And it is the same hook that has to *stop* there, because a region is a box on the
 //! screen and not a claim on what is in front of it: a pin can be behind another
@@ -31,12 +31,13 @@
 //! still in the listing behind it (see `publish_preview_under_the_pointer`), and a pin
 //! behind another program is not (see `key_input::pin_owns_foreground`).
 
-use crate::app::seam::preview_is_under_the_pointer;
-pub(crate) use crate::app::seam::{
-    pin_volume_delta_pending, publish_preview_under_the_pointer, take_pin_volume_delta,
-    take_pin_zoom_delta, take_text_scroll_delta, take_text_size_delta,
+use crate::app::seam::{
+    post_a_notch_to_the_model, preview_is_under_the_pointer, wake_preview_loop,
 };
-use crate::app::seam::{PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_ZOOM_DELTA, TEXT_SCROLL_DELTA};
+use crate::app::seam::{
+    MODELS_BAND, PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_VOLUME_REGION, PIN_ZOOM_DELTA,
+    PIN_ZOOM_REGION, TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION, TEXT_SIZE_REGION,
+};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
@@ -147,16 +148,16 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // asked before the two regions below: the button sits inside the pin's own box, which
         // the zoom road claims whole, and the popup can float over a page that scrolls.
         if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
-            if let Some(region) = crate::ui::preview_window::pin_volume_keep_alive_try() {
+            if let Some(region) = PIN_VOLUME_REGION.get() {
                 if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                     PIN_VOLUME_DELTA.fetch_add(notches, Ordering::AcqRel);
-                    crate::ui::preview_window::wake_preview_loop();
+                    wake_preview_loop();
                     return LRESULT(1);
                 }
             }
         }
 
-        if let Some(region) = crate::ui::preview_window::text_scroll_keep_alive_try() {
+        if let Some(region) = TEXT_SCROLL_REGION.get() {
             // The box the preview published is asked first, and what owns the wheel second: in that
             // order, so that the second — a few calls into Windows — is a cost neither every wheel
             // message on the desktop nor a notch that is outside every preview pays (see
@@ -181,7 +182,7 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
                         TEXT_SCROLL_DELTA.fetch_add(notches, Ordering::AcqRel);
                     }
                     if notches != 0 {
-                        crate::ui::preview_window::wake_preview_loop();
+                        wake_preview_loop();
                     }
                 }
                 return LRESULT(1);
@@ -191,9 +192,9 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // And the page's size for a page with no scroll to give: one that fits its box is a page
         // the branch above never reaches, because there is no scroll there for Explorer to lose —
         // so a `Ctrl` and a wheel over one is asked for here instead (see
-        // `text_size_keep_alive_try`).
+        // `TEXT_SIZE_REGION`).
         if wparam.0 == WM_MOUSEWHEEL as usize && control_is_down() {
-            if let Some(region) = crate::ui::preview_window::text_size_keep_alive_try() {
+            if let Some(region) = TEXT_SIZE_REGION.get() {
                 if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                     PIN_TEXT_SIZE_DELTA.fetch_add(notches, Ordering::AcqRel);
                     return LRESULT(1);
@@ -206,10 +207,10 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // engine's window and swallowed here — the kinds a notch zooms are refused there rather than here
         // (see `pin_zoom_view`), and no notch falls through to the listing under the pin.
         if wparam.0 == WM_MOUSEWHEEL as usize {
-            if let Some(region) = crate::ui::preview_window::the_models_band() {
+            if let Some(region) = MODELS_BAND.get() {
                 if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                     if notches != 0 {
-                        crate::ui::preview_window::post_a_notch_to_the_model(info.pt, notches);
+                        post_a_notch_to_the_model(info.pt.x, info.pt.y, notches);
                     }
                     return LRESULT(1);
                 }
@@ -228,11 +229,11 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // pin would be read at the end of it — 62 ms, measured, which is four frames of a
         // 144 Hz display and the whole of what makes a zoom start unevenly (see
         // `wake_preview_loop`).
-        if let Some(region) = crate::ui::preview_window::pin_zoom_keep_alive_try() {
+        if let Some(region) = PIN_ZOOM_REGION.get() {
             if point_in_region(info.pt, region) && preview_takes_the_wheel() {
                 if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
                     PIN_ZOOM_DELTA.fetch_add(notches, Ordering::AcqRel);
-                    crate::ui::preview_window::wake_preview_loop();
+                    wake_preview_loop();
                 }
                 return LRESULT(1);
             }

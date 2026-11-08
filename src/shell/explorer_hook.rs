@@ -49,6 +49,15 @@ mod views;
 mod window_state;
 
 use crate::app::engine_processes;
+use crate::app::seam::{
+    cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
+    note_engine_page_drag, pin_button_covers, pin_press_was_not_a_pick, pinned_path,
+    pointer_item_box, pointer_item_holds, press_pinned_preview, preview_pointer_hold,
+    preview_screen_rect, preview_stall_ms, preview_window_rect, publish_pin_media_press,
+    publish_pointer_item_box, request_pin_end, request_pin_menu_dismiss, show_preview,
+    show_preview_keyboard, take_pin_handed_off, take_pin_menu_pressed, take_pin_resumed,
+    update_pinned_preview, PreviewCursorHover,
+};
 use crate::config::config::{
     AvoidMode, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS, DEFAULT_PIN_UPDATE_ENABLED,
     DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
@@ -57,15 +66,6 @@ use crate::config::config::{
 use crate::engines::webview_preview;
 use crate::formats::video_formats::is_video_file;
 use crate::shell::wheel_input;
-use crate::ui::preview_window::{
-    cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    note_engine_page_drag, pin_button_covers, pin_press_was_not_a_pick, pinned, pinned_path,
-    pointer_item_box, pointer_item_holds, press_pinned_preview, preview_pointer_hold,
-    preview_screen_rect, preview_stall_ms, preview_window_rect, publish_pin_media_press,
-    publish_pointer_item_box, request_pin_end, request_pin_menu_dismiss, show_preview,
-    show_preview_keyboard, take_pin_handed_off, take_pin_menu_pressed, take_pin_resumed,
-    update_pinned_preview, PreviewCursorHover,
-};
 use crate::{CONFIG, RUNNING};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -118,12 +118,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 // What the rest of the crate asks for by name.
+/// What a ui test drives when it presses a button of the pin's own: the queue the loop drains, answered
+/// by the side that owns the setting. Nothing in this side's own code calls it by that path — the loop is
+/// its caller (see `answer_what_the_preview_side_asked`).
+#[cfg(test)]
+pub(crate) use main_loop::answer_what_the_preview_side_asked;
 pub use main_loop::run_explorer_hook;
 pub use view_sort::note_explorer_restart;
 pub(crate) use view_sort::{view_sort_of, SortKey, ViewSort};
-pub(crate) use window_state::{
-    explorer_browser_class_matches, is_foreground_explorer, is_foreground_explorer_without_cache,
-};
+pub(crate) use window_state::is_foreground_explorer;
 
 // The parts, in one namespace (see the note above). The macro is named rather than globbed:
 // it is written from two parts and lives with the counter it is written beside.

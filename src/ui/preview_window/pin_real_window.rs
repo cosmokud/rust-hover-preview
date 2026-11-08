@@ -205,7 +205,7 @@ static REAL_PIN_CLASS_REGISTERED: Once = Once::new();
 unsafe fn register_real_pin_class() {
     REAL_PIN_CLASS_REGISTERED.call_once(|| {
         let hinstance = GetModuleHandleW(None).expect("the module's own handle");
-        let icon = unsafe { crate::shell::app_icon::app_icon() };
+        let icon = unsafe { crate::app::app_icon::app_icon() };
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(window_proc),
@@ -274,7 +274,7 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
 
     // The window's own icon, both sizes: the small one is what a taskbar button draws, and the
     // large one what anything listing the window as a window draws.
-    let icon = unsafe { crate::shell::app_icon::app_icon() };
+    let icon = unsafe { crate::app::app_icon::app_icon() };
     let icon = LPARAM(icon.0 as isize);
     let _ = unsafe { SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_BIG as usize), icon) };
     let _ = unsafe { SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_SMALL as usize), icon) };

@@ -682,7 +682,7 @@ unsafe fn add_tray_icon(hwnd: HWND) -> bool {
     // The icon the app wears: its own, loaded from the resource the build script compiles it
     // under, with the Shell's default application icon as the fallback for a build that has
     // none (see `app_icon`).
-    let hicon = crate::shell::app_icon::app_icon();
+    let hicon = crate::app::app_icon::app_icon();
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd,

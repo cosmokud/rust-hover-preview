@@ -1393,16 +1393,16 @@ fn a_caret_key_the_hook_answers_is_counted_and_wakes_the_loop() {
     if foreground.0.is_null() {
         return;
     }
-    crate::shell::key_input::publish_pin_key_owner(foreground.0 as u64, 0);
-    crate::shell::key_input::publish_find_bar_up(false);
+    crate::app::seam::publish_pin_key_owner(foreground.0 as u64, 0);
+    crate::app::seam::publish_find_bar_up(false);
 
     // The count and the signal are the process's own, so both are cleared here: what is read below
     // has to be this key's and not one left behind by a test beside this one.
-    let _ = crate::shell::key_input::take_pin_key_presses();
+    let _ = crate::app::seam::take_pin_key_presses();
     unsafe {
         let _ = ResetEvent(preview_channel_event());
     }
-    let counted = crate::shell::key_input::pin_key_counted();
+    let counted = crate::app::seam::pin_key_counted();
 
     // A key-down the way the system hands it over: a low-level hook's `lParam` is the structure, and
     // `VK_DOWN` is the caret a line on.
@@ -1428,12 +1428,12 @@ fn a_caret_key_the_hook_answers_is_counted_and_wakes_the_loop() {
         "a caret key with the pin in front is the pin's, and is swallowed rather than passed on"
     );
     assert_eq!(
-        crate::shell::key_input::pin_key_counted(),
+        crate::app::seam::pin_key_counted(),
         counted + 1,
         "and it is counted for the loop"
     );
     assert!(
-        crate::shell::key_input::take_pin_key_presses().contains(&7),
+        crate::app::seam::take_pin_key_presses().contains(&7),
         "as the command the page's caret answers, which is what the loop drains"
     );
 
@@ -1445,5 +1445,5 @@ fn a_caret_key_the_hook_answers_is_counted_and_wakes_the_loop() {
         );
     }
 
-    crate::shell::key_input::publish_pin_key_owner(0, 0);
+    crate::app::seam::publish_pin_key_owner(0, 0);
 }
