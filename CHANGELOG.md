@@ -43,6 +43,7 @@
 - **A caption's two state buttons wear the ink a state is read in** — **Always On Top** while the window is kept on top and **Detach** while it is a window of its own are drawn in the numbers’ ink, the one the same two buttons wear on a sound’s card, standing in the wash that side of the caption stands in and lighting a step toward white under the hand. Every other button of the strip is drawn as it was. The menus’ rows are unchanged: a detached window’s `Detach Window` row is still faded.
 
 - **The detach button in a sound's card lights where it is drawn, not only near the command bar** — the four window buttons stand in a band at the top of the card, and three of them were answered anywhere in it while the detach was asked for only inside the bar's own row below them, so a hand on the button was a hand on the artwork. It is answered with the three beside it now.
+
 ## [0.4.11] - 2026-11-08
 
 ### Added
