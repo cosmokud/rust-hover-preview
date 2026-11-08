@@ -55,6 +55,8 @@ const BOX: &str = "--box";
 const READY: &str = "--ready";
 /// Whether the pin that was handed over was maximized.
 const MAXIMIZED: &str = "--maximized";
+/// Where the sound the pin was playing had got to, in seconds into its file.
+const AT: &str = "--at";
 /// The process that began this one, waited on so that a window outlives nobody.
 const PARENT: &str = "--parent";
 
@@ -74,7 +76,7 @@ const READY_WAIT: Duration = Duration::from_secs(300);
 pub(crate) type MediaBox = (i32, i32, i32, i32);
 
 /// What a detached window was begun with.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub(crate) struct OpenRequest {
     /// The file the window is to stand on.
     pub(crate) path: PathBuf,
@@ -84,6 +86,12 @@ pub(crate) struct OpenRequest {
     /// asked for by the take-up: a maximized window is a box chosen for the whole window, and only
     /// the window that now exists can be given one.
     pub(crate) maximized: bool,
+    /// Where the sound of the file had got to in the pin this was handed over from, for the file
+    /// that pin was showing, and nothing for every other kind: a picture, a film's first frame and
+    /// a page are read the same wherever they are opened, and a second into a sound is not in the
+    /// file at all — it is where the player on the other side of this hand-off had got to, and the
+    /// window that takes the file up cannot ask a process that no longer has it.
+    pub(crate) at: Option<f64>,
     /// The event to set once the window is up, or nothing where nobody is waiting — a window begun
     /// by hand is one whose first paint nobody owes an answer to.
     pub(crate) ready: Option<String>,
@@ -92,7 +100,7 @@ pub(crate) struct OpenRequest {
 }
 
 /// How this process was started.
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Debug)]
 pub(crate) enum Startup {
     /// The tray app, which is what a launch with no switch of ours on it is.
     Tray,
@@ -132,6 +140,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Startup {
     let mut path: Option<PathBuf> = None;
     let mut region: Option<MediaBox> = None;
     let mut maximized = false;
+    let mut at: Option<f64> = None;
     let mut ready: Option<String> = None;
     let mut parent: Option<u32> = None;
 
@@ -152,6 +161,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Startup {
                     .and_then(|value| value.parse().ok())
             }
             Some(MAXIMIZED) => maximized = true,
+            Some(AT) => at = args.next().and_then(|value| reader_at(&value)),
             // Anything else is not this switch's business and not a reason to read the launch as a
             // detached one: what is looked for is `--detach`, and nothing else here can add it.
             _ => {}
@@ -168,6 +178,7 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Startup {
                 path,
                 region,
                 maximized,
+                at,
                 ready,
                 parent,
             })
@@ -197,6 +208,27 @@ fn reader_box(value: &std::ffi::OsStr) -> Option<MediaBox> {
     }
 
     Some(region)
+}
+
+/// Read where a sound was left off, written as a number of seconds, or nothing where the writing is
+/// not one: a second this app cannot read is a sound that is taken up by its own rule, which is a
+/// window that plays rather than a hand-off that does not happen.
+fn reader_at(value: &std::ffi::OsStr) -> Option<f64> {
+    let seconds = value.to_str()?.trim().parse::<f64>().ok()?;
+
+    (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
+}
+
+/// Where a sound this window was handed over is to begin: the second the pin it came from had got
+/// to, for the file that pin was showing, and nothing for any other.
+///
+/// It is the one fact about a hand-off a file cannot be asked for on the other side of it, and it is
+/// what the window that takes the file up reads before it falls back to the way a hover of that
+/// file drops a sound in (see the loop's own start of a sound and `pin_detach`).
+pub(crate) fn the_sound_starts_at(path: &Path) -> Option<f64> {
+    open_request()
+        .filter(|request| request.path == path)
+        .and_then(|request| request.at)
 }
 
 /// Publish what this process was started for. Called once, by `main`, before any thread that asks
@@ -287,7 +319,12 @@ pub(crate) fn watch_the_parent() {
 /// pin this was asked of, and that is the ready event's business — the tray app's pin stays standing
 /// until the child says its window is there, so what the user sees is a window being *replaced* by
 /// the same window rather than a file that blinks out and back.
-pub(crate) fn hand_off(path: &Path, region: MediaBox, maximized: bool) -> std::io::Result<()> {
+pub(crate) fn hand_off(
+    path: &Path,
+    region: MediaBox,
+    maximized: bool,
+    at: Option<f64>,
+) -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
     let serial = HANDED_OVER.fetch_add(1, Ordering::Relaxed);
     let ready = format!(
@@ -311,6 +348,12 @@ pub(crate) fn hand_off(path: &Path, region: MediaBox, maximized: bool) -> std::i
         .arg(care_of().to_string());
     if maximized {
         command.arg(MAXIMIZED);
+    }
+    // Where the sound had got to, written down to the thousandth of a second it is a position in:
+    // the number is the other side's answer read back as one, which is why it crosses as text rather
+    // than as a shape of its own.
+    if let Some(at) = at.filter(|seconds| seconds.is_finite() && *seconds >= 0.0) {
+        command.arg(AT).arg(format!("{at:.3}"));
     }
 
     let child = command.spawn()?;

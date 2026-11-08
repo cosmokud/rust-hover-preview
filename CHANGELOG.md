@@ -42,6 +42,8 @@
 
 - **A caption's two state buttons wear the ink a state is read in** — **Always On Top** while the window is kept on top and **Detach** while it is a window of its own are drawn in the numbers’ ink, the one the same two buttons wear on a sound’s card, standing in the wash that side of the caption stands in and lighting a step toward white under the hand. Every other button of the strip is drawn as it was. The menus’ rows are unchanged: a detached window’s `Detach Window` row is still faded.
 
+- **A detached sound continues where the pin had got to rather than where a hover of that file would start it** — a hand-off opened the file the way a hover is opened, which for a sound is the `Volume → Audio Seek` rule, so a card playing at 1:40 came up in its own window at whatever second a hover of that file was last left at (2:30, say): a seek that jumped the moment the window appeared. The tick that draws the card's clock now writes down the second it drew, and the hand-off carries it, so the new window is the window that was standing with the one thing about it that could have moved put back. A second drawn for another file is not this window's, and a card with no clock behind it hands over none.
+
 - **The detach button in a sound's card lights where it is drawn, not only near the command bar** — the four window buttons stand in a band at the top of the card, and three of them were answered anywhere in it while the detach was asked for only inside the bar's own row below them, so a hand on the button was a hand on the artwork. It is answered with the three beside it now.
 
 ## [0.4.11] - 2026-11-08
