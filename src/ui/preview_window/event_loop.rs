@@ -385,6 +385,11 @@ pub fn run_preview_window() {
         // nothing and does nothing.
         detach_open::begin();
 
+        // **The tray app is waiting on this before it makes the rings the road** — the section is joined and
+        // the loop is about to turn, which is the whole of what it asks before it publishes into the ring
+        // this loop reads (see `app::viewer::begin_the_viewer`).
+        crate::app::seam::note_the_preview_loop_is_up();
+
         while RUNNING.load(Ordering::SeqCst) {
             // Every tick is noted, whether it does anything or not: what the note is
             // for is the Explorer hook telling a loop that is working from one that has

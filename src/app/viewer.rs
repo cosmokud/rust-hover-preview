@@ -18,8 +18,16 @@ use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::System::Threading::WaitForSingleObject;
+
+/// How long a viewer that was just begun is given to say its preview loop is running (see
+/// `begin_the_viewer`).
+///
+/// It is a bound on a start rather than on a preview: a viewer that has not answered by the end of it is one
+/// this run will never talk to, and the road it falls back to is the one this app took before the split — so
+/// a machine slow enough to miss it loses the second process, never the previews.
+const THE_VIEWER_ANSWERS_IN: Duration = Duration::from_secs(3);
 
 /// How long a viewer that was just begun is given before another may be. A viewer that dies as it starts
 /// would otherwise be begun once per hover, and a hover comes at pointer pace.
@@ -42,13 +50,52 @@ static NEXT_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 ///
 /// Called once, by `main`, before the threads that publish are begun: where it answers false the run draws
 /// its own previews, and no viewer of its own is ever asked for again.
+///
+/// **A viewer is standing when it says so, not when it was spawned.** A process is begun whether or not it
+/// ever joins the section and turns its loop, and a run that took the rings' road on the strength of a
+/// spawn alone would publish every hover of the session into a ring nobody reads — no previews at all, from
+/// a start-up that reported nothing wrong. So the answer is the readiness event the viewer sets once it is
+/// up, waited on for a bound: a viewer that does not answer is a process nothing here will ever talk to, and
+/// this run is the single-process app instead (see `main` and `seam::preview_ready_event`).
 pub(crate) fn begin_the_viewer() -> bool {
-    let Some(child) = begin_one() else {
+    let Some(mut child) = begin_one() else {
         return false;
     };
 
+    // Safety: an event of this run's own, waited on for a bound and nothing else: nothing here is
+    // dereferenced.
+    let answered = unsafe {
+        WaitForSingleObject(
+            crate::app::seam::preview_ready_event(),
+            THE_VIEWER_ANSWERS_IN.as_millis() as u32,
+        ) == WAIT_OBJECT_0
+    };
+    if !answered {
+        // Ended rather than left standing: a viewer that answered nothing draws nothing, and a second
+        // process holding a preview loop of its own is one this run has no use for. And this process's own
+        // windows are once again the ones the hook judges a press by (see `seam::window_is_a_viewers`).
+        let _ = child.kill();
+        crate::app::seam::note_the_viewer_process(0);
+        return false;
+    }
+
     keep_the_handle(child);
     true
+}
+
+/// Say which road this run took, on the trace a run asks for when what is under the seam is measured: the
+/// rings, where a viewer answered, or this process's own channel and preview thread, where none did (see
+/// `begin_the_viewer` and `main`).
+pub(crate) fn note_the_road(two_processes: bool) {
+    if std::env::var_os("RHP_SEAM_TRACE").is_none() {
+        return;
+    }
+
+    if two_processes {
+        eprintln!("seam: a viewer answered, the rings are the road");
+    } else {
+        eprintln!("seam: no viewer answered, this process draws its own previews");
+    }
 }
 
 /// Make sure a viewer is standing, beginning one where the one there was has gone.
