@@ -65,7 +65,7 @@ use caption::{fit_title, longest_prefix_that_fits, paint_glyph, CaptionButtonBox
 #[cfg(test)]
 use find_bar::{
     index_at_column, query_origin, query_run, step_mark_legs, step_mark_shape,
-    FIND_BAR_CARET_MARGIN, FIND_BAR_COUNT_WIDTH, FIND_BAR_MARGIN,
+    FIND_BAR_CARET_MARGIN, FIND_BAR_COUNT_WIDTH, FIND_BAR_MARGIN, FIND_BAR_SCROLLBAR_GAP,
 };
 #[cfg(test)]
 use primitives::{

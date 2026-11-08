@@ -51,6 +51,11 @@ const FIND_BAR_WIDTH: i32 = 380;
 const FIND_BAR_ROW_HEIGHT: i32 = 22;
 const FIND_BAR_PADDING: f32 = 7.0;
 pub(super) const FIND_BAR_MARGIN: f32 = 10.0;
+/// The gap the card keeps from the page's scrollbar, over and above its own margin: the bar is a thin
+/// target a hand reaches for, so a card stopping at its column would read as one card with the bar
+/// and crowd the drag that reaches it — this is the room that keeps the two apart (see
+/// `scrollbar_room`).
+pub(super) const FIND_BAR_SCROLLBAR_GAP: f32 = 10.0;
 const FIND_BAR_RADIUS: f32 = 9.0;
 const FIND_BAR_SHADOW: f32 = 2.0;
 /// The room the count keeps at the right end of the query's row, where `current/total` is drawn, at
@@ -337,24 +342,27 @@ fn tooltip_room(dpi: u32) -> i32 {
 /// The card's text height and the numbers a switch's tooltip is drawn from at one scale: the room it
 /// keeps about its name, the gap it hangs below the card by, its corner radius and the shadow under
 /// it — the four the caption's own tooltip is drawn with (see `paint_tooltip`).
+fn tooltip_cell(scale: f32) -> i32 {
+    text_paint::scaled(
+        text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+        scale,
+    )
+}
+
 /// The room the page's scrollbar takes out of the card's right edge, in device pixels: nothing on a
 /// page short enough not to scroll, and on one that does the page's own right margin plus the bar's
-/// width across, so that the card's margin lands against the scrollbar rather than against the frame
-/// (see `text_preview::layout::scrollbar_geometry`). Measuring it here rather than handing in a
-/// rectangle keeps the card's placement and the bar's the same arithmetic at every display scale.
+/// width across plus the gap the card stands off it by, so that the card lands outside the scrollbar's
+/// column with a margin of its own on the far side of it (see
+/// `text_preview::layout::scrollbar_geometry` and `FIND_BAR_SCROLLBAR_GAP`). Measuring it here rather
+/// than handing in a rectangle keeps the card's placement and the bar's the same arithmetic at every
+/// display scale.
 fn scrollbar_room(scrollbar: bool, scale: f32) -> i32 {
     if !scrollbar {
         return 0;
     }
     text_paint::scaled(text_paint::PADDING_PIXELS as i32, scale)
         + text_paint::scaled(text_paint::SCROLLBAR_WIDTH_PIXELS, scale).max(1)
-}
-
-fn tooltip_cell(scale: f32) -> i32 {
-    text_paint::scaled(
-        text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
-        scale,
-    )
+        + text_paint::scaled(FIND_BAR_SCROLLBAR_GAP as i32, scale)
 }
 
 fn tooltip_shape(scale: f32) -> (i32, i32, f32, i32) {

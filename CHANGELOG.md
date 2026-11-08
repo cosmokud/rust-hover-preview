@@ -22,7 +22,7 @@
 
 ### Fixed
 
-- **A page's find bar keeps clear of the page's scrollbar** — the card was laid out against the frame's right edge, so a document long enough to scroll had its bar painted over by it at the top and its own column taken away while the card was up. On a page that scrolls, the card's margin is now measured from the scrollbar's left edge rather than from the frame's — the page's own right margin plus a bar's width, both in the display's pixels — so the card is clear of the bar at every width and every scale a pin is resized to, and a page short enough not to scroll places it exactly where it was.
+- **A page's find bar keeps clear of the page's scrollbar** — the card was laid out against the frame's right edge, so a document long enough to scroll had its bar painted over by it at the top and its own column taken away while the card was up. On a page that scrolls, the card's margin is now measured from the scrollbar's left edge rather than from the frame's — the page's own right margin plus a bar's width plus a gap the card stands off the bar by, all in the display's pixels — so the card is clear of the bar at every width and every scale a pin is resized to, and a page short enough not to scroll places it exactly where it was.
 
 - **A page's find count is drawn whole, however many places the query was found** — `1210/19000` was cut after its first digits, because the count was given a fixed column measured for a count of four figures; the column is the room its own text needs now, taken out of the query's field rather than out of the count, so a page of nineteen thousand matches reads as `1210/19000` with every digit on it.
 
