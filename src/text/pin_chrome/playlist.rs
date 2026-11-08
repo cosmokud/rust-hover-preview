@@ -517,6 +517,12 @@ pub(crate) fn paint_playlist(
                 boxes.push(clock_box);
             }
         }
+
+        // **A row's name, its facts and its length are two painters' work on one DC**, and each
+        // remembers only the face it selected itself: neither may trust its cache once the row is
+        // done, or the next row's run comes out in the face the other left there.
+        painter.forget_the_face();
+        small_painter.forget_the_face();
     }
 
     // The scrollbar goes last, over the rows' right edge and out of their columns' way: the track
