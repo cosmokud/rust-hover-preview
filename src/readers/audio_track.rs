@@ -33,6 +33,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+mod disk;
+
 /// Which of the two engines plays a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Player {
@@ -185,14 +187,51 @@ pub fn playable(path: &Path) -> Option<Track> {
     }
 }
 
+/// What this file's answer is, asking for it only where neither memo has one: the memo of this run
+/// first, the disk a run before this one wrote second, and `read` last — which is the probe, the
+/// engine or the process, and the thing this exists to keep from being run again.
+///
+/// Every gate that would otherwise probe asks this rather than the probe (see `audio_box`,
+/// `video_probe::probe_video_geometry` and `pin_playlist::start_the_prober`), so one file read in
+/// an earlier run is one row filled here with nothing started at all.
+pub fn ask(path: &Path, read: impl FnOnce() -> Option<Track>) -> Option<Track> {
+    if let Probed::Track(track) = probed(path) {
+        return Some(track);
+    }
+
+    // A hit is held for this run as well, and not written again: it is already on the disk it was
+    // read from (see `disk::entry`).
+    if let Some(track) = disk::entry(path) {
+        hold(path, track.clone());
+        return Some(track);
+    }
+
+    // A read that found nothing writes nothing, here or on the disk (see [`remember`]).
+    let track = read()?;
+    remember(path, track.clone());
+
+    Some(track)
+}
+
 /// Hold what a probe found for `path`, and nothing for a probe that found nothing: a read that came
 /// back empty leaves the file unanswered rather than answered with an emptiness, so the next ask
 /// reads it again instead of being told for the rest of the run that the machine cannot play it.
 ///
 /// Only a [`Track`] can be written, which is the same answer `audio_card` and the start of a pin's
 /// player both read to decide a file can be previewed (see `audio_engine::audio_card` and
-/// `start_audio_playback_at`) — so what is held is only ever what those two accept.
+/// `start_audio_playback_at`) — so what is held is only ever what those two accept. Both levels are
+/// written: the memo of this run, and the entry the next run reads (see [`ask`] and `disk::store`).
+///
+/// The disk write is the caller's own thread — the hover's measure thread, the film's load worker,
+/// the playlist's prober — and never a tick's, which is the one thread that must not wait for a
+/// file to be written (see `pin_playlist::start_the_prober`).
 pub fn remember(path: &Path, track: Track) {
+    hold(path, track.clone());
+    disk::store(path, &track);
+}
+
+/// The first level on its own: what this run's memo holds, and nothing written anywhere.
+fn hold(path: &Path, track: Track) {
     let key = head::key(path);
 
     if let Ok(mut held) = PROBED.lock() {
@@ -210,6 +249,12 @@ pub fn remember(path: &Path, track: Track) {
         make_room(&mut held, TRACKS_MAX_ENTRIES);
     }
 }
+
+/// The lock every test that writes either memo holds for its whole run: both are process-wide values
+/// shared with every other test in the binary, and two of these at once is one test's sweep giving up
+/// the file another test's card is asking for (see `pin_window::tests::ONE_AT_A_TIME`).
+#[cfg(test)]
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// The gain that brings a file's measured loudness to the level files are normalized to, where
 /// one has been measured for it: the number the tray's `Normalize` is played at, on top of the
@@ -264,12 +309,6 @@ pub fn remember_gain(path: &Path, gain: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The lock these tests take, so that one of them runs at a time: both memos are process-wide
-    /// values shared with every other test in the binary, and two of these at once is one test's
-    /// sweep giving up the file another test's card is asking for (see
-    /// `pin_window::tests::ONE_AT_A_TIME`).
-    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     /// A file no probe has run for, named so that the tests here cannot be each other's.
     ///

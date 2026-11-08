@@ -393,7 +393,7 @@ pub(super) fn refresh_the_rows() -> bool {
 /// a thread that stops at its next file rather than reading a folder nobody is looking at any more.
 #[cfg(not(test))]
 fn start_the_prober() {
-    use crate::readers::audio_track::{self, Probed};
+    use crate::readers::audio_track;
 
     let run = PROBE_RUN.fetch_add(1, Ordering::AcqRel) + 1;
     let order = match THE_PLAYLIST.lock() {
@@ -408,17 +408,18 @@ fn start_the_prober() {
                 if PROBE_RUN.load(Ordering::Acquire) != run {
                     return;
                 }
-                if !matches!(audio_track::probed(&path), Probed::NotAsked) {
-                    continue;
-                }
 
                 // One ask per file per sweep, and a file nothing could be read from is left
                 // unanswered for the sweep after this one rather than retried here: a folder of
-                // files no probe can read must not become a thread reading them round.
-                let Some(track) = audio_engine::probe_audio_track_briefly(&path) else {
+                // files no probe can read must not become a thread reading them round. A row of a
+                // folder read in an earlier run is answered by the disk, with nothing started at
+                // all (see `audio_track::ask`).
+                if audio_track::ask(&path, || audio_engine::probe_audio_track_briefly(&path))
+                    .is_none()
+                {
                     continue;
-                };
-                audio_track::remember(&path, track);
+                }
+
                 PROBED.fetch_add(1, Ordering::AcqRel);
                 DIRTY.store(true, Ordering::Release);
                 wake_preview_loop();
