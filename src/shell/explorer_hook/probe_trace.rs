@@ -260,7 +260,11 @@ pub(super) fn trace_click(
 /// being kept, and a loop that has stopped could not put it back. Nothing here waits
 /// on anything, and nothing is written anywhere but the trace.
 pub(super) fn end_engines_of_a_stalled_preview(quiet_ms: u64, trace: Option<&Path>) {
-    if webview_preview::showing_path().is_some() {
+    // Whether a page is on screen at all, which is the engine's own answer as the viewer publishes it:
+    // the document this must not end is drawn in the other process, and only its being there is asked.
+    // The name it holds is the viewer's to keep and never asked for here (see
+    // `crate::app::seam::ENGINE_SHOWING`).
+    if webview_preview::is_showing() {
         return;
     }
 

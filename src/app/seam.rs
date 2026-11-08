@@ -142,6 +142,11 @@ pub(crate) struct SeamFacts {
     /// `ENGINE_PAGE_RUNS`).
     engine_page_runs: AtomicBool,
     engine_page_drag: AtomicBool,
+    /// The window the engine draws in while it has one, and whether it is showing a document: the two
+    /// answers the tray's own key and press hooks ask about a preview whose window is the viewer's (see
+    /// `ENGINE_HWND` and `ENGINE_SHOWING`).
+    engine_hwnd: AtomicIsize,
+    engine_showing: AtomicBool,
     /// Whether a text preview in full mode is on screen, and whether a spinner is standing in for a
     /// page that is on its way. Both hold the pointer; what they hold it *through* differs (see
     /// `TEXT_PREVIEW_HOLDING` and the two boxes below).
@@ -216,6 +221,8 @@ impl SeamFacts {
             preview_rect: AtomicU64::new(NO_REGION),
             engine_page_runs: AtomicBool::new(false),
             engine_page_drag: AtomicBool::new(false),
+            engine_hwnd: AtomicIsize::new(0),
+            engine_showing: AtomicBool::new(false),
             text_preview_holding: AtomicBool::new(false),
             waiting_preview_holding: AtomicBool::new(false),
             hold_region_journey: AtomicU64::new(NO_REGION),
@@ -1137,6 +1144,29 @@ pub(crate) static ENGINE_PAGE_RUNS: Fact<AtomicBool> = Fact::of(|facts| &facts.e
 /// is under the hand only where the drag began, and everything after that is the page being orbited or
 /// panned (see `preview_pointer_hold`).
 pub(crate) static ENGINE_PAGE_DRAG: Fact<AtomicBool> = Fact::of(|facts| &facts.engine_page_drag);
+
+/// The window the engine draws a document in, while it has one: written where the engine's own handle
+/// moves, and back to `0` where the window is destroyed.
+///
+/// **It crosses because the keyboard is the tray's to answer for.** A click into a page that runs makes
+/// the engine's window the foreground, and the app's key hook stands down for it — but the window is the
+/// viewer process's, so a handle kept beside the engine answers `0` on the side that asks (see
+/// `window_state::engine_owns_the_keyboard`). The handle rather than the hook's own verdict is what is
+/// published because that verdict is made of the foreground and of the window's children, which only
+/// the side that can ask Win32 for them can make (see `window_state::is_our_own_window`).
+///
+/// No staleness is accepted here, and none is needed: the writer is the one place the handle changes,
+/// where the window is made and where it is destroyed.
+pub(crate) static ENGINE_HWND: Fact<AtomicIsize> = Fact::of(|facts| &facts.engine_hwnd);
+
+/// Whether the engine is showing a document at all, published where the engine's own answer moves.
+///
+/// It is the tray's question and the viewer's fact: the stalled-preview sweep ends the engines a loop
+/// that stopped ticking left behind, and a browser drawing a document is the preview itself while it is
+/// up rather than an engine being kept (see `probe_trace::end_engines_of_a_stalled_preview`). One bool
+/// rather than the shown page's path, because the sweep asks only whether a page is on screen — a name
+/// would be a buffer and a torn read for an identity nothing on this side asks for.
+pub(crate) static ENGINE_SHOWING: Fact<AtomicBool> = Fact::of(|facts| &facts.engine_showing);
 
 /// Whether a text preview in full mode is on screen, which is the one thing a pointer can rest on to
 /// select from and scroll.
