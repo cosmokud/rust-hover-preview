@@ -32,6 +32,7 @@
 //! a press washes it further and inks its mark with the accent, and the two chevrons are the buttons a
 //! hand holds down rather than presses once (see `FindBarPaint` and `text_find`).
 
+use super::bubble::{TOOLTIP_GAP_PIXELS, TOOLTIP_PADDING_PIXELS, TOOLTIP_RADIUS};
 use super::primitives::{
     caption_style, draw_cross, fill_box, fill_round_rect, measure_run, measure_text,
     stroke_round_rect, stroke_segment, surface_pixels, ChromePalette,
@@ -47,8 +48,10 @@ const FIND_BAR_PADDING: f32 = 7.0;
 const FIND_BAR_MARGIN: f32 = 10.0;
 const FIND_BAR_RADIUS: f32 = 9.0;
 const FIND_BAR_SHADOW: f32 = 2.0;
-/// The room the count keeps at the right end of the query's row, where `current/total` is drawn.
-const FIND_BAR_COUNT_WIDTH: i32 = 44;
+/// The room the count keeps at the right end of the query's row, where `current/total` is drawn, at
+/// its narrowest: a column narrower than the count it holds is a count with its last digits cut off,
+/// so a count that needs more than this takes more (see `count_text`).
+pub(super) const FIND_BAR_COUNT_WIDTH: i32 = 44;
 /// The gap between the two step buttons and the close, and the wider one between the switches and the
 /// commands — two groups a hand reaches for for different reasons.
 const FIND_BAR_GAP: i32 = 2;
@@ -169,20 +172,43 @@ pub(crate) struct FindBarPaint {
     pub(crate) whole_word: bool,
 }
 
+/// What the card's count says: the place the reader is on out of the places the query was found, or
+/// the `0/0` a count reads as when the query is empty or found nowhere.
+///
+/// It is named here rather than in the paint because the card's layout is written from it: the count's
+/// own column is as wide as its text, so the field beside it is laid out against the count really
+/// drawn and not against one count's worth of room (see `find_bar_layout`).
+pub(crate) fn count_text(current: Option<usize>, total: usize) -> String {
+    if total == 0 {
+        "0/0".to_string()
+    } else {
+        format!("{}/{}", current.map_or(0, |current| current + 1), total)
+    }
+}
+
 /// Where the card is drawn for a page of `width` x `height` whose box begins at `top`: against the
 /// page's top-right corner, inside the page's own margin, and as wide as the page leaves room for —
 /// a card wider than its page would be a card drawn over the frame's edge.
 ///
+/// `count` is what the card is about to say at its right end, and the column it is given is measured
+/// from it rather than fixed: a page searched for a word it holds two thousand of has a wider count
+/// than a page searched for one it holds nine of, and the room is taken out of the field rather than
+/// out of the count's last digits (see `count_text`).
+///
 /// Every rectangle is in the window's coordinates rather than the page's: the page is the band between
 /// the pin's chrome, and a press arrives in the window's own points (see `text_find::find_bar`).
-pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32) -> FindBar {
+pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32, count: &str) -> FindBar {
     let scale = dpi as f32 / 96.0;
     let margin = text_paint::scaled(FIND_BAR_MARGIN as i32, scale);
     let padding = text_paint::scaled(FIND_BAR_PADDING as i32, scale);
     let row = text_paint::scaled(FIND_BAR_ROW_HEIGHT, scale);
     let gap = text_paint::scaled(FIND_BAR_GAP, scale).max(1);
     let group_gap = text_paint::scaled(FIND_BAR_GROUP_GAP, scale).max(gap);
-    let count_width = text_paint::scaled(FIND_BAR_COUNT_WIDTH, scale);
+    // The column is the room the count's own text needs, and never less than the room a count has
+    // always been given: a count that fits moves nothing as it changes, and a count that does not is
+    // drawn whole rather than cut at its last digit.
+    let count_width = text_paint::scaled(FIND_BAR_COUNT_WIDTH, scale)
+        .max(query_columns(count, dpi).last().copied().unwrap_or(0));
     // A command is a box the row's own height across, so a hand has a square to land in rather than a
     // mark to hit: the mark inside it is the smaller glyph the caption's buttons are drawn with.
     let side = row;
@@ -275,6 +301,62 @@ pub(crate) fn find_bar_layout(width: i32, height: i32, top: i32, dpi: u32) -> Fi
         next: on_the_card(next),
         close: on_the_card(close),
     }
+}
+
+/// The room a switch's tooltip takes below the card, in the pixels a display's scale multiplies: the
+/// gap it hangs by, its own padding about its cell, and the shadow it casts. It is the row the surface
+/// a find bar is written on keeps below the card, because the name is written there and carried across
+/// below the card (see `find_bar_surface_size` and `paint_tooltip`).
+fn tooltip_room(dpi: u32) -> i32 {
+    let scale = dpi as f32 / 96.0;
+    let (padding, gap, _, shadow) = tooltip_shape(scale);
+    gap + padding + tooltip_cell(scale) + shadow
+}
+
+/// The card's text height and the numbers a switch's tooltip is drawn from at one scale: the room it
+/// keeps about its name, the gap it hangs below the card by, its corner radius and the shadow under
+/// it — the four the caption's own tooltip is drawn with (see `paint_tooltip`).
+fn tooltip_cell(scale: f32) -> i32 {
+    text_paint::scaled(
+        text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+        scale,
+    )
+}
+
+fn tooltip_shape(scale: f32) -> (i32, i32, f32, i32) {
+    (
+        text_paint::scaled(TOOLTIP_PADDING_PIXELS as i32, scale),
+        text_paint::scaled(TOOLTIP_GAP_PIXELS as i32, scale),
+        (TOOLTIP_RADIUS * scale).max(1.0),
+        (2.0 * scale).round().max(1.0) as i32,
+    )
+}
+
+/// The name a switch says while a pointer rests on it, or nothing for a control that has nothing to
+/// say: `Aa` and `W` are not words, where the two chevrons and the cross are the marks every window a
+/// hand has ever used has drawn its own steps and its own close with (see `paint_find_bar`).
+///
+/// A pressed switch says it as well, because a press is a hand on it: a name that went away the moment
+/// the button was pressed would leave the reader guessing what the box they just washed meant.
+fn switch_tooltip(part: FindBarPart) -> Option<&'static str> {
+    match part {
+        FindBarPart::Case => Some("Match Case"),
+        FindBarPart::WholeWord => Some("Match Whole Word"),
+        _ => None,
+    }
+}
+
+/// The size of the surface a find bar is written on: the card, and the row below it a switch's tooltip
+/// hangs in.
+///
+/// The surface is the caller's, and it is the card's own size plus that row because the name is
+/// written on it and carried across the window below the card, the way the card's own text is written
+/// on it and carried across the card (see `paint_find_bar` and `carry_text_across`).
+pub(crate) fn find_bar_surface_size(card: &FindBar, dpi: u32) -> (u32, u32) {
+    (
+        (card.panel.right - card.panel.left).max(1) as u32,
+        (card.panel.bottom - card.panel.top).max(1) as u32 + tooltip_room(dpi).max(0) as u32,
+    )
 }
 
 /// Whether a point is inside a rectangle, which is half-open the way every box of the chrome is:
@@ -716,17 +798,11 @@ pub(crate) fn paint_find_bar(
         }
     }
 
-    let count = if state.total == 0 {
-        "0/0".to_string()
-    } else {
-        format!(
-            "{}/{}",
-            state.current.map_or(0, |current| current + 1),
-            state.total
-        )
-    };
+    let count = count_text(state.current, state.total);
     let count_width = measure_text(surface, &style, &count, scale);
-    let count_left = (bar.count.right - count_width).max(bar.count.left);
+    // The count is right-aligned at the row's end and grows leftwards over the room the layout gave
+    // it, rather than being cut at the column a shorter count was laid out in (see `find_bar_layout`).
+    let count_left = (bar.count.right - count_width).max(bar.query.left);
     let count_top = centered_top(bar.count);
     let count_box = RECT {
         left: count_left,
@@ -766,6 +842,93 @@ pub(crate) fn paint_find_bar(
             washed(part, switched(part)),
         );
         boxes.push(box_);
+    }
+
+    // The name a switch says while a pointer rests on it: a card of its own, hanging below the card,
+    // the way a caption's tooltip hangs below the strip — because the card has no room for a word that
+    // is not the query (see `switch_tooltip` and `paint_tooltip`).
+    //
+    // Its panel is put down straight into the window's pixels, because it is a panel over the page; its
+    // name is not, because GDI needs a device context, so it is written on the surface the card's text
+    // is written on — in the row `find_bar_surface_size` keeps below the card for it — and carried
+    // across with everything else (see `seal_text` and `carry_text_across`).
+    let buffer_height = (buffer.len() / (width.max(1) as usize * 4)) as i32;
+    if let Some(text) = state.hovered.and_then(switch_tooltip) {
+        let anchor = if state.hovered == Some(FindBarPart::WholeWord) {
+            bar.whole_word
+        } else {
+            bar.case
+        };
+        let (padding, gap, radius, shadow) = tooltip_shape(scale);
+        let text_width = measure_text(surface, &style, text, scale);
+        let panel_width = (text_width + padding * 2).min(width.max(0));
+        let panel_height = cell + padding;
+        let top = bar.panel.bottom + gap;
+        let left =
+            ((anchor.left + anchor.right - panel_width) / 2).clamp(0, (width - panel_width).max(0));
+        let panel = RECT {
+            left,
+            top,
+            right: left + panel_width,
+            bottom: top + panel_height,
+        };
+
+        // A name with nowhere to be drawn is not drawn at all: half a tooltip over the page's last row
+        // is worse than the name waiting for a window with room for it.
+        if panel_width > 0
+            && panel_height > 0
+            && panel.bottom + shadow <= buffer_height
+            && panel.bottom - bar.panel.top <= surface.height as i32
+        {
+            fill_round_rect(
+                buffer,
+                width,
+                RECT {
+                    top: panel.top + shadow,
+                    bottom: panel.bottom + shadow,
+                    ..panel
+                },
+                radius,
+                [0, 0, 0],
+                [0, 0, 0],
+                0.32,
+            );
+            fill_round_rect(
+                buffer,
+                width,
+                panel,
+                radius,
+                palette.hover(0.0),
+                palette.hover(0.0),
+                1.0,
+            );
+            stroke_round_rect(
+                buffer,
+                width,
+                panel,
+                radius,
+                (1.0 * scale).round().max(1.0),
+                palette.hover(0.30),
+                1.0,
+            );
+
+            let name_top = panel.top + ((panel_height - cell) / 2).max(0);
+            let name_box = RECT {
+                left: panel.left + padding,
+                top: name_top,
+                right: (panel.left + padding + text_width.max(0)).min(panel.right),
+                bottom: (name_top + cell).min(panel.bottom),
+            };
+            painter.draw(
+                text,
+                name_box.left - bar.panel.left,
+                on_the_surface(name_box),
+                &style,
+                palette.foreground,
+                palette.hover(0.0),
+            );
+            boxes.push(name_box);
+        }
     }
 
     drop(painter);

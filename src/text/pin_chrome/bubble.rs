@@ -22,9 +22,9 @@ use windows::Win32::Foundation::RECT;
 
 /// The room a tooltip takes around its text, and how far it floats below the button it
 /// belongs to, in the units a display's scale multiplies.
-const TOOLTIP_PADDING_PIXELS: f32 = 8.0;
-const TOOLTIP_GAP_PIXELS: f32 = 6.0;
-const TOOLTIP_RADIUS: f32 = 4.0;
+pub(super) const TOOLTIP_PADDING_PIXELS: f32 = 8.0;
+pub(super) const TOOLTIP_GAP_PIXELS: f32 = 6.0;
+pub(super) const TOOLTIP_RADIUS: f32 = 4.0;
 
 /// Where a caption's tooltip is, in the window's own coordinates: the panel it is drawn in,
 /// which is a panel of its own rather than any part of the strip.
