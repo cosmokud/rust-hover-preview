@@ -1344,6 +1344,9 @@ pub(super) struct AudioCardClock {
     /// at in its place.
     pub(super) paused: Option<f64>,
     pub(super) name_offset: i32,
+    /// How far the card's facts line has been scrolled, which is the second line of it a card can
+    /// have no room for (see `audio_preview::Card::facts_offset`).
+    pub(super) facts_offset: i32,
     pub(super) dpi: u32,
     /// What the card's own row of buttons is saying, read in one look before the media's own lock
     /// is taken rather than from under it (see `pinned_audio_chrome`).
@@ -3173,7 +3176,7 @@ pub(super) fn pinned_audio_card_box(
         pressed: None,
         window_buttons: false,
     });
-    let Some(card) = audio_card(path, None, None, 0, chrome) else {
+    let Some(card) = audio_card(path, None, None, 0, 0, chrome) else {
         return rect;
     };
 

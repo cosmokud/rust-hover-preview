@@ -171,6 +171,9 @@ pub fn run_preview_window() {
         // The name on screen, scrolled sideways while the card has no room for it, put up with
         // the card it belongs to so a hover that changes begins at the beginning again.
         let mut audio_name_scroll: Option<audio_preview::NameScroll> = None;
+        // And the facts line of the same card, scrolled the same way where the room the clock
+        // leaves has no place for it: put up with the card too (see `audio_preview::facts_scroll`).
+        let mut audio_facts_scroll: Option<audio_preview::NameScroll> = None;
         // The hover the preview came from, so a theme or Markdown switch can rebuild it without
         // waiting for the next hover.
         let mut current_show: Option<PreviewMessage> = None;
@@ -1579,8 +1582,9 @@ pub fn run_preview_window() {
                         // the fall until they are home, which is a second or so and then nothing
                         // (see `audio_meter::beat_fade`).
                         let falling = audio_beat > 0.0;
-                        let cadence = match &audio_name_scroll {
-                            Some(scroll) if scroll.moves() => AUDIO_NAME_REPAINT,
+                        let cadence = match (&audio_name_scroll, &audio_facts_scroll) {
+                            (Some(name), _) if name.moves() => AUDIO_NAME_REPAINT,
+                            (_, Some(facts)) if facts.moves() => AUDIO_NAME_REPAINT,
                             _ if sound_playing || falling => AUDIO_NAME_REPAINT,
                             _ => AUDIO_CARD_REPAINT,
                         };
@@ -1594,13 +1598,8 @@ pub fn run_preview_window() {
                             let since_paint = audio_repaint_at.elapsed();
                             audio_repaint_at = Instant::now();
 
-                            let name_offset = match audio_name_scroll.as_mut() {
-                                Some(scroll) => {
-                                    scroll.advance(Instant::now(), cadence);
-                                    scroll.offset()
-                                }
-                                None => 0,
-                            };
+                            let name_offset = step_the_marquee(&mut audio_name_scroll, cadence);
+                            let facts_offset = step_the_marquee(&mut audio_facts_scroll, cadence);
 
                             if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                                 let (elapsed, duration) = audio_clock(
@@ -1674,6 +1673,7 @@ pub fn run_preview_window() {
                                     duration,
                                     audio_card_dpi,
                                     name_offset,
+                                    facts_offset,
                                     audio_chrome,
                                     beat,
                                 ) {
@@ -2049,6 +2049,22 @@ pub fn run_preview_window() {
                                     audio_card_dpi,
                                     current_audio_options(),
                                 ));
+                                // And the facts line of that card, measured against the room the
+                                // clock in it leaves: a line the room has no place for is scrolled
+                                // rather than cut short (see `audio_preview::facts_scroll`).
+                                let (elapsed, duration) = audio_clock(
+                                    &result.path,
+                                    audio_started,
+                                    audio_start_offset,
+                                    audio_paused,
+                                );
+                                audio_facts_scroll = audio_facts_marquee(
+                                    &result.path,
+                                    elapsed,
+                                    duration,
+                                    media_data.current_width(),
+                                    audio_card_dpi,
+                                );
                             }
 
                             let mw = media_data.current_width() as i32;
@@ -3592,6 +3608,7 @@ pub fn run_preview_window() {
                     &mut audio_repaint_at,
                     &mut audio_card_dpi,
                     &mut audio_name_scroll,
+                    &mut audio_facts_scroll,
                     &mut video_pos,
                     &mut current_video_path,
                     &mut current_show,
@@ -4291,6 +4308,10 @@ pub fn run_preview_window() {
                                         .as_ref()
                                         .map(|scroll| scroll.offset())
                                         .unwrap_or(0),
+                                    facts_offset: audio_facts_scroll
+                                        .as_ref()
+                                        .map(|scroll| scroll.offset())
+                                        .unwrap_or(0),
                                     dpi: audio_card_dpi,
                                     chrome: pinned_audio_chrome(audio_paused),
                                 };
@@ -4383,6 +4404,10 @@ pub fn run_preview_window() {
                             from: audio_start_offset,
                             paused: audio_paused,
                             name_offset: audio_name_scroll
+                                .as_ref()
+                                .map(|scroll| scroll.offset())
+                                .unwrap_or(0),
+                            facts_offset: audio_facts_scroll
                                 .as_ref()
                                 .map(|scroll| scroll.offset())
                                 .unwrap_or(0),
@@ -5082,5 +5107,22 @@ pub fn run_preview_window() {
         let (_, cvar) = &*load_request_slot;
         cvar.notify_all();
         let _ = load_worker.join();
+    }
+}
+
+/// Move one of a card's marquees on by one repaint, and answer where it has got to: nothing at all
+/// for a card with no marquee, and the text's own resting place for one that does not travel (see
+/// `audio_preview::NameScroll`).
+///
+/// The name and the facts line are two scrolls rather than one, and this is the step both of them
+/// are taken by: they travel at the same speed, hold at their ends for the same time, and differ only
+/// in what they are put up with and where the room they travel is measured from.
+fn step_the_marquee(scroll: &mut Option<audio_preview::NameScroll>, cadence: Duration) -> i32 {
+    match scroll {
+        Some(scroll) => {
+            scroll.advance(Instant::now(), cadence);
+            scroll.offset()
+        }
+        None => 0,
     }
 }

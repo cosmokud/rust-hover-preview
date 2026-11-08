@@ -727,7 +727,7 @@ fn audio_probe() {
             (Some(67.0), track.duration),
             (Some(0.5), None),
         ] {
-            let Some(card) = audio_card(&path, elapsed, duration, 0, None) else {
+            let Some(card) = audio_card(&path, elapsed, duration, 0, 0, None) else {
                 continue;
             };
             let options = current_audio_options();
