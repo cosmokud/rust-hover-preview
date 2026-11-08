@@ -262,6 +262,12 @@ pub(super) fn toggle(pin: &PinnedPreview) {
     // be given back, so neither is left for whatever happens to repaint next (see `the_box_has_moved`).
     the_box_has_moved();
 
+    // The band is what narrows the walk behind a sound's card to the folder's sounds, and what
+    // gives the setting's own order back when it is put down, so the walk is asked again both ways
+    // (see `pin_walk::ask_the_walk_again`). Asked as a message rather than walked from here: this
+    // is the context menu's own press, and the pin's lock is held across it.
+    send_preview(PreviewMessage::PinWalkAgain);
+
     if !open {
         return;
     }
