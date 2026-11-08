@@ -3,6 +3,8 @@
 
 use super::playback_trace::note_playback_trace;
 use super::*;
+use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 /// The point the pointer is at, in screen coordinates: what a drag is measured in, since a
 /// window that is being resized moves its own origin out from under a client coordinate.
@@ -37,6 +39,26 @@ pub(super) fn client_to_screen(hwnd: HWND, x: i32, y: i32) -> (i32, i32) {
     } else {
         (x, y)
     }
+}
+
+/// A place on the screen as a point in a window's own coordinates, with how wide that window's client
+/// is: the rect a row of a band is counted in, and one no arithmetic over the box a pin is laid out
+/// in can stand in for, because a window is not obliged to be standing where that box says it is (see
+/// `pin_playlist::pin_playlist_hover_refresh`).
+///
+/// It is the inverse of `client_to_screen` and, unlike it, has no stand-in: a point a window cannot
+/// place is a window this app has not got, and a row there is a row of nothing.
+pub(super) fn the_point_in_the_window(hwnd: HWND, (x, y): (i32, i32)) -> Option<(i32, i32, i32)> {
+    let mut point = POINT { x, y };
+    let mut client = RECT::default();
+    unsafe {
+        GetClientRect(hwnd, &mut client).ok()?;
+        if !ScreenToClient(hwnd, &mut point).as_bool() {
+            return None;
+        }
+    }
+
+    Some((point.x, point.y, client.right))
 }
 
 /// The media box a window box implies: the window less the caption above it and the transport bar

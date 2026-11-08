@@ -601,23 +601,27 @@ fn hover_at_the_band((top, height, width, scale): (i32, i32, i32, f32), y: Optio
 /// marqueed under a pointer that has gone is a name travelling for nobody (see
 /// `pin_audio_hover_refresh`, which is the same question asked of the card's own buttons).
 ///
-/// It is asked of the pin in hand rather than through `hover`, which takes this lock again — but the
-/// row it names is `hover`'s own question and not a second reading of the band's geometry: the screen
-/// is turned into a row of the window here, the way the find bar's and the card's own buttons are
-/// asked on this same tick, and the band's top comes off it in one place (see `hover_at_the_band`).
+/// **The row is the window's own**, read off the client rect the pointer is in rather than counted
+/// from the box the pin's content projects: a window rests on the screen and that box does not have
+/// to be where it rests, so the subtraction this used to do named a row the move never had — a row
+/// hand is on that the tick cleared again, marquee and all. What a window says about itself is
+/// DPI-exact, that arithmetic is not.
 ///
-/// The window's own box is asked for the one thing a row cannot say: a pointer beside the window at
-/// the band's own height is on no row of it, whatever row the subtraction makes of it.
-pub(super) fn pin_playlist_hover_refresh(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
+/// A pointer outside the window is on no row of it, and that is the whole of what clears the hover
+/// of a hand that has walked away; the picked row is not the hover and is not touched here.
+pub(super) fn pin_playlist_hover_refresh(
+    pin: &PinnedPreview,
+    hwnd: HWND,
+    cursor: Option<(i32, i32)>,
+) -> bool {
     let Some((top, height)) = pin_playlist_band(pin) else {
         return false;
     };
-    let (width, _) = pin.window_size();
-    let (left, window_top, right, _) = pin.window_box();
+    let Some((x, y, width)) = cursor.and_then(|at| the_point_in_the_window(hwnd, at)) else {
+        return false;
+    };
 
-    let y = cursor
-        .filter(|(x, _)| *x >= left && *x < right)
-        .map(|(_, y)| y - window_top);
+    let y = (0..width).contains(&x).then_some(y);
 
     hover_at_the_band((top, height, width, pin.dpi as f32 / 96.0), y)
 }

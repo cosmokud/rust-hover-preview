@@ -563,8 +563,10 @@ pub(super) fn refresh_pin_chrome(
     // And the playlist band under a card, which is a band of rows the same way: the pointer that
     // has left the pin sends it no more moves, and a row left marqueed under one that is somewhere
     // else is a name travelling across a row nobody is looking at (see
-    // `pin_playlist::pin_playlist_hover_refresh`).
-    let playlist = pin_playlist::pin_playlist_hover_refresh(pin, cursor);
+    // `pin_playlist::pin_playlist_hover_refresh`, which asks the window the pointer is in for the
+    // row rather than the box the pin is laid out in).
+    let playlist =
+        pin_playlist::pin_playlist_hover_refresh(pin, pin_lifecycle::pinned_window(), cursor);
 
     // A name belongs to a button, and a button belongs to a pointer that is still on it. The
     // pointer is read from the cursor rather than from `pin.hovered`, because that is only

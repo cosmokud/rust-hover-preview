@@ -1275,6 +1275,12 @@ fn a_pointer_in_the_band_is_a_row_of_the_band() {
         pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
     let window = pin.window_box();
     let row = pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0) / 2;
+    // The window a pointer's own place is read against, standing where the pin's box says it does:
+    // a screen row is a row of a window only the window itself can answer (see
+    // `pin_input::the_point_in_the_window`).
+    let hwnd = unsafe {
+        a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, window)
+    };
     stand_pin(Some(pin));
     pin_playlist::refresh_the_rows();
 
@@ -1285,7 +1291,7 @@ fn a_pointer_in_the_band_is_a_row_of_the_band() {
             .and_then(|pinned| {
                 pinned
                     .pin()
-                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, cursor))
+                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, hwnd, cursor))
             })
             .expect("the pin the test stood up")
     };
@@ -1306,6 +1312,8 @@ fn a_pointer_in_the_band_is_a_row_of_the_band() {
     assert!(travel > 0, "and it is wider than the column it is drawn in");
     assert!(!asked(cursor), "the same row again is no change");
 
+    // SAFETY: the window is the suite's own, and this is the road one is put away down.
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
     let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
     assert!(opened.is_some(), "the pin the test stood up");
     stand_pin(previous_pin);
@@ -1332,6 +1340,9 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
         pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
     let window = pin.window_box();
     let row = pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0) / 2;
+    let hwnd = unsafe {
+        a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, window)
+    };
     stand_pin(Some(pin));
     pin_playlist::refresh_the_rows();
 
@@ -1351,17 +1362,17 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
 
     // The tick that reads the same pointer off the screen: the row is the row, so there is
     // nothing to change and the name is still the name.
-    let at = |x: i32, y: i32| {
+    let at = |at| {
         pin_state()
             .and_then(|pinned| {
                 pinned
                     .pin()
-                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, Some((x, y))))
+                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, hwnd, at))
             })
             .expect("the pin the test stood up")
     };
     assert!(
-        !at(window.0 + 40, window.1 + band_top + row),
+        !at(Some(client_to_screen(hwnd, 40, band_top + row))),
         "the tick's pointer is the row the move already named"
     );
     assert_eq!(
@@ -1386,7 +1397,7 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
 
     // A pointer that has left the window is on no row at all, so the name stops being carried.
     assert!(
-        at(window.0 - 10, window.1 + band_top + row),
+        at(Some((window.0 - 10, window.1 + band_top + row))),
         "a pointer beside the window is on nothing of it"
     );
     assert_eq!(
@@ -1400,6 +1411,104 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
         "and a row no hand is on carries no name"
     );
 
+    // SAFETY: the window is the suite's own, and this is the road one is put away down.
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **A row is a row of the window, at the scale the window is drawn at**: a display at 144% is where
+/// the box the pin's content projects and the rect the window really rests in stop being the same
+/// numbers, and the tick that read the row off the box instead cleared the one the move had named —
+/// a name on a row the hand was merely *on* stopped, while one on a row it had *picked* went on (see
+/// `pin_playlist::pin_playlist_hover_refresh` and `pin_input::the_point_in_the_window`).
+#[test]
+fn a_row_the_hand_is_on_is_a_row_of_the_window_at_any_scale() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let mut pin = sound_pin();
+    pin.dpi = 144;
+    pin.caption = pinned_caption_height(144, Some(MediaType::Audio));
+    pin.path = PathBuf::from(
+        "a third mixdown, whose name no column of a band holds and no other test names.mp3",
+    );
+    pin_playlist::toggle(&pin);
+    let (band_top, _) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let row = pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0) / 2;
+
+    // The window stands a window's own distance away from the box the pin is laid out in, and is the
+    // size the pin asks its window to be: what the tick reads back is the window's rows, and a box
+    // it cannot be asked about.
+    let window = pin.window_box();
+    let (width, height) = pin.window_size();
+    let stands_at = (
+        window.0 + 213,
+        window.1 + 307,
+        window.0 + 213 + width,
+        window.1 + 307 + height,
+    );
+    assert_ne!(
+        stands_at.1, window.1,
+        "the window is not where the box says"
+    );
+    let hwnd = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            stands_at,
+        )
+    };
+    stand_pin(Some(pin));
+    pin_playlist::refresh_the_rows();
+
+    assert!(
+        unsafe { pin_playlist::hover(band_top + row) },
+        "a row a hand has come to is a change"
+    );
+    let (marqueed, travel, _) =
+        pin_playlist::the_marquee_in_hand().expect("a name to carry across the row");
+    assert_eq!(marqueed, 0, "the name is set up for the row the move named");
+    assert!(travel > 0, "and it is wider than the column it is drawn in");
+
+    // The same pointer read off the screen, the way the tick reads it: the window's own client point
+    // is that same row, so nothing of the band's changes and the name is still the name.
+    let at = |at| {
+        pin_state()
+            .and_then(|pinned| {
+                pinned
+                    .pin()
+                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, hwnd, at))
+            })
+            .expect("the pin the test stood up")
+    };
+    assert!(
+        !at(Some(client_to_screen(hwnd, 40, band_top + row))),
+        "the tick's pointer is the row the move already named"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(Some(0)),
+        "so the row the hand is on is still the row it was, at 144%"
+    );
+    assert_eq!(
+        pin_playlist::the_marquee_in_hand().map(|(row, _, _)| row),
+        Some(0),
+        "and the name the tick has to carry is still on it"
+    );
+
+    std::thread::sleep(audio_preview::NAME_HOLD + std::time::Duration::from_millis(60));
+    pin_playlist::the_tick_is_owed_a_repaint();
+    let (marqueed_again, _, offset) =
+        pin_playlist::the_marquee_in_hand().expect("the name still marqueed");
+    assert_eq!(marqueed_again, 0, "on the row the hand is on");
+    assert!(offset > 0, "and it has moved along it");
+
+    // SAFETY: the window is the suite's own, and this is the road one is put away down.
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
     let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
     assert!(opened.is_some(), "the pin the test stood up");
     stand_pin(previous_pin);
