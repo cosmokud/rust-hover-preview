@@ -448,7 +448,8 @@ pub(super) fn step_the_hold(now: Instant) {
 /// focused — and the query is searched again from the line the reader is on when the bar was away,
 /// because a bar closed and opened again comes back at the query it was left with rather than at its
 /// matches (see `FindState`). A bar that was already up has nothing to search again: its query has
-/// not changed, and the reader asked for the field rather than for the document.
+/// not changed, and the reader asked for the field rather than for the document — unless they have
+/// picked something else out of the page since, which is the seed below.
 ///
 /// **A page with something selected seeds the query with it**, which is what an editor's own find box
 /// does: a word double pressed in the page, or a run of it dragged over, is the thing the reader is
@@ -456,6 +457,12 @@ pub(super) fn step_the_hold(now: Instant) {
 /// the bar was left holding rather than joining it, and the caret is left after it — the reader who
 /// wants the rest of a word typed appends to it, and the one who wants a different query presses
 /// `Ctrl`+`F` again over a page with nothing selected, or `Ctrl`+`A` in the field.
+///
+/// **That holds over a bar that is already up as well.** A reader who picks another word out of the
+/// page and reaches for the key is asking to find that one, not the query the bar is showing, so the
+/// seed replaces it and the document is searched again — the same box a second press of a shortcut in
+/// an editor is (see `the_pages_selection`, which is what tells that reader from the one who is still
+/// in the query).
 pub(super) fn open_text_find() {
     // Asked before the bar is written to, and outside the lock the bar is opened under, because it
     // reads the document rather than the bar's own state (see `the_pages_selection`).
@@ -473,7 +480,14 @@ pub(super) fn open_text_find() {
         find.focused = FindFocus::Field;
 
         if find.open {
-            find.field.select_all();
+            // A bar that is up takes a seed and searches it; with nothing seeded — the reader who is
+            // still in the query rather than picking words out of the page — it selects the query it
+            // holds, so that the next character typed replaces it.
+            if seed.is_some_and(|text| find.field.seed(&text)) {
+                find.pending.push(FindEdit::SearchAgain);
+            } else {
+                find.field.select_all();
+            }
         } else {
             find.open = true;
             // A bar opened over a selection comes back at that and not at the query it was left
@@ -488,8 +502,14 @@ pub(super) fn open_text_find() {
     }
 }
 
-/// What the reader selected in the page, or nothing while the bar is already up or the page holds no
-/// selection: the seed `Ctrl`+`F` puts in the query (see `open_text_find`).
+/// What the reader selected in the page, or nothing while the page holds no selection or the reader
+/// is still in the query: the seed `Ctrl`+`F` puts in the query (see `open_text_find`).
+///
+/// **A bar that is up and focused says no.** A selection left in the page under a bar the reader is
+/// typing in is where they were before, not what they are asking to find: the chord pressed from
+/// inside the query asks for the field, and a query replaced by a word the reader stopped looking at
+/// would be a search they never asked for. A page they have just pressed into is the other way round —
+/// `FindFocus` follows the hand — so that is the reader picking out a new word to find.
 ///
 /// It is read of the page rather than of the frame that shows it, so a selection reaching past the
 /// box is seeded whole, and it is read before the bar's own lock is taken because it reads the
@@ -498,7 +518,7 @@ fn the_pages_selection() -> Option<String> {
     let (path, options, selection) = CURRENT_MEDIA.lock().ok().and_then(|media| {
         let media = media.as_ref()?;
         let state = media.text_state.as_ref()?;
-        if state.find.open {
+        if state.find.open && state.find.focused != FindFocus::Page {
             return None;
         }
 
