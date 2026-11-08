@@ -300,13 +300,19 @@ pub(crate) fn playlist_thumb_grab(
     (thumb_bottom - thumb_top) / 2
 }
 
-/// Whether a band-local point is the scrollbar's own track rather than a row's.
+/// Whether a band-local point is the scrollbar's to answer rather than a row's.
+///
+/// The band a press grabs it in is wider than the mark it paints: it runs from the last column the
+/// length can be inked in — `clock_right` is that column's exclusive edge, so one pixel left of it is
+/// the length's own last pixel — to the window's own right edge, which is the two pixels past the
+/// track as well as the track. Nothing is drawn in that room beyond the bar: a hand reaching for the
+/// bar is not a hand made to find four pixels of it (see `pin_playlist::press`).
 pub(crate) fn playlist_track_holds(layout: &PlaylistLayout, x: i32, y: i32) -> bool {
-    let Some((left, right)) = layout.track else {
-        return false;
-    };
-
-    x >= left && x < right && y >= layout.rows_top && y < layout.rows_bottom
+    layout.track.is_some()
+        && x >= layout.clock_right - 1
+        && x < layout.width
+        && y >= layout.rows_top
+        && y < layout.rows_bottom
 }
 
 /// How far a name has to travel before its end is in sight, at the room a row's left column
@@ -718,9 +724,13 @@ const PAD_PIXELS: f32 = 10.0;
 /// The room the accent stripe of the row the pin is showing takes at a row's left edge.
 const STRIPE_PIXELS: f32 = 3.0;
 
-/// The scrollbar in the band's right margin: how wide its track is, the gap that holds the rows
-/// off it, and how far a row's name may run before the scrollbar's own room is taken off.
-const SCROLLBAR_PIXELS: f32 = 5.0;
+/// The scrollbar in the band's right margin: how wide its track is — a bar a hand is not the reader
+/// of, so it is the thinnest mark the display draws a column in — the gap that holds the rows off it,
+/// and how far a row's name may run before the scrollbar's own room is taken off.
+///
+/// The width is the paint's alone: what a press grabs is the room from the length's last pixel to the
+/// window's own edge, which is far wider than the mark itself (see `playlist_track_holds`).
+const SCROLLBAR_PIXELS: f32 = 4.0;
 const SCROLLBAR_GAP_PIXELS: f32 = 6.0;
 /// How far the scrollbar's track is held off the window's own right edge: the bar is a mark on that
 /// edge, and a margin wider than a couple of pixels reads as a column the band does not have.

@@ -66,7 +66,16 @@ fn the_rows_are_two_columns_and_the_clock_is_the_second() {
         right, 398,
         "the track hugs the window's own right edge, two pixels off it"
     );
-    assert_eq!(right - left, 5, "and it is the width of a bar");
+    assert_eq!(
+        right - left,
+        4,
+        "and it is the thickness of a bar: the thinnest mark a column is drawn in"
+    );
+    assert_eq!(
+        left,
+        400 - 2 - 4,
+        "so its left edge is two margins off the edge"
+    );
     assert!(
         scrolling.clock_right < layout.clock_right,
         "the clock gives the bar its room"
@@ -487,22 +496,26 @@ fn a_press_on_the_bar_takes_hold_of_the_thumb_it_found() {
         "and a press on the track above it took the middle"
     );
 
-    // And the bar is the window's own column, held the two pixels off its edge: a press anywhere else
-    // in the band is a row's.
+    // And the bar is grabbed by the room it is the mark in rather than by its own four pixels: from
+    // the length's last column to the window's own right edge, and nowhere left of that.
     let (left, right) = layout.track.expect("a band that scrolls has a track");
-    assert!(playlist_track_holds(&layout, left, layout.rows_top));
-    assert!(playlist_track_holds(
-        &layout,
-        right - 1,
-        layout.rows_bottom - 1
-    ));
+    assert!(playlist_track_holds(&layout, right - 1, layout.rows_top));
     assert!(
-        !playlist_track_holds(&layout, left - 1, layout.rows_top),
-        "a press left of the bar is the rows'"
+        playlist_track_holds(&layout, layout.width - 1, layout.rows_top),
+        "the last pixel of the window is the bar's"
     );
     assert!(
-        !playlist_track_holds(&layout, left, layout.rows_top - 1),
-        "and one above it is nobody's"
+        playlist_track_holds(&layout, layout.clock_right - 1, layout.rows_bottom - 1),
+        "and so is the last pixel the length is inked in"
+    );
+    assert!(
+        !playlist_track_holds(&layout, layout.clock_right - 2, layout.rows_top),
+        "a press left of the length is the rows'"
+    );
+    assert!(playlist_track_holds(&layout, left - 1, layout.rows_top));
+    assert!(
+        !playlist_track_holds(&layout, layout.clock_right - 1, layout.rows_top - 1),
+        "and one above the rows is nobody's, however far right it is"
     );
 }
 
