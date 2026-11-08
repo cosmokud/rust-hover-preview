@@ -267,10 +267,12 @@ use windows::Win32::System::DataExchange::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
+#[cfg(test)]
+use windows::Win32::System::Threading::ResetEvent;
 use windows::Win32::System::Threading::{
-    CreateEventW, GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, ResetEvent,
-    SetEvent, TerminateProcess, WaitForSingleObject, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    CreateEventW, GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, SetEvent,
+    TerminateProcess, WaitForSingleObject, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_TERMINATE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetCapture, GetDoubleClickTime, GetFocus, ReleaseCapture, SetCapture,
@@ -293,7 +295,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
     IDC_ARROW, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MF_STRING, MSG,
     MWMO_INPUTAVAILABLE, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSTANDBY,
-    PBT_APMSUSPEND, PM_NOREMOVE, PM_REMOVE, QS_ALLINPUT, SC_CLOSE, SC_MAXIMIZE, SC_RESTORE,
+    PBT_APMSUSPEND, PM_REMOVE, QS_ALLINPUT, SC_CLOSE, SC_MAXIMIZE, SC_RESTORE,
     SET_WINDOW_POS_FLAGS, SIZE_RESTORED, SM_CXDOUBLECLK, SM_CYDOUBLECLK, SM_XVIRTUALSCREEN,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
     SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
@@ -361,6 +363,7 @@ pub(crate) use pointer::text_preview_scrollable;
 pub(crate) use pointer::text_scroll_keep_alive_try;
 pub(crate) use pointer::text_size_keep_alive_try;
 pub(crate) use pointer::AvoidRegion;
+pub(crate) use pointer::ScreenRegion;
 pub(crate) use requests::hide_preview;
 
 /// Whether a screen point is on one of a standing pin's own buttons — the caption's, or a sound's

@@ -3,6 +3,12 @@
 //! ends at.
 
 use super::*;
+#[cfg(test)]
+pub(super) use crate::app::seam::preview_channel_event;
+pub(super) use crate::app::seam::send_preview;
+pub(super) use crate::app::seam::wait_preview_channel;
+pub(crate) use crate::app::seam::wake_preview_loop;
+pub(crate) use crate::app::seam::PREVIEW_SENDER;
 
 /// How long the preview thread waits when there is nothing on screen: no preview
 /// to animate, nothing to repaint, and no pointer region left to keep in step.
@@ -166,67 +172,6 @@ pub(super) const HOVER_TOPMOST_REASSERT_MS: u64 = 1000;
 /// change that arrives without a swap (streaming frames landing late) is
 /// noticed within half a second rather than never.
 pub(super) const STATIC_MEDIA_REFRESH_MS: u64 = 500;
-// Message passing for thread communication
-/// The event the preview channel's sends are announced on, so that a thread waiting for one
-/// sleeps on the channel as well as on the message queue.
-///
-/// The wait the loop does was a wait on the queue alone, polled in eight-millisecond slices
-/// because nothing would otherwise wake it: a thread with nothing on screen spent the whole of
-/// `IDLE_WAIT_MS` waking to ask an empty channel whether it had anything, several times a
-/// second, for the whole life of the process. Signalling this on the send is what lets the
-/// wait block on the channel too — so a hover is answered when it is sent rather than at the
-/// end of a slice, and an idle loop costs one kernel wait per tick instead of one per slice.
-pub(super) fn preview_channel_event() -> HANDLE {
-    // Kept as the number a handle is rather than as the handle, for the reason
-    // `NOACTIVATE_WAKE` is: a handle is a raw pointer, and this is shared across threads.
-    static EVENT: Lazy<isize> = Lazy::new(|| {
-        // Safety: an event with no name and no security descriptor, manual-reset, which is
-        // what a wait that may be woken several times before it is read wants.
-        unsafe { CreateEventW(None, true, false, None) }
-            .map(|handle| handle.0 as isize)
-            .unwrap_or_default()
-    });
-
-    HANDLE(*EVENT as *mut core::ffi::c_void)
-}
-
-/// Wake the preview loop where it stands, without a message: what a wheel notch over a pinned
-/// picture, or a pin button press, asks for.
-///
-/// A notch or a press is counted on a hook's own thread — an atomic written there and nothing else —
-/// and read by the loop on its next tick, so a loop waiting for a pin is a loop that will not see it
-/// until its own wait runs out: `STATIC_PIN_WAIT_MS` rounded up to the system timer's own 15.6 ms
-/// tick, which measured 62.2 ms over forty waits, worst 63.7 — four frames of a 144 Hz display, and
-/// the whole of what makes a zoom start unevenly. The same wait signalled where the notch is counted
-/// came back in 5.4 ms with the signal sent five in. A middle click shorter than that wait would
-/// otherwise be lost outright.
-///
-/// It is the channel's own event rather than one of its own, so nothing new is waited on: the loop is
-/// already armed on it, and a signal to an event nobody is waiting on is read by the next wait — it is
-/// manual-reset, and reset after the wait rather than at the send (see `wait_preview_channel`).
-pub(crate) fn wake_preview_loop() {
-    // Safety: an event created once for the process, signalled: nothing here is dereferenced.
-    unsafe {
-        let _ = SetEvent(preview_channel_event());
-    }
-}
-
-/// Send a message to the preview loop and wake it, so that a wait in progress ends at once.
-pub(super) fn send_preview(message: PreviewMessage) {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(tx) = sender.as_ref() {
-            let _ = tx.send(message);
-            // Signalled after the send rather than before, so an armed wait can only be woken
-            // by a message that is already in the channel to be read.
-            unsafe {
-                let _ = SetEvent(preview_channel_event());
-            }
-        }
-    }
-}
-
-pub static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
-    Lazy::new(|| Mutex::new(None));
 
 // Use AtomicIsize for the HWND pointer (thread-safe)
 pub(super) static PREVIEW_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -510,61 +455,4 @@ pub(super) fn wait_for_the_compositor(
     }
 
     wait_preview_channel(rx, 0)
-}
-
-/// Wait for a preview message or for window input, whichever comes first.
-///
-/// This is what makes a pinned window follow the hand at the pointer's own
-/// pace rather than at the pace of the repaint: waiting on the message queue instead of on the
-/// channel wakes the moment the pointer moves, and costs nothing extra when idle.
-///
-/// The wait is on two things at once: the message queue, and the channel's own event. The event
-/// is what the slicing this used to do was standing in for. A wait that could not see the channel
-/// had to wake on a timer to ask it, so `wait_ms` was cut into eight-millisecond slices and each
-/// one was a kernel wait followed by a poll of an empty channel — which for a loop with nothing
-/// on screen, waiting `IDLE_WAIT_MS`, was a hundred kernel transitions a second for the whole
-/// life of the process, doing nothing. A send now signals the event, so the wait ends where the
-/// message lands, and an idle loop costs one wait per tick.
-///
-/// The event is manual-reset and is reset after the wait rather than at the send, which is what
-/// makes the arm-then-send race safe: a message that arrived between the poll above and the wait
-/// below has already signalled it, so the wait returns at once instead of sleeping through a
-/// message that is in the queue.
-pub(super) fn wait_preview_channel(
-    rx: &Receiver<PreviewMessage>,
-    wait_ms: u64,
-) -> Option<PreviewMessage> {
-    // A message sent just before the wait is answered without waiting at all.
-    if let Ok(message) = rx.try_recv() {
-        return Some(message);
-    }
-
-    let event = preview_channel_event();
-    let handles = [event];
-    unsafe {
-        let _ = MsgWaitForMultipleObjectsEx(
-            Some(&handles),
-            wait_ms as u32,
-            QS_ALLINPUT,
-            MWMO_INPUTAVAILABLE,
-        );
-        let _ = ResetEvent(event);
-    }
-
-    // Woken by input, by a message, or by the timeout. Either way the channel is only ever
-    // polled, never blocked on, so the queue is never left unpumped while a drag is going.
-    if let Ok(message) = rx.try_recv() {
-        return Some(message);
-    }
-
-    // Input alone is a reason to go round the loop now rather than to sit out the rest of
-    // the tick: the queue holds the move the wait woke for.
-    let mut msg = MSG::default();
-    unsafe {
-        if PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE).as_bool() {
-            return None;
-        }
-    }
-
-    None
 }

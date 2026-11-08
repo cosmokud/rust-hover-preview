@@ -32,6 +32,16 @@
 //! window answers them, which is where the bar's one key table lives (see `PIN_FIND_BAR_UP` and
 //! `text_find::key_edit_with`).
 
+#[cfg(test)]
+pub(crate) use crate::app::seam::pin_key_counted;
+#[cfg(test)]
+use crate::app::seam::PIN_KEY_COUNTED;
+pub(crate) use crate::app::seam::{
+    publish_find_bar_up, publish_pin_always_on_top, publish_pin_key_owner, take_pin_key_presses,
+};
+use crate::app::seam::{
+    PIN_FIND_BAR_UP, PIN_KEYS_OWNER, PIN_KEYS_TOPMOST, PIN_KEYS_VIDEO, PIN_KEY_PRESSES,
+};
 use crate::CONFIG;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -62,21 +72,6 @@ static PIN_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
 
 /// The same bits for the preview shortcut's own chords.
 static TOGGLE_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
-
-/// The two window handles a standing pin answers keys for, as raw pointers, or zero.
-///
-/// Published by the preview loop on every tick rather than asked for from inside the hook, which
-/// may not take a lock and may not walk the desktop: two atomics and a compare are all a
-/// `WH_KEYBOARD_LL` callback may afford, because every keystroke on the machine waits for it to
-/// return and Windows removes a hook that is slow.
-static PIN_KEYS_OWNER: AtomicU64 = AtomicU64::new(0);
-static PIN_KEYS_VIDEO: AtomicU64 = AtomicU64::new(0);
-
-/// Whether the standing pin is `Pin Mode → Always On Top`, published beside the two handles for
-/// the same reason: a window that is above everything is the window the pointer is over, so the
-/// notch a hand turns on it is the pin's whether or not the keyboard happens to be in it (see
-/// `pin_owns_foreground`).
-static PIN_KEYS_TOPMOST: AtomicBool = AtomicBool::new(false);
 
 /// The keys a standing pin answers, as the commands they mean.
 ///
@@ -115,7 +110,7 @@ pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
 /// Named rather than written as the `12` of an array length so that a command added to the table
 /// above is a command this count has to be told about, rather than a command whose presses are
 /// counted into a counter that was never reserved for it.
-const PIN_COMMAND_COUNT: usize = 12;
+pub(crate) const PIN_COMMAND_COUNT: usize = 12;
 
 /// The command that means `PinCommand::TogglePlayback`, which is the one row of
 /// `PIN_KEY_COMMANDS` whose repeats are not commands.
@@ -138,76 +133,12 @@ pub(crate) fn pin_key_command(vk: i32) -> Option<u8> {
         .map(|(_, command)| *command)
 }
 
-/// Tell the hook which windows a standing pin is answering for, or that there is no such pin.
-///
-/// Called by the preview loop on the tick it settles the pin's chrome, which is the same tick that
-/// already knows whether a pin is up and which player it is showing. Passing zero for the video
-/// handle is the normal case — a pin showing an image has no player to lose keys to.
-pub(crate) fn publish_pin_key_owner(owner: u64, video: u64) {
-    PIN_KEYS_OWNER.store(owner, Ordering::Release);
-    PIN_KEYS_VIDEO.store(video, Ordering::Release);
-}
-
-/// Tell the hooks whether the standing pin is above every other window.
-///
-/// It is published rather than asked for where it is read for the reason the two handles above
-/// are: a low-level callback may not take the configuration's lock, and every notch on the
-/// machine waits for the answer. No pin up is the same answer as a pin that is not on top —
-/// a hover preview stands in front of everything and needs no exemption (see
-/// `pin_owns_foreground`).
-pub(crate) fn publish_pin_always_on_top(always_on_top: bool) {
-    PIN_KEYS_TOPMOST.store(always_on_top, Ordering::Release);
-}
-
-/// Pin-key commands seen since this was last called, one per press, in the order pressed.
-///
-/// Drained by the preview loop on the same tick that drains the pin key's own counter, so a
-/// command travels the same path a press of the pin's own caption button does: it is queued, and
-/// the loop acts on it (see `ask_pin`).
-static PIN_KEY_PRESSES: [AtomicU32; PIN_COMMAND_COUNT] = [
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-];
-
 /// Whether the toggle is held, which is what tells a Space press from a Space still held down.
 ///
 /// One flag rather than one per key of `PIN_KEY_COMMANDS`, because the pin's own arrangement
 /// answers every repeat of every one of them but the toggle — so a flag per key would be a flag
 /// nothing reads.
 static PIN_KEY_DOWN: AtomicBool = AtomicBool::new(false);
-
-/// Take the pin's own key commands, one count per command and per press since the last call.
-pub(crate) fn take_pin_key_presses() -> Vec<u8> {
-    PIN_KEY_PRESSES
-        .iter()
-        .enumerate()
-        .flat_map(|(command, count)| {
-            std::iter::repeat_n(command as u8, count.swap(0, Ordering::AcqRel) as usize)
-        })
-        .collect()
-}
-
-/// How many commands this hook has counted since the process started, which is the one thing a
-/// reader of the two roads a pin's key can travel can tell apart: a key this hook counted never
-/// became a message, and a key the pin's own window answered never came here (see `pin_owns_caret`).
-#[cfg(test)]
-static PIN_KEY_COUNTED: AtomicU64 = AtomicU64::new(0);
-
-/// The number of commands this hook has counted (see `PIN_KEY_COUNTED`).
-#[cfg(test)]
-pub(crate) fn pin_key_counted() -> u64 {
-    PIN_KEY_COUNTED.load(Ordering::Relaxed)
-}
 
 /// Whether a key-down is a command, from the command it means and whether the toggle was already
 /// held when it arrived.
@@ -356,22 +287,6 @@ fn pin_toggle_held_after(
 /// it is a window of FFmpeg's that this app has no business taking keys from.
 fn pin_owns_caret(owner: u64, video: u64, foreground: u64) -> bool {
     owner != 0 && foreground != 0 && (foreground == owner || (video != 0 && foreground == video))
-}
-
-/// Whether a find bar is up over the standing pin's page, published beside the two handles and for
-/// the same reason: `text_find::is_open` takes the media lock, and a `WH_KEYBOARD_LL` callback may
-/// take none. It is also the one question that changes what this hook may do at all — a bar that is
-/// up takes every key the pin would have answered, by passing it on.
-static PIN_FIND_BAR_UP: AtomicBool = AtomicBool::new(false);
-
-/// Tell the hook whether a find bar is up over the pin's page.
-///
-/// **A swallowed key never becomes a character.** `TranslateMessage` runs after every low-level hook
-/// has returned, so the `WM_CHAR` a text field types from exists only for a key-down the hook let
-/// through. That is why a bar is not another reader of this hook's commands: while it is up the
-/// pin's keys are the field's, and the field's road is a message (see `text_find::key_edit_with`).
-pub(crate) fn publish_find_bar_up(open: bool) {
-    PIN_FIND_BAR_UP.store(open, Ordering::Release);
 }
 
 /// The same question asked of the published handles rather than of numbers: whether the pin is the

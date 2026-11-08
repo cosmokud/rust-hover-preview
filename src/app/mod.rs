@@ -2,6 +2,7 @@ pub(crate) mod afk;
 pub(crate) mod detach;
 pub(crate) mod dialogs;
 pub(crate) mod engine_processes;
+pub(crate) mod seam;
 pub(crate) mod single_instance;
 pub(crate) mod startup;
 pub(crate) mod updates;
