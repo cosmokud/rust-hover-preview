@@ -34,9 +34,7 @@
 
 #[cfg(test)]
 use crate::app::seam::PIN_KEY_COUNTED;
-use crate::app::seam::{
-    PIN_FIND_BAR_UP, PIN_KEYS_OWNER, PIN_KEYS_TOPMOST, PIN_KEYS_VIDEO, PIN_KEY_PRESSES,
-};
+use crate::app::seam::{PIN_FIND_BAR_UP, PIN_KEYS_OWNER, PIN_KEYS_TOPMOST, PIN_KEYS_VIDEO};
 use crate::CONFIG;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -585,7 +583,7 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
             ) {
                 PinKeyAnswer::PassedOn => {}
                 PinKeyAnswer::Command(counted) => {
-                    PIN_KEY_PRESSES[counted as usize].fetch_add(1, Ordering::AcqRel);
+                    crate::app::seam::note_a_pin_key_command(counted);
                     #[cfg(test)]
                     PIN_KEY_COUNTED.fetch_add(1, Ordering::Relaxed);
                     // The count is an atomic and nothing else, so the loop is woken for it: a press

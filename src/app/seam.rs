@@ -33,16 +33,21 @@
 //! reason the static is here at all: what is read and written together is one fact, and a count kept in
 //! one file with its reader in another is a fact with two homes.
 //!
-//! The step after this one gives these the same shape across a process boundary rather than within
-//! one, at which point what is in here is the whole of what a second process is told, and the modules
-//! this came out of have no second thing to change.
+//! The facts are one `#[repr(C)]` struct rather than a scatter of statics, and *where* that struct is
+//! kept is settled once, at start-up: in a shared section this run opens, or in this process's own
+//! copy. What is in here is the whole of what a second process is told, which is what makes the split
+//! a change of one module.
 
 use crate::ui::preview_window::{AvoidRegion, PinPlanned, ScreenRegion};
 use once_cell::sync::Lazy;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicIsize, AtomicPtr, AtomicU32, AtomicU64, Ordering,
+};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcessId, ResetEvent, SetEvent, WaitForSingleObject,
@@ -51,6 +56,141 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, MsgWaitForMultipleObjectsEx, PeekMessageW, MSG, MWMO_INPUTAVAILABLE,
     PM_NOREMOVE, QS_ALLINPUT,
 };
+
+/// Every fact the tray side and the preview side publish to each other, as one struct.
+///
+/// The facts were a scatter of `static Atomic*`s of this module's own, which is the same thing while
+/// the tray and the preview are one process and nothing at all once they are two: a static is this
+/// process's memory, and a preview in a process of its own cannot read one. So each is a field of one
+/// `#[repr(C)]` struct, and *where* that struct is kept is settled once at start-up by `the_facts` — in
+/// the shared section a run opens for its own viewers, or in `LOCAL_FACTS` for a run that has none,
+/// which is every test and every start-up that could not open one.
+///
+/// **One type, two homes.** A reader below names a field through a `Fact` rather than naming a static,
+/// so nothing outside this module knows which home it is inside, and the code that counts a notch
+/// inside a low-level hook is the same code whichever it is.
+///
+/// The layout has to be the same bytes in both processes, which is why this is `#[repr(C)]` with an
+/// atomic and nothing else in every field: no padding the compiler invented between one process's copy
+/// and the other's, and nothing in it that is not a number. `AtomicU64` and `AtomicIsize` are
+/// word-sized and word-aligned and `AtomicBool` is one byte, so two processes agree about where a field
+/// starts.
+///
+/// What each field is and why it exists is said beside its `Fact` in the rest of this module.
+pub(crate) struct SeamFacts {
+    text_scroll_delta: AtomicI32,
+    pin_zoom_delta: AtomicI32,
+    pin_volume_delta: AtomicI32,
+    pin_text_size_delta: AtomicI32,
+    preview_under_pointer: AtomicU32,
+    pin_keys_owner: AtomicU64,
+    pin_keys_video: AtomicU64,
+    pin_keys_topmost: AtomicBool,
+    /// Pin-key commands seen since this was last called, one per press, in the order pressed.
+    ///
+    /// Drained by the preview loop on the same tick that drains the pin key's own counter, so a
+    /// command travels the same path a press of the pin's own caption button does: it is queued, and
+    /// the loop acts on it (see `ask_pin`). One count per command of `PIN_KEY_COMMANDS`, in the order
+    /// that table lists them.
+    pin_key_presses: [AtomicU32; PIN_COMMAND_COUNT],
+    pin_find_bar_up: AtomicBool,
+    pin_up: AtomicBool,
+    pin_bubble_hwnd: AtomicIsize,
+    pin_menu_hwnd: AtomicIsize,
+    pin_file_in_flight: AtomicU64,
+    /// The five boxes, each packed the way `PublishedRegion` packs one (see there).
+    pin_volume_region: AtomicU64,
+    text_scroll_region: AtomicU64,
+    text_size_region: AtomicU64,
+    pin_zoom_region: AtomicU64,
+    models_band: AtomicU64,
+    models_notches: AtomicI32,
+    models_notch_point: AtomicU64,
+    pin_presses: AtomicU32,
+    toggle_presses: AtomicU32,
+    pin_main_down: AtomicU32,
+}
+
+impl SeamFacts {
+    /// Every fact at rest: no box published, no pin up, nothing counted.
+    const fn new() -> Self {
+        Self {
+            text_scroll_delta: AtomicI32::new(0),
+            pin_zoom_delta: AtomicI32::new(0),
+            pin_volume_delta: AtomicI32::new(0),
+            pin_text_size_delta: AtomicI32::new(0),
+            preview_under_pointer: AtomicU32::new(0),
+            pin_keys_owner: AtomicU64::new(0),
+            pin_keys_video: AtomicU64::new(0),
+            pin_keys_topmost: AtomicBool::new(false),
+            pin_key_presses: [const { AtomicU32::new(0) }; PIN_COMMAND_COUNT],
+            pin_find_bar_up: AtomicBool::new(false),
+            pin_up: AtomicBool::new(false),
+            pin_bubble_hwnd: AtomicIsize::new(0),
+            pin_menu_hwnd: AtomicIsize::new(0),
+            pin_file_in_flight: AtomicU64::new(0),
+            pin_volume_region: AtomicU64::new(NO_REGION),
+            text_scroll_region: AtomicU64::new(NO_REGION),
+            text_size_region: AtomicU64::new(NO_REGION),
+            pin_zoom_region: AtomicU64::new(NO_REGION),
+            models_band: AtomicU64::new(NO_REGION),
+            models_notches: AtomicI32::new(0),
+            models_notch_point: AtomicU64::new(0),
+            pin_presses: AtomicU32::new(0),
+            toggle_presses: AtomicU32::new(0),
+            pin_main_down: AtomicU32::new(0),
+        }
+    }
+}
+
+/// The facts of a run that has no section: this process's own copy, which is where every test and every
+/// start-up that could not open one publishes.
+static LOCAL_FACTS: SeamFacts = SeamFacts::new();
+
+/// Where a run's facts are once it has opened a section, or null where it has not.
+static MAPPED_FACTS: AtomicPtr<SeamFacts> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The facts this process publishes to and reads from: the section where there is one, this process's
+/// own copy otherwise.
+///
+/// Written once, at start-up, before the threads that publish are begun; read on every hook callback
+/// and every tick, which is why it is one pointer load and not a lock.
+pub(crate) fn the_facts() -> &'static SeamFacts {
+    let mapped = MAPPED_FACTS.load(Ordering::Acquire);
+    if mapped.is_null() {
+        return &LOCAL_FACTS;
+    }
+
+    // Safety: the pointer is set once, from a view this process mapped and never unmapped, and the
+    // section is a whole number of `SeamFacts` written through `SeamFacts` and nothing else.
+    unsafe { &*mapped }
+}
+
+/// One published fact, named rather than kept: which field of the facts it is, asked of whichever copy
+/// of them this run is using (see `SeamFacts`).
+///
+/// It is a function from the facts to a field, so a handle cannot name a field that is not there and
+/// cannot name one of another type — the compiler checks both, and there is no index to be got wrong at
+/// run time. What the indirection costs is one cached load and one predicted call, which is what a hook
+/// callback can afford: the atomics themselves are the atomics they were, and a handle is used exactly
+/// as the static it replaced was, by dereferencing to it.
+pub(crate) struct Fact<T: 'static> {
+    home: fn(&'static SeamFacts) -> &'static T,
+}
+
+impl<T: 'static> Fact<T> {
+    const fn of(home: fn(&'static SeamFacts) -> &'static T) -> Self {
+        Self { home }
+    }
+}
+
+impl<T: 'static> Deref for Fact<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        (self.home)(the_facts())
+    }
+}
 
 #[derive(Clone)]
 pub(crate) enum PreviewMessage {
@@ -228,6 +368,26 @@ pub(crate) enum PreviewMessage {
     },
 }
 
+/// The name a piece of this run's seam is known by, as the UTF-16 the Win32 calls take.
+///
+/// **The run's own pid is in it, and that is the whole of why two runs never meet.** A kernel object's
+/// name belongs to the session rather than to the process, so a fixed one would be one section and one
+/// pair of events for every run at once: a second run would open the first one's facts and publish its
+/// own hovers into them, and a run a developer left behind would take the place of the user's. A pid is
+/// the one thing a run has and no other run has, and the `Local\` prefix keeps even that within the
+/// session the run was begun in.
+///
+/// Nothing outlives the run that made it: a section and an event live exactly as long as the last
+/// handle to them, so a run that ends takes its names with it.
+fn the_seam_name(suffix: &str) -> Vec<u16> {
+    // Safety: asks the kernel for this process's own id; nothing is dereferenced.
+    let pid = unsafe { GetCurrentProcessId() };
+    format!("Local\\rust-hover-preview-seam-{pid}{suffix}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
 /// The event the preview channel's sends are announced on, so that a thread waiting for one
 /// sleeps on the channel as well as on the message queue.
 ///
@@ -241,9 +401,10 @@ pub(crate) fn preview_channel_event() -> HANDLE {
     // Kept as the number a handle is rather than as the handle, for the reason
     // `NOACTIVATE_WAKE` is: a handle is a raw pointer, and this is shared across threads.
     static EVENT: Lazy<isize> = Lazy::new(|| {
-        // Safety: an event with no name and no security descriptor, manual-reset, which is
-        // what a wait that may be woken several times before it is read wants.
-        unsafe { CreateEventW(None, true, false, None) }
+        let name = the_seam_name("-preview");
+        // Safety: an event with a name of this run's own and no security descriptor, manual-reset,
+        // which is what a wait that may be woken several times before it is read wants.
+        unsafe { CreateEventW(None, true, false, PCWSTR(name.as_ptr())) }
             .map(|handle| handle.0 as isize)
             .unwrap_or_default()
     });
@@ -348,22 +509,23 @@ pub(crate) fn wait_preview_channel(
 
 /// Wheel notches handed to a text preview. Signed: up is positive. Swapped to
 /// zero by the preview thread, so a notch is counted once.
-pub(crate) static TEXT_SCROLL_DELTA: AtomicI32 = AtomicI32::new(0);
+pub(crate) static TEXT_SCROLL_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.text_scroll_delta);
 
 /// Wheel notches handed to a pinned picture, in the same units and on the same terms as
 /// the text preview's own count above: signed, swapped to zero by the reader, and added
 /// to only where the pointer is inside the box the pin published.
-pub(crate) static PIN_ZOOM_DELTA: AtomicI32 = AtomicI32::new(0);
+pub(crate) static PIN_ZOOM_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.pin_zoom_delta);
 
 /// Wheel notches handed to a pin's volume control, on the same terms as the counts
 /// above: signed (up is louder), swapped to zero by the reader, and added to only
 /// where the pointer is over the volume popup or the button that opens it.
-pub(crate) static PIN_VOLUME_DELTA: AtomicI32 = AtomicI32::new(0);
+pub(crate) static PIN_VOLUME_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.pin_volume_delta);
 
 /// Wheel notches handed to a pinned page's own text size, on the same terms again: a notch turned
 /// over a page with `Ctrl` held is how large that page is drawn rather than where it is (see
 /// `text_size_after_notches`).
-pub(crate) static PIN_TEXT_SIZE_DELTA: AtomicI32 = AtomicI32::new(0);
+pub(crate) static PIN_TEXT_SIZE_DELTA: Fact<AtomicI32> =
+    Fact::of(|facts| &facts.pin_text_size_delta);
 
 /// Whether the preview on screen is the surface the pointer is standing on, published by the
 /// preview thread once a tick.
@@ -379,7 +541,8 @@ pub(crate) static PIN_TEXT_SIZE_DELTA: AtomicI32 = AtomicI32::new(0);
 /// desktop to find out what is in front — the same reason the pin's key owners are published by
 /// the same tick (see `key_input::publish_pin_key_owner`). One tick of staleness is all it can be
 /// wrong by, and a notch is turned by a hand that is not moving.
-pub(crate) static PREVIEW_UNDER_POINTER: AtomicU32 = AtomicU32::new(0);
+pub(crate) static PREVIEW_UNDER_POINTER: Fact<AtomicU32> =
+    Fact::of(|facts| &facts.preview_under_pointer);
 
 /// Whether the preview on screen is the surface the pointer is standing on, as the preview thread
 /// last saw it (see `PREVIEW_UNDER_POINTER`).
@@ -429,14 +592,14 @@ pub(crate) fn pin_volume_delta_pending() -> bool {
 /// may not take a lock and may not walk the desktop: two atomics and a compare are all a
 /// `WH_KEYBOARD_LL` callback may afford, because every keystroke on the machine waits for it to
 /// return and Windows removes a hook that is slow.
-pub(crate) static PIN_KEYS_OWNER: AtomicU64 = AtomicU64::new(0);
-pub(crate) static PIN_KEYS_VIDEO: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PIN_KEYS_OWNER: Fact<AtomicU64> = Fact::of(|facts| &facts.pin_keys_owner);
+pub(crate) static PIN_KEYS_VIDEO: Fact<AtomicU64> = Fact::of(|facts| &facts.pin_keys_video);
 
 /// Whether the standing pin is `Pin Mode → Always On Top`, published beside the two handles for
 /// the same reason: a window that is above everything is the window the pointer is over, so the
 /// notch a hand turns on it is the pin's whether or not the keyboard happens to be in it (see
 /// `pin_owns_foreground`).
-pub(crate) static PIN_KEYS_TOPMOST: AtomicBool = AtomicBool::new(false);
+pub(crate) static PIN_KEYS_TOPMOST: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_keys_topmost);
 
 /// Tell the hook which windows a standing pin is answering for, or that there is no such pin.
 ///
@@ -459,29 +622,10 @@ pub(crate) fn publish_pin_always_on_top(always_on_top: bool) {
     PIN_KEYS_TOPMOST.store(always_on_top, Ordering::Release);
 }
 
-/// Pin-key commands seen since this was last called, one per press, in the order pressed.
-///
-/// Drained by the preview loop on the same tick that drains the pin key's own counter, so a
-/// command travels the same path a press of the pin's own caption button does: it is queued, and
-/// the loop acts on it (see `ask_pin`).
-pub(crate) static PIN_KEY_PRESSES: [AtomicU32; PIN_COMMAND_COUNT] = [
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-];
-
 /// Take the pin's own key commands, one count per command and per press since the last call.
 pub(crate) fn take_pin_key_presses() -> Vec<u8> {
-    PIN_KEY_PRESSES
+    the_facts()
+        .pin_key_presses
         .iter()
         .enumerate()
         .flat_map(|(command, count)| {
@@ -490,9 +634,23 @@ pub(crate) fn take_pin_key_presses() -> Vec<u8> {
         .collect()
 }
 
+/// Count one press of a command of the pin's key, which the loop drains (see `take_pin_key_presses`).
+///
+/// The count is an atomic added to on a low-level hook's own thread, where nothing may be allocated and
+/// nothing may wait, and it is per command because the order the presses came in is what the loop acts
+/// on while the presses themselves are not messages.
+pub(crate) fn note_a_pin_key_command(command: u8) {
+    if let Some(count) = the_facts().pin_key_presses.get(command as usize) {
+        count.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 /// How many commands this hook has counted since the process started, which is the one thing a
 /// reader of the two roads a pin's key can travel can tell apart: a key this hook counted never
 /// became a message, and a key the pin's own window answered never came here (see `pin_owns_caret`).
+///
+/// It is a `static` of this module's rather than a field of `SeamFacts` because a test is the only
+/// thing that reads it, and a section's layout is no place for a field only a test build has.
 #[cfg(test)]
 pub(crate) static PIN_KEY_COUNTED: AtomicU64 = AtomicU64::new(0);
 
@@ -506,7 +664,7 @@ pub(crate) fn pin_key_counted() -> u64 {
 /// the same reason: `text_find::is_open` takes the media lock, and a `WH_KEYBOARD_LL` callback may
 /// take none. It is also the one question that changes what this hook may do at all — a bar that is
 /// up takes every key the pin would have answered, by passing it on.
-pub(crate) static PIN_FIND_BAR_UP: AtomicBool = AtomicBool::new(false);
+pub(crate) static PIN_FIND_BAR_UP: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_find_bar_up);
 
 /// Tell the hook whether a find bar is up over the pin's page.
 ///
@@ -572,9 +730,10 @@ static TRAY_CHANNEL: Lazy<TrayChannel> = Lazy::new(|| {
 /// its wait would be an event the other could be woken by and find nothing on the channel it read.
 pub(crate) fn tray_channel_event() -> HANDLE {
     static EVENT: Lazy<isize> = Lazy::new(|| {
-        // Safety: an event with no name and no security descriptor, manual-reset, which is what a wait
-        // that may be woken several times before it is read wants.
-        unsafe { CreateEventW(None, true, false, None) }
+        let name = the_seam_name("-tray");
+        // Safety: an event with a name of this run's own and no security descriptor, manual-reset,
+        // which is what a wait that may be woken several times before it is read wants.
+        unsafe { CreateEventW(None, true, false, PCWSTR(name.as_ptr())) }
             .map(|handle| handle.0 as isize)
             .unwrap_or_default()
     });
@@ -639,7 +798,7 @@ pub(crate) fn note_a_pin_click(line: String) {
 /// of the preview thread through a lock, which is a hook that stops answering Explorer behind a preview
 /// thread that has stopped turning. This is the published copy written beside the state it copies (see
 /// `pin_window::PIN_UP`, where it is written).
-pub(crate) static PIN_UP: AtomicBool = AtomicBool::new(false);
+pub(crate) static PIN_UP: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_up);
 
 /// Whether a preview is pinned, answered without a lock and without waiting for one (see `PIN_UP`).
 pub(crate) fn the_pin_is_up() -> bool {
@@ -653,11 +812,11 @@ pub(crate) fn the_pin_is_up() -> bool {
 /// hook reads on the tick after a row of that menu was pressed landed on the panel, and the window under
 /// the pointer is how that press is told from one on the file the panel covers (see
 /// `window_state::bubble_window_is_at`).
-pub(crate) static PIN_BUBBLE_HWND: AtomicIsize = AtomicIsize::new(0);
+pub(crate) static PIN_BUBBLE_HWND: Fact<AtomicIsize> = Fact::of(|facts| &facts.pin_bubble_hwnd);
 
 /// The window a standing pin's own menu is drawn in, published beside the bubble and read by the same
 /// press (see `PIN_BUBBLE_HWND`).
-pub(crate) static PIN_MENU_HWND: AtomicIsize = AtomicIsize::new(0);
+pub(crate) static PIN_MENU_HWND: Fact<AtomicIsize> = Fact::of(|facts| &facts.pin_menu_hwnd);
 
 /// The file a pin has been asked for and is not showing yet, as a fingerprint, or `0` for none.
 ///
@@ -671,7 +830,7 @@ pub(crate) static PIN_MENU_HWND: AtomicIsize = AtomicIsize::new(0);
 /// shortcut: two spellings of one file — a case difference, a short name — hash apart, and the cost is a
 /// press answered as a new pick, which is what it was before this was published at all. Upgrade to a
 /// published path if a user ever meets it.
-pub(crate) static PIN_FILE_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+pub(crate) static PIN_FILE_IN_FLIGHT: Fact<AtomicU64> = Fact::of(|facts| &facts.pin_file_in_flight);
 
 /// Note the file a pin is now on its way to, or `None` where nothing is in flight any more.
 pub(crate) fn publish_the_pin_file_in_flight(path: Option<&Path>) {
@@ -706,15 +865,24 @@ fn fingerprint_of(path: &Path) -> u64 {
 /// over a preview that does. The coordinate space is Windows' own, which is a 16-bit one in each axis —
 /// the virtual screen is at most 32768 pixels across and its origin no further out than that — so a box
 /// that somehow did not fit is published as no box at all, which costs a notch and never claims one.
-pub(crate) struct PublishedRegion(AtomicU64);
+/// the notch that was refused, which is never a notch claimed twice.
+///
+/// It is a handle over that word rather than the word itself, for the reason a `Fact` is (see
+/// `SeamFacts`): the packing below is this type's, and where the packed word lives is the facts'.
+pub(crate) struct PublishedRegion(fn(&'static SeamFacts) -> &'static AtomicU64);
 
 /// What a `PublishedRegion` holds where it names no box. It decodes to `(-1, -1, -1, -1)`, an empty box
 /// no point is inside, so even a box of its own that happened to pack to this answers the same way.
 const NO_REGION: u64 = u64::MAX;
 
 impl PublishedRegion {
-    pub(crate) const fn new() -> Self {
-        Self(AtomicU64::new(NO_REGION))
+    const fn of(home: fn(&'static SeamFacts) -> &'static AtomicU64) -> Self {
+        Self(home)
+    }
+
+    /// This box's word, in the copy of the facts this process is publishing to.
+    fn cell(&self) -> &'static AtomicU64 {
+        (self.0)(the_facts())
     }
 
     /// Publish `region` whole, or withdraw the box where there is none.
@@ -726,12 +894,12 @@ impl PublishedRegion {
             })
             .unwrap_or(NO_REGION);
 
-        self.0.store(packed, Ordering::Release);
+        self.cell().store(packed, Ordering::Release);
     }
 
     /// The box as it was last published, or `None` where there is none.
     pub(crate) fn get(&self) -> Option<(i32, i32, i32, i32)> {
-        let packed = self.0.load(Ordering::Acquire);
+        let packed = self.cell().load(Ordering::Acquire);
         if packed == NO_REGION {
             return None;
         }
@@ -743,22 +911,26 @@ impl PublishedRegion {
 
 /// The box a wheel notch over a pin's volume control belongs to: the open popup's panel and the button
 /// it hangs from, or just the button while it is closed.
-pub(crate) static PIN_VOLUME_REGION: PublishedRegion = PublishedRegion::new();
+pub(crate) static PIN_VOLUME_REGION: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.pin_volume_region);
 
 /// The box a wheel notch over a scrollable text preview belongs to: the journey from where the hover was
 /// opened to the preview itself, or the pinned window's box where what is pinned is a page.
-pub(crate) static TEXT_SCROLL_REGION: PublishedRegion = PublishedRegion::new();
+pub(crate) static TEXT_SCROLL_REGION: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.text_scroll_region);
 
 /// The same box for a page that fits the one it is drawn in: there is no scroll there for Explorer to
 /// lose, so a `Ctrl` and a wheel over one is the page's own size rather than its place (see
 /// `text_size_after_notches`).
-pub(crate) static TEXT_SIZE_REGION: PublishedRegion = PublishedRegion::new();
+pub(crate) static TEXT_SIZE_REGION: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.text_size_region);
 
 /// The box of a pinned picture, which a notch zooms.
-pub(crate) static PIN_ZOOM_REGION: PublishedRegion = PublishedRegion::new();
+pub(crate) static PIN_ZOOM_REGION: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.pin_zoom_region);
 
 /// The band a pinned model is drawn in, which a notch is handed to the model's own camera for.
-pub(crate) static MODELS_BAND: PublishedRegion = PublishedRegion::new();
+pub(crate) static MODELS_BAND: PublishedRegion = PublishedRegion::of(|facts| &facts.models_band);
 
 /// Notches turned over that band and not yet handed to the model: how many, and the screen point the last
 /// one was turned at, packed as two 16-bit fields.
@@ -769,8 +941,8 @@ pub(crate) static MODELS_BAND: PublishedRegion = PublishedRegion::new();
 /// allocation on that path. The two are one fact in two atomics, and only the count is exact: the point is
 /// the last one turned and is asked of the engine only to clamp the notch into its own client, so a point
 /// paired with a notch turned a hair earlier answers the same way.
-pub(crate) static MODELS_NOTCHES: AtomicI32 = AtomicI32::new(0);
-pub(crate) static MODELS_NOTCH_POINT: AtomicU64 = AtomicU64::new(0);
+pub(crate) static MODELS_NOTCHES: Fact<AtomicI32> = Fact::of(|facts| &facts.models_notches);
+pub(crate) static MODELS_NOTCH_POINT: Fact<AtomicU64> = Fact::of(|facts| &facts.models_notch_point);
 
 /// Hand a notch turned over a pinned model's band to the model — f3d's wheel is its camera's zoom, so the
 /// notch is the engine's and nothing of this app's (see `MODELS_BAND` and `f3d_player`).
@@ -809,10 +981,10 @@ pub(crate) fn take_the_models_notch() -> Option<((i32, i32), i32)> {
 /// Both low-level hooks count it — the keyboard hook for keys, and the mouse hook for `mouse3` through
 /// `mouse5`, which never reach the keyboard — and the preview loop drains it once a tick. It is here
 /// rather than beside the counter it is added to because its reader is the other side.
-pub(crate) static PIN_PRESSES: AtomicU32 = AtomicU32::new(0);
+pub(crate) static PIN_PRESSES: Fact<AtomicU32> = Fact::of(|facts| &facts.pin_presses);
 
 /// Preview-shortcut presses seen over Explorer since this was last drained.
-pub(crate) static TOGGLE_PRESSES: AtomicU32 = AtomicU32::new(0);
+pub(crate) static TOGGLE_PRESSES: Fact<AtomicU32> = Fact::of(|facts| &facts.toggle_presses);
 
 /// Pin-key presses since this was last called (see `PIN_PRESSES`).
 pub(crate) fn take_presses() -> u32 {
@@ -830,7 +1002,7 @@ pub(crate) fn take_preview_toggle_presses() -> u32 {
 /// activation Explorer dispatches for a middle press lands after this app's raise as often as before it,
 /// so the band a raise gives back is held for the hand rather than for a duration (see
 /// `pin_lifecycle::A_PRESS_BAND_IS_HELD_FOR`).
-pub(crate) static PIN_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
+pub(crate) static PIN_MAIN_DOWN: Fact<AtomicU32> = Fact::of(|facts| &facts.pin_main_down);
 
 /// Whether a key of the pin's own is down right now — a mouse button it is bound to included (see
 /// `PIN_MAIN_DOWN`).
