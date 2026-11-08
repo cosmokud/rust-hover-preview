@@ -834,6 +834,9 @@ pub fn run_explorer_hook() {
                 && (is_cursor_over_explorer_full(pointer.window)
                     || (keyboard_owns_pointer && cursor_preview_hover().any()));
             if wheel_scroll {
+                if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+                    eprintln!("seam: wheel re-hover: asking the item under the pointer again");
+                }
                 scroll_since_move = true;
                 // The list moves under a parked cursor, so the file under the pointer
                 // is a new question: the probe latch is reopened and the hover clock
