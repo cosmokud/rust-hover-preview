@@ -440,6 +440,24 @@ fn step_the_notches(notches: i32) -> bool {
     moved
 }
 
+/// The band's own state, as a test reads it: the row the hand is on, the row it has picked, and the
+/// row standing first in sight.
+#[cfg(test)]
+pub(super) fn the_band_in_hand() -> Option<(Option<usize>, Option<usize>, usize)> {
+    let playlist = THE_PLAYLIST.lock().ok()?;
+    Some((playlist.hovered, playlist.picked, playlist.scroll))
+}
+
+/// The row a marquee is set up for and how far its name has to travel — nothing at all where the row
+/// has room for the whole of it.
+#[cfg(test)]
+pub(super) fn the_marquee_in_hand() -> Option<(usize, i32)> {
+    let playlist = THE_PLAYLIST.lock().ok()?;
+    playlist
+        .marquee
+        .map(|marquee| (marquee.row, marquee.travel))
+}
+
 /// Move the marqueed name on by one tick, answering whether it moved: it rests at either end for
 /// `NAME_HOLD` and ping-pongs between them, which is the card's own rule for the same name (see
 /// `audio_preview::NameScroll`).
@@ -512,7 +530,7 @@ pub(super) fn pin_playlist_hover_refresh(pin: &PinnedPreview, cursor: Option<(i3
     let band_top = window_top + top;
 
     let local = cursor.and_then(|(x, y)| {
-        (x >= left && x < right && y >= band_top && y < band_top + height).then(|| y - window_top)
+        (x >= left && x < right && y >= band_top && y < band_top + height).then(|| y - band_top)
     });
 
     set_the_hover((height, width, pin.dpi as f32 / 96.0), local)

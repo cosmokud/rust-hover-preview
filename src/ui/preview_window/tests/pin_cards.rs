@@ -1255,6 +1255,62 @@ fn a_press_the_band_took_is_given_back_by_the_release_that_follows_it() {
     stand_pin(previous_pin);
 }
 
+/// A pointer in the band is the row of the band it is over, read off the screen row the tick reads
+/// the cursor at: the band begins at the window's own row `band_top`, and a row counted in the
+/// window's rows instead is one that far down the list — a band no hand is ever on, and a name
+/// nothing carries (see `pin_playlist::pin_playlist_hover_refresh`).
+#[test]
+fn a_pointer_in_the_band_is_a_row_of_the_band() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let mut pin = sound_pin();
+    // A name the band's column has no room for, so that the row the hand is on is a name that
+    // marquees rather than one drawn once and held.
+    pin.path = PathBuf::from(
+        "a mixdown of a very long name indeed, and one no column of a band holds.mp3",
+    );
+    pin_playlist::toggle(&pin);
+    let (band_top, _) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let window = pin.window_box();
+    let row = pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0) / 2;
+    stand_pin(Some(pin));
+    pin_playlist::refresh_the_rows();
+
+    // The pointer inside the band's own first row, as the screen row the tick reads it at.
+    let cursor = Some((window.0 + 40, window.1 + band_top + row));
+    let asked = |cursor| {
+        pin_state()
+            .and_then(|pinned| {
+                pinned
+                    .pin()
+                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, cursor))
+            })
+            .expect("the pin the test stood up")
+    };
+
+    assert!(asked(cursor), "a row the pointer has come to is a change");
+    let (hovered, _, scroll) = pin_playlist::the_band_in_hand().expect("the band's own rows");
+    assert_eq!(
+        hovered,
+        Some(scroll),
+        "the pointer in the band's first row is on the row the band draws first"
+    );
+    let (marqueed, travel) =
+        pin_playlist::the_marquee_in_hand().expect("a name to carry across the row");
+    assert_eq!(
+        marqueed, scroll,
+        "and the name the hand is on is the one the tick has to carry"
+    );
+    assert!(travel > 0, "and it is wider than the column it is drawn in");
+    assert!(!asked(cursor), "the same row again is no change");
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
 /// The band's two edges are the window's two edges, and a press on either is the height being
 /// dragged rather than a row being picked: the card is never resized, and the band is the only thing
 /// a pinned sound's window has to be resized by.
