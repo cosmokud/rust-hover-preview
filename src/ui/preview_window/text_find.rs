@@ -556,6 +556,13 @@ pub(super) fn note(edit: FindEdit) {
 /// answered only while the pin is the window the user is in, because the chord is read from the
 /// keyboard's own state rather than received as a message — a `Ctrl`+`F` pressed in another window
 /// would otherwise open a bar in a pin standing behind it (see `pin_is_focused`).
+///
+/// **The press bit alone is not enough to catch it.** That bit is spent by whoever reads the key
+/// first, and the Explorer hook's own pass reads every letter's on the ticks where neither `Ctrl` nor
+/// `Alt` is down (see `explorer_hook::input::type_ahead_keys`) — so a chord whose `Ctrl` is let go
+/// before this pass reads it is a chord this poll never sees. The key being *down* where it was not
+/// on the last pass is the other half, and a hand that holds the chord for either a tap or a moment is
+/// caught by one of the two (see `CHORD_HELD`).
 pub(super) fn pinned_find_requested() -> bool {
     if !pin_is_focused() || !text_selection::has_text_document() {
         return false;
@@ -563,10 +570,27 @@ pub(super) fn pinned_find_requested() -> bool {
 
     unsafe {
         let control = GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000 != 0;
-        let just_pressed = GetAsyncKeyState(VK_F.0 as i32) & 1 != 0;
-        control && just_pressed
+        if !control {
+            CHORD_HELD.store(false, Ordering::Relaxed);
+            return false;
+        }
+
+        // One read of the key, for both of the things it says: whether it has been pressed since the
+        // last read of it, and whether it is down now. **Read only under `Ctrl`**, because a read is
+        // what spends that press bit: a pass that found the modifier already let go would otherwise
+        // spend a press it had no chord for, and the hand that asked for the bar would have to ask a
+        // second time.
+        let f = GetAsyncKeyState(VK_F.0 as i32) as u16;
+        let held = f & 0x8000 != 0;
+        let was_held = CHORD_HELD.swap(held, Ordering::Relaxed);
+
+        f & 0x0001 != 0 || (held && !was_held)
     }
 }
+
+/// Whether the last pass that could answer the chord found `Ctrl`+`F` held down, which is the half of
+/// the chord that no other reader of the key can spend (see `pinned_find_requested`).
+static CHORD_HELD: AtomicBool = AtomicBool::new(false);
 
 /// The character a `WM_CHAR` is, where the bar is to type it: `wparam` is one UTF-16 code unit, so a
 /// surrogate is half of a character this bar does not hold — BMP only — and it is dropped rather
@@ -892,11 +916,17 @@ pub(super) unsafe fn settle(hwnd: HWND) {
     // **A batch that changed nothing the card draws owes no paint.** A `←` at the start of a query, a
     // `Shift`+`←` with the selection already at it, a `Backspace` with nothing before the caret: each
     // is an edit the road queues like any other, and a band repaint copies the whole page frame under
-    // the card. Asked after the search and the step rather than before, so a re-search that found the
-    // same places and a step that landed on the match it started from are the same answer — and asked
-    // of the caret's blink never, because that is the tick's own question where no edit is in hand
-    // (see `the_caret_turned`).
-    if as_drawn() == before {
+    // the card. Asked after the search and the step rather than before, so a step that landed on the
+    // match it started from is the same answer — and asked of the caret's blink never, because that is
+    // the tick's own question where no edit is in hand (see `the_caret_turned`).
+    //
+    // **A search is exempt, and that is what makes a bar that has just come up visible.** A bar opened
+    // over a query its page does not hold finds nothing, and the answer it draws of that — `0/0` and no
+    // place to be — is the answer the bar already stood in when the search began, because opening it
+    // is what put the query there: compared on what is drawn, that batch would paint nothing, and the
+    // bar would be up on the state's side and nowhere in the window's pixels until something else
+    // happened to repaint them. So a batch that searched paints.
+    if !settled.search && as_drawn() == before {
         return;
     }
 
