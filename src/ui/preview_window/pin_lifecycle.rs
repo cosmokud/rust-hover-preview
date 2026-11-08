@@ -2243,6 +2243,12 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
         return;
     }
 
+    // **The window a press was made in is the frame the press landed in.** A click inside a listing
+    // is a click on a child of it, and a placement asked to put a window behind a child is a call the
+    // desktop does nothing with — the pin stayed over the listing the press was made in, which is the
+    // fault this road exists to answer (see `window_classes::the_frame_of`).
+    let window = crate::shell::window_classes::the_frame_of(window);
+
     // A band held for a press is given back by this road whatever comes of the lowering, because a press
     // that named no file has ended the answer the band was kept for — and every placement after it asks
     // the setting again (see `PIN_BAND_HELD`).
