@@ -1106,8 +1106,10 @@ fn a_band_under_a_card_grows_the_window_and_leaves_the_card_alone() {
         "a band opened on a display is a band with a height"
     );
     assert_eq!(
-        band_top, pin.content.3,
-        "it begins at the card's own bottom edge, so nothing of the card moves for it"
+        band_top,
+        pin.content.3 - pin.content.1,
+        "it begins at the card's own bottom edge, counted in the window's own rows, so nothing of \
+         the card moves for it"
     );
     assert_eq!(
         pin.window_box(),
@@ -1227,11 +1229,12 @@ fn a_press_the_band_took_is_given_back_by_the_release_that_follows_it() {
         "the band owes a paint for the rows it just built"
     );
 
-    // A row of the band, and a press on it: the band's own, and not the window's to carry.
-    let row = band_top + pin_chrome::playlist_row_height(1.0) / 2;
+    // A row of the band, and a press on it: the band's own, and not the window's to carry. The row
+    // is taken past the band's own pad, which is the part of it a press picks nothing in.
+    let row = band_top + pin_chrome::playlist_row_height(1.0) / 2 + 12;
     assert!(row < band_top + band_height, "a row inside the band");
     assert!(
-        unsafe { pin_playlist::press(HWND::default(), row, false) },
+        unsafe { pin_playlist::press(HWND::default(), 100, row, false) },
         "a press on a row is the band's"
     );
 
@@ -1245,6 +1248,91 @@ fn a_press_the_band_took_is_given_back_by_the_release_that_follows_it() {
         !unsafe { pin_playlist::release(HWND::default()) },
         "and a release with no press behind it is the window's"
     );
+
+    // And the band is put back down, so the next test does not come up with one.
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// The band's two edges are the window's two edges, and a press on either is the height being
+/// dragged rather than a row being picked: the card is never resized, and the band is the only thing
+/// a pinned sound's window has to be resized by.
+///
+/// And the card's own window buttons keep the rows they stand on, because a border that answered for
+/// them would be a border that ate the close button.
+#[test]
+fn the_bands_edges_drag_the_height_and_the_cards_buttons_keep_their_rows() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let width = pin.window_size().0;
+    let card = pin.content;
+    stand_pin(Some(pin));
+    // The rows are the band's own and are built for whatever order the pin holds; a test that runs
+    // after another one of this pin's is a band whose rows are already there (see `THE_PLAYLIST`).
+    pin_playlist::refresh_the_rows();
+
+    // The bottom edge is the window's own last rows, and the top edge its first ones.
+    assert_eq!(
+        pin_playlist::edge_at(width / 2, band_top + band_height - 1),
+        Some(pin_chrome::PlaylistEdge::Bottom)
+    );
+    assert_eq!(
+        pin_playlist::edge_at(4, 1),
+        Some(pin_chrome::PlaylistEdge::Top),
+        "the window's first rows are its top edge, away from the card's own buttons"
+    );
+
+    // And where the card's window buttons stand the edge is not the band's at all: they are four
+    // buttons in the window's own first rows and they keep them.
+    let buttons = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            (0..width)
+                .find(|x| pin_audio_window_buttons_at(pin, *x, 1))
+                .map(|x| (x, pin_audio_window_buttons_at(pin, x, 1)))
+        })
+        .expect("the card's own window buttons, which a card always carries");
+    assert!(buttons.1, "the button column the test found");
+    assert_eq!(
+        pin_playlist::edge_at(buttons.0, 1),
+        None,
+        "the band's top edge took the rows the card's window buttons stand on"
+    );
+
+    // A press on the bottom edge is the height's, and dragging it down grows the band and leaves the
+    // card exactly where it was.
+    let edge = band_top + band_height - 1;
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), width / 2, edge, false) },
+        "a press on the band's bottom edge is the band's"
+    );
+    assert!(
+        unsafe { pin_playlist::drag(HWND::default(), edge + 40) },
+        "and the drag that follows it is the band's too"
+    );
+    assert_eq!(
+        pin_playlist::pin_playlist_band(pin_state().expect("the pin").pin().expect("the pin"))
+            .expect("the band")
+            .1,
+        band_height + 40,
+        "dragging the bottom edge down did not grow the band by the travel"
+    );
+    assert_eq!(
+        pin_state()
+            .expect("the pin")
+            .pin()
+            .expect("the pin")
+            .content,
+        card,
+        "and the card moved for a drag of the band's bottom edge"
+    );
+    assert!(unsafe { pin_playlist::release(HWND::default()) });
 
     // And the band is put back down, so the next test does not come up with one.
     let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));

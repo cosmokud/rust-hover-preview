@@ -1075,6 +1075,16 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         return true;
     }
 
+    // **And then the playlist band, before anything the card itself owns.** The band is the pin's own
+    // rows and none of it is the card's: a press on one picks it, a second press shows the file it is,
+    // and a press on either of the window's edges is the band's height being dragged. Asked after the
+    // card's arms instead, every one of those presses was a press on a card that has no rows down
+    // there — a band nothing could be clicked in, and nothing double-clicked either (see
+    // `pin_playlist::press`).
+    if pin_playlist::press(hwnd, x, y, double_click) {
+        return true;
+    }
+
     if framed {
         let edge = {
             let Some(pinned) = pin_state() else {
@@ -1128,13 +1138,6 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
     // window: a button is a button, and a hand on the rest of the card is still a hand carrying the
     // window (see `pinned_audio_control_press`).
     if pinned_audio_control_press(hwnd, x, y) {
-        return true;
-    }
-
-    // And the playlist band under the card, which is the pin's own rows: a press there picks a row
-    // and never carries the window, and a press that is the second of a pair shows the file that row
-    // is (see `pin_playlist::press`).
-    if pin_playlist::press(hwnd, y, double_click) {
         return true;
     }
 
