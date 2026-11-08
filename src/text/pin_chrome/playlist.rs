@@ -495,7 +495,7 @@ pub(crate) fn paint_playlist(
         boxes.push(facts_box);
 
         if let Some(clock) = row.clock.as_deref() {
-            let measured = measure(surface, &facts_style, clock, small);
+            let measured = measure(surface, &facts_style, clock, scale);
             let clock_box = RECT {
                 left: layout.clock_left,
                 top: facts_box.top,
@@ -506,7 +506,7 @@ pub(crate) fn paint_playlist(
                 // The length is the accent, which is the ink the card's own clock and its bar are
                 // drawn in: the two say the same thing about the same second (see
                 // `audio_preview::page`).
-                small_painter.draw(
+                painter.draw(
                     clock,
                     (clock_box.right - measured).max(clock_box.left),
                     clock_box,
