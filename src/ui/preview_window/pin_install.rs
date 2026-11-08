@@ -715,6 +715,10 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
         }
         if let Some(pin) = state.pin_mut() {
             pin.path = path.clone();
+            // The file the window is showing is the one the side that asks what is pinned reads, and it
+            // is written here rather than at the install's end because a swap never passes through one
+            // (see `seam::publish_the_pinned_path`).
+            crate::app::seam::publish_the_pinned_path(Some(pin.path.as_path()));
         }
     }
 
