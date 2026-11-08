@@ -293,6 +293,13 @@ pub(crate) fn this_window_is_its_own() {
     DETACHED_HERE.store(true, Ordering::Release);
 }
 
+/// Turn that off again, which only a test does: the flip is a window's own for the life of the process it
+/// happens in, and a test process is the one place a process outlives more than one window.
+#[cfg(test)]
+pub(crate) fn forget_this_window_is_its_own() {
+    DETACHED_HERE.store(false, Ordering::Release);
+}
+
 /// What this window was begun with, or nothing where this process is the tray app.
 pub(crate) fn open_request() -> Option<OpenRequest> {
     OPEN.lock().ok().and_then(|open| open.clone())

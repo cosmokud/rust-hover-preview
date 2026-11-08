@@ -5,13 +5,16 @@
 //! watches, the tray icon, the sweeps of what earlier runs left behind — and the viewer owns every pixel —
 //! the preview loop, the low-level wheel hook, the media, the engines. What crosses between them is the
 //! seam's two rings and the facts beside them (see `app::seam`), and what that buys is a preview whose
-//! media is already open in a process that can hand its window to another one without reading the file a
-//! second time.
+//! media is already open in a process that keeps drawing it when its pin is detached, rather than being
+//! handed to a process that would have to read the file a second time (see `app::detach`).
 //!
-//! A viewer is begun once, at start-up, and replaced when it dies: a viewer that is gone is a hover nobody
-//! draws, so the next show the tray is about to send begins another one (see
-//! `make_sure_a_viewer_is_standing`). A run that cannot begin one at all is not left with a tray and no
-//! previews — it draws them itself, which is exactly the run this app was before the split (see `main`).
+//! **A run outlives its viewer, and may have more than one.** A viewer is begun at start-up and replaced
+//! when it dies: one that is gone is a hover nobody draws, so the next show the tray is about to send
+//! begins another (see `make_sure_a_viewer_is_standing`). And it is begun again, at once, when the one
+//! there was becomes a window of its own, because the pin that was detached was drawn in the process the
+//! hovers were drawn in — the run's hovers have nobody else (see `another_viewer_is_owed`). A run that
+//! cannot begin one at all is not left with a tray and no previews — it draws them itself, which is exactly
+//! the run this app was before the split (see `main`).
 
 use std::os::windows::io::IntoRawHandle;
 use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
@@ -104,6 +107,13 @@ fn wait_for_a_viewer(viewer: u32, bound: Duration) -> bool {
 /// notice, which is the hook's loop: a loop that sat out a process's start-up would be a hook that stopped
 /// answering Explorer for as long as the launch took.
 pub(crate) fn another_viewer_is_owed(pid: u32) {
+    // **A run that draws its own previews owes no viewer.** The window that left was drawn by this process,
+    // which is still drawing the hovers, and a viewer begun here would read a ring nothing publishes into
+    // (see `main` and `seam::the_rings_are_the_road`).
+    if !crate::app::seam::the_rings_are_the_road() {
+        return;
+    }
+
     // The window that left is still this app's own, standing over the desktop: the run keeps it in the
     // record a press on it is judged by (see `seam::window_is_a_viewers`).
     crate::app::seam::note_a_detached_viewer(pid);

@@ -145,6 +145,122 @@ mod tests {
     use crate::ui::preview_window::pin_window::{end_pin, install, Reason, RecordedPinWindow};
     use crate::ui::preview_window::tests::the_room_to_itself;
 
+    /// The flip is a process's own for the rest of its life, and a test process outlives more windows than
+    /// one: the flag is turned back off when this goes out of scope, including when a body panics.
+    struct AWindowOfItsOwnNoLonger;
+
+    impl Drop for AWindowOfItsOwnNoLonger {
+        fn drop(&mut self) {
+            crate::app::detach::forget_this_window_is_its_own();
+        }
+    }
+
+    #[test]
+    fn detaching_makes_the_pin_a_window_of_its_own_and_tells_the_tray_to_begin_another() {
+        let _room = the_room_to_itself();
+
+        let mut pin = PinnedPreview::for_test();
+        pin.path = PathBuf::from("sound.flac");
+        install(pin);
+        assert!(
+            crate::app::seam::the_pin_is_up(),
+            "a pin the tray can drive is up to begin with"
+        );
+        assert_eq!(
+            crate::app::seam::pinned_path(),
+            Some(PathBuf::from("sound.flac")),
+            "and the tray knows the file a click would be sent to"
+        );
+
+        detach_the_pinned_window();
+        let _flipped = AWindowOfItsOwnNoLonger;
+        let told = crate::app::seam::take_tray_messages();
+
+        // **The notice the tray begins another viewer from**, and it names this process: that is the one
+        // which is standing on the screen from here on and serving no hovers.
+        assert!(
+            told.iter().any(|message| matches!(
+                message,
+                crate::app::seam::TrayMessage::ViewerDetached(pid) if *pid == std::process::id()
+            )),
+            "the tray is told which viewer has left: {} notices",
+            told.len()
+        );
+        assert!(
+            crate::app::detach::is_detached(),
+            "and every press the chrome draws from here on reads the window as one of its own"
+        );
+
+        // **The pin stops being a pin, and the window keeps standing.** No pin of the tray's is up — so a
+        // hover is admitted again over this window — and no file is named where a click would be sent, while
+        // this process still has a window to draw and still has the file in it.
+        assert!(
+            !crate::app::seam::the_pin_is_up(),
+            "the tray has no pin any more"
+        );
+        assert_eq!(
+            crate::app::seam::pinned_path(),
+            None,
+            "and no file to send to"
+        );
+        assert!(
+            super::super::requests::pinned(),
+            "while the window itself stands: nothing was taken down"
+        );
+        assert_eq!(
+            pin_state().and_then(|state| state.pin().map(|pin| pin.path.clone())),
+            Some(PathBuf::from("sound.flac")),
+            "and nothing was read again: the window is still on the file it was showing"
+        );
+
+        // **And every road out is drawn as spent**, from the same flag: the caption's mark, the rows of both
+        // menus, and the button in a sound card's own top margin.
+        assert_eq!(
+            super::super::paint::pinned_paint().map(|paint| paint.detachable),
+            Some(false),
+            "the caption draws the detach mark as one a window of its own has spent"
+        );
+        let rows = super::super::pin_menu::menu_rows(crate::app::detach::is_detached());
+        assert!(
+            rows[row_at(&rows, "Detach Window")].disabled,
+            "the card's menu keeps the row it has always listed, and asks it as one spent"
+        );
+        let bubble = super::super::pin_bubble::bubble_menu_chrome_rows(
+            Some(super::super::media_types::MediaType::Audio),
+            false,
+            false,
+            true,
+            false,
+            crate::app::detach::is_detached(),
+        );
+        assert!(
+            bubble[row_at(&bubble, "Detach Window")].disabled,
+            "and so does the menu a standing window and a bubble share"
+        );
+        assert_eq!(
+            super::super::pin_lifecycle::pinned_audio_chrome(None).map(|chrome| chrome.detached),
+            Some(true),
+            "and the sound card's own button says it in its own place"
+        );
+
+        // The window's own end goes on working in a window of its own, and ends nothing else.
+        end_pin(Reason::Closed, &RecordedPinWindow::new(0x4100));
+        assert!(
+            !super::super::requests::pinned(),
+            "the window came down when it was closed"
+        );
+        assert!(
+            !crate::app::seam::the_pin_is_up(),
+            "and published no pin of the tray's on its way out"
+        );
+    }
+
+    fn row_at(rows: &[crate::text::pin_chrome::MenuRow], label: &str) -> usize {
+        rows.iter()
+            .position(|row| row.label == label)
+            .unwrap_or_else(|| panic!("the menu holds the {label} row"))
+    }
+
     #[test]
     fn nothing_is_handed_over_where_no_pin_is_standing() {
         let _room = the_room_to_itself();
