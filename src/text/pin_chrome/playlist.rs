@@ -685,10 +685,11 @@ pub(crate) fn playlist_row(path: &Path) -> PlaylistRow {
         }],
     };
     // The room the file takes is the one part no probe answers for, and the one a person picking
-    // one of ten mixes reads: it is always there, and it is a quantity like the others.
+    // one of ten mixes reads: it is always there. Drawn as a word, not one of the card's numbers:
+    // the size is a note on the file rather than a figure of the sound.
     facts.push(audio_preview::Fact {
         text: format!("{:.1} MB", size_in_bytes(path) as f64 / BYTES_IN_A_MEGABYTE),
-        kind: audio_preview::FactKind::Number,
+        kind: audio_preview::FactKind::Word,
     });
 
     PlaylistRow {
