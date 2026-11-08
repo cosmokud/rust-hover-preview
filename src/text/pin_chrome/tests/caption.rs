@@ -144,7 +144,7 @@ fn a_real_font_cuts_the_name_where_the_measured_width_runs_out() {
 #[test]
 fn every_button_of_a_caption_is_the_one_under_the_pointer() {
     let buttons = button_boxes(600, 30, 96, true);
-    assert_eq!(buttons.len(), 8);
+    assert_eq!(buttons.len(), 9);
 
     for button in &buttons {
         let middle_x = (button.rect.left + button.rect.right) / 2;
@@ -181,9 +181,10 @@ fn a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons() {
     let narrow = button_boxes(200, 30, 96, true);
 
     // Buttons are 46 wide and never narrower, so a strip 200 wide holds four of them: the window's
-    // own, taken from close at the right edge back to the left (see `button_boxes`).
+    // own, taken from close at the right edge back to the left (see `button_boxes`) — the detach
+    // among them, because the road out of being a pin is a window's road and stands with them.
     assert_eq!(narrow.len(), 4);
-    assert_eq!(narrow[0].kind, CaptionButton::AlwaysOnTop);
+    assert_eq!(narrow[0].kind, CaptionButton::Detach);
     assert_eq!(narrow[1].kind, CaptionButton::Minimize);
     assert_eq!(narrow[2].kind, CaptionButton::Maximize);
     assert_eq!(narrow[3].kind, CaptionButton::Close);
@@ -219,18 +220,21 @@ fn a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons() {
 /// right at every width in the middle of a step.
 #[test]
 fn a_caption_gives_up_its_buttons_one_at_a_time_from_the_left() {
-    const ORDER: [CaptionButton; 8] = [
+    const ORDER: [CaptionButton; 9] = [
         CaptionButton::Previous,
         CaptionButton::Next,
         CaptionButton::OpenWith,
         CaptionButton::OpenWithList,
         CaptionButton::AlwaysOnTop,
+        CaptionButton::Detach,
         CaptionButton::Minimize,
         CaptionButton::Maximize,
         CaptionButton::Close,
     ];
 
     let boundaries = [
+        (9 * 46, 9),
+        (9 * 46 - 1, 8),
         (8 * 46, 8),
         (8 * 46 - 1, 7),
         (7 * 46, 7),
@@ -357,7 +361,7 @@ fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
         surface.pixels()
     };
 
-    // A caption 240 wide has dropped three of its eight buttons and still says nothing.
+    // A caption 240 wide has dropped four of its nine buttons and still says nothing.
     assert!(
         !buttons_fit(240, 96, true) && !title_fits(240, 96, true),
         "a caption with buttons missing has given the name up"
@@ -368,14 +372,14 @@ fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
         "a strip with buttons missing painted a name beside them"
     );
 
-    // And a caption that carries all eight says the name it has room for.
+    // And a caption that carries all nine says the name it has room for.
     assert!(
-        buttons_fit(440, 96, true) && title_fits(440, 96, true),
+        buttons_fit(520, 96, true) && title_fits(520, 96, true),
         "a caption with every button has room for a name beside them"
     );
     assert_ne!(
-        strip(440, "notes.txt"),
-        strip(440, ""),
+        strip(520, "notes.txt"),
+        strip(520, ""),
         "a whole caption did not paint the name it had room for"
     );
 
@@ -398,14 +402,15 @@ fn a_caption_without_a_maximize_keeps_the_close_button_where_it_was() {
     let three = button_boxes(600, 30, 96, true);
     let two = button_boxes(600, 30, 96, false);
 
-    assert_eq!(two.len(), 7);
+    assert_eq!(two.len(), 8);
     assert_eq!(two[0].kind, CaptionButton::Previous);
     assert_eq!(two[1].kind, CaptionButton::Next);
     assert_eq!(two[2].kind, CaptionButton::OpenWith);
     assert_eq!(two[3].kind, CaptionButton::OpenWithList);
     assert_eq!(two[4].kind, CaptionButton::AlwaysOnTop);
-    assert_eq!(two[5].kind, CaptionButton::Minimize);
-    assert_eq!(two[6].kind, CaptionButton::Close);
+    assert_eq!(two[5].kind, CaptionButton::Detach);
+    assert_eq!(two[6].kind, CaptionButton::Minimize);
+    assert_eq!(two[7].kind, CaptionButton::Close);
 
     let close = three
         .iter()
@@ -418,12 +423,12 @@ fn a_caption_without_a_maximize_keeps_the_close_button_where_it_was() {
         .expect("a minimize button")
         .rect;
 
-    assert_eq!(two[6].rect.left, close.left);
-    assert_eq!(two[6].rect.right, close.right);
+    assert_eq!(two[7].rect.left, close.left);
+    assert_eq!(two[7].rect.right, close.right);
+    assert_eq!(two[6].rect.right, two[7].rect.left);
     assert_eq!(two[5].rect.right, two[6].rect.left);
-    assert_eq!(two[4].rect.right, two[5].rect.left);
     assert_eq!(
-        two[5].rect.right - two[5].rect.left,
+        two[6].rect.right - two[6].rect.left,
         minimize.right - minimize.left
     );
 
@@ -666,6 +671,7 @@ fn draws_the_caption_glyphs() {
         ("open-with", CaptionButton::OpenWith, false),
         ("open-with-list", CaptionButton::OpenWithList, false),
         ("always-on-top", CaptionButton::AlwaysOnTop, false),
+        ("detach", CaptionButton::Detach, false),
         ("minimize", CaptionButton::Minimize, false),
         ("maximize", CaptionButton::Maximize, false),
         ("restore", CaptionButton::Maximize, true),
@@ -1153,7 +1159,7 @@ fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
     // padding at either end of the run.
     assert_eq!(
         title_room(600, 96, true),
-        600 - 8 * 46 - 24,
+        600 - 9 * 46 - 24,
         "a caption wide enough carries the walk as well"
     );
     assert_eq!(
@@ -1180,11 +1186,11 @@ fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
         "and a caption too narrow for even close is a bare bar rather than no bar at all"
     );
 
-    // A pin with nothing to maximize carries three window buttons rather than four, so it has a button's
-    // width more to say a name in: at 390 the caption with a maximize has given its name up and the one
-    // without has not.
+    // A pin with nothing to maximize carries one window button fewer, so it has a button's width more
+    // to say a name in: at 460 the caption with a maximize has given its name up and the one without
+    // has not.
     assert!(
-        !title_fits(390, 96, true) && title_fits(390, 96, false),
+        !title_fits(460, 96, true) && title_fits(460, 96, false),
         "a caption's room is measured against the buttons it is actually carrying"
     );
 

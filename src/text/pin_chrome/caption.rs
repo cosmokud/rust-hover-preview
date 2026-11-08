@@ -21,9 +21,9 @@
 
 use super::page_marks::{READ_ONLY_PILL_GAP_PIXELS, READ_ONLY_PILL_PIXELS};
 use super::primitives::{
-    caption_style, draw_chevron, draw_cross, draw_open_with, draw_open_with_list, draw_pin_top,
-    fill_box, measure_text, stroke_box, surface_pixels, ChromePalette, GLYPH_PIXELS,
-    GLYPH_STROKE_PIXELS,
+    caption_style, draw_chevron, draw_cross, draw_detached_window, draw_open_with,
+    draw_open_with_list, draw_pin_top, fill_box, measure_text, stroke_box, surface_pixels,
+    ChromePalette, GLYPH_PIXELS, GLYPH_STROKE_PIXELS,
 };
 use crate::text::text_paint::{self, DibSurface};
 use std::cell::RefCell;
@@ -88,6 +88,14 @@ pub(crate) enum CaptionButton {
     OpenWithList,
     /// Keep the pinned window on top of all other windows.
     AlwaysOnTop,
+    /// Hand this window to a process of its own, where the file in it is nobody's preview: no
+    /// hover, no listing, nothing this app's Explorer watch can reach (see
+    /// `ui::preview_window::pin_detach` and `app::detach`).
+    ///
+    /// It sits at the seam between the two groups — after the pin's own four, before the window's
+    /// own three — because that is what it is: a road out of *being a pin* rather than one of the
+    /// two things the groups are about.
+    Detach,
     Minimize,
     Maximize,
     Close,
@@ -131,22 +139,24 @@ pub(crate) struct Caption<'a> {
 /// That order is the order they are given up in, reversed, which is why it is written down once
 /// (see `button_boxes`): close is the last button on the right and the last to go.
 fn caption_button_kinds(maximizable: bool) -> &'static [CaptionButton] {
-    const MAXIMIZABLE_KINDS: [CaptionButton; 8] = [
+    const MAXIMIZABLE_KINDS: [CaptionButton; 9] = [
         CaptionButton::Previous,
         CaptionButton::Next,
         CaptionButton::OpenWith,
         CaptionButton::OpenWithList,
         CaptionButton::AlwaysOnTop,
+        CaptionButton::Detach,
         CaptionButton::Minimize,
         CaptionButton::Maximize,
         CaptionButton::Close,
     ];
-    const KINDS: [CaptionButton; 7] = [
+    const KINDS: [CaptionButton; 8] = [
         CaptionButton::Previous,
         CaptionButton::Next,
         CaptionButton::OpenWith,
         CaptionButton::OpenWithList,
         CaptionButton::AlwaysOnTop,
+        CaptionButton::Detach,
         CaptionButton::Minimize,
         CaptionButton::Close,
     ];
@@ -633,6 +643,9 @@ pub(super) fn paint_glyph(
         }
         CaptionButton::AlwaysOnTop => {
             draw_pin_top(buffer, width, center_x, center_y, glyph, stroke, ink)
+        }
+        CaptionButton::Detach => {
+            draw_detached_window(buffer, width, center_x, center_y, glyph, stroke, ink)
         }
         CaptionButton::Minimize => {
             let top = center_y;

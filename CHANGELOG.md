@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`Detach Window` hands a pinned window to a process of its own, so a preview can be pinned and then left completely alone** — the row stands above **To Bubble** in the pin's right-click menus, and the same ask is a caption button between **Always On Top** and **Minimize** (and a fourth window button in a sound's card, between the band and the minimize). What comes up is the same file, at the same place, at the same size, as a window a click, a hover, a key in Explorer or `Tray → Pin Mode → Update Preview` can never change, because it is a second run of this app in which no Explorer watch is running at all: everything a pin is — the caption and its buttons, the transport bar, **Previous**/**Next**, the bubble, the taskbar button, `Escape`, the menu — works there too, and only the file it was handed is on screen. What is handed over is the file, the media box and whether the window is maximized; the pin it came from comes down when the new window is *drawn* rather than when the hand-off is made, so the file is never in neither window, and a child that dies before its window appears leaves the pin standing.
+
+- **Any number of detached windows, one tray icon and one taskbar button** — every detached window is a process of the same executable, which is the identity the taskbar groups buttons by, so they share this app's single button and its hover lists a thumbnail of each window beside the pin's own. They live under the tray icon: closing the app closes all of them (the job every engine of this app's is in also holds every hand-off, and each window waits on the process that began it as well), while closing one leaves the rest alone. Their engines are their own processes, so `Engine → TTL`/`Idle` never reaches them, and a window's own player, browser and render tier end with it.
+
+- **A detached window reads the configuration file the way a pin reads the tray** — what is written down reaches it live, including the two rows the tray *says* rather than only writes (`Text → Font Size` and `Pin Mode → Always On Top`), which a window of another process would otherwise never hear. What a window only reads when it opens a file — the engine a film is played by, the scale its box was measured at — arrives at its next start, which is the behaviour a pin has always had, and a detached window is a separate window rather than a second kind of pin.
+
+### Changed
+
+- **A preview nobody asked for is not what a detached window shows while it opens** — the file is opened by the same road a hover is (a film's player begun, a document's page asked for and waited on, a model's viewer started), with the preview itself kept past the corner of every display until the take-up replaces it. A file that never settles ends the process that was waiting for it rather than leaving one with no window in it, and the pin that made the hand-off stays.
+
+- **The caption carries one button more, and a caption that runs out of room still gives up its walk first** — the detach stands at the seam between the pin's own buttons and the window's own three: `Previous`, `Next`, **Open With**, **Open With…**, **Always On Top**, **Detach**, **Minimize**, **Maximize**, **Close**. Close is still the last button on the right and the last to go, and the window's three keep the places they have always had.
+
 ## [0.4.11] - 2026-11-08
 
 ### Added
