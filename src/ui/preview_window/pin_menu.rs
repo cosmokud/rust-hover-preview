@@ -27,7 +27,7 @@ pub(crate) fn note_pin_menu_pressed() {
 }
 
 pub(crate) fn take_pin_menu_pressed() -> bool {
-    PIN_MENU_PRESSED.swap(false, Ordering::SeqCst)
+    crate::app::seam::take_a_pin_flag(&PIN_MENU_PRESSED)
 }
 
 fn point_in_panel(panel: &RECT, x: i32, y: i32) -> bool {

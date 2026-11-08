@@ -34,7 +34,6 @@
 
 #[cfg(test)]
 use crate::app::seam::PIN_KEY_COUNTED;
-use crate::app::seam::{PIN_FIND_BAR_UP, PIN_KEYS_OWNER, PIN_KEYS_TOPMOST, PIN_KEYS_VIDEO};
 use crate::CONFIG;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -53,14 +52,14 @@ static PIN_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
 static TOGGLE_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
     [const { AtomicU64::new(0) }; crate::shell::key_binding::MAX_ALTERNATIVES];
 
-/// Pin-key presses seen since startup, swapped to zero by the preview loop; the preview shortcut's own
-/// count beside it, and whether each chord's main key is held — a bit per `PIN_CHORDS` slot, which is
-/// what tells a press from a repeat.
+/// Pin-key presses, the preview shortcut's own count beside it, and whether each chord's main key is
+/// held — a bit per `PIN_CHORDS` slot, which is what tells a press from a repeat.
 ///
 /// All three are counted here and read on the other side, so they are published in `app::seam` and these
-/// are the names they are counted by.
+/// are the names they are counted by. The pin key's own down bits are kept once for the run, because a
+/// hand is one hand; its presses are counted in every block a viewer stands in, because what a press
+/// means is each window's own (see `note_a_pin_press`).
 pub(crate) use crate::app::seam::PIN_MAIN_DOWN;
-pub(crate) use crate::app::seam::PIN_PRESSES;
 pub(crate) use crate::app::seam::TOGGLE_PRESSES;
 
 /// The same bits for the preview shortcut's own chords.
@@ -238,8 +237,12 @@ fn pin_owns_caret(owner: u64, video: u64, foreground: u64) -> bool {
 /// It is the wheel hook's question as well as the keyboard hook's, which is why it is answered here
 /// rather than beside either of them: both run inside a low-level callback, and what neither may do
 /// there is walk the desktop to ask.
-pub(crate) fn pin_owns_foreground() -> bool {
-    let owner = PIN_KEYS_OWNER.load(Ordering::Acquire);
+///
+/// **It is asked of one block**, because it is asked once a box: a notch turned in a box one viewer
+/// published is that viewer's window's, and the pin it is about is the pin of that window (see
+/// `PublishedRegion::the_block_over`).
+pub(crate) fn pin_owns_foreground(block: &'static crate::app::seam::ViewerFacts) -> bool {
+    let (owner, video) = crate::app::seam::the_windows_of_the_pin(block);
     if owner == 0 {
         return true;
     }
@@ -249,14 +252,14 @@ pub(crate) fn pin_owns_foreground() -> bool {
     // a notch turned in it is the pin's own (see `Pin Mode → Always On Top`). Without this the
     // setting's own name was a lie for the wheel — the pin hovered, was seen, and was not
     // scrolled until the user clicked it, which is a click a topmost window never needed.
-    if PIN_KEYS_TOPMOST.load(Ordering::Acquire) {
+    if crate::app::seam::the_pin_stands_over_everything(block) {
         return true;
     }
 
     // Safety: asks Windows which window is in front. It is a handle looked up, not a pointer
     // dereferenced, and it cannot fail.
     let foreground = unsafe { GetForegroundWindow().0 as u64 };
-    pin_owns_caret(owner, PIN_KEYS_VIDEO.load(Ordering::Acquire), foreground)
+    pin_owns_caret(owner, video, foreground)
 }
 
 /// Thread running the hook's message pump, published so shutdown can wake it.
@@ -383,11 +386,40 @@ fn install_chords(
     }
 }
 
+/// Where one counted press of a chord lands.
+///
+/// The pin key's is every window's to act on — it raises a pin at the hover's viewer and brings a bubble
+/// back at the pin's — while the preview shortcut's is the run's, because a count in every block would be
+/// the setting flipped once by each preview loop standing (see `PIN_PRESSES` and `TOGGLE_PRESSES`).
+#[derive(Clone, Copy)]
+enum Presses<'a> {
+    Once(&'a AtomicU32),
+    InEveryViewer,
+}
+
+impl Presses<'_> {
+    fn count(self) {
+        match self {
+            Self::Once(cell) => {
+                cell.fetch_add(1, Ordering::AcqRel);
+            }
+            Self::InEveryViewer => crate::app::seam::note_a_pin_press(),
+        }
+    }
+}
+
 /// Count a mouse pin button's edge the way the keyboard hook counts a key's.
 ///
 /// Called from the mouse hook, so it touches atomics only: no lock, no desktop call.
 pub(crate) fn note_mouse_button(vk: i32, down: bool) {
-    if note_key_edge(&PIN_CHORDS, &PIN_MAIN_DOWN, &PIN_PRESSES, vk, down, || true) {
+    if note_key_edge(
+        &PIN_CHORDS,
+        &PIN_MAIN_DOWN,
+        Presses::InEveryViewer,
+        vk,
+        down,
+        || true,
+    ) {
         crate::app::seam::wake_preview_loop();
     }
 }
@@ -410,7 +442,7 @@ pub(crate) fn note_mouse_button(vk: i32, down: bool) {
 fn note_key_edge(
     chords: &[AtomicU64],
     main_down: &AtomicU32,
-    presses: &AtomicU32,
+    presses: Presses<'_>,
     vk: i32,
     down: bool,
     count_press: impl FnOnce() -> bool,
@@ -440,7 +472,7 @@ fn note_key_edge(
             && crate::shell::key_binding::packed_press_matches(slot.load(Ordering::Acquire), vk)
     });
     if first && matched && count_press() {
-        presses.fetch_add(1, Ordering::AcqRel);
+        presses.count();
         return true;
     }
     false
@@ -515,7 +547,7 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
         if note_key_edge(
             &TOGGLE_CHORDS,
             &TOGGLE_MAIN_DOWN,
-            &TOGGLE_PRESSES,
+            Presses::Once(&TOGGLE_PRESSES),
             vk,
             down,
             crate::shell::window_classes::the_foreground_is_explorer,
@@ -534,7 +566,7 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
             // order into a press.
             WM_KEYDOWN | WM_SYSKEYDOWN if pin_first_press(main_slots) => {
                 if pin_chord_matches(vk, main_slots) {
-                    PIN_PRESSES.fetch_add(1, Ordering::AcqRel);
+                    crate::app::seam::note_a_pin_press();
                 }
             }
             WM_KEYUP | WM_SYSKEYUP => {
@@ -551,9 +583,11 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
     // a key nothing there; FFmpeg's window does not eat them, and an arrow that reaches it is a
     // seek, which is the whole of what the swallow is for.
     if let Some(command) = pin_key_command(vk) {
-        let owner = PIN_KEYS_OWNER.load(Ordering::Acquire);
-        let video = PIN_KEYS_VIDEO.load(Ordering::Acquire);
-        let owns_caret = pin_owns_caret(owner, video, GetForegroundWindow().0 as u64);
+        // Which window of the run holds the caret, asked of every one it has standing: a key of the
+        // pin's belongs to whichever window of this run the user is in, and a pin that has become a
+        // window of its own is one of them.
+        let caret = crate::app::seam::the_pin_of_the_window(GetForegroundWindow().0 as u64);
+        let owns_caret = caret.is_some();
 
         // The toggle's flag is read and written once for the whole of this message, and it is the
         // flag and not the counter that needs the caret asked of first: a Space released over a
@@ -571,19 +605,21 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
             }
         }
 
-        if owns_caret {
+        // A find bar that is up is that window's own: a press is the field's there while another
+        // window of the run has none.
+        if let Some(caret) = caret {
             // The answer is one value because the gate that matters is the first arm: a key the pin
             // would have answered is passed on whole while a find bar is up, so the field's
             // `WM_CHAR` can exist at all (see `the_pin_answers_key`).
             match the_pin_answers_key(
                 command,
                 message,
-                PIN_FIND_BAR_UP.load(Ordering::Acquire),
+                crate::app::seam::the_find_bar_is_up(caret),
                 toggle_was_down,
             ) {
                 PinKeyAnswer::PassedOn => {}
                 PinKeyAnswer::Command(counted) => {
-                    crate::app::seam::note_a_pin_key_command(counted);
+                    crate::app::seam::note_a_pin_key_command(caret, counted);
                     #[cfg(test)]
                     PIN_KEY_COUNTED.fetch_add(1, Ordering::Relaxed);
                     // The count is an atomic and nothing else, so the loop is woken for it: a press
@@ -937,7 +973,11 @@ mod tests {
             std::array::from_fn(|index| AtomicU64::new(packed[index]));
         let down = AtomicU32::new(0);
         let presses = AtomicU32::new(0);
-        let note = |vk, is_down| note_key_edge(&chords, &down, &presses, vk, is_down, || true);
+        let note = |vk, is_down| {
+            note_key_edge(&chords, &down, Presses::Once(&presses), vk, is_down, || {
+                true
+            })
+        };
 
         assert!(
             !note(0x05, true),
@@ -979,7 +1019,14 @@ mod tests {
         let down = AtomicU32::new(0);
         let presses = AtomicU32::new(0);
         let note = |is_down, in_explorer| {
-            note_key_edge(&chords, &down, &presses, 0x76, is_down, || in_explorer)
+            note_key_edge(
+                &chords,
+                &down,
+                Presses::Once(&presses),
+                0x76,
+                is_down,
+                || in_explorer,
+            )
         };
 
         assert!(!note(true, false), "a press in another program is ignored");

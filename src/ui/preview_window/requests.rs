@@ -41,7 +41,7 @@ pub fn note_the_pin_was_handed_off() {
 /// the end is the loop's own `end_pin_state(Reason::Asked)`, which is the same call the
 /// caption's cross makes and the only place a pin actually ends on this road.
 pub fn request_pin_end() {
-    PIN_END_REQUESTED.store(true, Ordering::Release);
+    crate::app::seam::ask_the_pin_to_come_down();
 }
 
 /// Ask for the card's menu to be put away, from any thread — the Explorer hook's answer to a
@@ -51,7 +51,7 @@ pub fn request_pin_end() {
 /// pin's own end rides (see `request_pin_end`). Asking twice is asking once, and only the
 /// menu goes — the pin itself is left standing.
 pub fn request_pin_menu_dismiss() {
-    PIN_MENU_DISMISS_REQUESTED.store(true, Ordering::Release);
+    crate::app::seam::ask_the_pin_menu_to_come_down();
 }
 
 /// One of the tray's two `Volume` rows was moved, and which half of it: the film's, or the
