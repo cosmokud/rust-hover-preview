@@ -283,9 +283,9 @@ fn a_row_says_what_the_file_says_and_who_long_it_is() {
         parts,
         vec![
             ("FLAC", FactKind::Format),
-            ("44.1 kHz", FactKind::Note),
+            ("44.1 kHz", FactKind::Reading),
             ("stereo", FactKind::Note),
-            ("1006 kbps", FactKind::Note),
+            ("1006 kbps", FactKind::Reading),
             ("3.0 MB", FactKind::Note),
         ],
         "the parts are the card's own, in the card's own inks"

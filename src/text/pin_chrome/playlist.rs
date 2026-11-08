@@ -480,6 +480,7 @@ pub(crate) fn paint_playlist(
         for (at, fact) in row.facts.iter().enumerate() {
             let ink = match fact.kind {
                 audio_preview::FactKind::Format => palette.number,
+                audio_preview::FactKind::Reading => palette.foreground,
                 audio_preview::FactKind::Note => muted,
             };
 
@@ -677,20 +678,21 @@ pub(crate) fn playlist_row(path: &Path) -> PlaylistRow {
         _ => None,
     };
 
-    let mut facts = match track.as_ref() {
+    let facts = match track.as_ref() {
         Some(track) => audio_preview::facts_of(track, path),
-        None => vec![audio_preview::Fact {
-            text: audio_preview::extension_of(path).to_uppercase(),
-            kind: audio_preview::FactKind::Format,
-        }],
+        // A file nothing probed says only be read to say without one: the extension it carries
+        // and the room it takes, which is the one fact no probe answers for.
+        None => vec![
+            audio_preview::Fact {
+                text: audio_preview::extension_of(path).to_uppercase(),
+                kind: audio_preview::FactKind::Format,
+            },
+            audio_preview::Fact {
+                text: audio_preview::size_label(path),
+                kind: audio_preview::FactKind::Note,
+            },
+        ],
     };
-    // The room the file takes is the one part no probe answers for, and the one a person picking
-    // one of ten mixes reads: it is always there. A note on the file rather than a figure of the
-    // sound, so it stands in the muted gray the card sets its own notes in.
-    facts.push(audio_preview::Fact {
-        text: format!("{:.1} MB", size_in_bytes(path) as f64 / BYTES_IN_A_MEGABYTE),
-        kind: audio_preview::FactKind::Note,
-    });
 
     PlaylistRow {
         name: path
@@ -771,10 +773,3 @@ pub(crate) const WHEEL_ROWS: i32 = 3;
 /// How close to either of the window's edges a press is the band's height being dragged rather
 /// than a row being picked — the two strips of a window that a press picks nothing with.
 pub(crate) const EDGE_PIXELS: f32 = 6.0;
-
-/// The room a file takes, as the one fact of a row no probe answers for.
-fn size_in_bytes(path: &Path) -> u64 {
-    std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
-}
-
-const BYTES_IN_A_MEGABYTE: f64 = 1048576.0;
