@@ -423,7 +423,14 @@ fn dragged_overlay(
         frame,
     );
 
-    content_box_of(window, 96, false, overlay, pinned_caption_height(96, None))
+    content_box_of(
+        window,
+        96,
+        false,
+        overlay,
+        pinned_caption_height(96, None),
+        0,
+    )
 }
 
 /// Whether a window test is inside the room (see `the_room_to_itself`): the guard's own record

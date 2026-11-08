@@ -697,6 +697,9 @@ fn pin_swap_content(content: ScreenRegion, space: PinSwapSpace, dpi: u32) -> Scr
         space.transport_bar,
         space.overlay,
         space.caption,
+        // The box here is built from the *media's* own and clamped, and never read off a window that
+        // is standing: there is no band in it to take off (see `content_box_of`).
+        0,
     )
 }
 
