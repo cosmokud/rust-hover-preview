@@ -7,4 +7,5 @@ pub(crate) mod seam;
 pub(crate) mod single_instance;
 pub(crate) mod startup;
 pub(crate) mod updates;
+pub(crate) mod viewer;
 pub(crate) mod winget;

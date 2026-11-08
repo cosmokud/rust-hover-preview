@@ -719,7 +719,7 @@ impl Carry {
     /// the wait is what the carry exists to avoid. The messages go to `carried` rather than to
     /// the loop's own drain, because the tick is the thing that acts on them.
     pub(super) fn drain(&mut self, rx: &Receiver<PreviewMessage>) {
-        while let Ok(message) = rx.try_recv() {
+        while let Some(message) = next_preview_message(rx) {
             self.carried.push(message);
         }
     }

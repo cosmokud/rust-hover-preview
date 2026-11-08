@@ -49,6 +49,9 @@ use windows::Win32::System::Threading::{
 
 /// The switch that says this process is a detached window rather than the tray app.
 const DETACHED: &str = "--detach";
+/// The switch that says this process draws for a run of the tray app's that is already going, and the pid
+/// of that run: every name the seam is known by is made of it (see `app::seam::the_seam_name`).
+pub(crate) const VIEWER: &str = "--viewer";
 /// The media box the window is asked to stand around, in physical pixels, as `x,y,x,y`.
 const BOX: &str = "--box";
 /// The event this process is to set once its window is up, and the one the tray app waits on.
@@ -106,6 +109,9 @@ pub(crate) enum Startup {
     Tray,
     /// A detached window.
     Detached(OpenRequest),
+    /// The viewer of the run named by the pid that comes with it: the process every preview is drawn in,
+    /// which owns no listing and watches nothing of one (see `app::viewer` and `run_a_viewer`).
+    Viewer(u32),
     /// `--detach` with no file or no box behind it. Nothing is started at all: a request this app
     /// cannot answer must not become a second tray icon, which is what reading it as `Tray` would
     /// be.
@@ -143,6 +149,8 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Startup {
     let mut at: Option<f64> = None;
     let mut ready: Option<String> = None;
     let mut parent: Option<u32> = None;
+    let mut a_viewer_was_asked_for = false;
+    let mut viewer: Option<u32> = None;
 
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -162,10 +170,25 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Startup {
             }
             Some(MAXIMIZED) => maximized = true,
             Some(AT) => at = args.next().and_then(|value| reader_at(&value)),
+            // A viewer is told the run it draws for and nothing besides: a pid is a number, and one this
+            // process cannot read is a launch it cannot serve.
+            Some(VIEWER) => {
+                a_viewer_was_asked_for = true;
+                viewer = args
+                    .next()
+                    .and_then(|value| value.into_string().ok())
+                    .and_then(|value| value.parse().ok());
+            }
             // Anything else is not this switch's business and not a reason to read the launch as a
             // detached one: what is looked for is `--detach`, and nothing else here can add it.
             _ => {}
         }
+    }
+
+    // A viewer draws for a run that is already going: it has no request of its own, and a launch that
+    // cannot name the run is one this app does not answer.
+    if a_viewer_was_asked_for {
+        return viewer.map_or(Startup::Refused, Startup::Viewer);
     }
 
     if !asked {
@@ -286,12 +309,19 @@ pub(crate) fn the_process_may_go() {
 /// its own and asks nothing of the loop; the loop reads `RUNNING` on its next turn and ends the way
 /// it ends when its own window is closed.
 pub(crate) fn watch_the_parent() {
-    use windows::Win32::System::Threading::{
-        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-    };
-
     let Some(parent) = open_request().and_then(|request| request.parent) else {
         return;
+    };
+
+    watch_the_process(parent);
+}
+
+/// End this process when the process `parent` goes: the process that began a detached window, and the
+/// tray app that began a viewer — neither of which leaves anything of this one's behind (see
+/// `watch_the_parent`).
+pub(crate) fn watch_the_process(parent: u32) {
+    use windows::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
     };
 
     std::thread::spawn(move || {
@@ -536,6 +566,26 @@ mod tests {
             a_request(&["--detach", "C:\\file.png", "--box", " 0, 0, 10, 10 "]).region,
             (0, 0, 10, 10)
         );
+    }
+
+    #[test]
+    fn a_viewer_names_the_run_it_draws_for() {
+        assert_eq!(
+            parse(arguments(&["--viewer", "4242"])),
+            Startup::Viewer(4242)
+        );
+    }
+
+    #[test]
+    fn a_viewer_that_names_no_run_begins_nothing() {
+        // A viewer that cannot say whose section it is to read has nothing to draw from, and reading it as
+        // the tray app would be a second tray icon for a process nobody asked for.
+        assert_eq!(parse(arguments(&["--viewer"])), Startup::Refused);
+        assert_eq!(
+            parse(arguments(&["--viewer", "not a pid"])),
+            Startup::Refused
+        );
+        assert_eq!(parse(arguments(&["--viewer", ""])), Startup::Refused);
     }
 
     #[test]

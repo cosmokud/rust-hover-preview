@@ -13,13 +13,14 @@
 //! this window draws its own panels (see `pin_chrome::menu`).
 
 use super::*;
-use std::sync::atomic::AtomicBool;
 
 /// Whether a press landed inside the pin's own menu (the popup or its flyout).
 ///
 /// Cleared on read by the Explorer hook's `pin_watch`, so a press that dismissed the menu
 /// or picked a row on it does not lower the preview behind Explorer when over an Explorer window.
-static PIN_MENU_PRESSED: AtomicBool = AtomicBool::new(false);
+/// It lives in `app::seam` because the side that asks it is the other one, and this is the name it
+/// is written and read by.
+use crate::app::seam::PIN_MENU_PRESSED;
 
 pub(crate) fn note_pin_menu_pressed() {
     PIN_MENU_PRESSED.store(true, Ordering::SeqCst);

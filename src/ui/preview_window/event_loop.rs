@@ -2517,7 +2517,7 @@ pub fn run_preview_window() {
                     Some(carried_preview_messages.remove(0))
                 };
             }
-            while let Some(preview_msg) = next_preview_msg.or_else(|| rx.try_recv().ok()) {
+            while let Some(preview_msg) = next_preview_msg.or_else(|| next_preview_message(&rx)) {
                 next_preview_msg = None;
 
                 match preview_msg {

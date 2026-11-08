@@ -8,15 +8,18 @@ use super::*;
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
 /// from sleep. What a pin *is* — a window and the media under it — belongs to the
 /// preview loop, so this is a request rather than a take-down: the loop ends it on its
-/// next tick, through the same path its own close button takes.
-pub(super) static PIN_END_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// next tick, through the same path its own close button takes. It lives in `app::seam`
+/// because the side that asks it is the other one, and this is the name it is written and
+/// read by.
+pub(super) use crate::app::seam::PIN_END_REQUESTED;
 
 /// The card's menu was asked to come down, by the Explorer hook, because a press landed on a
 /// window that is not the pin's own. The pin window is `WS_EX_NOACTIVATE` and holds no
 /// capture, so a press on another window never reaches its procedure and the hook's poll is
 /// the only side that sees it (see `requests::request_pin_menu_dismiss`). Only the menu goes:
-/// the pin itself is left standing, and the loop takes the ask on its next tick.
-pub(super) static PIN_MENU_DISMISS_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// the pin itself is left standing, and the loop takes the ask on its next tick. It lives in
+/// `app::seam` for the reason `PIN_END_REQUESTED` does.
+pub(super) use crate::app::seam::PIN_MENU_DISMISS_REQUESTED;
 
 /// Whether a `Hide` that would take the preview's window down belongs to a hover at all: a pin
 /// standing in a window of its own is the window the user is looking at, and its own end is the

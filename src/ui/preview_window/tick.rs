@@ -3,6 +3,7 @@
 //! ends at.
 
 use super::*;
+pub(super) use crate::app::seam::next_preview_message;
 #[cfg(test)]
 pub(super) use crate::app::seam::preview_channel_event;
 pub(super) use crate::app::seam::send_preview;
