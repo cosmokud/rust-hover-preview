@@ -14,7 +14,7 @@
 //! that may do nothing of the kind.
 
 use super::*;
-use std::sync::atomic::{AtomicBool, AtomicI32};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64};
 
 /// Whether the band is up, for the session: what the card's menu row turns over and what the next
 /// pin comes up with (see `pin_playlist_band`).
@@ -28,6 +28,26 @@ static HEIGHT: AtomicI32 = AtomicI32::new(0);
 /// kept beside the height so that a band remembered from a larger display is still clamped by the
 /// one it is standing on without walking the desktop to find out.
 static CEILING: AtomicI32 = AtomicI32::new(0);
+
+/// Whether the band owes the tick a paint the tick has not given it yet: the band turned over, or a
+/// row's own facts landing from the prober below. One flag rather than a count, because a tick owes
+/// one paint however many things asked for it.
+///
+/// It is a flag of the band's own rather than an ask of the card's because the band is painted from
+/// the pin's window whether or not the sound in it is playing: a card that is held is a card the
+/// loop repaints on nothing, and a band opened over one would be a band nothing drew.
+static DIRTY: AtomicBool = AtomicBool::new(false);
+
+/// How many files the prober has landed a reading for, which is what tells the tick that a row's
+/// facts have changed: the rows are rebuilt when this number moves and never otherwise (see
+/// `start_the_prober`).
+static PROBED: AtomicU64 = AtomicU64::new(0);
+
+/// Which run of the prober the files of the current order are being read by: bumped when the order
+/// moves, so that a thread reading a folder the pin has left stops rather than reading on into a
+/// list nobody is looking at.
+#[cfg(not(test))]
+static PROBE_RUN: AtomicU64 = AtomicU64::new(0);
 
 /// The band's own state: the rows it holds, where it has scrolled to, which row the hand is on and
 /// which it has picked, and the name a row is marooned with.
@@ -61,6 +81,9 @@ struct PinPlaylist {
     /// so that a walk step moves the stripe without rebuilding every row's facts.
     path: Option<PathBuf>,
     showing: Option<usize>,
+    /// How many of the prober's readings the rows were last built from, which is the one number that
+    /// says a row's facts have changed without a row being asked (see `start_the_prober`).
+    probed: u64,
     /// Whole rows, never a row of a row: the band scrolls by rows because a row that is half shown
     /// is a row whose two lines are half readable.
     scroll: usize,
@@ -82,13 +105,13 @@ struct PinPlaylist {
 
 impl PinPlaylist {
     /// The rows the walk has moved to, and the row the pin is on: rebuilt only where the order is
-    /// not the one in hand, since every row of it is a file read.
-    fn hold_the_walk(&mut self, order: Vec<PathBuf>, path: PathBuf) {
-        if self.order != order {
-            self.rows = order
-                .iter()
-                .map(|path| pin_chrome::playlist_row(path))
-                .collect();
+    /// not the one in hand or a reading has landed since, since every row of it is a file read.
+    ///
+    /// Answers whether the order itself moved, which is the one thing that starts the prober: a
+    /// walk step moves the pin's own file and leaves the list exactly as it was.
+    fn hold_the_walk(&mut self, order: Vec<PathBuf>, path: PathBuf, probed: u64) -> bool {
+        let moved = self.order != order;
+        if moved {
             self.order = order;
             // A list that is not the one a pick was made in is not a list a pick means anything in.
             self.scroll = 0;
@@ -98,8 +121,20 @@ impl PinPlaylist {
             self.marquee = None;
         }
 
+        // A row of a file nothing has read yet is a row of the extension and the room the file takes
+        // and nothing else, so the rows are built again as the prober's readings land.
+        if moved || self.probed != probed {
+            self.rows = self
+                .order
+                .iter()
+                .map(|path| pin_chrome::playlist_row(path))
+                .collect();
+            self.probed = probed;
+        }
+
         self.showing = self.order.iter().position(|row| *row == path);
         self.path = Some(path);
+        moved
     }
 
     /// The marquee the row the hand is on needs, set up when the row becomes that row rather than
@@ -190,6 +225,10 @@ pub(super) fn the_band_is_open() -> bool {
 pub(super) fn toggle(pin: &PinnedPreview) {
     let open = !OPEN.load(Ordering::Acquire);
     OPEN.store(open, Ordering::Release);
+    // The window's own box moved with the flag, and it is the paint that follows that resizes it:
+    // a band put up is a surface the window has to be given, and a band taken away is one it has to
+    // be given back, so neither is left for whatever happens to repaint next (see `the_box_has_moved`).
+    the_box_has_moved();
 
     if !open {
         return;
@@ -213,6 +252,17 @@ pub(super) fn toggle(pin: &PinnedPreview) {
     CEILING.store(ceiling.max(floor), Ordering::Release);
 }
 
+/// Ask the tick for the paint the band's new height is owed.
+///
+/// Nothing of the window is moved here and nothing is drawn here: the band's own box is the pin's
+/// answer, and the paint that follows this is what gives the window its new height — including the
+/// shrinking one, which is a surface the window has to be given back as much as it was given the
+/// taller one.
+pub(super) fn the_box_has_moved() {
+    DIRTY.store(true, Ordering::Release);
+    wake_preview_loop();
+}
+
 /// What the band's own geometry is asked of: the window row it begins at, how tall it is, the
 /// window's own width, and the scale it is drawn at — or nothing where this pin carries no band.
 ///
@@ -234,10 +284,14 @@ pub(super) fn the_tick_is_owed_a_repaint() -> bool {
     if !the_band_is_open() {
         // A notch counted for a band that has since gone away is a notch nothing is going to read.
         let _ = wheel_input::take_pin_playlist_delta();
-        return false;
+        // A band taken down is still owed the paint that gives the window its rows back, so the flag
+        // is answered rather than thrown away: it is the one thing this side has to say about a band
+        // that is no longer there, and a window that shrank for nothing else never would (see
+        // `the_box_has_moved`).
+        return DIRTY.swap(false, Ordering::AcqRel);
     }
 
-    let mut owed = refresh_the_rows();
+    let mut owed = DIRTY.swap(false, Ordering::AcqRel) | refresh_the_rows();
 
     let notches = wheel_input::take_pin_playlist_delta();
     if notches != 0 {
@@ -256,6 +310,7 @@ pub(super) fn the_tick_is_owed_a_repaint() -> bool {
 /// band asks for it after the pin has been let go of rather than from inside `toggle`: what it
 /// reads first is the pin, and a pin asked twice on one thread blocks for ever.
 pub(super) fn refresh_the_rows() -> bool {
+    let probed = PROBED.load(Ordering::Acquire);
     let (order, path) = {
         let Some(pinned) = pin_state() else {
             return false;
@@ -272,19 +327,73 @@ pub(super) fn refresh_the_rows() -> bool {
         let Ok(playlist) = THE_PLAYLIST.lock() else {
             return false;
         };
-        if playlist.order == order && playlist.path.as_deref() == Some(pin.path.as_path()) {
+        if playlist.order == order
+            && playlist.path.as_deref() == Some(pin.path.as_path())
+            && playlist.probed == probed
+        {
             return false;
         }
 
         (order.to_vec(), pin.path.clone())
     };
 
-    let Ok(mut playlist) = THE_PLAYLIST.lock() else {
-        return false;
+    let moved = match THE_PLAYLIST.lock() {
+        Ok(mut playlist) => playlist.hold_the_walk(order, path, probed),
+        Err(_) => return false,
     };
-    playlist.hold_the_walk(order, path);
+    if moved {
+        start_the_prober();
+    }
     true
 }
+
+/// Read the facts of every row nothing has read yet, on a thread of its own: a probe opens the file
+/// through this machine's own codecs, which is not work a tick may pay for, and the rows are drawn
+/// without those facts until each one lands (see `PROBED`).
+///
+/// The order the band was built from is the thread's whole list, and a list the pin has moved off is
+/// a thread that stops at its next file rather than reading a folder nobody is looking at any more.
+#[cfg(not(test))]
+fn start_the_prober() {
+    use crate::readers::audio_track::{self, Probed};
+
+    let run = PROBE_RUN.fetch_add(1, Ordering::AcqRel) + 1;
+    let order = match THE_PLAYLIST.lock() {
+        Ok(playlist) => playlist.order.clone(),
+        Err(_) => return,
+    };
+
+    let _ = std::thread::Builder::new()
+        .name("pin-playlist-probe".to_string())
+        .spawn(move || {
+            for path in order {
+                if PROBE_RUN.load(Ordering::Acquire) != run {
+                    return;
+                }
+                if !matches!(audio_track::probed(&path), Probed::NotAsked) {
+                    continue;
+                }
+
+                let probed = audio_engine::probe_audio_track_briefly(&path);
+                audio_track::remember(
+                    &path,
+                    match probed {
+                        Some(track) => Probed::Track(track),
+                        None => Probed::Nothing,
+                    },
+                );
+                PROBED.fetch_add(1, Ordering::AcqRel);
+                DIRTY.store(true, Ordering::Release);
+                wake_preview_loop();
+            }
+        });
+}
+
+/// A suite has no folder and no codecs, and a reading landed over a fact a test has written down is
+/// a row no test put there: the prober is a machine's own business and is not asked for here (see
+/// `start_the_prober`).
+#[cfg(test)]
+fn start_the_prober() {}
 
 /// The wheel's notches, stepped as whole rows and clamped to what the band can scroll to:
 /// answering whether the band moved.
@@ -351,17 +460,57 @@ fn advance_the_marquee() -> bool {
 
 /// A pointer over the band, answering whether the band changed for it: which row the hand is on is
 /// the marquee's own answer, and a row a hand has come to is a name that starts moving.
+///
+/// `y` is the window's own row, which the band's begins some way down: a hand above the band is a
+/// hand on no row at all, and one on the card's own bar is not one either.
 pub(super) unsafe fn hover(y: i32) -> bool {
     let Some((top, height, width, scale)) = the_band_of_the_pin() else {
         return false;
     };
+
+    let local = y - top;
+    let local = (0..height).contains(&local).then_some(local);
+
+    set_the_hover((height, width, scale), local)
+}
+
+/// The row under the pointer the tick reads for itself, which is the one answer a move this window
+/// is never sent cannot give: a hand that has left the window sends no more moves, and a row left
+/// marqueed under a pointer that has gone is a name travelling for nobody (see
+/// `pin_audio_hover_refresh`, which is the same question asked of the card's own buttons).
+///
+/// It is asked of the pin in hand rather than through `hover`, which takes this lock again.
+pub(super) fn pin_playlist_hover_refresh(pin: &PinnedPreview, cursor: Option<(i32, i32)>) -> bool {
+    let Some((top, height)) = pin_playlist_band(pin) else {
+        return false;
+    };
+    let (width, _) = pin.window_size();
+    let (left, window_top, right, _) = pin.window_box();
+    let band_top = window_top + top;
+
+    let local = cursor.and_then(|(x, y)| {
+        (x >= left && x < right && y >= band_top && y < band_top + height).then(|| y - window_top)
+    });
+
+    set_the_hover((height, width, pin.dpi as f32 / 96.0), local)
+}
+
+/// The band's hover, written in the one place: which row a band-local row of the window is on, and
+/// the marquee that comes with it, answering whether either changed.
+///
+/// It is handed the band's own geometry rather than asking the pin for it because its two callers
+/// stand on either side of the pin's lock: a pointer's move arrives with the lock free, and the
+/// tick that reads the cursor for itself holds it.
+fn set_the_hover(band: (i32, i32, f32), local: Option<i32>) -> bool {
+    let (height, width, scale) = band;
     let Ok(mut playlist) = THE_PLAYLIST.lock() else {
         return false;
     };
 
     let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
-    let hovered =
-        pin_chrome::playlist_row_at(&layout, playlist.scroll, playlist.rows.len(), y - top);
+    let hovered = local.and_then(|y| {
+        pin_chrome::playlist_row_at(&layout, playlist.scroll, playlist.rows.len(), y)
+    });
 
     let changed = playlist.hovered != hovered;
     playlist.hovered = hovered;
@@ -461,7 +610,14 @@ pub(super) unsafe fn drag(hwnd: HWND, y: i32) -> bool {
 /// `pin_capture_lost` before the arm that owns one had read what its press armed.
 pub(super) unsafe fn release(hwnd: HWND) -> bool {
     let (pressed, dragging) = match THE_PLAYLIST.lock() {
-        Ok(mut playlist) => (playlist.pressed, playlist.resizing.take()),
+        Ok(mut playlist) => {
+            // The press is spent here rather than left standing, and it is the whole of what keeps
+            // the band's arm from swallowing the releases that follow it: a flag left set is the
+            // release of every drag and every caption button the card begins afterwards, taken for
+            // a press the band answered, and a window left carrying the pointer for the run.
+            let pressed = std::mem::take(&mut playlist.pressed);
+            (pressed, playlist.resizing.take())
+        }
         Err(_) => return false,
     };
     if !pressed {

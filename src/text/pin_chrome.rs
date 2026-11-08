@@ -22,7 +22,7 @@
 //! `find_bar` for the card a page's find bar floats in, `playlist` for the band a pinned sound's
 //! card grows under it, `page_marks` for the two marks a page of
 //! text wears — the caret over its text and the **Read only** pill on its caption — and
-//! `primitives` for the palette and the shapes, marks and text runs the other six are drawn
+//! `primitives` for the palette and the shapes, marks and text runs the other seven are drawn
 //! from. What is left in this file is the way in: every
 //! name the rest of the tree reaches as `pin_chrome::`, and the imports the tests beside it read
 //! the five through.
