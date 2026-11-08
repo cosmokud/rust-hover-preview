@@ -129,6 +129,12 @@ fn main() {
     };
     trace.step("instance guard");
 
+    // The facts this run publishes are a section of its own from here on (see `app::seam::the_facts`),
+    // opened before the threads that publish are begun so that no thread starts on this process's own
+    // copy and finds the facts moved under it.
+    app::seam::open_the_seam_section();
+    trace.step("seam section");
+
     configure_dpi_awareness();
     trace.step("dpi awareness");
 

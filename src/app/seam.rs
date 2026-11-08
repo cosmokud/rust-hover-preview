@@ -42,6 +42,7 @@ use crate::ui::preview_window::{AvoidRegion, PinPlanned, ScreenRegion};
 use once_cell::sync::Lazy;
 use std::cell::UnsafeCell;
 use std::ffi::OsString;
+use std::mem::size_of;
 use std::ops::Deref;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -51,7 +52,10 @@ use std::sync::atomic::{
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE};
+use windows::Win32::System::Memory::{
+    CreateFileMappingW, MapViewOfFile, FILE_MAP_ALL_ACCESS, PAGE_READWRITE,
+};
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcessId, ResetEvent, SetEvent, WaitForSingleObject,
 };
@@ -283,6 +287,73 @@ pub(crate) fn the_facts() -> &'static SeamFacts {
     // Safety: the pointer is set once, from a view this process mapped and never unmapped, and the
     // section is a whole number of `SeamFacts` written through `SeamFacts` and nothing else.
     unsafe { &*mapped }
+}
+
+/// Open the shared section this run's facts live in, and publish into that from here on.
+///
+/// **The section is named for this run, pid and all** (see `the_seam_name`), so a second run opens one of
+/// its own rather than reading this one's hovers, and nothing is torn down when it ends: the section goes
+/// with the last view of it.
+///
+/// Called once, at start-up, before the threads that publish are begun. Nothing here is a condition for a
+/// run to work: a section that could not be made leaves `the_facts` on this process's own copy, which is
+/// what every test and every run before this one used.
+pub(crate) fn open_the_seam_section() {
+    if let Some(facts) = a_section_of_this_run() {
+        MAPPED_FACTS.store(facts, Ordering::Release);
+    }
+}
+
+/// This run's section, mapped and written with the at-rest facts, or `None` where there is none to be had.
+///
+/// What it holds is one `SeamFacts`, atoms and two rings, so a viewer built with this run agrees about
+/// where a field starts and reads a fact in one load. The creator writes the at-rest facts into it before
+/// anything is told where it is, which is what makes a box that was never published read as no box rather
+/// than as one at the origin.
+fn a_section_of_this_run() -> Option<*mut SeamFacts> {
+    let name = the_seam_name("");
+    let size = size_of::<SeamFacts>();
+
+    // Safety: a section backed by the pagefile, named for this run and sized to one `SeamFacts`; no
+    // security descriptor, which is this user's own access, and no handle of an existing file.
+    let Ok(mapping) = (unsafe {
+        CreateFileMappingW(
+            INVALID_HANDLE_VALUE,
+            None,
+            PAGE_READWRITE,
+            0,
+            size as u32,
+            PCWSTR(name.as_ptr()),
+        )
+    }) else {
+        return None;
+    };
+
+    // Safety: a whole view of the section just made, mapped read and write for this process.
+    let view = unsafe { MapViewOfFile(mapping, FILE_MAP_ALL_ACCESS, 0, 0, size) };
+    // The view holds the section: the mapping's own handle is not what keeps the facts alive, and a
+    // section nothing holds is one the other side cannot find.
+    // Safety: a handle this process owns and has finished with, and it is closed once.
+    unsafe {
+        let _ = CloseHandle(mapping);
+    }
+    if view.Value.is_null() {
+        return None;
+    }
+
+    let facts = view.Value.cast::<SeamFacts>();
+    // Safety: the view is the whole of a `SeamFacts`, freshly mapped, and nothing else has been told
+    // where it is yet, so writing the at-rest facts into it cannot race a reader.
+    //
+    // shortcut: the section exists the moment it is made and the facts are written a call later, so a
+    // reader that found the name in that window would read zeroes; nothing does, because this runs before
+    // any thread of this process is begun. Upgrade to a section nothing may name until it is written if a
+    // second process ever opens one while the first is still starting.
+    unsafe {
+        facts.write(SeamFacts::new());
+    }
+
+    Some(facts)
 }
 
 /// One published fact, named rather than kept: which field of the facts it is, asked of whichever copy
@@ -1767,6 +1838,37 @@ mod tests {
             assert_eq!(message.numbers[0], press);
         }
         assert_eq!(ring.pop(), None);
+    }
+
+    #[test]
+    fn a_section_carries_the_facts_and_a_ring_of_the_messages() {
+        // Mapped and not published: every other test in this binary reads and writes the facts as it finds
+        // them, and moving them under it is not this test's to do.
+        let Some(facts) = a_section_of_this_run() else {
+            panic!("a section every run can open");
+        };
+        // Safety: a view of this run's own section, written with the at-rest facts and told to nobody.
+        let facts = unsafe { &*facts };
+
+        assert!(
+            !facts.pin_up.load(Ordering::Acquire),
+            "a section starts at rest"
+        );
+        assert_eq!(
+            facts.pin_zoom_region.load(Ordering::Acquire),
+            NO_REGION,
+            "a box that was never published is no box, not the one at the origin"
+        );
+
+        // The ring is the one part of the section nothing else here touches, and a message through it is
+        // the mapped bytes being written and read again.
+        assert!(facts
+            .preview_ring
+            .push(SeamMessage::of(SeamMessage::HIDE, &[7]), "test"));
+        assert_eq!(
+            facts.preview_ring.pop().map(|message| message.numbers[0]),
+            Some(7)
+        );
     }
 
     #[test]
