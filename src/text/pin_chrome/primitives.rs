@@ -28,9 +28,9 @@ pub(crate) struct ChromePalette {
     /// The bubble's ring, and the played part of a transport's bar.
     pub(crate) accent: [u8; 3],
     /// The ink a state of the window's own is read in rather than a choice it still offers — that it
-    /// is kept on top, that it is a window of its own — and the one a sound's card reads the numbers
-    /// on its facts line in, so that a caption's button and that card's button say the same thing in
-    /// one color rather than two near neighbours (see `caption::paint_button` and
+    /// is kept on top, that it is a window of its own — and the one a sound's card and a playlist row
+    /// both read the format of a file in, so that a caption's button and that card's button say the
+    /// same thing in one color rather than two near neighbours (see `caption::paint_button` and
     /// `audio_preview::build_page`).
     pub(crate) number: [u8; 3],
     /// Whether the theme is a dark one, which decides which way a hairline is shaded.

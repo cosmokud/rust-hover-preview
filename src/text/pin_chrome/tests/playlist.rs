@@ -16,11 +16,11 @@ fn a_row(name: &str) -> PlaylistRow {
         facts: vec![
             Fact {
                 text: "MP3".to_string(),
-                kind: FactKind::Name,
+                kind: FactKind::Format,
             },
             Fact {
                 text: "4.2 MB".to_string(),
-                kind: FactKind::Word,
+                kind: FactKind::Note,
             },
         ],
         clock: None,
@@ -282,11 +282,11 @@ fn a_row_says_what_the_file_says_and_who_long_it_is() {
     assert_eq!(
         parts,
         vec![
-            ("FLAC", FactKind::Name),
-            ("44.1 kHz", FactKind::Number),
-            ("stereo", FactKind::Word),
-            ("1006 kbps", FactKind::Number),
-            ("3.0 MB", FactKind::Word),
+            ("FLAC", FactKind::Format),
+            ("44.1 kHz", FactKind::Note),
+            ("stereo", FactKind::Note),
+            ("1006 kbps", FactKind::Note),
+            ("3.0 MB", FactKind::Note),
         ],
         "the parts are the card's own, in the card's own inks"
     );

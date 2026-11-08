@@ -7,19 +7,19 @@ fn card() -> Card {
         facts: vec![
             Fact {
                 text: "FLAC".to_string(),
-                kind: FactKind::Name,
+                kind: FactKind::Format,
             },
             Fact {
                 text: "44.1 kHz".to_string(),
-                kind: FactKind::Number,
+                kind: FactKind::Note,
             },
             Fact {
                 text: "stereo".to_string(),
-                kind: FactKind::Word,
+                kind: FactKind::Note,
             },
             Fact {
                 text: "1006 kbps".to_string(),
-                kind: FactKind::Number,
+                kind: FactKind::Note,
             },
         ],
         duration: Some(562.0),
@@ -602,7 +602,48 @@ fn writes_the_facts_a_file_has_and_no_others() {
     let facts = facts_of(&bare, Path::new("C:/music/track.ape"));
     assert_eq!(facts.len(), 1, "nothing is said that the file did not say");
     assert_eq!(facts[0].text, "APE");
-    assert_eq!(facts[0].kind, FactKind::Name);
+    assert_eq!(facts[0].kind, FactKind::Format);
+}
+
+/// The ink a fact is drawn in is what it says rather than where it stands on the line: the format
+/// is the one fact set in the numbers' ink, and the rate, the channels and the bitrate beside it are
+/// the card's own muted gray — which is the rule a band's row draws its facts line by as well (see
+/// `pin_chrome::playlist`).
+#[test]
+fn the_facts_are_inked_by_what_they_say() {
+    let (width, _) = measure(&card(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&card(), width, 0);
+
+    // The two inks the page reads, worked out here the way `build_page` works them out.
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let page_color = rgb(theme.background());
+    let number = readable(
+        rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
+        page_color,
+    );
+    let muted = blend(rgb(theme.foreground()), page_color, 0.45);
+
+    let ink_of = |text: &str| {
+        page.facts
+            .iter()
+            .find(|run| run.text == text)
+            .unwrap_or_else(|| panic!("a run of {text}"))
+            .style
+            .foreground
+    };
+
+    assert_eq!(
+        ink_of("FLAC"),
+        number,
+        "the format is the one fact the numbers' ink is kept for"
+    );
+    for note in ["44.1 kHz", "stereo", "1006 kbps"] {
+        assert_eq!(
+            ink_of(note),
+            muted,
+            "{note} is a note about the sound, and a note is muted"
+        );
+    }
 }
 
 /// The numbers a card is written with, at the lengths and rates a file can have.
@@ -1293,7 +1334,7 @@ fn the_controls_are_carved_out_of_the_bar_rather_than_out_of_the_card() {
     let narrow = |controls| Card {
         facts: vec![Fact {
             text: "FLAC".to_string(),
-            kind: FactKind::Name,
+            kind: FactKind::Format,
         }],
         controls,
         ..card()
