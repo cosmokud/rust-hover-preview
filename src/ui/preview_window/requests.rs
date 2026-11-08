@@ -105,7 +105,23 @@ pub fn pinned_path() -> Option<PathBuf> {
 /// read as a new pick — the load dropped, the hold abandoned, its player killed — and the picture
 /// that was being kept went with them (see `pin_install::THE_FILE_IN_FLIGHT`).
 pub fn update_pinned_preview(path: &Path) {
-    if !pinned() || !pin_update_enabled() {
+    if !pin_update_enabled() {
+        return;
+    }
+
+    show_pinned_file(path);
+}
+
+/// Ask for the pinned window to be shown another file, from inside the window itself: a row of its
+/// own playlist pressed twice, which is the hand naming a file it can already see rather than the
+/// listing behind it naming one.
+///
+/// It is the same road as `update_pinned_preview` less the `pin_update_enabled()` gate, and the
+/// gate is left out on purpose: that setting is about a pin following the *listing's* picks — a
+/// window that moves under a hand that is working elsewhere — and a file the user has picked out of
+/// the pin's own list is one they asked this window for.
+pub(super) fn show_pinned_file(path: &Path) {
+    if !pinned() {
         return;
     }
 

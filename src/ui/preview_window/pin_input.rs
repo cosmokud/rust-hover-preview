@@ -93,6 +93,13 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         return;
     }
 
+    // A drag of the playlist band's own height, which is the band being given its size rather than
+    // the window being carried: the window's top-left does not move for it (see
+    // `pin_playlist::drag`).
+    if pin_playlist::drag(hwnd, y) {
+        return;
+    }
+
     let hovered = (caption.wanted && y < caption.height)
         .then(|| caption_button_at(x, y, &caption))
         .flatten();
@@ -179,7 +186,17 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     // moved, because a repaint here is a band that copies the whole page frame (see `text_find::hover`).
     let find_changed = text_find::hover(x, y);
 
-    if hovered_changed || chrome_changed || transport_changed || audio_changed || find_changed {
+    // And the playlist band under a pinned sound's card, where a row a hand has come to is a name
+    // that starts travelling across it (see `pin_playlist::hover`).
+    let playlist_changed = pin_playlist::hover(y);
+
+    if hovered_changed
+        || chrome_changed
+        || transport_changed
+        || audio_changed
+        || find_changed
+        || playlist_changed
+    {
         render_layered_preview(hwnd);
     }
 
@@ -666,13 +683,7 @@ fn pinned_audio_volume_button(pin: &PinnedPreview) -> Option<RECT> {
         return None;
     }
 
-    let (_, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
+    let (top, _) = pinned_media_band_rows(pin);
 
     // The button's own box, from the card's own arithmetic rather than from anything kept beside
     // it: a popup hung off a button that has moved is a popup that is not where its button is
@@ -1113,6 +1124,13 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         return true;
     }
 
+    // And the playlist band under the card, which is the pin's own rows: a press there picks a row
+    // and never carries the window, and a press that is the second of a pair shows the file that row
+    // is (see `pin_playlist::press`).
+    if pin_playlist::press(hwnd, y, double_click) {
+        return true;
+    }
+
     // **A model's band is the scene's and never the window's**: a press there turns the model rather
     // than carrying the pin, and it is asked last because the chrome's own rows above it are the pin's
     // (see `f3d_player::press_the_models_band`).
@@ -1337,6 +1355,12 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
     if pin_menu_hand_off_release(hwnd) {
         return true;
     }
+    // And a press the playlist band took: a drag of its height is over and the pointer given back,
+    // and a press on a row is over with nothing left to do (see `pin_playlist::release`).
+    if pin_playlist::release(hwnd) {
+        return true;
+    }
+
     // A drag of the volume knob first, which is a hand on the level rather than on anything else:
     // it is the one press on a pinned window that is let go of somewhere other than where it began
     // (see `pinned_volume_press`).

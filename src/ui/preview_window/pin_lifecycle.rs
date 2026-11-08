@@ -99,14 +99,21 @@ impl PinnedPreview {
     /// The box the window occupies: the media's own box with the caption above it and the transport
     /// bar below it — or the media's box itself, for a kind whose chrome is drawn over it, since a
     /// strip of chrome over a picture needs no room beside it.
+    ///
+    /// A pinned sound's card grows a playlist band under that box, and the band is the *window's*
+    /// rather than the media's: what it adds is rows of window below the card, and the card's own
+    /// box is what every one of its controls, its paint and its press are answered against (see
+    /// `pin_playlist::pin_playlist_band`).
     pub(super) fn window_box(&self) -> ScreenRegion {
-        pinned_window_box_of(
+        let (left, top, right, bottom) = pinned_window_box_of(
             self.content,
             self.dpi,
             self.transport_bar,
             self.overlay,
             self.caption,
-        )
+        );
+
+        (left, top, right, bottom + pin_playlist::playlist_rows(self))
     }
 
     /// The size of the window, as the renderer and the hit tests want it.
@@ -3205,13 +3212,7 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
         return None;
     }
 
-    let (_, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
+    let (top, _) = pinned_media_band_rows(pin);
 
     audio_preview::control_at(
         x,
@@ -3262,13 +3263,7 @@ pub(super) fn pin_audio_command_bar_band(pin: &PinnedPreview) -> Option<(i32, i3
     let bar = audio_preview::control_box(CardControl::Seek, width, pin.dpi, options, true)?;
     let button = audio_preview::control_box(CardControl::Previous, width, pin.dpi, options, true)?;
 
-    let (_, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
+    let (top, _) = pinned_media_band_rows(pin);
     let margin = logical_px(pin.dpi, AUDIO_COMMAND_BAR_REVEAL_PIXELS);
 
     Some((

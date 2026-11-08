@@ -160,7 +160,8 @@ fn a_sound_card_whose_menu_fits_the_screen() -> PinnedPreview {
 }
 
 /// The rows the menu holds are the settings it is the face of, and what
-/// the pin does with them: the two ways out of the pin,
+/// the pin does with them: the band the card can grow under itself and
+/// its rule, the two ways out of the pin,
 /// the rule, the playback of the file in it, the rule again,
 /// and then the settings — the two doors, neither carrying
 /// a mark and both carrying the arrow a door carries — with the shuffle
@@ -179,6 +180,8 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     assert_eq!(
         labels,
         [
+            "Playlist",
+            "",
             "Detach Window",
             "To Bubble",
             "To Taskbar",
@@ -198,7 +201,12 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         ]
     );
     assert!(
-        matches!(top[4].mark, pin_chrome::MenuMark::Separator),
+        matches!(top[1].mark, pin_chrome::MenuMark::Separator),
+        "the band's own row stands above a rule, so that it reads as a thing of the window\
+         rather than as one of the ways out of it"
+    );
+    assert!(
+        matches!(top[6].mark, pin_chrome::MenuMark::Separator),
         "the rule between the ways out of the pin and the playback is a rule, not a row"
     );
     assert!(
@@ -382,6 +390,8 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     assert_eq!(
         labels,
         [
+            "Playlist",
+            "",
             "Detach Window",
             "To Bubble",
             "To Taskbar",
@@ -1206,6 +1216,8 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
     assert_eq!(
         labels,
         [
+            "Playlist",
+            "",
             "Detach Window",
             "To Bubble",
             "To Taskbar",
@@ -1841,6 +1853,8 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     assert_eq!(
         labels,
         [
+            "Playlist",
+            "",
             "Detach Window",
             "To Bubble",
             "To Taskbar",

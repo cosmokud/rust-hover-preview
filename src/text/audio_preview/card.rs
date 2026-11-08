@@ -98,11 +98,11 @@ pub(super) const CHASE_SECONDS: f64 = 2.0;
 pub(super) const CHASE_DIVISOR: i32 = 5;
 
 /// How long a name rests at either end of its travel before it turns around.
-pub(super) const NAME_HOLD: Duration = Duration::from_millis(1000);
+pub(crate) const NAME_HOLD: Duration = Duration::from_millis(1000);
 
 /// The time one advance of a name's own font is worth: the speed a scroll is counted in, so
 /// that a card drawn at any scale is scrolled across at the same speed to the eye.
-const NAME_ADVANCE_MS: u128 = 100;
+pub(crate) const NAME_ADVANCE_MS: u128 = 100;
 
 /// The options a card is built with, passed in rather than read from the configuration here so
 /// a caller's intent cannot drift from what is drawn.
@@ -620,7 +620,7 @@ pub(crate) fn name_of(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn extension_of(path: &Path) -> String {
+pub(crate) fn extension_of(path: &Path) -> String {
     path.extension()
         .map(|extension| extension.to_string_lossy().to_string())
         .unwrap_or_else(|| "audio".to_string())
@@ -628,7 +628,7 @@ fn extension_of(path: &Path) -> String {
 
 /// A sample rate as a person reads it: kHz to the decimal the fraction asks for, and the whole
 /// number where it asks for none — `44.1 kHz`, `48 kHz`, `22.05 kHz`.
-pub(super) fn rate_label(rate: u32) -> String {
+pub(crate) fn rate_label(rate: u32) -> String {
     let khz = rate as f64 / 1000.0;
     let rounded = (khz * 100.0).round() / 100.0;
 
@@ -643,7 +643,7 @@ pub(super) fn rate_label(rate: u32) -> String {
 
 /// How many channels, as a word where a word is what people say: `mono`, `stereo`, and the
 /// count for everything else.
-pub(super) fn channel_label(channels: u16) -> String {
+pub(crate) fn channel_label(channels: u16) -> String {
     match channels {
         0 => String::new(),
         1 => "mono".to_string(),
@@ -656,7 +656,7 @@ pub(super) fn channel_label(channels: u16) -> String {
 
 /// A bitrate as a person reads it, in the unit the number belongs in: kilobits for anything
 /// that came off a codec, bits for a stream that is only a few hundred a second.
-pub(super) fn bitrate_label(bitrate: u32) -> String {
+pub(crate) fn bitrate_label(bitrate: u32) -> String {
     if bitrate >= 1000 {
         format!("{} kbps", (bitrate as f64 / 1000.0).round() as u64)
     } else {
@@ -665,7 +665,7 @@ pub(super) fn bitrate_label(bitrate: u32) -> String {
 }
 
 /// A position as a clock: `9:22`, and `1:02:03` where the file runs past an hour.
-pub(super) fn clock(seconds: f64) -> String {
+pub(crate) fn clock(seconds: f64) -> String {
     let total = seconds.max(0.0) as u64;
     let (hours, minutes, seconds) = (total / 3600, (total % 3600) / 60, total % 60);
 

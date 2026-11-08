@@ -837,6 +837,10 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
         }
     }
 
+    // And the playlist band's own height, which the pointer was taken for the way a drag takes it:
+    // a capture somebody else has taken is a band whose edge has stopped following the hand.
+    pin_playlist::the_capture_was_lost();
+
     // And the card's menu, which the pointer is held for exactly the way a drag is: a capture
     // somebody else took is a menu nothing can be answered in, and the panels are no longer
     // inside the card's own window — so unlike a drag, a menu left standing by one is not a

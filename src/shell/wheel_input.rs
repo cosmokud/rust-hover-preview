@@ -61,6 +61,11 @@ static PIN_VOLUME_DELTA: AtomicI32 = AtomicI32::new(0);
 /// `text_size_after_notches`).
 static PIN_TEXT_SIZE_DELTA: AtomicI32 = AtomicI32::new(0);
 
+/// Wheel notches handed to the playlist band under a pinned sound's card, on the same terms:
+/// signed (up is toward the first row), swapped to zero by the reader, and added to only where the
+/// pointer is inside the band the pin published (see `pin_playlist_keep_alive_try`).
+static PIN_PLAYLIST_DELTA: AtomicI32 = AtomicI32::new(0);
+
 /// Thread running the hook's message pump, published so shutdown can wake it.
 static WHEEL_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
@@ -133,6 +138,12 @@ fn control_is_down() -> bool {
 /// units (120 to a notch). Signed, up being positive — which is a zoom in.
 pub fn take_pin_zoom_delta() -> i32 {
     PIN_ZOOM_DELTA.swap(0, Ordering::AcqRel)
+}
+
+/// Wheel notches the playlist band under a pinned sound's card has been given since this was last
+/// called, in wheel units (120 to a notch). Signed, up being toward the band's first row.
+pub fn take_pin_playlist_delta() -> i32 {
+    PIN_PLAYLIST_DELTA.swap(0, Ordering::AcqRel)
 }
 
 /// Wheel notches a pin's volume control has been given since this was last called, in
@@ -284,6 +295,19 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
                     }
                     return LRESULT(1);
                 }
+            }
+        }
+
+        // The playlist band under a pinned sound's card: a notch over it is the list being stepped
+        // rather than the card being zoomed, and it is asked before the pictures' own notch because
+        // a band stands inside the box that road claims whole (see `pin_playlist_keep_alive_try`).
+        if let Some(region) = crate::ui::preview_window::pin_playlist_keep_alive_try() {
+            if point_in_region(info.pt, region) && preview_takes_the_wheel() {
+                if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
+                    PIN_PLAYLIST_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    crate::ui::preview_window::wake_preview_loop();
+                }
+                return LRESULT(1);
             }
         }
 

@@ -5,6 +5,14 @@
 use super::pin_trace::note_pin_trace;
 use super::*;
 
+thread_local! {
+    /// The membrane a pinned sound's playlist band is written on: its rows are measured and drawn
+    /// through GDI, which needs a device context of its own, and it is the band's own size rather
+    /// than the window's because the band is all that is carried off it (see
+    /// `pin_playlist::paint_the_band`, and `surfaces` for the surfaces kept the same way).
+    static PLAYLIST_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+}
+
 pub(super) unsafe fn render_layered_preview(hwnd: HWND) {
     // **A pin is painted into the window the pin stands in**, and the handle a road carries is only
     // whichever window its message came to: the loop's own is the hover's, which a picture pin has put
@@ -289,6 +297,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         caption_height,
         paint.transport_height,
         paint.overlay,
+        paint.playlist,
     );
     let band_height = band_height.max(1) as u32;
     let band_width = width.max(1) as u32;
@@ -497,6 +506,27 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // which is the whole of how it differs from the volume popup's road (see `pin_chrome_strips` and
     // `text_find::find_bar`).
     paint_pin_find_bar(out, width, &paint);
+
+    // The playlist band under a pinned sound's card, which is the pin's own rows rather than the
+    // media's: it is painted opaque for the reason a band of a layered window has to be — a press
+    // on it is a press on the pin, and a band of transparent pixels is a band the listing behind
+    // the window keeps for itself (see `pin_playlist`).
+    if paint.playlist > 0 {
+        PLAYLIST_SURFACE.with(|cell| {
+            let mut surface = cell.borrow_mut();
+            let wanted = (width.max(1) as u32, paint.playlist.max(1) as u32);
+            if surface
+                .as_ref()
+                .map(|surface| (surface.width, surface.height))
+                != Some(wanted)
+            {
+                *surface = DibSurface::create(wanted.0, wanted.1);
+            }
+            if let Some(surface) = surface.as_ref() {
+                pin_playlist::paint_the_band(out, surface, stride, width, height, &paint);
+            }
+        });
+    }
 
     // The chrome, for the strips to carry: each strip whole, or not painted at all, which is what
     // makes a picture whose chrome has gone a picture and nothing else — and the two are asked
@@ -829,6 +859,9 @@ pub(super) struct PinnedPaint {
     pub(super) resizing: bool,
     pub(super) caption_height: i32,
     pub(super) transport_height: i32,
+    /// The rows a pinned sound's card grows a playlist band with, below the media — nothing at all
+    /// for every other kind and for a card whose band is down (see `pin_playlist`).
+    pub(super) playlist: i32,
     /// How the media is drawn inside its band, or nothing for a kind the wheel does not zoom: what
     /// a picture the wheel has taken inside its window is placed by, rather than the band itself (see
     /// `PinZoom`).
@@ -933,6 +966,7 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             ),
             caption_height: pin.caption,
             transport_height: pinned_transport_height(pin.dpi, pin.transport_bar),
+            playlist: pin_playlist::playlist_rows(pin),
             zoom: pin.zoom,
             overlay: pin.overlay,
             // A kind with no caption of its own is asked for none whatever its chrome is doing:
