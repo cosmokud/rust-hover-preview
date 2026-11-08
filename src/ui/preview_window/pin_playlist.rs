@@ -440,6 +440,45 @@ fn step_the_notches(notches: i32) -> bool {
     moved
 }
 
+/// The Up and Down arrows over a band that is up: the row the hand has picked stepped one row at a
+/// time inside it, held at both ends rather than wrapped, and the band scrolled to keep it in sight.
+///
+/// The highlight is the one a press writes, so a hand that picked a row and a hand that arrowed to it
+/// are on the same row. It answers whether the band took the key, which is what keeps the arrows off
+/// the walk of the pinned file wherever it did (see `pin_geometry::pin_command_request`).
+pub(super) fn step_the_pick(direction: i32) -> bool {
+    let Some((_, height, width, scale)) = the_band_of_the_pin() else {
+        return false;
+    };
+    let Ok(mut playlist) = THE_PLAYLIST.lock() else {
+        return true;
+    };
+
+    let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
+    let Some((picked, scroll)) = pin_chrome::playlist_step_pick(
+        playlist.picked,
+        playlist.showing,
+        playlist.scroll,
+        playlist.rows.len(),
+        layout.visible.max(0) as usize,
+        direction,
+    ) else {
+        return true;
+    };
+
+    let moved = (playlist.picked, playlist.scroll) != (Some(picked), scroll);
+    playlist.picked = Some(picked);
+    playlist.scroll = scroll;
+    playlist.set_the_marquee(&layout, scale);
+
+    if moved {
+        // A wash that moved is a paint the tick owes, asked for by the one flag every other move of
+        // the band asks it by (see `the_box_has_moved`).
+        the_box_has_moved();
+    }
+    true
+}
+
 /// The band's own state, as a test reads it: the row the hand is on, the row it has picked, and the
 /// row standing first in sight.
 #[cfg(test)]

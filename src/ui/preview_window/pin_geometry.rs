@@ -720,24 +720,25 @@ pub(super) unsafe fn pin_command_request(
             PinCommand::PreviousFile => step_pinned_file(-1, wait, anchor),
             PinCommand::NextFile => step_pinned_file(1, wait, anchor),
             // An up arrow and a down arrow are the same answer one line at a time: the page's caret where
-            // the pin holds one, and the walk where it does not.
+            // the pin holds one, the highlight of a band where one is up, and the walk where neither is.
             //
             // The caret's own moves are queued rather than made here for the same reason a find bar's
             // edits are: this is the tick that may take the page's lock, but a move styles a document
             // and paints a frame, and that is the work a tick of its own owns (see
             // `text_caret::settle`).
             command @ (PinCommand::CaretUp | PinCommand::CaretDown) => {
+                let direction = if matches!(command, PinCommand::CaretUp) {
+                    -1
+                } else {
+                    1
+                };
                 match text_caret::command_move(command) {
                     Some(()) => None,
-                    None => step_pinned_file(
-                        if matches!(command, PinCommand::CaretUp) {
-                            -1
-                        } else {
-                            1
-                        },
-                        wait,
-                        anchor,
-                    ),
+                    // A row a hand may be on without playing it is the band's own, and a step of the
+                    // walk under an open band is a band that cannot be arrowed through (see
+                    // `pin_playlist::step_the_pick`).
+                    None if pin_playlist::step_the_pick(direction) => None,
+                    None => step_pinned_file(direction, wait, anchor),
                 }
             }
             // And the two page keys, which are a screenful of the caret's where the pin holds a page and
