@@ -410,6 +410,7 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
         None,
         0,
         Some(CardChrome {
+            detached: false,
             playing: false,
             volume: current_audio_volume(),
             hovered: None,
@@ -544,6 +545,7 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
             name_offset: 0,
             dpi: 96,
             chrome: Some(CardChrome {
+                detached: false,
                 playing: false,
                 volume: 40,
                 hovered: None,
@@ -612,6 +614,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
     // The clock-and-bar repaint, handed a clock, a chrome and a
     // name offset the way the loop hands them over.
     let chrome = Some(CardChrome {
+        detached: false,
         playing: false,
         volume: 40,
         hovered: None,
@@ -838,6 +841,7 @@ fn a_repaint_still_follows_the_theme_setting() {
     );
 
     let chrome = Some(CardChrome {
+        detached: false,
         playing: false,
         volume: 40,
         hovered: None,
@@ -1019,6 +1023,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
     // of a different size than the frame's, with the clock
     // the loop hands over.
     let chrome = Some(CardChrome {
+        detached: false,
         playing: false,
         volume: 40,
         hovered: None,
@@ -2466,6 +2471,29 @@ fn a_hand_on_the_artwork_does_not_ask_the_cards_command_bar_out() {
             Some(Some(CardControl::Seek)),
             "a hand on the command bar's own row is a hand on its bar at {dpi} dpi"
         );
+
+        // And the four window buttons in the card's own corner, the detach among them, are answered
+        // wherever they are drawn: they stand in a band of their own at the top of the card, above
+        // the bar's row, and a hand on one is a hand on that button (see
+        // `pin_audio_control_revealed`).
+        for control in [
+            CardControl::AlwaysOnTop,
+            CardControl::Detach,
+            CardControl::Minimize,
+            CardControl::Close,
+        ] {
+            let button =
+                audio_preview::control_box(control, width, dpi, current_audio_options(), true)
+                    .expect("a window button in the card's own corner");
+            assert_eq!(
+                hovered_at(
+                    window.0 + (button.left + button.right) / 2,
+                    window.1 + (button.top + button.bottom) / 2
+                ),
+                Some(Some(control)),
+                "a hand on {control:?}'s own box is a hand on it at {dpi} dpi"
+            );
+        }
 
         // One row past the band's margin: near the row, and no longer near enough.
         assert_eq!(

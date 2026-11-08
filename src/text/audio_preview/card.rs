@@ -211,6 +211,10 @@ pub(crate) struct CardChrome {
     /// the panel that opens off it is drawn at.
     pub volume: u32,
     pub always_on_top: bool,
+    /// Whether the window this card is drawn in is a detached one — a window of its own rather than a
+    /// pin of the process that drew it — which is the state its detach button says in the same ink
+    /// the pin says it is kept on top in (see `app::detach`).
+    pub detached: bool,
     pub hovered: Option<CardControl>,
     pub pressed: Option<CardControl>,
     /// Whether the four window buttons are showing, which is what the card is painted

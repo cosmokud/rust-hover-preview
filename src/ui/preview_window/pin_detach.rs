@@ -18,6 +18,15 @@ use super::pin_window::pin_state;
 /// Does nothing where there is no pin to hand over, which is every road that reaches here after the
 /// pin it was drawn for has gone.
 pub(super) fn detach_the_pinned_window() {
+    // A window of its own has nothing left to hand on: it *is* the window a pin was handed over to
+    // become, and a second hand-off would be one process handing its own window to a third for no
+    // choice the user made (see `app::detach::is_detached`). Every road that offers the hand-off —
+    // the caption's button, a sound card's window button and both menus — draws itself saying the
+    // same, and this is the one place that is true whatever is drawn.
+    if crate::app::detach::is_detached() {
+        return;
+    }
+
     let Some((path, region, maximized)) = the_pin_to_hand_over() else {
         return;
     };

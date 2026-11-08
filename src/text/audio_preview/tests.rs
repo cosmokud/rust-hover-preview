@@ -38,6 +38,7 @@ fn card() -> Card {
 fn pinned() -> Card {
     Card {
         controls: Some(CardChrome {
+            detached: false,
             playing: false,
             volume: 40,
             hovered: None,
@@ -1350,6 +1351,7 @@ fn control_boxes_for(card: &Card, width: u32) -> Option<CardBoxes> {
 fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
     Card {
         controls: Some(CardChrome {
+            detached: false,
             playing: false,
             volume: 40,
             hovered,
@@ -1359,6 +1361,16 @@ fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
         }),
         ..pinned()
     }
+}
+
+/// The same card on the window a hand-off made of it: a window of its own rather than a pin of this
+/// process, which is the state its own detach button says (see `CardChrome::detached`).
+fn detached(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
+    let mut card = lit(hovered, pressed);
+    if let Some(chrome) = card.controls.as_mut() {
+        chrome.detached = true;
+    }
+    card
 }
 
 /// The four window buttons stand in the card's top corner, over the name line: the
@@ -1483,6 +1495,7 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
     let mut named = card();
     named.name = long.to_string();
     named.controls = Some(CardChrome {
+        detached: false,
         playing: false,
         volume: 40,
         hovered: None,
@@ -1513,6 +1526,7 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
     down.name_offset = offset;
     let chrome = down.controls.expect("a card that carries controls");
     down.controls = Some(CardChrome {
+        detached: false,
         window_buttons: false,
         ..chrome
     });
@@ -1845,6 +1859,92 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
     );
 }
 
+/// A window of its own says so in its own detach button: the mark wears the ink the pin beside it
+/// wears when the window is kept on top — the numbers' own — and lights a step further toward white
+/// under the hand, which is the same pair of states the always-on-top button is drawn in (see
+/// `CardChrome::detached`). A pin's detach is the card's own ink at rest and the accent under the
+/// hand, so what became of the window is read from the ink alone.
+#[test]
+fn the_detach_of_a_window_of_its_own_wears_the_pin_s_own_ink() {
+    let (width, height) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&pinned(), width, 0);
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+
+    // The colors the paint reads, worked out here the same way the card's own paint works them out.
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let page_color = rgb(theme.background());
+    let foreground = rgb(theme.foreground());
+    let number = readable(
+        rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
+        page_color,
+    );
+    let accent = readable(
+        rgb(theme.style_for_scopes(&["support.function"]).foreground),
+        page_color,
+    );
+    // The brighter one a mark that carries a state is drawn in while the hand is on it.
+    let lit_number = crate::text::text_paint::blend(number, [255, 255, 255], 0.35);
+
+    let pin = render(&pinned(), width, height, 96, options()).expect("a painted card");
+    let own = render(&detached(None, None), width, height, 96, options()).expect("a painted card");
+    let own_lit = render(
+        &detached(Some(CardControl::Detach), None),
+        width,
+        height,
+        96,
+        options(),
+    )
+    .expect("a painted card");
+
+    // The ink of a pixel is its color read backwards: the buffer is blue, green, red, alpha.
+    let ink = |color: [u8; 3]| [color[2], color[1], color[0], 255];
+    let holds = |painted: &(Vec<u8>, u32, u32), box_: RECT, want: [u8; 4]| -> bool {
+        (box_.top..box_.bottom).any(|y| {
+            (box_.left..box_.right).any(|x| {
+                let index = (y as usize * width as usize + x as usize) * 4;
+                [
+                    painted.0[index],
+                    painted.0[index + 1],
+                    painted.0[index + 2],
+                    painted.0[index + 3],
+                ] == want
+            })
+        })
+    };
+
+    // A pin's own detach is the card's ink, and the pin beside it is the numbers' because the window
+    // is kept on top: the two buttons are told apart at rest.
+    assert!(
+        holds(&pin, boxes.detach.drawn, ink(foreground)),
+        "a pin's detach is drawn in the card's own ink: {:?}",
+        boxes.detach.drawn
+    );
+    assert!(
+        holds(&pin, boxes.always_on_top.drawn, ink(number)),
+        "and the pin that is kept on top in the numbers' ink"
+    );
+
+    // The same button on a window of its own: the ink the pin beside it says its state in, and a step
+    // toward white under the hand — not the accent, which is a button with no state to show.
+    assert!(
+        holds(&own, boxes.detach.drawn, ink(number)),
+        "a window of its own draws its detach in the pin's own ink: {:?}",
+        boxes.detach.drawn
+    );
+    assert!(
+        holds(&own_lit, boxes.detach.drawn, ink(lit_number)),
+        "and lights it a step toward white while the hand is on it"
+    );
+    assert!(
+        !holds(&own_lit, boxes.detach.drawn, ink(accent)),
+        "not the accent, which a window of its own has no state to be drawn in"
+    );
+    assert!(
+        holds(&own, boxes.always_on_top.drawn, ink(number)),
+        "and the pin beside it keeps the ink its own state is read in"
+    );
+}
+
 /// The detach takes its place in the corner without moving either end of the cluster: the row a
 /// hand asks the buttons for is still the one the band says — a band as tall as a hit box, which
 /// a button fewer or more does not touch — and the span still begins at the always-on-top's own
@@ -1980,6 +2080,7 @@ fn the_pin_says_it_is_on_top_in_the_ink_the_numbers_are_read_in() {
         let ink_in = |always_on_top: bool, hovered: Option<CardControl>, rect: RECT| -> [u8; 4] {
             let card = Card {
                 controls: Some(CardChrome {
+                    detached: false,
                     playing: false,
                     volume: 40,
                     hovered,
