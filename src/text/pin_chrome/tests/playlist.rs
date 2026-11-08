@@ -1,6 +1,7 @@
 use super::super::playlist::{
-    playlist_edge_at, playlist_row, playlist_scroll_at, playlist_scroll_max, playlist_step_pick,
-    playlist_thumb, playlist_thumb_grab, playlist_track_holds, PlaylistEdge,
+    clock_origin, facts_style, playlist_edge_at, playlist_row, playlist_scroll_at,
+    playlist_scroll_max, playlist_step_pick, playlist_thumb, playlist_thumb_grab,
+    playlist_track_holds, PlaylistEdge,
 };
 use super::*;
 use crate::readers::audio_track::{self, Player, Probed, Track};
@@ -38,8 +39,12 @@ fn the_rows_are_two_columns_and_the_clock_is_the_second() {
         "the rows are held off the band's edge"
     );
     assert!(
-        layout.name_right < layout.clock_left,
-        "the name column stops short of the clock's own"
+        layout.facts_right < layout.clock_left,
+        "the facts line stops short of the clock's own"
+    );
+    assert!(
+        layout.name_right > layout.facts_right,
+        "and the name runs nearer the length than the note under it does"
     );
     assert_eq!(
         layout.clock_right, 390,
@@ -61,7 +66,7 @@ fn the_rows_are_two_columns_and_the_clock_is_the_second() {
         right, 398,
         "the track hugs the window's own right edge, two pixels off it"
     );
-    assert_eq!(right - left, 4, "and it is the width of a bar");
+    assert_eq!(right - left, 5, "and it is the width of a bar");
     assert!(
         scrolling.clock_right < layout.clock_right,
         "the clock gives the bar its room"
@@ -69,6 +74,37 @@ fn the_rows_are_two_columns_and_the_clock_is_the_second() {
     assert!(
         scrolling.clock_right < left,
         "and the clock ends before the track begins, so the two are never one column"
+    );
+}
+
+/// The name's cut is measured against the length as it is drawn rather than against the column the
+/// length is right-aligned in: at the widest shape a length is ever set in the two are the scaled
+/// gap apart, and a shorter clock only moves the ink, never the cut.
+#[test]
+fn the_name_column_stops_five_pixels_short_of_the_drawn_clock() {
+    let layout = playlist_layout(400, 240, SCALE, 2);
+    let surface = DibSurface::create(1, 1).expect("a surface to measure on");
+    let drawn = |clock: &str| {
+        clock_origin(
+            layout.clock_right,
+            layout.clock_left,
+            measure_text(&surface, &facts_style(), clock, SCALE),
+        )
+    };
+    let gap = (5.0 * SCALE) as i32;
+
+    assert_eq!(
+        drawn("0:00:00") - layout.name_right,
+        gap,
+        "the widest length leaves the name cut the scaled gap off its own drawn edge"
+    );
+    assert!(
+        drawn("0:04") - layout.name_right > gap,
+        "a short length is drawn further right and the cut stays where it is"
+    );
+    assert!(
+        drawn("1:02:03") - layout.name_right >= gap,
+        "and a length of another shape never reaches back past the widest one"
     );
 }
 
