@@ -20,7 +20,7 @@ fn a_row(name: &str) -> PlaylistRow {
             },
             Fact {
                 text: "4.2 MB".to_string(),
-                kind: FactKind::Number,
+                kind: FactKind::Word,
             },
         ],
         clock: None,
@@ -286,7 +286,7 @@ fn a_row_says_what_the_file_says_and_who_long_it_is() {
             ("44.1 kHz", FactKind::Number),
             ("stereo", FactKind::Word),
             ("1006 kbps", FactKind::Number),
-            ("3.0 MB", FactKind::Number),
+            ("3.0 MB", FactKind::Word),
         ],
         "the parts are the card's own, in the card's own inks"
     );
