@@ -1,32 +1,37 @@
-//! Detach Mode: a pinned window handed to a process of this app's own.
+//! Detach Mode: a pin that is a window of its own rather than a pin of the tray's.
 //!
 //! A pin is one window and one whole set of process-wide facts — its state, its bubble, its film
 //! host, its chrome strips, the player it plays through, the thumbnail it is drawn by — and those
 //! facts are singletons by construction (see `ui::preview_window::pin_window::PIN_STATE`, and the
 //! statics of every `pin_*.rs` beside it). A second pin *inside* this process would therefore be
-//! the first pin's window with a second name on it. So a detached window is not a second pin here:
-//! it is a second process of the same executable, begun in a mode that takes one pin up on the file
-//! it is handed and never opens a hover at all.
+//! the first pin's window with a second name on it. So detaching a pin is not a second pin here
+//! either: it is *this* pin, and the process that was drawing the hovers stops being the one that
+//! serves them (see `pin_detach::detach_the_pinned_window`).
 //!
-//! What that buys is the whole of what a pin is, without a line of it being made per-window: the
-//! caption, the bubble, the taskbar stand-in, the walk, the menus, the player. What it costs is one
-//! process per detached window, and what it needs is the three things this module is:
+//! **The window stands where it is, and nothing is read again.** That is the whole of what the
+//! button asks for: a sound that does not start over from silence, a film that does not begin again
+//! at 0:00, a page that is not laid out a second time — because no file is opened, no player is
+//! begun and no box is rebuilt. What it costs is a viewer: the pin was drawn in the process every
+//! preview is drawn in, so that process is a window of its own from then on and the tray begins a
+//! fresh viewer for the hovers (see `app::viewer`). Three things make the flip safe:
 //!
-//! - **What is handed over.** The file, the media box the pin was showing it in, and whether the
-//!   window is maximized. The box is the *media's* rather than the window's, because a take-up in
-//!   the new process builds the window around a media box (see `pin_install::take_up_pinned_window`):
-//!   handed the media box, the child builds the window the parent is standing in.
-//! - **When the hand is finished.** The child sets an event once its window is up and drawn, and
-//!   only then does the tray app's own pin come down — so the file is never in neither window, and
-//!   a child that dies before its window appears leaves the pin it came from standing.
-//! - **What ends it.** Nothing here outlives the tray app: the child is put in the same job every
-//!   engine of this app's is in (`engine_processes::adopt`), which ends it the moment the app does,
-//!   and it watches the process that began it as well, for the machine where a job cannot be
-//!   joined. A detached window has one way out of its own — its Close, its Escape, its menu — and
-//!   that ending is the process's own: the loop it draws on sets `RUNNING` false and `main` follows
-//!   the same shutdown the tray app's does.
+//! - **The flag.** [`is_detached`] answers whether the pin on this screen is one the tray can drive,
+//!   and every reader asks it fresh rather than keeping a copy taken at a take-up (see
+//!   [`this_window_is_its_own`]).
+//! - **What the tray is told.** `PIN_UP` goes false and the pinned path is cleared, so a hover is
+//!   admitted again while this window keeps standing, and the notice that names the process which
+//!   left is the one message that crosses (see `app::seam::TrayMessage::ViewerDetached`).
+//! - **What ends it.** Nothing of this run's: its own Close, its Escape, its menu, or the tray app
+//!   going — every viewer is in the job every engine of this app's is in
+//!   (`engine_processes::adopt`), which ends it when the app does.
 //!
-//! A detached window is a separate *process*, and that is what makes it inert with respect to
+//! **What is left here is the `--detach` road, and nothing calls it.** Before the pin could stay
+//! where it was, detaching was a second process of this executable begun in a mode that took the
+//! same file up from scratch — the file, the media box the pin was showing it in, whether it was
+//! maximized, and the second a sound had got to. `startup_mode`, [`OpenRequest`], [`hand_off`] and
+//! `ui::preview_window::detach_open` are that whole road, kept until it is deleted.
+//!
+//! A `--detach` child is a separate *process*, and that is what makes it inert with respect to
 //! Explorer: no hook of this app's runs in it, so nothing of the listing — a click, a hover, a key,
 //! `Tray → Pin Mode → Update Preview` — can reach the file in it. It reads the configuration file
 //! like any other run, so the tray's own rows reach it the way they reach a pin: the ones written
@@ -67,12 +72,14 @@ const PARENT: &str = "--parent";
 ///
 /// The wait is a thread's own and nothing is behind it: the pin it was handed over from is still
 /// on the screen until this answers, which is the whole reason the wait exists.
+#[allow(dead_code)]
 const READY_POLL: Duration = Duration::from_millis(50);
 
 /// How long a hand-off is given before the wait is given up on, leaving the pin it came from
 /// standing. A document handed to an Office engine can spend fifteen seconds being rendered and
 /// still arrive, so this is generous rather than tight; a child that never answers at all is a
 /// child whose window the user never sees, and a pin that stays is the better of the two.
+#[allow(dead_code)]
 const READY_WAIT: Duration = Duration::from_secs(300);
 
 /// A media box on the screen: left, top, right, bottom, in physical pixels.
@@ -127,6 +134,7 @@ static DETACHED_HERE: AtomicBool = AtomicBool::new(false);
 
 /// How many windows this process has begun, which is what keeps two hand-offs' events apart when
 /// both are made from the same run.
+#[allow(dead_code)]
 static HANDED_OVER: AtomicU32 = AtomicU32::new(1);
 
 /// How this process was started, read from its own command line.
@@ -257,15 +265,32 @@ pub(crate) fn the_sound_starts_at(path: &Path) -> Option<f64> {
 /// Publish what this process was started for. Called once, by `main`, before any thread that asks
 /// is begun.
 pub(crate) fn begin(request: OpenRequest) {
-    DETACHED_HERE.store(true, Ordering::Release);
+    this_window_is_its_own();
     if let Ok(mut open) = OPEN.lock() {
         *open = Some(request);
     }
 }
 
 /// Whether this process is a detached window.
+///
+/// **The same flag answers two questions, because they are one.** A `--detach` child is begun with it set
+/// and never clears it; a viewer sets it the moment a pin of its own is detached, and what it says from
+/// then on is that the window on this screen is a window of its own rather than a pin the tray can drive
+/// (see `this_window_is_its_own`). Every reader of it is asking that one question — is the pin here one
+/// this process hands out, or one it keeps — so nothing that reads it needs to know which road set it.
 pub(crate) fn is_detached() -> bool {
     DETACHED_HERE.load(Ordering::Acquire)
+}
+
+/// This process's pin is a window of its own from here on: the window stands as it is, and nothing of it
+/// is taken up, resized or shown again (see `pin_detach::detach_the_pinned_window`).
+///
+/// It is the whole of what detaching a pin is now. The pin already lives here, beside its own player and
+/// its own engine, so it becoming a window of its own is a fact about this process rather than a second
+/// process begun on the same file — which is what a hand-off was, and what used to cost the user a read of
+/// the file, a player launched again and a sound starting over from silence.
+pub(crate) fn this_window_is_its_own() {
+    DETACHED_HERE.store(true, Ordering::Release);
 }
 
 /// What this window was begun with, or nothing where this process is the tray app.
@@ -349,6 +374,8 @@ pub(crate) fn watch_the_process(parent: u32) {
 /// pin this was asked of, and that is the ready event's business — the tray app's pin stays standing
 /// until the child says its window is there, so what the user sees is a window being *replaced* by
 /// the same window rather than a file that blinks out and back.
+// The `--detach` road: kept whole and unused until it is deleted (see the module doc).
+#[allow(dead_code)]
 pub(crate) fn hand_off(
     path: &Path,
     region: MediaBox,
@@ -412,6 +439,7 @@ pub(crate) fn hand_off(
 /// where this one is a detached window being handed a pin again — the tray app's own id, carried
 /// down the chain rather than the immediate parent's, so that a window handed over twice is still
 /// ended by the app the user closes rather than by the window that handed it on.
+#[allow(dead_code)]
 fn care_of() -> u32 {
     open_request()
         .and_then(|request| request.parent)
@@ -420,6 +448,7 @@ fn care_of() -> u32 {
 
 /// The event a hand-off is waited on, made before the child is begun so that no child can set an
 /// event nobody has made yet.
+#[allow(dead_code)]
 fn create_the_ready_event(name: &str) -> std::io::Result<HANDLE> {
     let name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -435,6 +464,7 @@ fn create_the_ready_event(name: &str) -> std::io::Result<HANDLE> {
 /// the file it was handed — a pin the user closed, or walked to another file, while the child was
 /// loading is not this hand-off's to end. That is the one guard the whole road needs: everything
 /// else about it is a wait.
+#[allow(dead_code)]
 fn wait_for_the_hand_over(mut child: std::process::Child, event: isize, path: &Path) {
     let waited_on = HANDLE(event as *mut std::ffi::c_void);
     let started = std::time::Instant::now();
