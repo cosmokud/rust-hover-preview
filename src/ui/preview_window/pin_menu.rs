@@ -314,6 +314,13 @@ const SEEK_LABELS: [&str; 4] = ["Remember", "From the Start", "From the Middle",
 pub(super) enum PinMenuRow {
     /// Collapse the pin into the round bubble it leaves on the desktop.
     ToBubble,
+    /// Hand this window to a process of its own, where the file in it is nobody's preview: no
+    /// hover, no listing, nothing this app's Explorer watch can reach (see `pin_detach` and
+    /// `crate::app::detach`).
+    ///
+    /// It stands above the two collapses and the close because it is the same kind of row: the pin
+    /// stops being this process's pin, and what is left in hand is a window of its own.
+    Detach,
     /// Collapse the pin into the app's own stand-in in the taskbar.
     ToTaskbar,
     /// Take the pin down.
@@ -354,7 +361,8 @@ pub(super) enum PinMenuRow {
 ///
 /// The same three doors are what the hover timers watch and what a press on any opens (see
 /// `refresh_pin_menu`).
-const PIN_MENU_ROWS: [PinMenuRow; 15] = [
+const PIN_MENU_ROWS: [PinMenuRow; 16] = [
+    PinMenuRow::Detach,
     PinMenuRow::ToBubble,
     PinMenuRow::ToTaskbar,
     PinMenuRow::Close,
@@ -381,6 +389,7 @@ impl PinMenuRow {
     fn label(self, playing: bool) -> &'static str {
         match self {
             PinMenuRow::ToBubble => "To Bubble",
+            PinMenuRow::Detach => "Detach Window",
             PinMenuRow::ToTaskbar => "To Taskbar",
             PinMenuRow::Close => "Close",
             PinMenuRow::Separator => "",
@@ -407,6 +416,7 @@ impl PinMenuRow {
             }
             PinMenuRow::Shuffle => pin_chrome::MenuMark::Check(pin_audio_shuffle()),
             PinMenuRow::ToBubble
+            | PinMenuRow::Detach
             | PinMenuRow::ToTaskbar
             | PinMenuRow::Close
             | PinMenuRow::Pause
@@ -1070,6 +1080,13 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
         // `collapse_pin_to_at`).
         Some(PinMenuRow::ToBubble) => {
             ask_pin(PinCommand::MinimizeToAt(PinMinimizeTo::Bubble, (x, y)));
+            false
+        }
+        // The window handed to a process of its own: the row goes away with the choice, and the
+        // window it named is taken down by that process's first paint rather than by this press
+        // (see `pin_detach`).
+        Some(PinMenuRow::Detach) => {
+            super::pin_detach::detach_the_pinned_window();
             false
         }
         Some(PinMenuRow::ToTaskbar) => {

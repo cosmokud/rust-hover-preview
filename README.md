@@ -309,6 +309,14 @@ Pin mode works like QuickLook: pressing the middle mouse button or `Space` (`pin
 
 See [docs/tray.md](docs/tray.md) for every row in the tray menu and what each one does.
 
+## Detach Mode
+
+A pinned window can be handed to a process of its own: **Detach Window** in the pin's right-click menu, in its own menu where the file is a sound's card, or on the button between **Always On Top** and **Minimize**. The window that comes up shows the same file at the same place and the same size, and it is completely independent from then on — a click, a hover, a key in Explorer, or `Tray → Pin Mode → Update Preview` never reaches it, because no Explorer watch of this app's is running in the process that draws it. Everything a pin does it does too: the caption and its buttons, the transport bar, previous/next through the folder, the bubble, the taskbar button, `Escape`, and its own **Detach Window** row, which hands it to yet another process.
+
+You can have as many detached windows as you like, and they all live under the tray icon: closing the app closes every one of them, while closing one leaves the others and the tray app alone. Each is a process, so its film, its document engine and its browser are its own — the tray's `Engine` timers never touch them — and the taskbar shows them all under this app's single button, with a thumbnail per window.
+
+Settings reach a detached window the way they reach a pin: what is written down (`config.ini`) is read by the window itself, so a level, a scale or a theme changes live, while what a window only reads when it opens a file — the engine a film plays through, the size its box was measured at — arrives at its next start, which is the answer a pin has always given.
+
 ## Configuration
 
 See [docs/configuration.md](docs/configuration.md) for every `config.ini` setting, the file's default contents, and the names that are gone.

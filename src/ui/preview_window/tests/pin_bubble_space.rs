@@ -77,6 +77,7 @@ fn the_bubble_menu_holds_only_what_has_playback() {
                 BubbleMenuRow::MinimizeToBubble,
                 BubbleMenuRow::MinimizeToTaskbar,
                 BubbleMenuRow::Separator,
+                BubbleMenuRow::Detach,
                 BubbleMenuRow::ToTaskbar,
                 BubbleMenuRow::Close,
             ],
@@ -94,6 +95,7 @@ fn the_bubble_menu_holds_only_what_has_playback() {
                 BubbleMenuRow::MinimizeToBubble,
                 BubbleMenuRow::MinimizeToTaskbar,
                 BubbleMenuRow::Separator,
+                BubbleMenuRow::Detach,
                 BubbleMenuRow::ToTaskbar,
                 BubbleMenuRow::Close,
             ],
@@ -195,6 +197,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
             "Minimize to Bubble",
             "Minimize to Taskbar",
             "",
+            "Detach Window",
             "To Taskbar",
             "Close"
         ],
@@ -218,6 +221,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
             "Minimize to Bubble",
             "Minimize to Taskbar",
             "",
+            "Detach Window",
             "To Taskbar",
             "Close"
         ],
@@ -238,6 +242,7 @@ fn the_painted_menu_carries_the_rows_the_press_answers() {
             "Minimize to Bubble",
             "Minimize to Taskbar",
             "",
+            "Detach Window",
             "To Taskbar",
             "Close"
         ],

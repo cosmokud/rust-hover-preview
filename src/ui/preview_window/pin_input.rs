@@ -1297,6 +1297,10 @@ pub(super) unsafe fn pinned_audio_control_release(hwnd: HWND, x: i32, y: i32) ->
             // player and the window together. Both are the pin's own commands, which the loop
             // answers the way it answers a caption button (see `pin_command_request`).
             CardControl::Minimize => ask_pin(PinCommand::Minimize),
+            // The window handed to a process of its own, the caption's own button by another name:
+            // a sound's card is a pin like any other, and this is the road that stops it being one
+            // (see `pin_detach`).
+            CardControl::Detach => super::pin_detach::detach_the_pinned_window(),
             CardControl::Close => ask_pin(PinCommand::Close),
             CardControl::Seek => {}
         }
@@ -1386,6 +1390,12 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
                 pin_chrome::CaptionButton::Close => ask_pin(PinCommand::Close),
                 pin_chrome::CaptionButton::Previous => ask_pin(PinCommand::PreviousFile),
                 pin_chrome::CaptionButton::Next => ask_pin(PinCommand::NextFile),
+                // The window handed to a process of its own, on the file it is showing and at the
+                // box it is showing it in. It is done here rather than asked for as a command
+                // because what it leaves behind is another process: the ask is a thread's own, and
+                // the pin it came from is taken down by that process's first paint rather than by
+                // this press (see `pin_detach`).
+                pin_chrome::CaptionButton::Detach => super::pin_detach::detach_the_pinned_window(),
                 // The file is in hand here and the Shell takes it as it stands, so this one
                 // is asked for where it was pressed rather than written down for the loop
                 // to pick up: nothing about opening a file is the loop's business.

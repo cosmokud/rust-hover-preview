@@ -159,6 +159,13 @@ pub(super) enum BubbleMenuRow {
     /// the next press of the minimize button: the row only a pin still standing in its own window
     /// carries, because the bubble the other menu is drawn in is already the place this one names.
     ToBubble,
+    /// Hand this window to a process of its own, where the file in it is nobody's preview: no
+    /// hover, no listing, nothing this app's Explorer watch can reach (see `pin_detach` and
+    /// `crate::app::detach`).
+    ///
+    /// It stands above the two collapses because it is the same kind of row: the pin stops being
+    /// this process's pin, and what is left in hand is a window of its own.
+    Detach,
     /// Put the pin away into the taskbar rather than the bubble: the stand-in the pick above
     /// names, gone to now instead of at the next press of the minimize button — and on a bubble,
     /// which is a pin already away, the only thing the two picks beside it can mean.
@@ -219,6 +226,11 @@ pub(super) fn bubble_menu_rows(
         rows.push(BubbleMenuRow::MinimizeToTaskbar);
         rows.push(BubbleMenuRow::Separator);
     }
+    // The row that stops the pin being a pin is the last of the window's own group, and stands
+    // above the collapses that only move it: the road out of this process is the one that is not
+    // undone afterwards. A bubble carries it too — a collapsed pin is still a pin, and handing it
+    // on is not the same choice as putting it away (see `BubbleMenuRow::Detach`).
+    rows.push(BubbleMenuRow::Detach);
     // A pin still standing in its own window is a pin with a bubble to be put away into, and the
     // row for it stands above the taskbar's: the two ways out of the pin are one pair (see
     // `BubbleMenuRow::ToBubble`).
@@ -331,6 +343,13 @@ pub(super) fn shared_menu_row_press(
             to_taskbar();
             false
         }
+        // The window handed to a process of its own: the row goes away with the choice, and the
+        // window it named is taken down by that process's first paint rather than by this press
+        // (see `pin_detach`).
+        BubbleMenuRow::Detach => {
+            super::pin_detach::detach_the_pinned_window();
+            false
+        }
         BubbleMenuRow::Separator => true,
     }
 }
@@ -358,6 +377,7 @@ pub(super) fn bubble_menu_row_label(
         BubbleMenuRow::MinimizeToBubble => "Minimize to Bubble",
         BubbleMenuRow::MinimizeToTaskbar => "Minimize to Taskbar",
         BubbleMenuRow::ToBubble => "To Bubble",
+        BubbleMenuRow::Detach => "Detach Window",
         BubbleMenuRow::ToTaskbar => "To Taskbar",
         BubbleMenuRow::Close => "Close",
     }

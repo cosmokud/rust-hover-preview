@@ -94,6 +94,9 @@ mod audio_guard;
 mod audio_meter;
 mod audio_session;
 mod bubble_stream;
+// A window handed to a process of its own: what that process opens with, and the pin's road out to
+// one (see `crate::app::detach`).
+mod detach_open;
 mod dimensions;
 mod displays;
 mod engine_render;
@@ -118,6 +121,7 @@ mod paint;
 mod pin_bubble;
 mod pin_chrome_layout;
 mod pin_chrome_strips;
+mod pin_detach;
 mod pin_drag;
 mod pin_film_host;
 mod pin_film_thumbnail;
@@ -420,6 +424,7 @@ pub(crate) fn note_a_playback_trace_line(line: &str) {
 }
 pub(crate) use pin_window::take_pin_handed_off;
 pub(crate) use requests::is_preview_window;
+pub(crate) use requests::note_the_pin_was_handed_off;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;
 pub(crate) use requests::notify_peazip_ready;

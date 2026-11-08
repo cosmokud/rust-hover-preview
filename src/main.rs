@@ -106,6 +106,21 @@ fn main() {
     // rather than the first moment anything looked at the clock (see `StartupTrace`).
     let mut trace = StartupTrace::new();
 
+    // **Which of the two runs this is, before anything is claimed or swept.** A detached window is
+    // a process of this same executable begun by the tray app's own hand (see `app::detach`), and
+    // the three things a second process must not do are all below: claim the single-instance mutex,
+    // reap what earlier runs left behind, and put an icon in the tray.
+    match app::detach::startup_mode() {
+        app::detach::Startup::Tray => {}
+        // A hand-off this app cannot answer starts nothing at all rather than a second tray icon.
+        app::detach::Startup::Refused => return,
+        app::detach::Startup::Detached(request) => {
+            app::detach::begin(request);
+            run_a_detached_window(&mut trace);
+            return;
+        }
+    }
+
     // Bail out before any hook, window, or thread is created when the app is
     // already running, so only the first instance stays in the tray.
     let _instance_guard = match app::single_instance::acquire() {
@@ -181,44 +196,7 @@ fn main() {
     });
 
     // Watch config.ini changes off the hover hot path.
-    let config_watch_handle = std::thread::spawn(|| {
-        let config_path = config::config::AppConfig::config_path();
-        let mut last_modified = config_path
-            .as_ref()
-            .and_then(|path| fs::metadata(path).ok())
-            .and_then(|meta| meta.modified().ok());
-
-        while RUNNING.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(1000));
-
-            let modified = config_path
-                .as_ref()
-                .and_then(|path| fs::metadata(path).ok())
-                .and_then(|meta| meta.modified().ok());
-
-            if modified != last_modified {
-                last_modified = modified;
-                // A level edited on disk reaches a live pin from here, or opening the menu is
-                // the first place its change is noticed (see `show_context_menu`). Unchanged
-                // halves — and a level this process wrote itself — publish nothing.
-                let changed = CONFIG
-                    .lock()
-                    .map(|mut config| config.reload_from_disk_keeping_our_own_levels())
-                    .unwrap_or((false, false));
-                // Lock released first: the message a publish sends locks `CONFIG` again.
-                if changed.0 {
-                    ui::preview_window::publish_tray_volume(false);
-                }
-                if changed.1 {
-                    ui::preview_window::publish_tray_volume(true);
-                }
-                // The pin key is a number the keyboard hook reads rather than the
-                // configuration, so a spelling that changed on disk is handed to it here
-                // — off the hook's own path, which may not take a lock.
-                shell::key_input::refresh();
-            }
-        }
-    });
+    let config_watch_handle = std::thread::spawn(|| watch_the_configuration(false));
 
     // Start the explorer hook in a separate thread
     let hook_handle = std::thread::spawn(|| {
@@ -322,5 +300,141 @@ fn sync_startup_setting(trace: &mut StartupTrace) {
             config.run_at_startup = registered;
             config.save();
         }
+    }
+}
+
+/// The run a detached window has: one preview thread, one configuration watch, and nothing that
+/// watches a listing.
+///
+/// It is deliberately not the tray app's start with pieces skipped at their own doors: the pieces
+/// that are missing here are the *whole* of what makes a hover possible — the Explorer hook, the
+/// two key watches, the sweep of what earlier runs left behind, the update check and the tray — and
+/// a detached window is a window no listing can reach (see `app::detach`).
+fn run_a_detached_window(trace: &mut StartupTrace) {
+    configure_dpi_awareness();
+    trace.step("dpi awareness");
+
+    // The apartment a page's own measurements are taken in before any file is read: a page is laid
+    // out by this thread, and a PDF page is rendered through Windows.Data.Pdf and a picture of a
+    // format this app has no decoder for is decoded by the codec Windows has (see
+    // `run_preview_window`).
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+    }
+    trace.step("com");
+
+    let preview_handle = std::thread::spawn(|| {
+        ui::preview_window::run_preview_window();
+    });
+
+    // What the tray would have said out loud in its own process is said here off the same file (see
+    // `watch_the_configuration`).
+    let config_watch_handle = std::thread::spawn(|| watch_the_configuration(true));
+
+    // **The one watch a detached window keeps.** The wheel over a pinned picture, a pinned page and
+    // a sound's knob is the low-level hook's rather than the window's — a pin is nobody's keyboard
+    // until it is pressed, so Windows hands its notches to Explorer — and that hook is a process's
+    // own (see `shell::wheel_input`). The Explorer's hook and the two key watches are exactly what
+    // this window does not have.
+    let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
+    trace.step("threads");
+
+    // And what ends it: the tray app going — which the job every hand-off joins answers on its own —
+    // and the process that began it, waited on a second time for the machine where a job could not be
+    // joined (see `app::detach::watch_the_parent`).
+    app::detach::watch_the_parent();
+
+    // The window draws itself on its own thread, and it ends itself the moment its pin does (see
+    // `ui::preview_window::detach_open`): what is left here is only the waiting.
+    while RUNNING.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    shell::wheel_input::request_stop();
+
+    // The engines are this process's own and are ended with it the way the tray app's are ended
+    // with it: nothing of this app's should outlive the window it was begun for.
+    engines::office_render::shutdown();
+    engines::webview_preview::shutdown();
+    ui::preview_window::shut_down_the_resident();
+
+    let _ = preview_handle.join();
+    let _ = wheel_handle.join();
+    let _ = config_watch_handle.join();
+
+    unsafe {
+        CoUninitialize();
+    }
+}
+
+/// Watch `config.ini` for changes, off both runs' hot paths.
+///
+/// `detached` is whether this process is a detached window, and it decides one thing: a detached
+/// window is a process the tray's own rows are not spoken to. What the tray writes down reaches it
+/// through this watch the way it reaches a pin; the two rows that are *said* to a window already up
+/// — the text size and the band — are said to the tray's own preview thread and to no other, so
+/// this window says them to itself here, off the same reload. A row that is a window's own question
+/// at its take-up — the engine a film is played by, the scale its box was measured at — is not one
+/// of them and reaches a detached window at its next start, which is what a pin does.
+fn watch_the_configuration(detached: bool) {
+    let config_path = config::config::AppConfig::config_path();
+    let mut last_modified = config_path
+        .as_ref()
+        .and_then(|path| fs::metadata(path).ok())
+        .and_then(|meta| meta.modified().ok());
+
+    while RUNNING.load(Ordering::Acquire) {
+        std::thread::sleep(Duration::from_millis(1000));
+
+        let modified = config_path
+            .as_ref()
+            .and_then(|path| fs::metadata(path).ok())
+            .and_then(|meta| meta.modified().ok());
+
+        if modified == last_modified {
+            continue;
+        }
+        last_modified = modified;
+
+        // The two values a detached window has to be *told* about rather than only read, taken
+        // before the reload: what changed is the difference between the two readings.
+        let before = CONFIG
+            .lock()
+            .map(|config| (config.text_font_scale_percent, config.pin_always_on_top))
+            .unwrap_or_default();
+
+        // A level edited on disk reaches a live pin from here, or opening the menu is the first
+        // place its change is noticed (see `show_context_menu`). Unchanged halves — and a level this
+        // process wrote itself — publish nothing.
+        let changed = CONFIG
+            .lock()
+            .map(|mut config| config.reload_from_disk_keeping_our_own_levels())
+            .unwrap_or((false, false));
+
+        // Lock released first: the message a publish sends locks `CONFIG` again.
+        if changed.0 {
+            ui::preview_window::publish_tray_volume(false);
+        }
+        if changed.1 {
+            ui::preview_window::publish_tray_volume(true);
+        }
+
+        if detached {
+            let after = CONFIG
+                .lock()
+                .map(|config| (config.text_font_scale_percent, config.pin_always_on_top))
+                .unwrap_or_default();
+            if after.0 != before.0 {
+                ui::preview_window::publish_text_font_size(after.0);
+            }
+            if after.1 != before.1 {
+                ui::preview_window::refresh_pin();
+            }
+        }
+
+        // The pin key is a number the keyboard hook reads rather than the configuration, so a
+        // spelling that changed on disk is handed to it here — off the hook's own path, which may
+        // not take a lock.
+        shell::key_input::refresh();
     }
 }

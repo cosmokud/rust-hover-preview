@@ -952,6 +952,82 @@ pub(super) fn draw_open_with_list(
     stroke_segment(buffer, width, right, tip, edge, color, 1.0);
 }
 
+/// Two windows, one stepped out behind the other: the window handed to a process of its own.
+///
+/// It is the one mark of the caption's that says nothing about the *file* being previewed and
+/// everything about the window it is previewed in, which is what the button beside the band and
+/// the minimize does: the first three of the pin's own open the file in another program, and this
+/// one opens it in another window of this app's. So it is drawn as two windows rather than as a
+/// box with a mark in it — the same pair, one behind the other.
+///
+/// The window behind is drawn as the two edges that are not under the one in front. Its whole
+/// outline would be a thicker square rather than two windows, and a square drawn inside a square
+/// reads as the smaller mark in a row of marks, however far it is stepped out. Everything is laid
+/// down in whole pixels for the reason `draw_open_with` gives: this mark is asked to be sharp at
+/// every display scale, and a stroked edge is a ramp either side of itself.
+pub(super) fn draw_detached_window(
+    buffer: &mut [u8],
+    width: i32,
+    center_x: i32,
+    center_y: i32,
+    span: i32,
+    thickness: f32,
+    color: [u8; 3],
+) {
+    let thick = thickness.round().max(1.0) as i32;
+    let half = (span / 2).max(1);
+    // How far the window behind is stepped out from the one in front: a quarter of the mark, and
+    // never so far that the window in front has no room left to be one.
+    let step = (span / 4).max(2).min(half);
+
+    let left = center_x - half;
+    let top = center_y - half;
+    let right = center_x + half + 1;
+    let bottom = center_y + half + 1;
+
+    // The window in front: the whole outline, stepped down and left of the one behind it.
+    stroke_box(
+        buffer,
+        width,
+        RECT {
+            left,
+            top: top + step,
+            right: right - step,
+            bottom,
+        },
+        thick as f32,
+        color,
+        1.0,
+    );
+
+    // The window behind: its top edge, across the whole square, and its right edge down to where
+    // the window in front takes the corner.
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: left + step,
+            top,
+            right,
+            bottom: (top + thick).min(bottom),
+        },
+        color,
+        1.0,
+    );
+    fill_box(
+        buffer,
+        width,
+        RECT {
+            left: (right - thick).max(left),
+            top: top + thick,
+            right,
+            bottom: bottom - step,
+        },
+        color,
+        1.0,
+    );
+}
+
 /// The style every piece of caption text is drawn in, whatever colour it is asked for.
 pub(super) fn caption_style(foreground: [u8; 3]) -> text_paint::TextStyle {
     text_paint::TextStyle {

@@ -179,6 +179,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
     assert_eq!(
         labels,
         [
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -197,7 +198,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
         ]
     );
     assert!(
-        matches!(top[3].mark, pin_chrome::MenuMark::Separator),
+        matches!(top[4].mark, pin_chrome::MenuMark::Separator),
         "the rule between the ways out of the pin and the playback is a rule, not a row"
     );
     assert!(
@@ -381,6 +382,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
     assert_eq!(
         labels,
         [
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -500,6 +502,7 @@ fn a_right_click_on_a_pin_that_is_not_a_sound_opens_the_window_menu() {
             "Minimize to Bubble",
             "Minimize to Taskbar",
             "",
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -536,6 +539,7 @@ fn a_right_click_on_the_media_holds_no_setting_rows() {
             "",
             "Maximize",
             "",
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -570,6 +574,7 @@ fn a_standing_menu_opens_on_the_walk_and_the_maximize_under_it() {
             BubbleMenuRow::Maximize,
             BubbleMenuRow::Toggle,
             BubbleMenuRow::Separator,
+            BubbleMenuRow::Detach,
             BubbleMenuRow::ToBubble,
             BubbleMenuRow::ToTaskbar,
             BubbleMenuRow::Close,
@@ -586,6 +591,7 @@ fn a_standing_menu_opens_on_the_walk_and_the_maximize_under_it() {
             BubbleMenuRow::Separator,
             BubbleMenuRow::Maximize,
             BubbleMenuRow::Separator,
+            BubbleMenuRow::Detach,
             BubbleMenuRow::ToBubble,
             BubbleMenuRow::ToTaskbar,
             BubbleMenuRow::Close,
@@ -778,6 +784,7 @@ fn a_pinned_page_holds_its_own_commands_above_the_windows_rows() {
             "",
             "Maximize",
             "",
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -821,6 +828,7 @@ fn a_walk_off_the_page_leaves_the_panel_the_windows_own_rows() {
             "",
             "Maximize",
             "",
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -1198,6 +1206,7 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
     assert_eq!(
         labels,
         [
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
@@ -1832,6 +1841,7 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     assert_eq!(
         labels,
         [
+            "Detach Window",
             "To Bubble",
             "To Taskbar",
             "Close",
