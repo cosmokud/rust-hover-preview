@@ -335,6 +335,12 @@ pub(crate) use pin_drag::publish_pin_media_press;
 pub(crate) use pin_input::pin_volume_keep_alive_try;
 pub(crate) use pin_lifecycle::band_place;
 pub(crate) use pin_lifecycle::pin_always_on_top;
+/// Whether the tray's **Pin Mode → Enable** row has pinning switched on.
+///
+/// Asked by a detached window's own configuration watch, which must not hand itself the message the
+/// tray's row sends for a switch that is about taking pins from a listing rather than about a window
+/// that was taken long ago (see `watch_the_configuration` and `PreviewMessage::PinChanged`).
+pub(crate) use pin_lifecycle::pin_enabled as pin_mode_is_enabled;
 pub(crate) use pin_lifecycle::pin_holds_the_front;
 pub(crate) use pin_lifecycle::PinCommand;
 pub(crate) use pin_menu_window::PIN_MENU_HWND;

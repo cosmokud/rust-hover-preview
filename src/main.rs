@@ -427,7 +427,12 @@ fn watch_the_configuration(detached: bool) {
             if after.0 != before.0 {
                 ui::preview_window::publish_text_font_size(after.0);
             }
-            if after.1 != before.1 {
+            // The band, and only while pinning is switched on: the message is the same one the tray's
+            // own row sends, and its answer for a window with **Pin Mode → Enable** off is to end it —
+            // which is right for a pin the tray owns and wrong for a window of its own, because that
+            // switch is about taking pins from the listing and this window was taken long ago (see
+            // `PreviewMessage::PinChanged`).
+            if after.1 != before.1 && crate::ui::preview_window::pin_mode_is_enabled() {
                 ui::preview_window::refresh_pin();
             }
         }
