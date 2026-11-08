@@ -116,6 +116,9 @@ pub(crate) struct ViewerFacts {
     pin_bubble_hwnd: AtomicIsize,
     pin_menu_hwnd: AtomicIsize,
     pin_file_in_flight: AtomicU64,
+    /// The window a pin is to be put behind, or zero where nothing is asked (see
+    /// `ask_the_pin_to_go_behind`).
+    pin_behind_ask: AtomicIsize,
     /// The path of the file a pin is showing, one UTF-16 unit to a word, and how many of them are the path
     /// (see `publish_the_pinned_path`).
     pin_path: [AtomicU32; SEAM_PIN_PATH_UNITS],
@@ -201,6 +204,7 @@ impl ViewerFacts {
             pin_bubble_hwnd: AtomicIsize::new(0),
             pin_menu_hwnd: AtomicIsize::new(0),
             pin_file_in_flight: AtomicU64::new(0),
+            pin_behind_ask: AtomicIsize::new(0),
             pin_path: [const { AtomicU32::new(0) }; SEAM_PIN_PATH_UNITS],
             pin_path_len: AtomicU32::new(0),
             pin_path_writing: AtomicU32::new(0),
@@ -2406,10 +2410,24 @@ pub(crate) static PIN_UP: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_up);
 /// detached into a window of its own still holds the hovers back, and a viewer that took its place in
 /// the ring is a viewer with no pin on screen.
 pub(crate) fn the_pin_is_up() -> bool {
+    the_pin_block().is_some()
+}
+
+/// The block a pin is up in, or nothing where no pin is up: the block whose `pin_up` is set (see
+/// `PIN_UP`).
+///
+/// **A fact about a pin is asked of this block and of no other.** A viewer that is not the pin's — one
+/// that left the ring with the window it detached, one begun for the hovers after it — publishes facts
+/// of its own that a pin is nothing to do with, and reading the first of those that answers is a fact
+/// about one window answered by another (see `pin_is_on_its_way_to` and `pinned_path`). A window of its
+/// own publishes no pin of the tray's at all (see `app::detach`), which is what leaves this answering
+/// nothing for it.
+fn the_pin_block() -> Option<&'static ViewerFacts> {
     asked_blocks()
         .iter()
         .flatten()
-        .any(|block| PIN_UP.in_block(block).load(Ordering::Acquire))
+        .copied()
+        .find(|block| PIN_UP.in_block(block).load(Ordering::Acquire))
 }
 
 /// Take a flag one viewer set about its own pin, from whichever block of the run set it: a pin is one
@@ -2477,15 +2495,57 @@ pub(crate) fn publish_the_pin_file_in_flight(path: Option<&Path>) {
 
 /// Whether `path` is the file the pin is already on its way to (see `PIN_FILE_IN_FLIGHT`).
 ///
-/// Every block is asked, because the pin the press is about is one window of the run's wherever it
-/// stands.
+/// **Asked of the pin's own block and of no other** (see `the_pin_block`): the flag is the pin's, and a
+/// block that holds one with no pin up — a window that left the ring mid-load — would otherwise answer
+/// for a pin that has nothing in flight at all, which is every pick of that file refused in silence.
 pub(crate) fn pin_is_on_its_way_to(path: &Path) -> bool {
     let wanted = fingerprint_of(path);
 
-    asked_blocks()
-        .iter()
-        .flatten()
-        .any(|block| PIN_FILE_IN_FLIGHT.in_block(block).load(Ordering::Acquire) == wanted)
+    the_pin_block()
+        .is_some_and(|block| PIN_FILE_IN_FLIGHT.in_block(block).load(Ordering::Acquire) == wanted)
+}
+
+/// The window a pin is to be put behind, published by the hook and taken by the viewer that holds the
+/// pin: zero for nothing asked (see `ask_the_pin_to_go_behind`).
+///
+/// It crosses because the two halves of the decision are on different sides: the hook is what watches the
+/// foreground every tick and knows the user has come back to the listing, and the window is the pin's, so
+/// the bringing-forward-or-behind is the viewer's own (see `pin_lifecycle::lower_pinned_preview`).
+pub(crate) static PIN_BEHIND_ASK: Fact<AtomicIsize> = Fact::of(|facts| &facts.pin_behind_ask);
+
+/// Ask the pin to put itself behind `window`, from any thread: the hook's answer to the user coming
+/// back to the listing the pin is standing over, which is a question only the window that holds the pin
+/// can answer (see `pin_lifecycle::lower_pinned_preview`).
+///
+/// **Every block is asked**, the way a press and an end are: a pin is one window of the run's wherever
+/// it stands, a window of its own included, and the viewer that holds it is the one that acts on this (see
+/// `note_a_pin_press`). A viewer with no pin spends it and puts nothing anywhere (see the preview loop).
+pub(crate) fn ask_the_pin_to_go_behind(window: isize) {
+    ask_the_pin_to_go_behind_in(asked_blocks(), window);
+}
+
+/// Ask the pin to go behind `window` in `blocks` (see `ask_the_pin_to_go_behind`).
+fn ask_the_pin_to_go_behind_in(
+    blocks: [Option<&'static ViewerFacts>; SEAM_VIEWERS],
+    window: isize,
+) {
+    for block in blocks.iter().flatten() {
+        PIN_BEHIND_ASK
+            .in_block(block)
+            .store(window, Ordering::Release);
+    }
+}
+
+/// The window the pin was last asked to go behind, taken, or nothing where nothing was asked (see
+/// `ask_the_pin_to_go_behind`).
+///
+/// Draining is the pin's own block's, which is this process's where this process holds the pin: two
+/// windows of a run standing would otherwise take each other's asks, and the pin that was asked would
+/// never hear it.
+pub(crate) fn take_the_pin_behind_ask() -> Option<isize> {
+    let window = PIN_BEHIND_ASK.swap(0, Ordering::AcqRel);
+
+    (window != 0).then_some(window)
 }
 
 /// Publish the file a pin is showing, or `None` where no pin is up: the one fact here that is a name
@@ -2531,14 +2591,12 @@ pub(crate) fn publish_the_pinned_path(path: Option<&Path>) {
 /// The file a pin is showing, as the side that owns the pin published it, or `None` where no pin is up or
 /// the name was being written when it was asked for (see `publish_the_pinned_path`).
 ///
-/// **Every block is asked**, and the first name one of them holds is the answer: a pin is one window of
-/// the run's wherever it stands, and the window that took the pin at its detach published no name of its
-/// own to be read here (see `app::detach`).
+/// **The pin's own block is asked and no other** (see `the_pin_block`): a name is a fact of the window
+/// that holds the pin, and a block that is not that window's holds a name of some other window's — the
+/// window that took the pin at its detach published no name of its own to be read here (see
+/// `app::detach`).
 pub(crate) fn pinned_path() -> Option<PathBuf> {
-    asked_blocks()
-        .iter()
-        .flatten()
-        .find_map(|block| a_pinned_path_of(block))
+    the_pin_block().and_then(a_pinned_path_of)
 }
 
 /// The name the block `facts` holds, or `None` where it holds none or was being written (see
@@ -3143,23 +3201,109 @@ mod tests {
         assert!(SeamMessage::of_preview(&PreviewMessage::PinUpdate(long)).is_none());
     }
 
+    /// **The facts of a pin are its own block's, and a name is published whole or not at all.**
+    ///
+    /// A name published by a block with no pin up is no pin's file, and a file in flight there is no
+    /// pin's file in flight: a window that left the ring mid-load holds both, and reading either as the
+    /// pin's is every pick of that file refused in silence (see `the_pin_block` and
+    /// `pin_is_on_its_way_to`). The facts are this process's own copy in a test (see `LOCAL_FACTS`), so
+    /// what is written here is read back here — and put at rest at the end, since the copy is one for the
+    /// whole binary.
     #[test]
-    fn the_pinned_path_is_published_whole_or_not_at_all() {
-        // The facts are this process's own copy in a test (see `LOCAL_FACTS`), so a name published here is
-        // read back here — and put away again at the end, since the copy is one for the whole binary.
+    fn the_facts_of_a_pin_are_its_own_blocks_and_a_name_is_whole_or_nothing() {
+        let facts = the_run_facts();
+        let path = Path::new("listing/a note.txt");
+        let other = Path::new("listing/on its way.png");
+        let at_rest = |block: &'static ViewerFacts| {
+            block.pin_up.store(false, Ordering::Release);
+            block.pin_file_in_flight.store(0, Ordering::Release);
+            block.pin_path_len.store(0, Ordering::Release);
+        };
+
+        facts.viewers[0]
+            .owner
+            .store(std::process::id(), Ordering::Release);
+        facts.viewers[1].owner.store(4_242, Ordering::Release);
+        at_rest(&facts.viewers[0]);
+        at_rest(&facts.viewers[1]);
         publish_the_pinned_path(None);
         assert_eq!(pinned_path(), None);
 
-        let path = Path::new("listing/a note.txt");
         publish_the_pinned_path(Some(path));
-        assert_eq!(pinned_path().as_deref(), Some(path));
+        assert_eq!(
+            pinned_path(),
+            None,
+            "a name published by a block with no pin up is no pin's file"
+        );
+
+        PIN_UP.store(true, Ordering::Release);
+        assert_eq!(
+            pinned_path().as_deref(),
+            Some(path),
+            "and the pin's own block is the one that names the pin's file"
+        );
 
         // A name longer than the facts can hold is no name rather than half of one.
         let long = PathBuf::from("a".repeat(SEAM_PIN_PATH_UNITS + 1));
         publish_the_pinned_path(Some(long.as_path()));
         assert_eq!(pinned_path(), None);
 
+        // **A window that left the ring mid-load**: a block standing of its own with a file in flight and
+        // no pin up. The file it names is no pin's, and a pick of it is not dropped on its account.
+        facts.viewers[1]
+            .pin_file_in_flight
+            .store(fingerprint_of(other), Ordering::Release);
+        assert!(
+            !pin_is_on_its_way_to(other),
+            "a file in flight in a block with no pin is no pin's file in flight"
+        );
+
+        // The pin's own block is the one asked, and its own flag is the one that answers.
+        facts.viewers[0]
+            .pin_file_in_flight
+            .store(fingerprint_of(other), Ordering::Release);
+        assert!(
+            pin_is_on_its_way_to(other),
+            "the pin's own flag is the one the update road is refused by"
+        );
+
+        // And a pin up with nothing in flight answers nothing: a flag is not a file on its way.
+        facts.viewers[0]
+            .pin_file_in_flight
+            .store(0, Ordering::Release);
+        assert!(!pin_is_on_its_way_to(other));
+
         publish_the_pinned_path(None);
+        at_rest(&facts.viewers[0]);
+        at_rest(&facts.viewers[1]);
+        facts.viewers[0].owner.store(0, Ordering::Release);
+        facts.viewers[1].owner.store(0, Ordering::Release);
+    }
+
+    #[test]
+    fn the_ask_to_go_behind_reaches_every_viewer_and_is_taken_once() {
+        let facts = the_run_facts();
+        let stood_in = facts.blocks(&facts.viewers[0], false);
+
+        ask_the_pin_to_go_behind_in(stood_in, 0x1234);
+        assert!(
+            stood_in
+                .iter()
+                .flatten()
+                .all(|block| PIN_BEHIND_ASK.in_block(block).load(Ordering::Acquire) == 0x1234),
+            "the window the user came back to is written into every window of the run's"
+        );
+
+        assert_eq!(
+            take_the_pin_behind_ask(),
+            Some(0x1234),
+            "and the pin's own viewer takes it"
+        );
+        assert_eq!(
+            take_the_pin_behind_ask(),
+            None,
+            "once: a second tick has nothing to lower"
+        );
     }
 
     #[test]

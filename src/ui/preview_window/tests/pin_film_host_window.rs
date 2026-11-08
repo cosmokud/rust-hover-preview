@@ -3796,6 +3796,61 @@ fn a_second_pick_for_the_file_in_flight_is_dropped() {
     );
 }
 
+/// **The update door is the hook's, and it refuses only for the reasons that are a refusal.**
+///
+/// A pin up nowhere is nothing to show a file in; the file a pin is already showing is not another file;
+/// a file the pin is on its way to is not one either — which the test above asks. Everything else is an
+/// ask, and the pin it is asked of is one window of the run's wherever it stands: the hook holds no pin
+/// window at all, so the door reads the published answers beside this process's own (see
+/// `update_pinned_preview` and `app::seam::the_pin_is_up`).
+#[test]
+fn the_update_door_refuses_only_what_is_a_refusal() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let (sender, answers) = channel();
+    let previous_sender = PREVIEW_SENDER
+        .lock()
+        .ok()
+        .and_then(|mut held| held.replace(sender));
+
+    // **No pin anywhere**: no window to show a file in, and nothing asked of one.
+    stand_pin(None);
+    assert!(!pinned(), "no pin is up");
+    update_pinned_preview(Path::new("a-file-nobody-pinned.png"));
+    assert!(
+        answers.try_recv().is_err(),
+        "a file offered while no pin is up is dropped rather than sent"
+    );
+
+    // **A pin up**, on a file of its own.
+    stand_pin(Some(PinnedPreview {
+        path: PathBuf::from("the-file-on-the-window.mkv"),
+        ..PinnedPreview::for_test()
+    }));
+    assert!(pinned());
+
+    update_pinned_preview(Path::new("the-file-on-the-window.mkv"));
+    assert!(
+        answers.try_recv().is_err(),
+        "a pick of the file the pin is already showing asks for nothing"
+    );
+
+    update_pinned_preview(Path::new("another-file.mkv"));
+    assert!(
+        matches!(
+            answers.try_recv(),
+            Ok(PreviewMessage::PinUpdate(ref path)) if path == Path::new("another-file.mkv")
+        ),
+        "a file the pin is not on is a pick like any other"
+    );
+
+    if let Ok(mut held) = PREVIEW_SENDER.lock() {
+        *held = previous_sender;
+    }
+    stand_pin(previous_pin);
+}
+
 /// **The band a step takes is the topmost one, and it is given back when the new source has the
 /// picture**: the outgoing film must not be covered by the program the user stepped from while the
 /// incoming player opens its file, and the pin must be an ordinary window again once it is drawn

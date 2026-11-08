@@ -559,6 +559,20 @@ pub fn run_explorer_hook() {
             if explorer_fg != pin_saw_explorer_foreground {
                 resolver.forget_item();
                 resolver.forget_window_views();
+                // **The user has come back to a listing, and the pin is a window that cannot hear it.**
+                // A window being activated is raised over every window of the ordinary band — a pin with
+                // `Always On Top` off included — but only while the pin is in that band: a pin the
+                // take-up left holding the topmost one, or one the loop's own repair put back at the
+                // front of the ordinary band, is a window that activation cannot cover, and the listing
+                // stays behind it for the rest of the session. The window that holds the pin is a
+                // viewer's, so the ask crosses to it and the lowering is decided there (see
+                // `app::seam::PIN_BEHIND_ASK` and `pin_lifecycle::lower_pinned_preview`, which answers
+                // for `Always On Top`, a collapsed pin and `Move To Top` off exactly as a press does).
+                if explorer_fg {
+                    // Safety: asks the desktop which window is in front; dereferences nothing.
+                    let foreground = unsafe { GetForegroundWindow() };
+                    crate::app::seam::ask_the_pin_to_go_behind(foreground.0 as isize);
+                }
                 pin_saw_explorer_foreground = explorer_fg;
             }
 
