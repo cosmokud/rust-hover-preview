@@ -699,19 +699,7 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         // card it is rather than dropped as a video with no shape (see
         // `audio_formats::probed_audio_only`). What is left is a file nothing here can read,
         // which is the answer this arm always gave it.
-        let playable = match audio_track::probed(path) {
-            Probed::Track(_) => true,
-            // A file nothing could be read from is read here once per hover, and never inside this
-            // one: what a probe finds nothing in is not held, so the next hover asks again rather
-            // than being answered from an emptiness (see `audio_track::remember`).
-            Probed::NotAsked => match probe_audio_track(path) {
-                Some(track) => {
-                    audio_track::remember(path, track);
-                    true
-                }
-                None => false,
-            },
-        };
+        let playable = audio_track::ask(path, || probe_audio_track(path)).is_some();
 
         if playable {
             audio_formats::remember_audio_only(path);
