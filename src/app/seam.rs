@@ -391,11 +391,13 @@ pub(crate) fn the_facts() -> &'static SeamFacts {
 /// section that could not be made leaves `the_facts` on this process's own copy, which is what every test
 /// and every run before the split used.
 pub(crate) fn open_the_seam_section() -> bool {
-    // Both events exist before the viewer does, so neither side ever makes one the other has already
+    // Every event exists before the viewer does, so neither side ever makes one the other has already
     // waited on: a named event is one object whichever process asked for it first, and all that matters
-    // is that it exists before the first send signals it.
+    // is that it exists before the first send signals it — and, for the readiness one, before a viewer
+    // can set it and end, which would leave this process waiting on a name nothing holds.
     let _ = preview_channel_event();
     let _ = tray_channel_event();
+    let _ = preview_ready_event();
 
     let Some(facts) = a_section_of_this_run() else {
         return false;
@@ -419,6 +421,7 @@ pub(crate) fn join_the_seam_section(tray: u32) -> bool {
     // that a send which finds nobody waiting yet is still a signal on the object the tray will read.
     let _ = preview_channel_event();
     let _ = tray_channel_event();
+    let _ = preview_ready_event();
 
     let name = the_seam_name("");
     let size = size_of::<SeamFacts>();
@@ -801,6 +804,49 @@ pub(crate) fn wake_preview_loop() {
     }
 }
 
+/// The event a viewer sets once its preview loop is running, and the one the tray app waits on before it
+/// makes the rings the road (see `app::viewer`).
+///
+/// **It is what keeps a viewer that dies at its start-up from costing the user every preview.** The tray
+/// commits to the rings on the strength of a process it has just begun, and a process is begun whether or
+/// not it ever stands: without an answer here, a run whose viewer could not join the section would publish
+/// every hover of the session into a ring nobody reads, which is a run with no previews at all. So a viewer
+/// sets this once its section is joined and its loop is turning, and a tray that does not hear it in time
+/// draws the run's previews itself (see `viewer::begin_the_viewer`).
+///
+/// It is made by the tray before that process is begun, for the reason the two events below are: an event
+/// a viewer sets and then ends is an object that goes with it, and a tray that asked for the name afterwards
+/// would make a fresh one and read its own silence as a viewer that never came up.
+pub(crate) fn preview_ready_event() -> HANDLE {
+    static EVENT: Lazy<isize> = Lazy::new(|| {
+        let name = the_seam_name("-up");
+        // Safety: an event with a name of this run's own and no security descriptor, manual-reset, which
+        // is what a signal set before the tray's wait is armed wants.
+        unsafe { CreateEventW(None, true, false, PCWSTR(name.as_ptr())) }
+            .map(|handle| handle.0 as isize)
+            .unwrap_or_default()
+    });
+
+    HANDLE(*EVENT as *mut core::ffi::c_void)
+}
+
+/// Say that this process's preview loop is running: the section is joined, the loop is turning, and every
+/// message the tray publishes from here on is one this process reads (see `preview_ready_event`).
+pub(crate) fn note_the_preview_loop_is_up() {
+    // Safety: an event of this run's own, signalled: nothing here is dereferenced.
+    unsafe {
+        let _ = SetEvent(preview_ready_event());
+    }
+
+    // And one line from the side the tray is waiting on, on the trace a run asks for: a run whose previews
+    // are missing is told here whether the process that was to draw them ever stood. Only a viewer's rings
+    // carry messages in a run that draws in another process, so this is said by a viewer and by nothing
+    // else (see `main`).
+    if the_rings_carry_messages() && std::env::var_os("RHP_SEAM_TRACE").is_some() {
+        eprintln!("seam: the viewer is up, its preview loop running");
+    }
+}
+
 /// Whether this process's messages cross the rings rather than the channels its own threads share.
 ///
 /// Set once, at start-up, by whichever side is one of two — the tray app once its viewer is standing, the
@@ -843,6 +889,13 @@ pub(crate) fn send_preview(message: PreviewMessage) {
         if let Some(slot) = SeamMessage::of_preview(&message) {
             the_facts().preview_ring.push(slot, "preview");
         }
+        // One line per hover and notice put in the ring, on the trace a run asks for: a run whose previews
+        // are missing is told here whether the tray ever sent one (see `next_preview_message`). Hovers are a
+        // pointer's pace and not a tick's, which is what a line here costs.
+        if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+            eprintln!("seam: the ring took a message from the tray");
+        }
+
         // Safety: an event of this run's own, signalled: nothing here is dereferenced.
         unsafe {
             let _ = SetEvent(preview_channel_event());
@@ -878,6 +931,14 @@ pub(crate) fn next_preview_message(rx: &Receiver<PreviewMessage>) -> Option<Prev
             .preview_ring
             .pop()
             .and_then(|slot| slot.as_preview());
+
+        // One line per message the ring hands over, on the trace a run asks for: a hover that was sent and
+        // never taken is the difference this line is read against `send_preview`'s. It is a message's pace
+        // and not a tick's — the wait calls this on every turn of an idle loop, and a message that is not
+        // there costs one `is_some`.
+        if message.is_some() && std::env::var_os("RHP_SEAM_TRACE").is_some() {
+            eprintln!("seam: the loop took a message off the preview ring");
+        }
 
         return message;
     }

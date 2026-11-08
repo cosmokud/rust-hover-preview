@@ -208,6 +208,7 @@ fn main() {
     // The road is taken once and never again: there is no switching back, and no second attempt at a viewer
     // a run has given up on (see `app::viewer`).
     let two_processes = the_seam_is_open && app::viewer::begin_the_viewer();
+    app::viewer::note_the_road(two_processes);
     let mut preview_handle = None;
     if two_processes {
         app::seam::carry_messages_in_the_rings();
