@@ -94,16 +94,7 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     }
 
     let hovered = (caption.wanted && y < caption.height)
-        .then(|| {
-            pin_chrome::button_at(
-                x,
-                y,
-                caption.width,
-                caption.height,
-                caption.dpi,
-                caption.frame != PinFrame::None,
-            )
-        })
+        .then(|| caption_button_at(x, y, &caption))
         .flatten();
     let (hovered_changed, chrome_changed) = {
         let Some(mut pinned) = pin_state() else {
@@ -215,6 +206,23 @@ pub(super) struct PinnedCaption {
     /// caption, and a caption that is not drawn is not something a press may act on — what is under
     /// it then is the picture, which is a handle for moving the window (see `PinChrome`).
     pub(super) wanted: bool,
+}
+
+/// The caption button a point in the pinned window is on, if it is one a hand can have: a detached
+/// window's own **Detach** is drawn faded and answers nothing, so no pointer is ever said to be on it
+/// and no press is ever armed by it (see `pin_chrome::Caption::detachable` and `app::detach`).
+fn caption_button_at(x: i32, y: i32, caption: &PinnedCaption) -> Option<pin_chrome::CaptionButton> {
+    let button = pin_chrome::button_at(
+        x,
+        y,
+        caption.width,
+        caption.height,
+        caption.dpi,
+        caption.frame != PinFrame::None,
+    )?;
+
+    let offered = button != pin_chrome::CaptionButton::Detach || !crate::app::detach::is_detached();
+    offered.then_some(button)
 }
 
 pub(super) fn pinned_caption_geometry() -> Option<PinnedCaption> {
@@ -1074,8 +1082,7 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         // has no strip at all, so nothing is answered from here and every press below it is the
         // card's own (see `pinned_caption_height`).
         if caption.wanted {
-            let button =
-                pin_chrome::button_at(x, y, caption.width, caption.height, caption.dpi, framed);
+            let button = caption_button_at(x, y, &caption);
             if let Some(button) = button {
                 if let Some(mut pinned) = pin_state() {
                     if let Some(pin) = pinned.pin_mut() {

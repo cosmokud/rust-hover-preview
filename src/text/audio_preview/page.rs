@@ -1101,6 +1101,11 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         // brighter one: the accent is what a button with no state of its own wears there, and a pin
         // kept on top that took it would say nothing but that the hand is near.
         //
+        // The detach beside it is the second of the two, and says the same way what became of the
+        // window it stands on: a pin is a window this process is showing the file in, and a detached
+        // window is one of its own — so the button that made it one wears the ink of a state it is in
+        // rather than the ink of a choice it still offers (see `CardChrome::detached`).
+        //
         // They are the one thing on the card that comes and goes: a button twice the
         // margin's own side stands in the name's own rows, so a hand near the buttons
         // themselves — in their own band and across their own columns — is what asks for
@@ -1118,8 +1123,16 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
                 fill_rect(surface, button.drawn, page_color);
 
                 let lit = chrome.hovered == Some(control) || chrome.pressed == Some(control);
-                let on_top = control == CardControl::AlwaysOnTop && chrome.always_on_top;
-                let color = match (on_top, lit) {
+                // The two window buttons that carry a state of the window's own — that it is kept on
+                // top, that it is a window of its own — are drawn in the numbers' ink, and light a
+                // step further toward white under the hand. The other two are the card's own ink, lit
+                // to the accent, which is what a button with no state to show wears.
+                let wearing_state = match control {
+                    CardControl::AlwaysOnTop => chrome.always_on_top,
+                    CardControl::Detach => chrome.detached,
+                    _ => false,
+                };
+                let color = match (wearing_state, lit) {
                     (false, false) => foreground,
                     (false, true) => accent,
                     (true, false) => number,

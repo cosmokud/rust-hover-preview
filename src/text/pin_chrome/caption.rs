@@ -118,6 +118,15 @@ pub(crate) struct Caption<'a> {
     /// size, so there is no larger box to give it and the button would be one that does nothing
     /// (see `pin_frame`).
     pub(crate) maximizable: bool,
+    /// Whether this pin's **Detach** button is a hand's to have. A window of its own has no more to
+    /// hand over: it *is* the window the pin was made into, so its own detach is drawn faded and
+    /// answers nothing (see `app::detach` and `ui::preview_window::pin_detach`).
+    ///
+    /// It is the same kind of fact as `maximizable` — a button the strip carries and the window has
+    /// no use for — and it is said by the ink rather than by leaving the button out, so that the row
+    /// of buttons does not move under a hand the moment the window it is on became a window of its
+    /// own.
+    pub(crate) detachable: bool,
     pub(crate) always_on_top: bool,
     pub(crate) hovered: Option<CaptionButton>,
     pub(crate) pressed: Option<CaptionButton>,
@@ -479,6 +488,7 @@ pub(crate) fn paint_caption(
             maximized: caption.maximized,
             read_only: caption.read_only,
             maximizable: caption.maximizable,
+            detachable: caption.detachable,
             always_on_top: caption.always_on_top,
             hovered: caption.hovered,
             pressed: caption.pressed,
@@ -509,6 +519,7 @@ struct CaptionStrip {
     maximized: bool,
     read_only: bool,
     maximizable: bool,
+    detachable: bool,
     always_on_top: bool,
     hovered: Option<CaptionButton>,
     pressed: Option<CaptionButton>,
@@ -544,6 +555,7 @@ impl CaptionStrip {
             && self.maximized == caption.maximized
             && self.read_only == caption.read_only
             && self.maximizable == caption.maximizable
+            && self.detachable == caption.detachable
             && self.always_on_top == caption.always_on_top
             && self.hovered == caption.hovered
             && self.pressed == caption.pressed
@@ -561,8 +573,12 @@ fn paint_button(
     button: CaptionButtonBox,
     scale: f32,
 ) {
-    let pressed = caption.pressed == Some(button.kind);
-    let hovered = caption.hovered == Some(button.kind);
+    // A button the window does not offer anymore is not one a press or a pointer can be on: nothing
+    // is washed under it and its mark keeps the faded ink in every state (see
+    // `Caption::detachable`).
+    let offered = caption.detachable || button.kind != CaptionButton::Detach;
+    let pressed = offered && caption.pressed == Some(button.kind);
+    let hovered = offered && caption.hovered == Some(button.kind);
 
     if button.kind == CaptionButton::AlwaysOnTop && caption.always_on_top {
         let wash = if pressed {
@@ -592,14 +608,18 @@ fn paint_button(
         text_paint::fill_rect(surface, button.rect, wash);
     }
 
+    // The two inks that are not the strip's own: the white a washed close cross is drawn in, and the
+    // faded ink of a mark the window is showing and not offering — the pin button that says the window
+    // is not kept on top, and the detach of a window that is already one of its own.
     let ink = if button.kind == CaptionButton::Close && (pressed || hovered) {
         [255, 255, 255]
-    } else if button.kind == CaptionButton::AlwaysOnTop
-        && !caption.always_on_top
-        && !pressed
-        && !hovered
+    } else if !offered
+        || (button.kind == CaptionButton::AlwaysOnTop
+            && !caption.always_on_top
+            && !pressed
+            && !hovered)
     {
-        text_paint::blend(palette.foreground, palette.background, 0.45)
+        palette.faded()
     } else {
         palette.foreground
     };

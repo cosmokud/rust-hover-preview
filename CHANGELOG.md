@@ -16,6 +16,12 @@
 
 - **The caption carries one button more, and a caption that runs out of room still gives up its walk first** — the detach stands at the seam between the pin's own buttons and the window's own three: `Previous`, `Next`, **Open With**, **Open With…**, **Always On Top**, **Detach**, **Minimize**, **Maximize**, **Close**. Close is still the last button on the right and the last to go, and the window's three keep the places they have always had.
 
+- **A detached window's own `Detach Window` is a spent road, drawn and answered as one** — a window of its own has nothing left to hand on, so the caption's button and both menu rows stay where they were and wear the theme's text given up toward the page, and a press on either is nothing at all: a faded row keeps its panel up where an answering one puts it away, and a caption button is not even hovered. The sound card's fourth button says the same in its own ink — the one the pin beside it wears when the window is kept on top — so a window of its own reads as one where a pin reads as pinned, and lights a step toward white under the hand rather than to the accent.
+
+### Fixed
+
+- **The detach button in a sound's card lights where it is drawn, not only near the command bar** — the four window buttons stand in a band at the top of the card, and three of them were answered anywhere in it while the detach was asked for only inside the bar's own row below them, so a hand on the button was a hand on the artwork. It is answered with the three beside it now.
+
 ## [0.4.11] - 2026-11-08
 
 ### Added

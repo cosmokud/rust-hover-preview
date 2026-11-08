@@ -345,7 +345,10 @@ pub(super) fn shared_menu_row_press(
         }
         // The window handed to a process of its own: the row goes away with the choice, and the
         // window it named is taken down by that process's first paint rather than by this press
-        // (see `pin_detach`).
+        // (see `pin_detach`). A bubble that is already a window of its own has nothing left to hand
+        // on — its row is drawn faded — so a press on it is a press on nothing and the panel stays
+        // up (see `pin_chrome::MenuRow::disabled`).
+        BubbleMenuRow::Detach if crate::app::detach::is_detached() => true,
         BubbleMenuRow::Detach => {
             super::pin_detach::detach_the_pinned_window();
             false
@@ -411,12 +414,17 @@ fn bubble_menu_row_mark(
 /// a pinned window's own menu is painted with, `standing` being which of the two it is, and
 /// `maximized` being whether that window is maximized, which is the word its maximize row carries
 /// (see `pin_menu::pinned_menu_paint`).
+///
+/// `detached` is whether this process is a window of its own, which the bubble a hand-off ended in is:
+/// the row that hands the window on is still listed and is listed faded, because there is no window
+/// left to hand it to (see `pin_chrome::MenuRow::disabled`).
 pub(super) fn bubble_menu_chrome_rows(
     kind: Option<MediaType>,
     playing: bool,
     standing: bool,
     settings: bool,
     maximized: bool,
+    detached: bool,
 ) -> Vec<pin_chrome::MenuRow> {
     let pause_on_minimize = bubble_pause_on_minimize(kind);
     let minimize_to = pin_minimize_to();
@@ -425,6 +433,7 @@ pub(super) fn bubble_menu_chrome_rows(
         .map(|row| pin_chrome::MenuRow {
             label: bubble_menu_row_label(*row, playing, maximized).to_string(),
             mark: bubble_menu_row_mark(*row, pause_on_minimize, minimize_to),
+            disabled: *row == BubbleMenuRow::Detach && detached,
         })
         .collect()
 }
@@ -488,6 +497,9 @@ pub(super) unsafe fn open_bubble_menu(hwnd: HWND) {
         false,
         true,
         false,
+        // A bubble of this process opened in a window of its own says the same of its hand-off row
+        // as a standing window's does (see `bubble_menu_press`).
+        crate::app::detach::is_detached(),
     );
 
     // The panel's natural size first, so the window grows only as big as the circle and the
@@ -611,6 +623,7 @@ pub(super) unsafe fn bubble_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
             false,
             true,
             false,
+            crate::app::detach::is_detached(),
         );
         if let Ok(mut menu) = BUBBLE_MENU.lock() {
             if let Some(menu) = menu.as_mut() {

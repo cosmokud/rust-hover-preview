@@ -299,6 +299,7 @@ fn a_caption_too_narrow_for_close_still_paints_its_bar() {
 
     let surface = DibSurface::create(width, height).expect("a surface");
     let caption = Caption {
+        detachable: true,
         title: "notes.txt",
         read_only: false,
         maximized: false,
@@ -349,6 +350,7 @@ fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
     let strip = |width: u32, title: &str| {
         let surface = DibSurface::create(width, 30).expect("a surface");
         let caption = Caption {
+            detachable: true,
             title,
             read_only: false,
             maximized: false,
@@ -478,6 +480,7 @@ fn a_caption_is_opaque_everywhere_it_is_painted() {
     // only happened to be opaque on a strip with nothing written on it is not opaque.
     for title in ["picture.png", ""] {
         let caption = Caption {
+            detachable: true,
             title,
             read_only: false,
             maximized: false,
@@ -531,6 +534,7 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
     // entirely is the same picture whichever file it is, so a test on one of those could not
     // tell a stale strip from a changed one.
     let caption = Caption {
+        detachable: true,
         title: "Readme.md",
         read_only: false,
         maximized: false,
@@ -619,6 +623,15 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
             &palette,
             &Caption {
                 always_on_top: false,
+                ..caption
+            },
+            96,
+        ),
+        (
+            "the detach given up, which is a mark drawn faded",
+            &palette,
+            &Caption {
+                detachable: false,
                 ..caption
             },
             96,
@@ -1143,6 +1156,91 @@ fn the_chevrons_arms_carry_a_share_of_the_ink() {
     );
 }
 
+/// A window of its own has nothing left to hand over, so its caption's **Detach** is the one button
+/// the strip carries and does not offer: its mark is the theme's own text given up toward the bar in
+/// every state, and a pointer resting on it lights nothing — a wash under a button that would begin a
+/// second process is a button that reads as one that would (see `Caption::detachable`).
+#[test]
+fn a_detached_window_s_detach_is_faded_and_washes_nothing_under_the_pointer() {
+    let palette = ChromePalette {
+        background: [40, 44, 52],
+        foreground: [171, 178, 191],
+        accent: [97, 175, 239],
+        dark: true,
+    };
+    // A strip wide enough for every button the caption carries, so that the detach is drawn at all.
+    let (width, height) = (9 * 46, 30);
+    let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
+
+    let strip = |detachable: bool, hovered: Option<CaptionButton>| {
+        let caption = Caption {
+            title: "picture.png",
+            read_only: false,
+            maximized: false,
+            maximizable: true,
+            detachable,
+            always_on_top: true,
+            hovered,
+            pressed: None,
+        };
+        paint_caption(&surface, &palette, &caption, 96);
+        surface.pixels().to_vec()
+    };
+
+    let box_ = button_boxes(width, height, 96, true)
+        .into_iter()
+        .find(|button| button.kind == CaptionButton::Detach)
+        .expect("a caption this wide carries the detach");
+
+    // The colours a pixel of the button's own box is made of, in the order of the surface, which is
+    // the desktop's own: the bar, and the ink of what is drawn on it.
+    let inks = |painted: &[u8]| -> Vec<[u8; 3]> {
+        let mut seen: Vec<[u8; 3]> = Vec::new();
+        for y in box_.rect.top..box_.rect.bottom {
+            for x in box_.rect.left..box_.rect.right {
+                let index = (y as usize * width as usize + x as usize) * 4;
+                let pixel = [painted[index + 2], painted[index + 1], painted[index]];
+                if !seen.contains(&pixel) {
+                    seen.push(pixel);
+                }
+            }
+        }
+        seen
+    };
+
+    // A pin's own detach, with the hand on it: the mark in the strip's own ink, and the button washed
+    // behind it, which is what every button of the strip that answers does.
+    let live = inks(&strip(true, Some(CaptionButton::Detach)));
+    assert!(
+        live.contains(&palette.foreground),
+        "a detach a pin still has is drawn in the caption's own ink"
+    );
+    assert!(
+        live.contains(&palette.hover(0.10)),
+        "and is washed by the pointer, the way its neighbours are"
+    );
+
+    // The same button on a window of its own: the mark is the faded ink, and the pointer changes
+    // nothing at all about it — the same bytes with a hand on the button as with none.
+    let dead = strip(false, Some(CaptionButton::Detach));
+    assert_eq!(
+        inks(&dead),
+        inks(&strip(false, None)),
+        "a pointer on a detach the window does not offer is a pointer on nothing"
+    );
+    let faded = inks(&dead);
+    assert!(
+        faded.contains(&palette.faded()),
+        "and the mark it still carries is drawn in the ink a window says what it does not offer in"
+    );
+    for absent in [palette.foreground, palette.accent, palette.hover(0.10)] {
+        assert!(
+            !faded.contains(&absent),
+            "with nothing of the button that answers left on it: {absent:?}"
+        );
+    }
+}
+
 /// A caption is narrowed in steps, and each is the width the one before it stopped being worth it at:
 /// the name is cut, then the name is given up, then the buttons go one at a time, and the bare bar is
 /// the last of it.
@@ -1223,6 +1321,7 @@ fn a_page_says_it_is_read_only_and_a_caption_for_another_kind_does_not() {
         let surface = DibSurface::create(width, height).expect("a surface");
         let strip = |read_only: bool| {
             let caption = Caption {
+                detachable: true,
                 title: "notes.txt",
                 read_only,
                 maximized: false,
@@ -1287,6 +1386,7 @@ fn a_name_stops_at_the_pill_and_is_only_given_up_where_the_pill_takes_its_room()
     let strip = |width: u32, title: &str, read_only: bool| {
         let surface = DibSurface::create(width, 30).expect("a surface");
         let caption = Caption {
+            detachable: true,
             title,
             read_only,
             maximized: false,

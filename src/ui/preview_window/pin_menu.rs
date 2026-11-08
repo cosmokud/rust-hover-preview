@@ -253,6 +253,10 @@ fn text_menu_rows() -> Vec<pin_chrome::MenuRow> {
         .map(|row| pin_chrome::MenuRow {
             label: row.label().to_string(),
             mark: row.mark(),
+            // The page's own four commands and the rule between them are the page's to answer
+            // whenever it is showing: none of them is a road out of the pin (see
+            // `pin_chrome::MenuRow::disabled`).
+            disabled: false,
         })
         .collect()
 }
@@ -455,13 +459,19 @@ fn row_of(row: PinMenuRow) -> Option<usize> {
 /// The rows a hand counts here are the rows themselves, with no rule between them: the doors
 /// the flyouts hang from are named rather than numbered (see `row_of` and
 /// `pinned_menu_paint`).
-pub(super) fn menu_rows() -> Vec<pin_chrome::MenuRow> {
+///
+/// `detached` is whether this process is a window of its own rather than a pin of the tray app's,
+/// which is the one thing the rows say about themselves: the hand-off row is still listed — it is
+/// where the road out of being a pin stood — and it is listed faded, because a window of its own has
+/// nothing left to hand on (see `pin_chrome::MenuRow::disabled` and `app::detach`).
+pub(super) fn menu_rows(detached: bool) -> Vec<pin_chrome::MenuRow> {
     let playing = a_sound_is_playing();
     PIN_MENU_ROWS
         .iter()
         .map(|row| pin_chrome::MenuRow {
             label: row.label(playing).to_string(),
             mark: row.mark(),
+            disabled: *row == PinMenuRow::Detach && detached,
         })
         .collect()
 }
@@ -497,6 +507,9 @@ pub(super) fn end_of_file_rows() -> Vec<pin_chrome::MenuRow> {
         .zip(END_OF_FILE_LABELS)
         .map(|(choice, label)| pin_chrome::MenuRow {
             label: label.to_string(),
+            // A choice a pin plays by is one a window of any kind has: what became of the window is
+            // no part of the sound in it (see `pin_chrome::MenuRow::disabled`).
+            disabled: false,
             mark: if *choice == current {
                 pin_chrome::MenuMark::Bullet
             } else {
@@ -512,6 +525,8 @@ fn seek_choice_rows(current: AudioSeek) -> Vec<pin_chrome::MenuRow> {
         .zip(SEEK_LABELS)
         .map(|(choice, label)| pin_chrome::MenuRow {
             label: label.to_string(),
+            // A seek choice is a choice a window of any kind has (see `pin_chrome::MenuRow::disabled`).
+            disabled: false,
             mark: if *choice == current {
                 pin_chrome::MenuMark::Bullet
             } else {
@@ -654,8 +669,12 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
     // the settings on a panel the right-click opened out on the media (see
     // `bubble_menu_chrome_rows`).
     let card = pin_shows_an_audio_card(pin);
+    // Whether this process is a window of its own, which is the one thing the rows are told rather
+    // than read: a hand-off row is a road a pin has and a window of its own has spent (see
+    // `menu_rows` and `bubble_menu_chrome_rows`).
+    let detached = crate::app::detach::is_detached();
     let rows = match card {
-        true => menu_rows(),
+        true => menu_rows(detached),
         // A right-click in the text of a pinned page holds the page's own two commands above the
         // rows the pin shares with the bubble (see `PinMenuPage::Text`).
         false => {
@@ -678,6 +697,9 @@ fn pinned_menu_paint(pin: &PinnedPreview) -> PinMenuPaint {
                 // A window that is maximized is one the row offers to put back, the way the
                 // caption's own maximize button does (see `pin_restore_box`).
                 pin.restore.is_some(),
+                // Whether this process is a window of its own, which is what the hand-off row says
+                // of itself here as well (see `bubble_menu_chrome_rows`).
+                detached,
             ));
             rows
         }
@@ -1084,7 +1106,11 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
         }
         // The window handed to a process of its own: the row goes away with the choice, and the
         // window it named is taken down by that process's first paint rather than by this press
-        // (see `pin_detach`).
+        // (see `pin_detach`). A window that is already one of its own has nothing left to hand on:
+        // its row is drawn faded, and a press on a row that is not a hand's is a press on nothing at
+        // all — the panel stays up, where a press on a row that answered would have put it away (see
+        // `pin_chrome::MenuRow::disabled`).
+        Some(PinMenuRow::Detach) if crate::app::detach::is_detached() => true,
         Some(PinMenuRow::Detach) => {
             super::pin_detach::detach_the_pinned_window();
             false

@@ -64,7 +64,27 @@ impl ChromePalette {
         };
         text_paint::blend(self.background, toward, amount)
     }
+
+    /// The ink of something a window is still showing and no longer offering: the theme's own
+    /// text given up part of the way toward its page, which is what a button or a row that is not
+    /// a hand's to have is drawn in (see `caption::Caption::detachable` and
+    /// `menu::MenuRow::disabled`).
+    ///
+    /// Given up toward the page and not replaced with a grey of this app's, because what is faded
+    /// here is a mark the window still means — the file in it is not a window to be detached, it is
+    /// already one — and it has to be read on either of the bundled themes, in a dark one and in a
+    /// light one alike.
+    pub(crate) fn faded(&self) -> [u8; 3] {
+        text_paint::blend(self.foreground, self.background, FADED_INK)
+    }
 }
+
+/// How far the ink of what a window no longer offers is given up toward the window's own page.
+///
+/// It is the same amount the caption's unpressed, unhovered **Always On Top** button gives up when
+/// the pin is not kept on top, so that everything a pin is showing and not offering is faded by one
+/// amount rather than by a handful of near neighbours.
+const FADED_INK: f32 = 0.45;
 
 /// The face a caption's title is set in: the one Windows writes a window's title in, so a
 /// pinned preview's caption reads like the caption of anything else on the desktop.
