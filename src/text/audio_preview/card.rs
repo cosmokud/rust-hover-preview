@@ -113,16 +113,16 @@ pub(crate) struct AudioPreviewOptions {
     pub(crate) mark_offset_y: f32,
 }
 
-/// How one fact is drawn: the codec's name is the one fact that is not a quantity or a plain
-/// word, so it is the one drawn in the page's own foreground.
+/// What ink one fact is set in, which is the whole of what a fact kind is: the line has two, and
+/// which one a fact takes is what it says rather than where it stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FactKind {
-    /// What the file is — `FLAC`, `MP3`, or the extension it carries where no engine named one.
-    Name,
-    /// A quantity: a sample rate, a bitrate.
-    Number,
-    /// A word: how many channels there are, as a person reads it.
-    Word,
+    /// What the file is — `FLAC`, `MP3`, or the extension it carries where no engine named one —
+    /// which is the one fact of the line drawn in the numbers' ink.
+    Format,
+    /// Everything else the file says of itself: a sample rate, how many channels there are, a
+    /// bitrate, the room it takes. Drawn in the muted gray, so the format is what stands out.
+    Note,
 }
 
 /// One fact, ready to be drawn: what it says and which color it is set in.
@@ -582,25 +582,25 @@ pub(crate) fn facts_of(track: &Track, path: &Path) -> Vec<Fact> {
             .codec
             .clone()
             .unwrap_or_else(|| extension_of(path).to_uppercase()),
-        kind: FactKind::Name,
+        kind: FactKind::Format,
     }];
 
     if let Some(rate) = track.rate {
         facts.push(Fact {
             text: rate_label(rate),
-            kind: FactKind::Number,
+            kind: FactKind::Note,
         });
     }
     if let Some(channels) = track.channels {
         facts.push(Fact {
             text: channel_label(channels),
-            kind: FactKind::Word,
+            kind: FactKind::Note,
         });
     }
     if let Some(bitrate) = track.bitrate {
         facts.push(Fact {
             text: bitrate_label(bitrate),
-            kind: FactKind::Number,
+            kind: FactKind::Note,
         });
     }
 

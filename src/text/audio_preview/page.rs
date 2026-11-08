@@ -673,7 +673,6 @@ pub(super) fn build_page(
         content_left,
         bar_width - body_advance * (TIME_GAP_ADVANCES + CLOCK_ADVANCES),
         body_advance,
-        foreground,
         muted,
         number,
     );
@@ -839,7 +838,6 @@ fn fact_runs(
     left: i32,
     room: i32,
     advance: i32,
-    foreground: [u8; 3],
     muted: [u8; 3],
     number: [u8; 3],
 ) -> Vec<PageRun> {
@@ -882,9 +880,8 @@ fn fact_runs(
             style: {
                 let mut style = plain_style(BODY_LEVEL);
                 style.foreground = match fact.kind {
-                    FactKind::Name => foreground,
-                    FactKind::Number => number,
-                    FactKind::Word => muted,
+                    FactKind::Format => number,
+                    FactKind::Note => muted,
                 };
                 style
             },

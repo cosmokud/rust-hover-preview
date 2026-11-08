@@ -58,7 +58,7 @@ use crate::config::config::TextTheme;
 #[cfg(test)]
 use crate::readers::audio_track::Track;
 #[cfg(test)]
-use crate::text::text_paint::{readable, rgb, scaled, TextMetrics, BODY_LEVEL};
+use crate::text::text_paint::{blend, readable, rgb, scaled, TextMetrics, BODY_LEVEL};
 #[cfg(test)]
 use crate::text::text_theme;
 #[cfg(test)]

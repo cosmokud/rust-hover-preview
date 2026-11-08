@@ -28,8 +28,8 @@ pub(crate) struct PlaylistRow {
     /// identifying, the folder being the one the pin was taken up in already.
     pub(crate) name: String,
     /// What the file says about itself, read once when the rows are built and drawn the way the
-    /// card draws its own facts line: the format in the page's ink, the quantities in the numbers'
-    /// ink and the words in the muted one, parted by the same ` · ` in that same muted gray (see
+    /// card draws its own facts line: the format in the numbers' ink and everything else the file
+    /// says in the muted one, parted by the same ` · ` in that same muted gray (see
     /// `audio_preview::facts_of` and `audio_preview::page`).
     pub(crate) facts: Vec<audio_preview::Fact>,
     /// How long it plays, or nothing where the file does not say — a row's right column is a
@@ -386,11 +386,12 @@ pub(crate) fn paint_playlist(
     let name_style = name_style();
     let facts_style = facts_style();
 
-    // **The facts line is set the way the card sets its own**, which is three inks rather than one:
-    // the format is the page's own, the quantities are the numbers' ink and the words — how many
-    // channels there are, said as a person says it — are the muted gray the card's own line uses.
-    // The ` · ` between two of them is that same gray, so the line reads as parts of one sentence
-    // rather than as a run of one colour (see `audio_preview::page`).
+    // **The facts line is set the way the card sets its own**, which is two inks rather than one:
+    // the format is the numbers' ink, so it is the one part of the line a person's eye lands on,
+    // and everything the file says beside it — the rate, how many channels there are, the bitrate,
+    // the room it takes — is the muted gray. The ` · ` between two of them is that same gray, so
+    // the line reads as parts of one sentence rather than as a run of one colour (see
+    // `audio_preview::page`).
     let muted = text_paint::blend(palette.background, palette.foreground, MUTED_INK);
     let separator = " · ";
 
@@ -478,9 +479,8 @@ pub(crate) fn paint_playlist(
         let mut x = facts_box.left;
         for (at, fact) in row.facts.iter().enumerate() {
             let ink = match fact.kind {
-                audio_preview::FactKind::Name => palette.foreground,
-                audio_preview::FactKind::Number => palette.number,
-                audio_preview::FactKind::Word => muted,
+                audio_preview::FactKind::Format => palette.number,
+                audio_preview::FactKind::Note => muted,
             };
 
             if at > 0 {
@@ -681,15 +681,15 @@ pub(crate) fn playlist_row(path: &Path) -> PlaylistRow {
         Some(track) => audio_preview::facts_of(track, path),
         None => vec![audio_preview::Fact {
             text: audio_preview::extension_of(path).to_uppercase(),
-            kind: audio_preview::FactKind::Name,
+            kind: audio_preview::FactKind::Format,
         }],
     };
     // The room the file takes is the one part no probe answers for, and the one a person picking
-    // one of ten mixes reads: it is always there. Drawn as a word, not one of the card's numbers:
-    // the size is a note on the file rather than a figure of the sound.
+    // one of ten mixes reads: it is always there. A note on the file rather than a figure of the
+    // sound, so it stands in the muted gray the card sets its own notes in.
     facts.push(audio_preview::Fact {
         text: format!("{:.1} MB", size_in_bytes(path) as f64 / BYTES_IN_A_MEGABYTE),
-        kind: audio_preview::FactKind::Word,
+        kind: audio_preview::FactKind::Note,
     });
 
     PlaylistRow {
