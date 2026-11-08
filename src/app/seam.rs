@@ -278,6 +278,8 @@ pub(crate) struct SeamFacts {
     /// Preview-shortcut presses seen over Explorer since the last drain: the setting they turn is the
     /// run's, so a press is one flip whichever preview loop reads it first (see `TOGGLE_PRESSES`).
     toggle_presses: AtomicU32,
+    /// Wheel notches the run's one wheel hook has seen (see `WHEEL_TICKS`).
+    wheel_ticks: AtomicU64,
 }
 
 // Safety: every field is an atomic or a block of them, and the two rings are written through their own
@@ -294,6 +296,7 @@ impl SeamFacts {
             tray_ring: SeamRing::new(),
             pin_main_down: AtomicU32::new(0),
             toggle_presses: AtomicU32::new(0),
+            wheel_ticks: AtomicU64::new(0),
         }
     }
 
@@ -2827,6 +2830,25 @@ pub(crate) static PIN_PRESSES: Fact<AtomicU32> = Fact::of(|facts| &facts.pin_pre
 /// block would be a preview loop reading it in each of the windows standing, which is finding the flip
 /// made twice (see `take_preview_toggle_presses`).
 pub(crate) static TOGGLE_PRESSES: RunFact<AtomicU32> = RunFact::of(|facts| &facts.toggle_presses);
+
+/// Wheel notches turned where no preview claimed them, counted by the run's one wheel hook.
+///
+/// **The hook and the loop that reads this are in two processes.** The wheel watcher is the viewer's, a
+/// hook being a process's own, and the loop that re-resolves the item under a parked pointer after a
+/// scroll is the tray's (see `shell::wheel_input`): a count kept beside the hook is one no other process
+/// can see, which is a scroll that refreshes nothing. So it is the run's own count, written by whichever
+/// process holds the hook.
+pub(crate) static WHEEL_TICKS: RunFact<AtomicU64> = RunFact::of(|facts| &facts.wheel_ticks);
+
+/// Count one wheel notch for the run (see `WHEEL_TICKS`).
+pub(crate) fn count_a_wheel_notch() {
+    WHEEL_TICKS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Wheel notches the run's hook has seen so far (see `WHEEL_TICKS`).
+pub(crate) fn wheel_ticks_seen() -> u64 {
+    WHEEL_TICKS.load(Ordering::Relaxed)
+}
 
 /// Pin-key presses since this was last called (see `PIN_PRESSES`).
 pub(crate) fn take_presses() -> u32 {

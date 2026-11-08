@@ -7,6 +7,9 @@
 //! tick counter that the polling loop consumes to re-resolve the item under the
 //! cursor once the list settles.
 //!
+//! That counter is the run's rather than this process's, because the loop that consumes it is the
+//! tray's and the hook may be a viewer's (see `app::seam::WHEEL_TICKS`).
+//!
 //! The same hook is what lets a scrollable text preview take the wheel: a preview the
 //! user has not pressed is a window the keyboard is not in, so Windows would deliver
 //! its wheel messages to Explorer instead. When the pointer is inside the region a
@@ -36,16 +39,13 @@ use crate::app::seam::{
     MODELS_BAND, PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_VOLUME_REGION, PIN_ZOOM_DELTA,
     PIN_ZOOM_REGION, TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION, TEXT_SIZE_REGION,
 };
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MBUTTONDOWN, WM_MBUTTONUP,
     WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
-
-/// Wheel messages seen since startup; the hook thread is the only writer.
-static WHEEL_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// Thread running the hook's message pump, published so shutdown can wake it.
 static WHEEL_THREAD_ID: AtomicU32 = AtomicU32::new(0);
@@ -68,9 +68,10 @@ fn preview_takes_the_wheel(block: &'static crate::app::seam::ViewerFacts) -> boo
         || crate::app::seam::the_pointer_is_on(block)
 }
 
-/// Number of wheel messages seen so far, counted across the whole desktop.
+/// Number of wheel messages seen so far, counted across the whole desktop by whichever process of the
+/// run holds this hook (see `app::seam::WHEEL_TICKS`).
 pub fn wheel_tick_count() -> u64 {
-    WHEEL_TICKS.load(Ordering::Relaxed)
+    crate::app::seam::wheel_ticks_seen()
 }
 
 /// Whether `Ctrl` is held, asked of the keyboard rather than read from the message: a wheel message
@@ -252,7 +253,7 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
             }
         }
 
-        WHEEL_TICKS.fetch_add(1, Ordering::Relaxed);
+        crate::app::seam::count_a_wheel_notch();
     }
 
     CallNextHookEx(None, code, wparam, lparam)
