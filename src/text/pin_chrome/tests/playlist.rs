@@ -1,6 +1,6 @@
 use super::super::playlist::{
-    playlist_edge_at, playlist_row, playlist_scroll_at, playlist_scroll_max, playlist_thumb,
-    playlist_thumb_grab, playlist_track_holds, PlaylistEdge,
+    playlist_edge_at, playlist_row, playlist_scroll_at, playlist_scroll_max, playlist_step_pick,
+    playlist_thumb, playlist_thumb_grab, playlist_track_holds, PlaylistEdge,
 };
 use super::*;
 use crate::readers::audio_track::{self, Player, Probed, Track};
@@ -411,6 +411,81 @@ fn a_press_on_the_bar_takes_hold_of_the_thumb_it_found() {
         !playlist_track_holds(&layout, left, layout.rows_top - 1),
         "and one above it is nobody's"
     );
+}
+
+/// The arrows step the highlight a row at a time inside the band and hold at both ends: a step off
+/// the top does not come back on at the bottom, and the first press with nothing picked starts on
+/// the row the sound on screen is on, or on the band's first row in sight where it has none.
+#[test]
+fn the_arrows_step_a_row_and_hold_at_either_end() {
+    // Nothing picked and nothing playing: the first press starts where the band is looking.
+    assert_eq!(playlist_step_pick(None, None, 0, 40, 5, -1), Some((0, 0)));
+    assert_eq!(playlist_step_pick(None, None, 0, 40, 5, 1), Some((1, 0)));
+
+    // A first press on a pin that is playing starts on the sound's own row and carries the band to
+    // it: the row it steps from is one the band has scrolled to rather than one it can see.
+    assert_eq!(playlist_step_pick(None, Some(7), 0, 40, 5, 1), Some((8, 4)));
+    assert_eq!(
+        playlist_step_pick(None, Some(7), 0, 40, 5, -1),
+        Some((6, 2))
+    );
+
+    // Either end holds rather than wraps.
+    assert_eq!(
+        playlist_step_pick(Some(0), None, 0, 40, 5, -1),
+        Some((0, 0))
+    );
+    assert_eq!(
+        playlist_step_pick(Some(39), Some(39), 35, 40, 5, 1),
+        Some((39, 35))
+    );
+
+    // And a band of no rows has no row to step to.
+    assert_eq!(playlist_step_pick(None, None, 0, 0, 5, 1), None);
+}
+
+/// A highlight stepped out of the rows in sight is carried back into them by the scroll, which is
+/// the band's own unit: a whole row, so that no row is ever drawn half of one — and every row the
+/// arrows can land on is one the paint draws from the scroll they leave.
+#[test]
+fn a_stepped_row_is_scrolled_back_into_sight() {
+    let (rows, visible) = (40usize, 5usize);
+
+    // Down out of the last row in sight, and up out of the first: the band follows it one row.
+    assert_eq!(
+        playlist_step_pick(Some(4), None, 0, rows, visible, 1),
+        Some((5, 1))
+    );
+    assert_eq!(
+        playlist_step_pick(Some(1), None, 1, rows, visible, -1),
+        Some((0, 0))
+    );
+
+    // The last row of the list is the last row the band can scroll to, and the first is its first.
+    let last = rows - 1;
+    assert_eq!(
+        playlist_step_pick(Some(last - 1), None, last - visible, rows, visible, 1),
+        Some((last, last + 1 - visible))
+    );
+
+    // A step inside the rows in sight moves nothing of the scroll.
+    assert_eq!(
+        playlist_step_pick(Some(5), None, 2, rows, visible, 1),
+        Some((6, 2))
+    );
+
+    // And whatever the row it lands on, it is one of the rows the paint draws.
+    for picked in 0..rows {
+        for direction in [-1, 1] {
+            let (to, scroll) =
+                playlist_step_pick(Some(picked), None, picked, rows, visible, direction)
+                    .expect("a band of forty rows");
+            assert!(
+                scroll <= to && to < scroll + visible,
+                "picked {picked} stepped to {to}, which is outside the rows drawn from {scroll}"
+            );
+        }
+    }
 }
 
 /// Both rows of a band are drawn at the one size: the second row is the first row's own painting,

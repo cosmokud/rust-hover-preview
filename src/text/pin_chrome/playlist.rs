@@ -212,6 +212,29 @@ pub(crate) fn playlist_row_at(
     (step < layout.visible.max(0) as usize && index < rows).then_some(index)
 }
 
+/// The row the arrows step to, and the scroll that keeps it in sight.
+///
+/// The first press with nothing picked starts on the row the pin is showing where its walk has one
+/// and on the band's first row in sight where it has none. Either end holds rather than wrapping,
+/// and the scroll is a whole row because a band never draws half of one.
+pub(crate) fn playlist_step_pick(
+    picked: Option<usize>,
+    showing: Option<usize>,
+    scroll: usize,
+    rows: usize,
+    visible: usize,
+    direction: i32,
+) -> Option<(usize, usize)> {
+    let last = rows.checked_sub(1)?;
+    let from = picked.or(showing).unwrap_or(scroll).min(last);
+    let picked = (from as i32 + direction).clamp(0, last as i32) as usize;
+    let scroll = scroll
+        .min(picked)
+        .max((picked + 1).saturating_sub(visible.max(1)));
+
+    Some((picked, scroll))
+}
+
 /// The scrollbar's thumb, top and bottom: the share of the rows the band shows, carried down the
 /// track by the share it has scrolled.
 pub(crate) fn playlist_thumb(layout: &PlaylistLayout, scroll: usize, rows: usize) -> (i32, i32) {
