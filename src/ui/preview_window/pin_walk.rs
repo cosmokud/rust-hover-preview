@@ -527,8 +527,11 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             if let Some(folder) = at.parent() {
                 pin_navigation::forget_folder(folder);
             }
-            let list =
-                pin_navigation::list_for(at, anchor, config).unwrap_or_else(|| empty.clone());
+            // The band a sound's playlist is drawn in is a list of the folder's sounds, so the walk
+            // behind it is `Category` while it is up (see `nav_mode_for`).
+            let band_open = pin_playlist::playlist_band_is_open();
+            let list = pin_navigation::list_for(at, anchor, config, band_open)
+                .unwrap_or_else(|| empty.clone());
 
             // Whether steps along this walk follow a shuffled playlist or the folder's own
             // order: the pin's own shuffle says so — the audio one for a walk anchored on a
