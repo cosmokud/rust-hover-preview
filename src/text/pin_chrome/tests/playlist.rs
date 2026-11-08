@@ -412,3 +412,54 @@ fn a_press_on_the_bar_takes_hold_of_the_thumb_it_found() {
         "and one above it is nobody's"
     );
 }
+
+/// Both rows of a band are drawn at the one size: the second row is the first row's own painting,
+/// name and facts line alike. Two painters share one surface's DC and the face each remembers is
+/// only its own — the second row is where a face the other left behind shows (see
+/// `RunPainter::forget_the_face`).
+#[test]
+fn a_row_is_drawn_exactly_as_the_row_above_it() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let (width, height) = (400u32, 140u32);
+    let surface = DibSurface::create(width, height).expect("a surface");
+    let layout = playlist_layout(width as i32, height as i32, SCALE, 2);
+    assert_eq!(layout.visible, 2, "two rows in the room of two");
+    let name = "a name of the one length";
+    let mut rows = [a_row(name), a_row(name)];
+    // A length as well, so that the row's right column is drawn in the same test: it is the one run
+    // of a row that is set at the body level rather than at either of the two above it.
+    for row in &mut rows {
+        row.clock = Some("1:02:03".to_string());
+    }
+
+    paint_playlist(
+        &surface,
+        &palette,
+        &PlaylistBand {
+            layout,
+            rows: &rows,
+            first: 0,
+            total: 2,
+            showing: None,
+            hovered: None,
+            picked: None,
+            name_offset: 0,
+        },
+        SCALE,
+    );
+
+    let pixels =
+        unsafe { std::slice::from_raw_parts(surface.bits(), (width * height * 4) as usize) };
+    let row = |index: usize| {
+        let top =
+            (layout.rows_top + index as i32 * layout.row_height) as usize * width as usize * 4;
+        &pixels[top..top + layout.row_height as usize * width as usize * 4]
+    };
+
+    assert_eq!(
+        row(0),
+        row(1),
+        "the second row is drawn away from the first, so a face one painter selected is the face \
+         the other drew in"
+    );
+}
