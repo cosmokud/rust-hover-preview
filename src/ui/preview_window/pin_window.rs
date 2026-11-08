@@ -355,7 +355,7 @@ use crate::app::seam::PIN_HANDED_OFF;
 
 /// Whether a pin has been closed since this was last asked (see [`PIN_RESUMED`]).
 pub(super) fn take_pin_resumed() -> bool {
-    PIN_RESUMED.swap(false, Ordering::AcqRel)
+    crate::app::seam::take_a_pin_flag(&PIN_RESUMED)
 }
 
 /// Note that the pin being asked for its end is one whose file was handed off to another
@@ -368,7 +368,7 @@ pub(super) fn note_pin_handed_off() {
 /// Whether the pin that just came down was handed off to another program (see
 /// [`PIN_HANDED_OFF`]).
 pub(crate) fn take_pin_handed_off() -> bool {
-    PIN_HANDED_OFF.swap(false, Ordering::AcqRel)
+    crate::app::seam::take_a_pin_flag(&PIN_HANDED_OFF)
 }
 
 /// Take a pin up over whatever was on screen: the window, what it is showing, and everything

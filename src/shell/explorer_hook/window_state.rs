@@ -333,7 +333,7 @@ pub(super) fn click_is_over_a_listing(over_explorer: bool, over_our_own: bool) -
 /// its rows is the bubble whether the panel is up or — on the tick after a row was pressed — the
 /// listing the panel and the bubble were standing over (see `press_is_on_the_pins_own_menu`).
 pub(super) fn bubble_window_is_at(window: HWND) -> bool {
-    let bubble = crate::app::seam::PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let bubble = crate::app::seam::the_bubble_window();
     window_is_the_slot(window, bubble)
 }
 
@@ -559,7 +559,7 @@ pub(super) fn press_is_on_the_pins_own_menu(window: HWND) -> bool {
 /// its menu is up, and a press the hook reads off the panel is a row rather than the file that row
 /// covers (see `press_is_on_the_pins_own_menu`, which the bubble's own panel answers beside it).
 pub(super) fn pin_menu_window_is_at(window: HWND) -> bool {
-    let menu = crate::app::seam::PIN_MENU_HWND.load(Ordering::SeqCst);
+    let menu = crate::app::seam::the_menu_window();
     window_is_the_slot(window, menu)
 }
 

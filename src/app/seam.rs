@@ -66,18 +66,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
     PM_NOREMOVE, QS_ALLINPUT,
 };
 
-/// Every fact the tray side and the preview side publish to each other, as one struct.
+/// What one viewer of this run knows about its own window: the block it stands in.
 ///
-/// The facts were a scatter of `static Atomic*`s of this module's own, which is the same thing while
-/// the tray and the preview are one process and nothing at all once they are two: a static is this
-/// process's memory, and a preview in a process of its own cannot read one. So each is a field of one
-/// `#[repr(C)]` struct, and *where* that struct is kept is settled once at start-up by `the_facts` — in
-/// the shared section a run opens for its own viewers, or in `LOCAL_FACTS` for a run that has none,
-/// which is every test and every start-up that could not open one.
+/// **A run's facts are not one record but a run's and a window's.** Two viewers stand at once once a
+/// pin has been detached — the one serving the hovers and the one standing as a window of its own — and
+/// everything either published used to land in the same field: a notch turned over the detached pin was
+/// claimed by the hover's viewer, and the window under the pointer, the boxes a notch belongs to, the
+/// engine's window and the pin's own handles were whichever viewer wrote last. So what one viewer
+/// publishes about its own window is a block of its own (see `SeamFacts`), and a process reaches its
+/// own block with `the_facts` and another's with `facts_of`, by pid.
 ///
-/// **One type, two homes.** A reader below names a field through a `Fact` rather than naming a static,
-/// so nothing outside this module knows which home it is inside, and the code that counts a notch
-/// inside a low-level hook is the same code whichever it is.
+/// **One type, one home per block.** A reader below names a field through a `Fact` rather than naming a
+/// static, so nothing outside this module knows which block it is inside, and the code that counts a
+/// notch inside a low-level hook is the same code whichever block it lands in.
 ///
 /// The layout has to be the same bytes in both processes, which is why this is `#[repr(C)]` with an
 /// atomic and nothing else in every field: no padding the compiler invented between one process's copy
@@ -86,7 +87,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// starts.
 ///
 /// What each field is and why it exists is said beside its `Fact` in the rest of this module.
-pub(crate) struct SeamFacts {
+pub(crate) struct ViewerFacts {
+    /// The pid of the process standing in this block, or 0 while it is free: claimed once, at start-up,
+    /// by the viewer that draws in it (see `claim_a_block`).
+    owner: AtomicU32,
     text_scroll_delta: AtomicI32,
     pin_zoom_delta: AtomicI32,
     pin_volume_delta: AtomicI32,
@@ -130,8 +134,6 @@ pub(crate) struct SeamFacts {
     models_notches: AtomicI32,
     models_notch_point: AtomicU64,
     pin_presses: AtomicU32,
-    toggle_presses: AtomicU32,
-    pin_main_down: AtomicU32,
     /// Which of this app's own surfaces the pointer stands on, one bit a surface (see
     /// `cursor_preview_hover`): the preview's picture, the player's window, the engine's, or none.
     preview_hover: AtomicU32,
@@ -169,21 +171,17 @@ pub(crate) struct SeamFacts {
     /// The boxes a standing pin's own buttons answer a press in, each packed whole, and `NO_REGION`
     /// for the ones this pin has no button in (see `pin_button_covers`).
     pin_buttons: [AtomicU64; PIN_BUTTONS],
-    /// Messages the tray side sends the preview side, and the other way, each with an event of its own
-    /// to wake the reader (see `SeamRing`).
-    preview_ring: SeamRing,
-    tray_ring: SeamRing,
 }
 
-// Safety: every field is an atomic or a slot in one of the two rings, and a slot is written only by the
-// sender that claimed it and read only once `filled` names that claim (see `SeamRing::push`). Nothing
-// here is a reference into this process, which is what makes the same type usable as a section.
-unsafe impl Sync for SeamFacts {}
+// Safety: every field is an atomic, and nothing here is a reference into this process, which is what
+// makes the same type usable as a section two processes map.
+unsafe impl Sync for ViewerFacts {}
 
-impl SeamFacts {
-    /// Every fact at rest: no box published, no pin up, nothing counted.
+impl ViewerFacts {
+    /// Every fact of a window at rest: no box published, no pin up, nothing counted.
     const fn new() -> Self {
         Self {
+            owner: AtomicU32::new(0),
             text_scroll_delta: AtomicI32::new(0),
             pin_zoom_delta: AtomicI32::new(0),
             pin_volume_delta: AtomicI32::new(0),
@@ -215,8 +213,6 @@ impl SeamFacts {
             models_notches: AtomicI32::new(0),
             models_notch_point: AtomicU64::new(0),
             pin_presses: AtomicU32::new(0),
-            toggle_presses: AtomicU32::new(0),
-            pin_main_down: AtomicU32::new(0),
             preview_hover: AtomicU32::new(0),
             preview_rect: AtomicU64::new(NO_REGION),
             engine_page_runs: AtomicBool::new(false),
@@ -232,9 +228,127 @@ impl SeamFacts {
             pin_media_left_presses: AtomicU64::new(0),
             preview_alive_unix_ms: AtomicU64::new(0),
             pin_buttons: [const { AtomicU64::new(NO_REGION) }; PIN_BUTTONS],
+        }
+    }
+}
+
+/// How many viewers one run may have standing at once, which is how many blocks its section holds:
+/// the viewer serving the hovers, and one per pin detached into a window of its own.
+///
+/// shortcut: a run that detaches more windows than this has no block for the eighth of them, and a
+/// viewer with no block stops at its start-up; upgrade to a section sized for a list if a user ever
+/// meets it.
+const SEAM_VIEWERS: usize = 8;
+
+/// The facts of a run: the blocks its viewers stand in, and the two things that are the run's own.
+///
+/// **Where a window's facts end and the run's begin** is the whole of what this split is. A block holds
+/// what one viewer published about the window it draws and the counts turned at it; what is here holds
+/// the two rings the messages cross on, and the two counts a hook of the tray's keeps for the run rather
+/// than for a window — the pin key's held chords, which are one hand, and the preview shortcut's
+/// presses, which turn one setting.
+///
+/// **The run keeps one block of its own and no window in it.** A block is a place, and the tray stands in
+/// the first of them for the reason every process of a run does: `the_facts` answers with it, and a
+/// process with no block of its own would be answered with a viewer's. What it publishes is never
+/// written there — the tray draws no window, so every fact it owns goes into the block the hovers are
+/// served from (see `the_serving_facts`) or into every block standing (see `note_a_pin_press`).
+///
+/// The section a run opens is one of these, which is what makes a viewer's block the same address in
+/// both processes (see `a_section_of_this_run`).
+pub(crate) struct SeamFacts {
+    viewers: [ViewerFacts; SEAM_VIEWERS],
+    /// Messages the tray side sends the preview side, and the other way, each with an event of its own
+    /// to wake the reader (see `SeamRing`).
+    preview_ring: SeamRing,
+    tray_ring: SeamRing,
+    /// The pin key's main keys that are held, as a bit per chord slot.
+    ///
+    /// The run's rather than a window's because a hand is one hand: the hook that counts an edge reads
+    /// it twice a message to tell a press from a repeat, and every viewer's band-hold reads the same
+    /// answer (see `PIN_MAIN_DOWN`).
+    pin_main_down: AtomicU32,
+    /// Preview-shortcut presses seen over Explorer since the last drain: the setting they turn is the
+    /// run's, so a press is one flip whichever preview loop reads it first (see `TOGGLE_PRESSES`).
+    toggle_presses: AtomicU32,
+}
+
+// Safety: every field is an atomic or a block of them, and the two rings are written through their own
+// claims (see `SeamRing::push`). Nothing here is a reference into this process, which is what makes the
+// same type usable as a section.
+unsafe impl Sync for SeamFacts {}
+
+impl SeamFacts {
+    /// Every fact of the run at rest: no block stood in, no pin up, nothing counted.
+    const fn new() -> Self {
+        Self {
+            viewers: [const { ViewerFacts::new() }; SEAM_VIEWERS],
             preview_ring: SeamRing::new(),
             tray_ring: SeamRing::new(),
+            pin_main_down: AtomicU32::new(0),
+            toggle_presses: AtomicU32::new(0),
         }
+    }
+
+    /// The block the viewer `pid` stands in, or `None` where no viewer of that pid is standing.
+    fn facts_of(&'static self, pid: u32) -> Option<&'static ViewerFacts> {
+        if pid == 0 {
+            return None;
+        }
+
+        self.viewers
+            .iter()
+            .find(|block| block.owner.load(Ordering::Acquire) == pid)
+    }
+
+    /// The blocks a question about the run's pin is asked of, and the ones a number the run keeps for its
+    /// windows is written into: every block a viewer stands in, or the one block a process publishes into
+    /// where it is a viewer itself, or where nothing is claimed at all and it is a run drawing its own
+    /// previews (see `asked_blocks`).
+    fn blocks(
+        &'static self,
+        own: &'static ViewerFacts,
+        a_viewer: bool,
+    ) -> [Option<&'static ViewerFacts>; SEAM_VIEWERS] {
+        let mut blocks = [None; SEAM_VIEWERS];
+
+        if a_viewer {
+            blocks[0] = Some(own);
+            return blocks;
+        }
+
+        for (slot, block) in blocks.iter_mut().zip(self.viewers.iter()) {
+            *slot = (block.owner.load(Ordering::Acquire) != 0).then_some(block);
+        }
+
+        // Nothing is claimed: this is a run of one process drawing its own previews, and the block it
+        // publishes into is the one every question about the run is asked of (see `the_facts`).
+        if blocks.iter().all(Option::is_none) {
+            blocks[0] = Some(own);
+        }
+
+        blocks
+    }
+
+    /// Claim a free block of this run for `pid`, answering its place in `viewers`.
+    ///
+    /// **A block is claimed once and by one process**, with a compare and swap on its owner: two viewers
+    /// begun at the same moment cannot stand in the same one, and the pid a block holds is what every
+    /// other process asks it by (see `facts_of`). `None` is every block stood in, which a viewer's
+    /// start-up is the one thing that can meet: it answers false to `join_the_seam_section` and stops,
+    /// rather than standing as a process with no facts to draw from.
+    fn claim_a_block(&'static self, pid: u32) -> Option<usize> {
+        for (at, block) in self.viewers.iter().enumerate() {
+            if block
+                .owner
+                .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(at);
+            }
+        }
+
+        None
     }
 }
 
@@ -351,6 +465,14 @@ static LOCAL_FACTS: SeamFacts = SeamFacts::new();
 /// Where a run's facts are once it has opened a section, or null where it has not.
 static MAPPED_FACTS: AtomicPtr<SeamFacts> = AtomicPtr::new(std::ptr::null_mut());
 
+/// Which block of this run's facts this process stands in, as its place in `SeamFacts::viewers`, or
+/// `NO_BLOCK` while it has claimed none.
+static THE_OWN_BLOCK: AtomicUsize = AtomicUsize::new(NO_BLOCK);
+
+/// The one block a run's facts hold on their own is the first: where a block is asked for and none was
+/// claimed, which is every test and every run that draws its own previews (see `THE_OWN_BLOCK`).
+const NO_BLOCK: usize = usize::MAX;
+
 /// The handle to this run's section, kept open for the life of the process.
 ///
 /// **A view does not keep the name; the handle does.** The section is backed by the pagefile — no file
@@ -363,20 +485,119 @@ static MAPPED_FACTS: AtomicPtr<SeamFacts> = AtomicPtr::new(std::ptr::null_mut())
 /// So it is never closed, and it needs no more than that: the last handle going is the run ending.
 static THE_SECTION_HANDLE: AtomicIsize = AtomicIsize::new(0);
 
-/// The facts this process publishes to and reads from: the section where there is one, this process's
-/// own copy otherwise.
+/// The facts this process publishes to and reads from: the block it stands in, of the section where
+/// there is one and of this process's own copy otherwise.
+///
+/// Written once, at start-up, before the threads that publish are begun; read on every hook callback
+/// and every tick, which is why it is one pointer load and one index and not a lock.
+pub(crate) fn the_facts() -> &'static ViewerFacts {
+    let run = the_run_facts();
+    let own = THE_OWN_BLOCK.load(Ordering::Acquire);
+
+    match run.viewers.get(own) {
+        Some(block) => block,
+        // Nothing claimed a block and no block is this process's: the run is one process drawing its
+        // own previews, and the first block is the one it stands in.
+        None => &run.viewers[0],
+    }
+}
+
+/// The block the hovers of this run are served from: the serving viewer's, and this process's own where
+/// it is the one drawing the previews (see `the_viewer_process`).
+///
+/// **It is the answer to every question about a preview under the pointer**, and the facts a `Fact`
+/// names below are read and written in it: an asker inside a viewer is answered with its own block,
+/// because `the_viewer_process` is that process's own pid where no viewer was noted — so a viewer that
+/// has become a window of its own still draws, wheels and keys its own preview and only stops being
+/// asked what the pointer is on.
+fn the_serving_facts() -> &'static ViewerFacts {
+    facts_of(the_viewer_process()).unwrap_or_else(the_facts)
+}
+
+/// The block of the viewer `pid` stands in, or `None` where no viewer of that pid is standing.
+///
+/// One pointer load and a walk of the blocks, and no lock: it is asked from the hooks, which may take
+/// none (see `the_facts`).
+pub(crate) fn facts_of(pid: u32) -> Option<&'static ViewerFacts> {
+    the_run_facts().facts_of(pid)
+}
+
+/// The blocks of this run a question about the pin, or about a key of the pin's, is asked of: every one
+/// standing, or the one block of a process that is itself a viewer.
+///
+/// **A pin is one window of this run wherever it stands**, so the tray asks every block before it
+/// answers that no pin is up, that no button is under the press or that the foreground is no pin's. A
+/// viewer asks about its own window and no other, which is why it is answered with its own block alone.
+fn asked_blocks() -> [Option<&'static ViewerFacts>; SEAM_VIEWERS] {
+    the_run_facts().blocks(the_facts(), this_process_is_a_viewer())
+}
+
+/// Whether this process is one of the run's viewers rather than the run itself: it joined a section a
+/// tray had opened, rather than opening one (see `join_the_seam_section`).
+fn this_process_is_a_viewer() -> bool {
+    THE_RUN.load(Ordering::Acquire) != 0
+}
+
+/// The run's facts: the section where this process has opened or joined one, this process's own copy
+/// otherwise.
 ///
 /// Written once, at start-up, before the threads that publish are begun; read on every hook callback
 /// and every tick, which is why it is one pointer load and not a lock.
-pub(crate) fn the_facts() -> &'static SeamFacts {
+fn the_run_facts() -> &'static SeamFacts {
     let mapped = MAPPED_FACTS.load(Ordering::Acquire);
     if mapped.is_null() {
         return &LOCAL_FACTS;
     }
 
     // Safety: the pointer is set once, from a view this process mapped and never unmapped, and the
-    // section is a whole number of `SeamFacts` written through `SeamFacts` and nothing else.
+    // section is a whole `SeamFacts` written through `SeamFacts` and nothing else.
     unsafe { &*mapped }
+}
+
+/// Claim a block of this run's facts for this process, and answer it (see `SeamFacts::claim_a_block`).
+fn claim_a_block() -> Option<&'static ViewerFacts> {
+    let at = the_run_facts().claim_a_block(std::process::id())?;
+    THE_OWN_BLOCK.store(at, Ordering::Release);
+    Some(&the_run_facts().viewers[at])
+}
+
+/// Count one press of the pin key, in every block the run has standing: what a press means is each
+/// window's own, so the tray counts it for all of them and only the blocks a viewer stands in (see
+/// `PIN_PRESSES`).
+pub(crate) fn note_a_pin_press() {
+    count_a_pin_press_in(asked_blocks());
+}
+
+/// Count one press of the pin key in `blocks` (see `note_a_pin_press`).
+fn count_a_pin_press_in(blocks: [Option<&'static ViewerFacts>; SEAM_VIEWERS]) {
+    for block in blocks.iter().flatten() {
+        PIN_PRESSES.in_block(block).fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+/// Ask the pin to come down, in every block the run has standing: the pin is one window of the run's
+/// wherever it stands, and only the viewer holding it acts on this (see `PIN_END_REQUESTED`).
+pub(crate) fn ask_the_pin_to_come_down() {
+    ask_the_pin_to_come_down_in(asked_blocks());
+}
+
+/// Ask the pin to come down in `blocks` (see `ask_the_pin_to_come_down`).
+fn ask_the_pin_to_come_down_in(blocks: [Option<&'static ViewerFacts>; SEAM_VIEWERS]) {
+    for block in blocks.iter().flatten() {
+        PIN_END_REQUESTED
+            .in_block(block)
+            .store(true, Ordering::Release);
+    }
+}
+
+/// Ask the pin's menu to come down, in every block the run has standing (see
+/// `PIN_MENU_DISMISS_REQUESTED`).
+pub(crate) fn ask_the_pin_menu_to_come_down() {
+    for block in asked_blocks().iter().flatten() {
+        PIN_MENU_DISMISS_REQUESTED
+            .in_block(block)
+            .store(true, Ordering::Release);
+    }
 }
 
 /// Open the shared section this run's facts live in, and publish into that from here on.
@@ -403,6 +624,9 @@ pub(crate) fn open_the_seam_section() -> bool {
         return false;
     };
     MAPPED_FACTS.store(facts, Ordering::Release);
+    // A run with a section stands in a block of it, and this is the first block claimed there: the one
+    // the tray stands in until a viewer of its own claims the next (see `claim_a_block`).
+    let _ = claim_a_block();
     true
 }
 
@@ -444,7 +668,16 @@ pub(crate) fn join_the_seam_section(tray: u32) -> bool {
     }
 
     MAPPED_FACTS.store(view.Value.cast::<SeamFacts>(), Ordering::Release);
-    true
+    // The block this viewer draws in, claimed before any thread of it that publishes is begun: a block
+    // another viewer of the run already stands in is not one this one may write (see `claim_a_block`).
+    if claim_a_block().is_some() {
+        return true;
+    }
+
+    // Said out loud rather than only answered: a viewer that stops here draws nothing at all, and a run
+    // whose blocks are all stood in has no room for the previews it keeps asking for.
+    eprintln!("seam: every block of the run's facts is stood in; this viewer stops");
+    false
 }
 
 /// This run's section, mapped and written with the at-rest facts, or `None` where there is none to be had.
@@ -495,21 +728,34 @@ fn a_section_of_this_run() -> Option<*mut SeamFacts> {
     Some(facts)
 }
 
-/// One published fact, named rather than kept: which field of the facts it is, asked of whichever copy
-/// of them this run is using (see `SeamFacts`).
+/// One published fact, named rather than kept: which field of a block it is, asked of the block the
+/// hovers are served from (see `ViewerFacts` and `the_serving_facts`).
 ///
-/// It is a function from the facts to a field, so a handle cannot name a field that is not there and
+/// It is a function from a block to a field, so a handle cannot name a field that is not there and
 /// cannot name one of another type — the compiler checks both, and there is no index to be got wrong at
 /// run time. What the indirection costs is one cached load and one predicted call, which is what a hook
 /// callback can afford: the atomics themselves are the atomics they were, and a handle is used exactly
 /// as the static it replaced was, by dereferencing to it.
+///
+/// **Which block a handle answers with is the whole of what a fact is about.** A handle reads and writes
+/// the block the hovers are served from, which is the asker's own block inside a viewer (see
+/// `the_serving_facts`); the facts a caller needs of *any* window of the run — a pin, wherever it
+/// stands — are asked of `asked_blocks` instead, and the ones a hook asks of one particular window are
+/// read through `in_block`.
 pub(crate) struct Fact<T: 'static> {
-    home: fn(&'static SeamFacts) -> &'static T,
+    home: fn(&'static ViewerFacts) -> &'static T,
 }
 
 impl<T: 'static> Fact<T> {
-    const fn of(home: fn(&'static SeamFacts) -> &'static T) -> Self {
+    const fn of(home: fn(&'static ViewerFacts) -> &'static T) -> Self {
         Self { home }
+    }
+
+    /// This field of the block `block` is, for a caller that has settled which window's fact it means —
+    /// a notch's, turned in a box one viewer published, or a key's, whose caret one viewer holds (see
+    /// `PublishedRegion::the_block_over` and `the_pin_of_the_window`).
+    pub(crate) fn in_block(&self, block: &'static ViewerFacts) -> &'static T {
+        (self.home)(block)
     }
 }
 
@@ -517,7 +763,31 @@ impl<T: 'static> Deref for Fact<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        (self.home)(the_facts())
+        (self.home)(the_serving_facts())
+    }
+}
+
+/// One fact of the run's own rather than of a window's, named rather than kept: which field of `SeamFacts`
+/// it is (see `ViewerFacts` for why a field is named at all).
+///
+/// It is a type of its own rather than a `Fact` because what it names is not in a block: a count here is
+/// kept once for the run, and a handle that could name a field of either would be a handle whose reader
+/// cannot tell which window's answer it is about to be given.
+pub(crate) struct RunFact<T: 'static> {
+    home: fn(&'static SeamFacts) -> &'static T,
+}
+
+impl<T: 'static> RunFact<T> {
+    const fn of(home: fn(&'static SeamFacts) -> &'static T) -> Self {
+        Self { home }
+    }
+}
+
+impl<T: 'static> Deref for RunFact<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        (self.home)(the_run_facts())
     }
 }
 
@@ -915,7 +1185,7 @@ pub(crate) fn send_preview(message: PreviewMessage) {
         // cannot carry is not sent at all (see `SeamRing` and `SeamMessage::of_preview`). The wake is
         // signalled either way: an armed wait must never be left on a message that was not written.
         if let Some(slot) = SeamMessage::of_preview(&message) {
-            the_facts().preview_ring.push(slot, "preview");
+            the_run_facts().preview_ring.push(slot, "preview");
         }
         // One line per hover and notice put in the ring, on the trace a run asks for: a run whose previews
         // are missing is told here whether the tray ever sent one (see `next_preview_message`). Hovers are a
@@ -955,7 +1225,7 @@ pub(crate) static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
 /// `pin_drag::Carry::drain`).
 pub(crate) fn next_preview_message(rx: &Receiver<PreviewMessage>) -> Option<PreviewMessage> {
     if the_preview_ring_is_ours() {
-        let message = the_facts()
+        let message = the_run_facts()
             .preview_ring
             .pop()
             .and_then(|slot| slot.as_preview());
@@ -1082,12 +1352,6 @@ pub(crate) static PIN_TEXT_SIZE_DELTA: Fact<AtomicI32> =
 pub(crate) static PREVIEW_UNDER_POINTER: Fact<AtomicU32> =
     Fact::of(|facts| &facts.preview_under_pointer);
 
-/// Whether the preview on screen is the surface the pointer is standing on, as the preview thread
-/// last saw it (see `PREVIEW_UNDER_POINTER`).
-pub(crate) fn preview_is_under_the_pointer() -> bool {
-    PREVIEW_UNDER_POINTER.load(Ordering::Acquire) != 0
-}
-
 /// Publish what the pointer is on, from the tick that is allowed to ask the desktop (see
 /// `PREVIEW_UNDER_POINTER`).
 pub(crate) fn publish_preview_under_the_pointer(under: bool) {
@@ -1149,6 +1413,56 @@ pub(crate) fn publish_pin_key_owner(owner: u64, video: u64) {
     PIN_KEYS_VIDEO.store(video, Ordering::Release);
 }
 
+/// The two windows the pin of `block` answers keys for, as it last published them, or two zeros where
+/// that viewer has no pin up (see `PIN_KEYS_OWNER`).
+///
+/// **A key of the pin's belongs to whichever window of the run holds it**, so the hook that takes one
+/// asks every block before it decides the caret is nobody's (see `asked_blocks`).
+pub(crate) fn the_windows_of_the_pin(block: &'static ViewerFacts) -> (u64, u64) {
+    (
+        PIN_KEYS_OWNER.in_block(block).load(Ordering::Acquire),
+        PIN_KEYS_VIDEO.in_block(block).load(Ordering::Acquire),
+    )
+}
+
+/// Whether that pin stands above every other window (see `PIN_KEYS_TOPMOST`).
+pub(crate) fn the_pin_stands_over_everything(block: &'static ViewerFacts) -> bool {
+    PIN_KEYS_TOPMOST.in_block(block).load(Ordering::Acquire)
+}
+
+/// The block whose pin answers for the window `foreground`, or `None` where no pin of this run's does.
+///
+/// **A key of the pin's belongs to whichever window of the run holds it**, and there is exactly one such
+/// answer: the block is asked of every one the run has standing, and the key is counted in the one it
+/// answers with (see `key_input::pin_owns_caret` for what a window of a pin's is).
+pub(crate) fn the_pin_of_the_window(foreground: u64) -> Option<&'static ViewerFacts> {
+    if foreground == 0 {
+        return None;
+    }
+
+    asked_blocks().iter().flatten().copied().find(|block| {
+        let (owner, video) = the_windows_of_the_pin(block);
+        owner != 0 && (foreground == owner || (video != 0 && foreground == video))
+    })
+}
+
+/// Whether a find bar is up over that pin's page (see `PIN_FIND_BAR_UP`).
+pub(crate) fn the_find_bar_is_up(block: &'static ViewerFacts) -> bool {
+    PIN_FIND_BAR_UP.in_block(block).load(Ordering::Acquire)
+}
+
+/// Whether the pointer stands on the surface that `block`'s viewer drew (see `PREVIEW_UNDER_POINTER`).
+///
+/// **It is one block's answer and not the run's**, which is the whole of what a detached window owes:
+/// the window the pointer is standing on is the window whose published answer says so, and the viewer
+/// that took the ring over is a viewer the pointer may be nowhere near.
+pub(crate) fn the_pointer_is_on(block: &'static ViewerFacts) -> bool {
+    PREVIEW_UNDER_POINTER
+        .in_block(block)
+        .load(Ordering::Acquire)
+        != 0
+}
+
 /// Tell the hooks whether the standing pin is above every other window.
 ///
 /// It is published rather than asked for where it is read for the reason the two handles above
@@ -1160,10 +1474,14 @@ pub(crate) fn publish_pin_always_on_top(always_on_top: bool) {
     PIN_KEYS_TOPMOST.store(always_on_top, Ordering::Release);
 }
 
+/// The pin's own key commands, one count per command of `PIN_COMMAND_COUNT`, in the order that table
+/// lists them (see `take_pin_key_presses`).
+static PIN_KEY_PRESSES: Fact<[AtomicU32; PIN_COMMAND_COUNT]> =
+    Fact::of(|facts| &facts.pin_key_presses);
+
 /// Take the pin's own key commands, one count per command and per press since the last call.
 pub(crate) fn take_pin_key_presses() -> Vec<u8> {
-    the_facts()
-        .pin_key_presses
+    PIN_KEY_PRESSES
         .iter()
         .enumerate()
         .flat_map(|(command, count)| {
@@ -1177,8 +1495,11 @@ pub(crate) fn take_pin_key_presses() -> Vec<u8> {
 /// The count is an atomic added to on a low-level hook's own thread, where nothing may be allocated and
 /// nothing may wait, and it is per command because the order the presses came in is what the loop acts
 /// on while the presses themselves are not messages.
-pub(crate) fn note_a_pin_key_command(command: u8) {
-    if let Some(count) = the_facts().pin_key_presses.get(command as usize) {
+///
+/// It is counted in the block of the window whose caret took the key, and in no other: a command is
+/// swallowed for one window, and a viewer whose pin never held the caret has nothing to act on.
+pub(crate) fn note_a_pin_key_command(block: &'static ViewerFacts, command: u8) {
+    if let Some(count) = PIN_KEY_PRESSES.in_block(block).get(command as usize) {
         count.fetch_add(1, Ordering::AcqRel);
     }
 }
@@ -1281,6 +1602,13 @@ pub(crate) static ENGINE_PAGE_RUNS: Fact<AtomicBool> = Fact::of(|facts| &facts.e
 /// panned (see `preview_pointer_hold`).
 pub(crate) static ENGINE_PAGE_DRAG: Fact<AtomicBool> = Fact::of(|facts| &facts.engine_page_drag);
 
+/// Whether the page the engine is drawing is one that runs (see `ENGINE_PAGE_RUNS`), as the viewer
+/// serving the hovers published it: a detached window's page is a pin the user is working in and not a
+/// preview the hook's press rule is about.
+pub(crate) fn the_engine_page_runs() -> bool {
+    ENGINE_PAGE_RUNS.load(Ordering::Acquire)
+}
+
 /// The window the engine draws a document in, while it has one: written where the engine's own handle
 /// moves, and back to `0` where the window is destroyed.
 ///
@@ -1370,7 +1698,7 @@ pub(crate) static PIN_MEDIA_LEFT_PRESSES: Fact<AtomicU64> =
 /// the window procedure gives the same press. The geometry is published instead of the verdict, so the
 /// intersection is a comparison the hook can afford inside its own callback.
 pub(crate) fn publish_pin_buttons(boxes: [Option<(i32, i32, i32, i32)>; PIN_BUTTONS]) {
-    let published = the_facts().pin_buttons.as_slice();
+    let published = the_serving_facts().pin_buttons.as_slice();
     for (cell, region) in published.iter().zip(boxes) {
         cell.store(pack_a_box(region), Ordering::Release);
     }
@@ -1380,15 +1708,26 @@ pub(crate) fn publish_pin_buttons(boxes: [Option<(i32, i32, i32, i32)>; PIN_BUTT
 ///
 /// Half-open on every edge, which is how a window hit-test reads a rectangle and how the button's own
 /// press is read: a point on a box's right or bottom edge is outside it.
+///
+/// **Every block is asked**, because the pin whose button it is is one window of the run's wherever it
+/// stands: a press on a detached window's caption button is answered for the same way. Half-open on
+/// every edge, which is how a window hit-test reads a rectangle and how the button's own press is read.
 pub(crate) fn pin_button_covers(point: (i32, i32)) -> bool {
     let (x, y) = point;
 
-    the_facts().pin_buttons.iter().any(|cell| {
-        unpack_a_box(cell.load(Ordering::Acquire)).is_some_and(|(left, top, right, bottom)| {
-            x >= left && x < right && y >= top && y < bottom
+    asked_blocks().iter().flatten().any(|block| {
+        block.pin_buttons.iter().any(|cell| {
+            unpack_a_box(cell.load(Ordering::Acquire)).is_some_and(|(left, top, right, bottom)| {
+                x >= left && x < right && y >= top && y < bottom
+            })
         })
     })
 }
+
+/// The wall clock of the preview loop's last tick, in milliseconds since the epoch: a number both
+/// processes can read, which is the whole of why it is a wall clock rather than an `Instant` (see
+/// `preview_stall_ms`).
+static PREVIEW_ALIVE_UNIX_MS: Fact<AtomicU64> = Fact::of(|facts| &facts.preview_alive_unix_ms);
 
 /// How long the preview loop has been quiet, in milliseconds: the age of its last tick, growing for as
 /// long as the loop is inside work that has not come back.
@@ -1400,10 +1739,13 @@ pub(crate) fn pin_button_covers(point: (i32, i32)) -> bool {
 /// a preview that has stopped. Nothing here waits on the loop or looks for it — it is only ever a
 /// number read.
 ///
+/// It is the block of the viewer the hovers are served from, and no other's: a detached window whose
+/// loop has stopped is a pin of the user's standing still, not a preview the sweep owes an answer for.
+///
 /// shortcut: a wall clock stepped backwards reads as no quiet, upgrade if a run must survive the clock
 /// being set back under it.
 pub(crate) fn preview_stall_ms() -> u64 {
-    let alive = the_facts().preview_alive_unix_ms.load(Ordering::Relaxed);
+    let alive = PREVIEW_ALIVE_UNIX_MS.load(Ordering::Relaxed);
     if alive == 0 {
         return 0;
     }
@@ -1415,9 +1757,7 @@ pub(crate) fn preview_stall_ms() -> u64 {
 /// Note that the preview loop has run a tick, whether the tick did anything or not: a loop waiting on
 /// the channel for a hover is a loop that is working (see `preview_stall_ms`).
 pub(crate) fn note_the_preview_ticked() {
-    the_facts()
-        .preview_alive_unix_ms
-        .store(unix_millis(), Ordering::Relaxed);
+    PREVIEW_ALIVE_UNIX_MS.store(unix_millis(), Ordering::Relaxed);
 }
 
 /// Milliseconds since the epoch, which is the only clock two processes can both read.
@@ -1912,7 +2252,7 @@ pub(crate) fn send_tray(message: TrayMessage) {
         // A notice the ring has no room for is dropped rather than waited on: a preview thread that
         // blocked on the tray would be a picture that stopped while a menu was open.
         if let Some(slot) = SeamMessage::of_tray(&message) {
-            the_facts().tray_ring.push(slot, "tray");
+            the_run_facts().tray_ring.push(slot, "tray");
         }
         // Safety: an event of this run's own, signalled: nothing here is dereferenced.
         unsafe {
@@ -1932,7 +2272,7 @@ pub(crate) fn send_tray(message: TrayMessage) {
 /// Everything the preview side has told the tray side since this was last called, in order.
 pub(crate) fn take_tray_messages() -> Vec<TrayMessage> {
     if the_rings_carry_messages() {
-        let ring = &the_facts().tray_ring;
+        let ring = &the_run_facts().tray_ring;
         return std::iter::from_fn(|| ring.pop())
             .filter_map(|slot| slot.as_tray())
             .collect();
@@ -2014,8 +2354,34 @@ pub(crate) static PIN_HANDED_OFF: Fact<AtomicBool> = Fact::of(|facts| &facts.pin
 pub(crate) static PIN_UP: Fact<AtomicBool> = Fact::of(|facts| &facts.pin_up);
 
 /// Whether a preview is pinned, answered without a lock and without waiting for one (see `PIN_UP`).
+///
+/// **Every block is asked**, because a pin is one window of the run's wherever it stands: a pin
+/// detached into a window of its own still holds the hovers back, and a viewer that took its place in
+/// the ring is a viewer with no pin on screen.
 pub(crate) fn the_pin_is_up() -> bool {
-    PIN_UP.load(Ordering::Acquire)
+    asked_blocks()
+        .iter()
+        .flatten()
+        .any(|block| PIN_UP.in_block(block).load(Ordering::Acquire))
+}
+
+/// Take a flag one viewer set about its own pin, from whichever block of the run set it: a pin is one
+/// window of the run's wherever it stands, and a flag is said once (see `PIN_RESUMED`).
+pub(crate) fn take_a_pin_flag(flag: &Fact<AtomicBool>) -> bool {
+    asked_blocks()
+        .iter()
+        .flatten()
+        .any(|block| flag.in_block(block).swap(false, Ordering::AcqRel))
+}
+
+/// The window of `window` that a block published, where one did (see `PIN_BUBBLE_HWND`).
+fn a_window_of_the_pin(window: &Fact<AtomicIsize>) -> isize {
+    asked_blocks()
+        .iter()
+        .flatten()
+        .map(|block| window.in_block(block).load(Ordering::Acquire))
+        .find(|handle| *handle != 0)
+        .unwrap_or(0)
 }
 
 /// The window a collapsed pin leaves on screen: the circle the whole of a pin is hidden behind, which
@@ -2030,6 +2396,18 @@ pub(crate) static PIN_BUBBLE_HWND: Fact<AtomicIsize> = Fact::of(|facts| &facts.p
 /// The window a standing pin's own menu is drawn in, published beside the bubble and read by the same
 /// press (see `PIN_BUBBLE_HWND`).
 pub(crate) static PIN_MENU_HWND: Fact<AtomicIsize> = Fact::of(|facts| &facts.pin_menu_hwnd);
+
+/// The window a collapsed pin of this run is hidden behind, or zero where no pin is collapsed (see
+/// `PIN_BUBBLE_HWND`).
+pub(crate) fn the_bubble_window() -> isize {
+    a_window_of_the_pin(&PIN_BUBBLE_HWND)
+}
+
+/// The window a standing pin's own menu of this run is drawn in, or zero where none is (see
+/// `PIN_MENU_HWND`).
+pub(crate) fn the_menu_window() -> isize {
+    a_window_of_the_pin(&PIN_MENU_HWND)
+}
 
 /// The file a pin has been asked for and is not showing yet, as a fingerprint, or `0` for none.
 ///
@@ -2051,8 +2429,16 @@ pub(crate) fn publish_the_pin_file_in_flight(path: Option<&Path>) {
 }
 
 /// Whether `path` is the file the pin is already on its way to (see `PIN_FILE_IN_FLIGHT`).
+///
+/// Every block is asked, because the pin the press is about is one window of the run's wherever it
+/// stands.
 pub(crate) fn pin_is_on_its_way_to(path: &Path) -> bool {
-    PIN_FILE_IN_FLIGHT.load(Ordering::Acquire) == fingerprint_of(path)
+    let wanted = fingerprint_of(path);
+
+    asked_blocks()
+        .iter()
+        .flatten()
+        .any(|block| PIN_FILE_IN_FLIGHT.in_block(block).load(Ordering::Acquire) == wanted)
 }
 
 /// Publish the file a pin is showing, or `None` where no pin is up: the one fact here that is a name
@@ -2076,7 +2462,7 @@ pub(crate) fn publish_the_pinned_path(path: Option<&Path>) {
         return;
     }
 
-    let facts = the_facts();
+    let facts = the_serving_facts();
     // Odd for the length of the write: a reader that sees the count move reads the name again on its next
     // tick rather than acting on the two halves of two names.
     facts.pin_path_writing.fetch_add(1, Ordering::AcqRel);
@@ -2097,8 +2483,20 @@ pub(crate) fn publish_the_pinned_path(path: Option<&Path>) {
 
 /// The file a pin is showing, as the side that owns the pin published it, or `None` where no pin is up or
 /// the name was being written when it was asked for (see `publish_the_pinned_path`).
+///
+/// **Every block is asked**, and the first name one of them holds is the answer: a pin is one window of
+/// the run's wherever it stands, and the window that took the pin at its detach published no name of its
+/// own to be read here (see `app::detach`).
 pub(crate) fn pinned_path() -> Option<PathBuf> {
-    let facts = the_facts();
+    asked_blocks()
+        .iter()
+        .flatten()
+        .find_map(|block| a_pinned_path_of(block))
+}
+
+/// The name the block `facts` holds, or `None` where it holds none or was being written (see
+/// `publish_the_pinned_path`).
+fn a_pinned_path_of(facts: &'static ViewerFacts) -> Option<PathBuf> {
     let before = facts.pin_path_writing.load(Ordering::Acquire);
     if before & 1 == 1 {
         return None;
@@ -2145,21 +2543,21 @@ fn fingerprint_of(path: &Path) -> u64 {
 /// the notch that was refused, which is never a notch claimed twice.
 ///
 /// It is a handle over that word rather than the word itself, for the reason a `Fact` is (see
-/// `SeamFacts`): the packing below is this type's, and where the packed word lives is the facts'.
-pub(crate) struct PublishedRegion(fn(&'static SeamFacts) -> &'static AtomicU64);
+/// `ViewerFacts`): the packing below is this type's, and where the packed word lives is a block's.
+pub(crate) struct PublishedRegion(fn(&'static ViewerFacts) -> &'static AtomicU64);
 
 /// What a `PublishedRegion` holds where it names no box. It decodes to `(-1, -1, -1, -1)`, an empty box
 /// no point is inside, so even a box of its own that happened to pack to this answers the same way.
 const NO_REGION: u64 = u64::MAX;
 
 impl PublishedRegion {
-    const fn of(home: fn(&'static SeamFacts) -> &'static AtomicU64) -> Self {
+    const fn of(home: fn(&'static ViewerFacts) -> &'static AtomicU64) -> Self {
         Self(home)
     }
 
-    /// This box's word, in the copy of the facts this process is publishing to.
+    /// This box's word, in the block the hovers are served from (see `the_serving_facts`).
     fn cell(&self) -> &'static AtomicU64 {
-        (self.0)(the_facts())
+        (self.0)(the_serving_facts())
     }
 
     /// Publish `region` whole, or withdraw the box where there is none.
@@ -2170,6 +2568,27 @@ impl PublishedRegion {
     /// The box as it was last published, or `None` where there is none.
     pub(crate) fn get(&self) -> Option<(i32, i32, i32, i32)> {
         unpack_a_box(self.cell().load(Ordering::Acquire))
+    }
+
+    /// This box's word, in the block `block` is (see `Fact::in_block`).
+    pub(crate) fn in_block(&self, block: &'static ViewerFacts) -> &'static AtomicU64 {
+        (self.0)(block)
+    }
+
+    /// The viewer of this run whose copy of this box stands over `point`, if one does: the window a notch
+    /// turned at `point` was turned over, and the block it is counted into (see `wheel_input`).
+    ///
+    /// **The window and the count are one answer**, which is why the block is answered rather than the
+    /// box: a notch over a detached pin is that window's, and a fresh viewer standing beside it publishes
+    /// no box over the point at all.
+    pub(crate) fn the_block_over(&self, point: (i32, i32)) -> Option<&'static ViewerFacts> {
+        let (x, y) = point;
+
+        asked_blocks().iter().flatten().copied().find(|block| {
+            unpack_a_box((self.0)(block).load(Ordering::Acquire)).is_some_and(
+                |(left, top, right, bottom)| x >= left && x < right && y >= top && y < bottom,
+            )
+        })
     }
 }
 
@@ -2228,8 +2647,12 @@ pub(crate) static PIN_WINDOW_BOX: PublishedRegion =
 ///
 /// It is published rather than read off the desktop because the window is not this process's: a handle
 /// belongs to the process that made it, and what the hook needs is where that window is, not its handle.
+/// **Every block is asked**, because a pin dragged under a hand is a box of whichever window holds it.
 pub(crate) fn preview_window_rect() -> Option<(i32, i32, i32, i32)> {
-    PIN_WINDOW_BOX.get()
+    asked_blocks()
+        .iter()
+        .flatten()
+        .find_map(|block| unpack_a_box(PIN_WINDOW_BOX.in_block(block).load(Ordering::Acquire)))
 }
 
 /// Notches turned over that band and not yet handed to the model: how many, and the screen point the last
@@ -2248,8 +2671,10 @@ pub(crate) static MODELS_NOTCH_POINT: Fact<AtomicU64> = Fact::of(|facts| &facts.
 /// notch is the engine's and nothing of this app's (see `MODELS_BAND` and `f3d_player`).
 ///
 /// The count is added and the loop woken; what the engine's window is and where its client is are asked on
-/// the loop's own thread, where the answer may be looked up (see `take_the_models_notch`).
-pub(crate) fn post_a_notch_to_the_model(x: i32, y: i32, notches: i32) {
+/// the loop's own thread, where the answer may be looked up (see `take_the_models_notch`). It is counted
+/// in the block whose band the notch was turned over, and in no other: the model it is for is that
+/// window's, and a viewer whose tick never publishes a band has no notch to hand anybody.
+pub(crate) fn post_a_notch_to_the_model(block: &'static ViewerFacts, x: i32, y: i32, notches: i32) {
     let (Ok(x), Ok(y)) = (i16::try_from(x), i16::try_from(y)) else {
         // A point that is not inside a screen this app can name is not a notch over anything of its own:
         // the box it was turned in was read off the same desktop, so this is a display that moved between
@@ -2257,8 +2682,12 @@ pub(crate) fn post_a_notch_to_the_model(x: i32, y: i32, notches: i32) {
         return;
     };
 
-    MODELS_NOTCH_POINT.store(x as u16 as u64 | (y as u16 as u64) << 16, Ordering::Release);
-    MODELS_NOTCHES.fetch_add(notches, Ordering::AcqRel);
+    MODELS_NOTCH_POINT
+        .in_block(block)
+        .store(x as u16 as u64 | (y as u16 as u64) << 16, Ordering::Release);
+    MODELS_NOTCHES
+        .in_block(block)
+        .fetch_add(notches, Ordering::AcqRel);
     wake_preview_loop();
 }
 
@@ -2281,10 +2710,18 @@ pub(crate) fn take_the_models_notch() -> Option<((i32, i32), i32)> {
 /// Both low-level hooks count it — the keyboard hook for keys, and the mouse hook for `mouse3` through
 /// `mouse5`, which never reach the keyboard — and the preview loop drains it once a tick. It is here
 /// rather than beside the counter it is added to because its reader is the other side.
+///
+/// **It is one of the two facts the tray writes into every block a viewer stands in** (see
+/// `note_a_pin_press`), because the press is the run's and what it means is each window's own: the pin
+/// it raises is the hover's, and the bubble it brings back is the pin's that has one.
 pub(crate) static PIN_PRESSES: Fact<AtomicU32> = Fact::of(|facts| &facts.pin_presses);
 
 /// Preview-shortcut presses seen over Explorer since this was last drained.
-pub(crate) static TOGGLE_PRESSES: Fact<AtomicU32> = Fact::of(|facts| &facts.toggle_presses);
+///
+/// The run's own rather than a block's: the setting a press turns is one setting, and a count in every
+/// block would be a preview loop reading it in each of the windows standing, which is finding the flip
+/// made twice (see `take_preview_toggle_presses`).
+pub(crate) static TOGGLE_PRESSES: RunFact<AtomicU32> = RunFact::of(|facts| &facts.toggle_presses);
 
 /// Pin-key presses since this was last called (see `PIN_PRESSES`).
 pub(crate) fn take_presses() -> u32 {
@@ -2301,8 +2738,9 @@ pub(crate) fn take_preview_toggle_presses() -> u32 {
 /// It is what the preview side reads as "the hand is still on the press that took this pin up": the
 /// activation Explorer dispatches for a middle press lands after this app's raise as often as before it,
 /// so the band a raise gives back is held for the hand rather than for a duration (see
-/// `pin_lifecycle::A_PRESS_BAND_IS_HELD_FOR`).
-pub(crate) static PIN_MAIN_DOWN: Fact<AtomicU32> = Fact::of(|facts| &facts.pin_main_down);
+/// `pin_lifecycle::A_PRESS_BAND_IS_HELD_FOR`). The run's rather than a window's, because a hand is one
+/// hand and the hook that counts an edge reads it back twice a message (see `the_pin_key_down`).
+pub(crate) static PIN_MAIN_DOWN: RunFact<AtomicU32> = RunFact::of(|facts| &facts.pin_main_down);
 
 /// Whether a key of the pin's own is down right now — a mouse button it is bound to included (see
 /// `PIN_MAIN_DOWN`).
@@ -2500,6 +2938,10 @@ mod tests {
     /// the pid of the run it draws for in it.
     const THE_SECOND_PROCESS: &str = "RHP_SEAM_SECOND_PROCESS";
 
+    /// Which of a tray's two viewers a run of the block test is: the two stand at once, and each publishes
+    /// numbers of its own (see `two_viewers_stand_in_blocks_of_their_own`).
+    const WHICH_VIEWER: &str = "RHP_SEAM_BLOCK";
+
     /// How long the first process waits on anything the second one owes it.
     const AN_ANSWER: Duration = Duration::from_secs(5);
 
@@ -2584,6 +3026,16 @@ mod tests {
                 ok: true,
             },
         ]
+    }
+
+    /// What a second process of this binary said, both streams: what it held is a panic, and the harness
+    /// prints that to its own output rather than to the one a panic would have gone to.
+    fn what_it_said(ended: &std::process::Output) -> String {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&ended.stdout),
+            String::from_utf8_lossy(&ended.stderr)
+        )
     }
 
     /// A message through a slot and back is the message it went in as, compared as a slot again: what a
@@ -2708,11 +3160,11 @@ mod tests {
         let facts = unsafe { &*facts };
 
         assert!(
-            !facts.pin_up.load(Ordering::Acquire),
+            !facts.viewers[0].pin_up.load(Ordering::Acquire),
             "a section starts at rest"
         );
         assert_eq!(
-            facts.pin_zoom_region.load(Ordering::Acquire),
+            facts.viewers[0].pin_zoom_region.load(Ordering::Acquire),
             NO_REGION,
             "a box that was never published is no box, not the one at the origin"
         );
@@ -2726,6 +3178,42 @@ mod tests {
             facts.preview_ring.pop().map(|message| message.numbers[0]),
             Some(7)
         );
+    }
+
+    #[test]
+    fn every_block_a_run_has_is_claimed_once_and_the_last_one_is_none() {
+        let _the_section_is_mine = the_one_section();
+        let Some(facts) = a_section_of_this_run() else {
+            panic!("a section every run can open");
+        };
+        // Safety: a view of this run's own section, and the blocks it holds are this test's to claim.
+        let facts = unsafe { &*facts };
+        for block in facts.viewers.iter() {
+            block.owner.store(0, Ordering::Release);
+        }
+
+        // One block a viewer, taken in the order they are free, and the pid is what one is asked by.
+        let claimed: Vec<usize> = (1..=SEAM_VIEWERS as u32)
+            .map(|pid| facts.claim_a_block(pid).expect("a free block of the run's"))
+            .collect();
+        assert_eq!(
+            claimed.len(),
+            SEAM_VIEWERS,
+            "a block for every viewer it may have"
+        );
+        assert_eq!(facts.claim_a_block(4242), None, "and none for one more");
+
+        for pid in 1..=SEAM_VIEWERS as u32 {
+            assert_eq!(
+                facts.facts_of(pid).map(|block| block as *const ViewerFacts),
+                Some(&facts.viewers[(pid - 1) as usize] as *const ViewerFacts),
+                "the block a viewer stands in is the one its pid is asked by"
+            );
+        }
+
+        for block in facts.viewers.iter() {
+            block.owner.store(0, Ordering::Release);
+        }
     }
 
     #[test]
@@ -2786,16 +3274,28 @@ mod tests {
         .expect("a second process of this test binary");
 
         // The second process says it is up by publishing a fact rather than by making an event of its own:
-        // it is the first thing it does once it has joined, and the fact this wait is looking at.
+        // it is the first thing it does once it has joined, and the fact this wait is looking at. The
+        // block it publishes in is the one its pid is asked by (see `facts_of`).
         let deadline = Instant::now() + AN_ANSWER;
-        while facts.preview_under_pointer.load(Ordering::Acquire) == 0 && Instant::now() < deadline
+        let mut standing = None;
+        while standing.is_none() && Instant::now() < deadline {
+            standing = facts.facts_of(child.id());
+            std::thread::sleep(A_LOOK);
+        }
+        let Some(block) = standing else {
+            let said = what_it_said(&child.wait_with_output().expect("the second process ended"));
+            panic!("the second process stands in a block of its own: {said}");
+        };
+
+        let deadline = Instant::now() + AN_ANSWER;
+        while block.preview_under_pointer.load(Ordering::Acquire) == 0 && Instant::now() < deadline
         {
             std::thread::sleep(A_LOOK);
         }
-        let it_said_it_was_up = facts.preview_under_pointer.load(Ordering::Acquire) != 0;
+        let it_said_it_was_up = block.preview_under_pointer.load(Ordering::Acquire) != 0;
 
         // A fact the tray publishes, and the hover it pushes at the same point the hook's road does.
-        facts.pin_zoom_delta.store(7, Ordering::Release);
+        block.pin_zoom_delta.store(7, Ordering::Release);
         let hover = PreviewMessage::Show(
             PathBuf::from("listing/a note.txt"),
             10,
@@ -2820,16 +3320,10 @@ mod tests {
         let woken =
             unsafe { WaitForSingleObject(tray_channel_event(), AN_ANSWER.as_millis() as u32) };
         let notice = facts.tray_ring.pop().and_then(|slot| slot.as_tray());
-        let the_fact = facts.text_scroll_delta.load(Ordering::Acquire);
+        let the_fact = block.text_scroll_delta.load(Ordering::Acquire);
 
         let ended = child.wait_with_output().expect("the second process ended");
-        // Both streams: what the process held is a panic, and the harness prints that to its own output
-        // rather than to the one a panic would have gone to.
-        let said = format!(
-            "{}{}",
-            String::from_utf8_lossy(&ended.stdout),
-            String::from_utf8_lossy(&ended.stderr)
-        );
+        let said = what_it_said(&ended);
 
         assert!(it_said_it_was_up, "the section is joined: {said}");
         assert!(ended.status.success(), "the second process held: {said}");
@@ -2851,7 +3345,11 @@ mod tests {
             "the section the tray opened is joined rather than made"
         );
         let facts = the_facts();
-
+        assert_eq!(
+            facts.owner.load(Ordering::Acquire),
+            std::process::id(),
+            "and it stands in a block of its own, asked of by its pid"
+        );
         // It is up: a fact, because a fact is the one thing both processes read without an event of their
         // own (see the wait above). Nothing here waits for the tray's signal until this is written.
         facts.preview_under_pointer.store(1, Ordering::Release);
@@ -2864,8 +3362,9 @@ mod tests {
             "the wait the tray's wake had to reach ends on that signal rather than on the bound"
         );
 
+        let run = the_run_facts();
         let Some(PreviewMessage::Show(path, x, y, Some(region))) =
-            facts.preview_ring.pop().and_then(|slot| slot.as_preview())
+            run.preview_ring.pop().and_then(|slot| slot.as_preview())
         else {
             panic!("the hover the tray pushed is in the ring");
         };
@@ -2882,7 +3381,7 @@ mod tests {
         // And the other way: a fact the tray reads and a notice on the ring it drains.
         facts.text_scroll_delta.store(-3, Ordering::Release);
         assert!(
-            facts.tray_ring.push(
+            run.tray_ring.push(
                 SeamMessage::of_tray(&TrayMessage::PinClick("the second process".to_owned()))
                     .expect("a notice that fits a slot"),
                 "test"
@@ -2893,5 +3392,189 @@ mod tests {
         unsafe {
             let _ = SetEvent(tray_channel_event());
         }
+    }
+
+    /// **Two viewers stand at once, and neither one's facts are the other's.**
+    ///
+    /// A run has two of them the moment a pin is detached: the viewer serving the hovers and the window
+    /// that left the ring. Both used to publish into one record, so a notch turned over the detached pin
+    /// was claimed by the hover's viewer, and the boxes a notch belongs to, the window under the pointer
+    /// and the pin's own handles were whichever of the two wrote last. So this test is the tray with both
+    /// of them standing: two processes of this same binary, each claiming a block of its own and
+    /// publishing a number only its own block can hold, and the tray reading them by pid and writing what
+    /// it owns for the run into every block a viewer stands in.
+    #[test]
+    fn two_viewers_stand_in_blocks_of_their_own() {
+        if let Some(tray) = std::env::var(THE_SECOND_PROCESS)
+            .ok()
+            .and_then(|pid| pid.parse().ok())
+        {
+            let which = std::env::var(WHICH_VIEWER)
+                .ok()
+                .and_then(|which| which.parse().ok())
+                .expect("a numbered viewer of the tray's two");
+            two_viewers_answer(tray, which);
+            return;
+        }
+
+        let _the_section_is_mine = the_one_section();
+        let Some(facts) = a_section_of_this_run() else {
+            panic!("a section two viewers can open");
+        };
+        // Safety: a view of this run's own section, and the blocks it holds are this test's to claim.
+        let facts = unsafe { &*facts };
+
+        // One section is made for the whole binary, so it is put back at rest rather than read as the test
+        // beside it left it: no block stood in and nothing of that test's published.
+        for block in facts.viewers.iter() {
+            block.owner.store(0, Ordering::Release);
+            block.pin_zoom_delta.store(0, Ordering::Release);
+            block.pin_bubble_hwnd.store(0, Ordering::Release);
+            block.preview_under_pointer.store(0, Ordering::Release);
+            block.pin_presses.store(0, Ordering::Release);
+            block.pin_end_requested.store(false, Ordering::Release);
+        }
+
+        // The run stands in a block of its own before it begins one viewer, which is what gives the two
+        // that follow two blocks of their own rather than one the tray is also in (see
+        // `open_the_seam_section`).
+        assert!(
+            facts.claim_a_block(std::process::id()).is_some(),
+            "a block for the run itself"
+        );
+
+        let first = a_viewer_of_block(1);
+        let second = a_viewer_of_block(2);
+
+        // Each says it is up by publishing a number rather than by an event of its own: what this wait is
+        // looking at is the fact only a viewer standing in its own block could have written.
+        let deadline = Instant::now() + AN_ANSWER;
+        let (one, two) = loop {
+            let published = |child: &std::process::Child| {
+                facts
+                    .facts_of(child.id())
+                    .filter(|block| block.pin_zoom_delta.load(Ordering::Acquire) != 0)
+            };
+            if let (Some(one), Some(two)) = (published(&first), published(&second)) {
+                break (one, two);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "both viewers stand in blocks of their own"
+            );
+            std::thread::sleep(A_LOOK);
+        };
+
+        // **No crosstalk**: each block holds the number the viewer standing in it published, whole, and
+        // nothing of the other's.
+        assert_eq!(
+            one.pin_zoom_delta.load(Ordering::Acquire),
+            -7,
+            "the first's own count"
+        );
+        assert_eq!(
+            two.pin_zoom_delta.load(Ordering::Acquire),
+            -14,
+            "and the second's"
+        );
+        assert_eq!(
+            one.pin_bubble_hwnd.load(Ordering::Acquire),
+            0x1000,
+            "the first's own bubble"
+        );
+        assert_eq!(
+            two.pin_bubble_hwnd.load(Ordering::Acquire),
+            0x2000,
+            "and the second's"
+        );
+
+        // **Hover admission is the serving viewer's answer and nobody else's** — the question the wheel
+        // asks of the block whose box the notch was turned in (see `the_pointer_is_on`).
+        assert!(
+            the_pointer_is_on(one),
+            "the pointer stands on the serving viewer's preview"
+        );
+        assert!(
+            !the_pointer_is_on(two),
+            "and on nothing the window that left the ring drew"
+        );
+
+        // **What the run writes for its windows reaches every one of them**: a press of the pin key is
+        // each window's to act on, and a pin asked to come down is the pin of whichever one holds it.
+        let stood_in = facts.blocks(&facts.viewers[0], false);
+        count_a_pin_press_in(stood_in);
+        ask_the_pin_to_come_down_in(stood_in);
+        for (block, which) in [(one, "the first"), (two, "the second")] {
+            assert_eq!(
+                block.pin_presses.load(Ordering::Acquire),
+                1,
+                "the press reaches {which}"
+            );
+            assert!(
+                block.pin_end_requested.load(Ordering::Acquire),
+                "and the ask for the pin does too, at {which}"
+            );
+        }
+
+        for (child, which) in [(first, "the first"), (second, "the second")] {
+            let ended = child.wait_with_output().expect("the viewer ended");
+            let said = what_it_said(&ended);
+            assert!(ended.status.success(), "{which} viewer held: {said}");
+        }
+    }
+
+    /// One of the two viewers of the block test, as the same binary begun again.
+    fn a_viewer_of_block(which: u8) -> std::process::Child {
+        crate::app::engine_processes::hidden_command(
+            std::env::current_exe().expect("this test's own binary"),
+        )
+        .arg(stringify!(two_viewers_stand_in_blocks_of_their_own))
+        .env(THE_SECOND_PROCESS, std::process::id().to_string())
+        .env(WHICH_VIEWER, which.to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("a viewer of this same test binary")
+    }
+
+    /// A viewer of the block test: its own block claimed, its own numbers published, and then the facts
+    /// the tray wrote for every window standing read out of that same block.
+    fn two_viewers_answer(tray: u32, which: u8) {
+        assert!(
+            join_the_seam_section(tray),
+            "the section the tray opened is joined rather than made"
+        );
+        let facts = the_facts();
+        assert_eq!(
+            facts.owner.load(Ordering::Acquire),
+            std::process::id(),
+            "the block this viewer stands in is claimed for it, and asked of by its pid"
+        );
+
+        facts
+            .pin_zoom_delta
+            .store(-7 * i32::from(which), Ordering::Release);
+        facts
+            .pin_bubble_hwnd
+            .store(0x1000 * isize::from(which), Ordering::Release);
+        // The first of the two is the window the hovers are served from, which is what the tray's answer
+        // about the thing under the pointer is made of; the second is the window that left the ring.
+        facts
+            .preview_under_pointer
+            .store(u32::from(which == 1), Ordering::Release);
+
+        let deadline = Instant::now() + Duration::from_millis(u64::from(A_WAKE));
+        while !facts.pin_end_requested.load(Ordering::Acquire) {
+            assert!(
+                Instant::now() < deadline,
+                "the ask the tray made for the pin reached this block"
+            );
+            std::thread::sleep(A_LOOK);
+        }
+        assert_eq!(
+            facts.pin_presses.load(Ordering::Acquire),
+            1,
+            "and so did the press it counted for every window standing"
+        );
     }
 }

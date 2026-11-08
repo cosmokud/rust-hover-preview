@@ -31,15 +31,13 @@
 //! still in the listing behind it (see `publish_preview_under_the_pointer`), and a pin
 //! behind another program is not (see `key_input::pin_owns_foreground`).
 
-use crate::app::seam::{
-    post_a_notch_to_the_model, preview_is_under_the_pointer, wake_preview_loop,
-};
+use crate::app::seam::{post_a_notch_to_the_model, wake_preview_loop};
 use crate::app::seam::{
     MODELS_BAND, PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_VOLUME_REGION, PIN_ZOOM_DELTA,
     PIN_ZOOM_REGION, TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION, TEXT_SIZE_REGION,
 };
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MBUTTONDOWN, WM_MBUTTONUP,
@@ -60,9 +58,14 @@ static WHEEL_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 /// the keyboard is, and a hover — no pin up — is a window nothing can be above. The pointer's is
 /// the one that made a raised pin scrollable without a click: the preview is what the pointer is
 /// standing on, which the preview thread read off the desktop once a tick (see
-/// `preview_is_under_the_pointer`).
-fn preview_takes_the_wheel() -> bool {
-    crate::shell::key_input::pin_owns_foreground() || preview_is_under_the_pointer()
+/// `the_pointer_is_on`).
+///
+/// **It is asked of the one block whose box the notch was turned in**, and of no other: a detached
+/// window's box is its own, and the viewer that took its place in the ring is not the window the
+/// pointer is standing on.
+fn preview_takes_the_wheel(block: &'static crate::app::seam::ViewerFacts) -> bool {
+    crate::shell::key_input::pin_owns_foreground(block)
+        || crate::app::seam::the_pointer_is_on(block)
 }
 
 /// Number of wheel messages seen so far, counted across the whole desktop.
@@ -148,21 +151,23 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // asked before the two regions below: the button sits inside the pin's own box, which
         // the zoom road claims whole, and the popup can float over a page that scrolls.
         if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
-            if let Some(region) = PIN_VOLUME_REGION.get() {
-                if point_in_region(info.pt, region) && preview_takes_the_wheel() {
-                    PIN_VOLUME_DELTA.fetch_add(notches, Ordering::AcqRel);
+            if let Some(block) = PIN_VOLUME_REGION.the_block_over((info.pt.x, info.pt.y)) {
+                if preview_takes_the_wheel(block) {
+                    PIN_VOLUME_DELTA
+                        .in_block(block)
+                        .fetch_add(notches, Ordering::AcqRel);
                     wake_preview_loop();
                     return LRESULT(1);
                 }
             }
         }
 
-        if let Some(region) = TEXT_SCROLL_REGION.get() {
+        if let Some(block) = TEXT_SCROLL_REGION.the_block_over((info.pt.x, info.pt.y)) {
             // The box the preview published is asked first, and what owns the wheel second: in that
             // order, so that the second — a few calls into Windows — is a cost neither every wheel
             // message on the desktop nor a notch that is outside every preview pays (see
             // `preview_takes_the_wheel`).
-            if point_in_region(info.pt, region) && preview_takes_the_wheel() {
+            if preview_takes_the_wheel(block) {
                 // The wheel is the preview's, not Explorer's: count it for the
                 // preview thread and swallow the message so the list behind the
                 // preview does not move as well. `Ctrl` held makes it the page's own size rather
@@ -177,9 +182,13 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
                 // which waits on the same tick.
                 if wparam.0 == WM_MOUSEWHEEL as usize {
                     if control_is_down() {
-                        PIN_TEXT_SIZE_DELTA.fetch_add(notches, Ordering::AcqRel);
+                        PIN_TEXT_SIZE_DELTA
+                            .in_block(block)
+                            .fetch_add(notches, Ordering::AcqRel);
                     } else {
-                        TEXT_SCROLL_DELTA.fetch_add(notches, Ordering::AcqRel);
+                        TEXT_SCROLL_DELTA
+                            .in_block(block)
+                            .fetch_add(notches, Ordering::AcqRel);
                     }
                     if notches != 0 {
                         wake_preview_loop();
@@ -194,9 +203,11 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // so a `Ctrl` and a wheel over one is asked for here instead (see
         // `TEXT_SIZE_REGION`).
         if wparam.0 == WM_MOUSEWHEEL as usize && control_is_down() {
-            if let Some(region) = TEXT_SIZE_REGION.get() {
-                if point_in_region(info.pt, region) && preview_takes_the_wheel() {
-                    PIN_TEXT_SIZE_DELTA.fetch_add(notches, Ordering::AcqRel);
+            if let Some(block) = TEXT_SIZE_REGION.the_block_over((info.pt.x, info.pt.y)) {
+                if preview_takes_the_wheel(block) {
+                    PIN_TEXT_SIZE_DELTA
+                        .in_block(block)
+                        .fetch_add(notches, Ordering::AcqRel);
                     return LRESULT(1);
                 }
             }
@@ -207,10 +218,10 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // engine's window and swallowed here — the kinds a notch zooms are refused there rather than here
         // (see `pin_zoom_view`), and no notch falls through to the listing under the pin.
         if wparam.0 == WM_MOUSEWHEEL as usize {
-            if let Some(region) = MODELS_BAND.get() {
-                if point_in_region(info.pt, region) && preview_takes_the_wheel() {
+            if let Some(block) = MODELS_BAND.the_block_over((info.pt.x, info.pt.y)) {
+                if preview_takes_the_wheel(block) {
                     if notches != 0 {
-                        post_a_notch_to_the_model(info.pt.x, info.pt.y, notches);
+                        post_a_notch_to_the_model(block, info.pt.x, info.pt.y, notches);
                     }
                     return LRESULT(1);
                 }
@@ -229,10 +240,12 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         // pin would be read at the end of it — 62 ms, measured, which is four frames of a
         // 144 Hz display and the whole of what makes a zoom start unevenly (see
         // `wake_preview_loop`).
-        if let Some(region) = PIN_ZOOM_REGION.get() {
-            if point_in_region(info.pt, region) && preview_takes_the_wheel() {
+        if let Some(block) = PIN_ZOOM_REGION.the_block_over((info.pt.x, info.pt.y)) {
+            if preview_takes_the_wheel(block) {
                 if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
-                    PIN_ZOOM_DELTA.fetch_add(notches, Ordering::AcqRel);
+                    PIN_ZOOM_DELTA
+                        .in_block(block)
+                        .fetch_add(notches, Ordering::AcqRel);
                     wake_preview_loop();
                 }
                 return LRESULT(1);
@@ -243,9 +256,4 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
     }
 
     CallNextHookEx(None, code, wparam, lparam)
-}
-
-fn point_in_region(point: POINT, region: (i32, i32, i32, i32)) -> bool {
-    let (left, top, right, bottom) = region;
-    point.x >= left && point.x < right && point.y >= top && point.y < bottom
 }
