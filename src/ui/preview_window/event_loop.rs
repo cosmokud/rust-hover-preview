@@ -567,6 +567,11 @@ pub fn run_preview_window() {
             // `MODELS_BAND`).
             crate::app::seam::PIN_ZOOM_REGION.publish(pin_model::pin_zoom_keep_alive_try());
             crate::app::seam::MODELS_BAND.publish(pin_model::the_models_band());
+            // And the box the pin's window stands in, which the hook's own press reads are measured
+            // against: a press inside it is the pin's own whatever is under the point, and a pin dragged
+            // under a hand that did not move is noticed by the box moving rather than by asking the
+            // desktop for a window handle this side does not own (see `crate::app::seam::PIN_WINDOW_BOX`).
+            crate::app::seam::PIN_WINDOW_BOX.publish(preview_window_rect());
             // And a notch the hook turned over that band, which it cannot hand to the engine itself: the
             // window to post it to is this thread's to ask, and the point is where the hand turned it
             // rather than where the engine's client starts (see `crate::app::seam::MODELS_NOTCHES`).

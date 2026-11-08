@@ -110,12 +110,21 @@ pub(crate) struct SeamFacts {
     pin_bubble_hwnd: AtomicIsize,
     pin_menu_hwnd: AtomicIsize,
     pin_file_in_flight: AtomicU64,
+    /// The path of the file a pin is showing, one UTF-16 unit to a word, and how many of them are the path
+    /// (see `publish_the_pinned_path`).
+    pin_path: [AtomicU32; SEAM_PIN_PATH_UNITS],
+    pin_path_len: AtomicU32,
+    /// A count of the writes to `pin_path`, odd in the middle of one, so that a reader can tell a name it
+    /// read whole from one it read being written.
+    pin_path_writing: AtomicU32,
     /// The five boxes, each packed the way `PublishedRegion` packs one (see there).
     pin_volume_region: AtomicU64,
     text_scroll_region: AtomicU64,
     text_size_region: AtomicU64,
     pin_zoom_region: AtomicU64,
     models_band: AtomicU64,
+    /// The box the pinned window stands in (see `PIN_WINDOW_BOX`).
+    pin_window_box: AtomicU64,
     models_notches: AtomicI32,
     models_notch_point: AtomicU64,
     pin_presses: AtomicU32,
@@ -155,11 +164,15 @@ impl SeamFacts {
             pin_bubble_hwnd: AtomicIsize::new(0),
             pin_menu_hwnd: AtomicIsize::new(0),
             pin_file_in_flight: AtomicU64::new(0),
+            pin_path: [const { AtomicU32::new(0) }; SEAM_PIN_PATH_UNITS],
+            pin_path_len: AtomicU32::new(0),
+            pin_path_writing: AtomicU32::new(0),
             pin_volume_region: AtomicU64::new(NO_REGION),
             text_scroll_region: AtomicU64::new(NO_REGION),
             text_size_region: AtomicU64::new(NO_REGION),
             pin_zoom_region: AtomicU64::new(NO_REGION),
             models_band: AtomicU64::new(NO_REGION),
+            pin_window_box: AtomicU64::new(NO_REGION),
             models_notches: AtomicI32::new(0),
             models_notch_point: AtomicU64::new(0),
             pin_presses: AtomicU32::new(0),
@@ -170,6 +183,10 @@ impl SeamFacts {
         }
     }
 }
+
+/// How many UTF-16 units of a pin's path the facts carry, which is how long a name a pin can be showing
+/// there (see `publish_the_pinned_path`).
+const SEAM_PIN_PATH_UNITS: usize = SEAM_TEXT_UNITS;
 
 /// How many messages one direction's ring holds, which is how far a sender may be behind before a
 /// message is dropped rather than kept.
@@ -1608,6 +1625,63 @@ pub(crate) fn pin_is_on_its_way_to(path: &Path) -> bool {
     PIN_FILE_IN_FLIGHT.load(Ordering::Acquire) == fingerprint_of(path)
 }
 
+/// Publish the file a pin is showing, or `None` where no pin is up: the one fact here that is a name
+/// rather than a number.
+///
+/// **A path is what the side that asks what is pinned cannot do without.** The update road a pin stands
+/// for — a click on the listing swaps the file in the window — is a comparison of the picked file against
+/// the pinned one, and a file stepped onto a standing pin never passes through an install. So the name is
+/// written where it changes, in one fixed buffer of UTF-16 units, with a count that says how much of the
+/// buffer it is and a count of the writes so that a reader can tell a name it read whole from one it read
+/// while it was being written.
+///
+/// shortcut: a path longer than the buffer is published as no path, which leaves the asking side with
+/// nothing rather than with another file's name — the update road is then off for that pin; upgrade if a
+/// user ever meets a path that long.
+pub(crate) fn publish_the_pinned_path(path: Option<&Path>) {
+    let facts = the_facts();
+    // Odd for the length of the write: a reader that sees the count move reads the name again on its next
+    // tick rather than acting on the two halves of two names.
+    facts.pin_path_writing.fetch_add(1, Ordering::AcqRel);
+
+    let mut len = 0;
+    let fits =
+        path.is_some_and(|path| path.as_os_str().encode_wide().count() <= SEAM_PIN_PATH_UNITS);
+    if let Some(path) = path.filter(|_| fits) {
+        for unit in path.as_os_str().encode_wide() {
+            facts.pin_path[len].store(u32::from(unit), Ordering::Relaxed);
+            len += 1;
+        }
+    }
+
+    facts.pin_path_len.store(len as u32, Ordering::Release);
+    facts.pin_path_writing.fetch_add(1, Ordering::Release);
+}
+
+/// The file a pin is showing, as the side that owns the pin published it, or `None` where no pin is up or
+/// the name was being written when it was asked for (see `publish_the_pinned_path`).
+pub(crate) fn pinned_path() -> Option<PathBuf> {
+    let facts = the_facts();
+    let before = facts.pin_path_writing.load(Ordering::Acquire);
+    if before & 1 == 1 {
+        return None;
+    }
+
+    let len = facts.pin_path_len.load(Ordering::Acquire) as usize;
+    if len == 0 || len > SEAM_PIN_PATH_UNITS {
+        return None;
+    }
+
+    let units: Vec<u16> = (0..len)
+        .map(|at| facts.pin_path[at].load(Ordering::Relaxed) as u16)
+        .collect();
+    if facts.pin_path_writing.load(Ordering::Acquire) != before {
+        return None;
+    }
+
+    Some(PathBuf::from(OsString::from_wide(&units)))
+}
+
 /// The number a path is published as, asked the same way on both sides so that the two answers are the
 /// same answer (see `PIN_FILE_IN_FLIGHT`).
 ///
@@ -1697,6 +1771,21 @@ pub(crate) static PIN_ZOOM_REGION: PublishedRegion =
 
 /// The band a pinned model is drawn in, which a notch is handed to the model's own camera for.
 pub(crate) static MODELS_BAND: PublishedRegion = PublishedRegion::of(|facts| &facts.models_band);
+
+/// The box the pin's window stands in, published once a tick and read by the hook's own press reads: a
+/// press inside it is the pin's own whatever is under the point, and a pin dragged under a hand that did
+/// not move is a box that changed (see `preview_window_rect`).
+pub(crate) static PIN_WINDOW_BOX: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.pin_window_box);
+
+/// The box the pin's window stands in, or nothing where no pin is up: the box a press is measured against
+/// (see `PIN_WINDOW_BOX`).
+///
+/// It is published rather than read off the desktop because the window is not this process's: a handle
+/// belongs to the process that made it, and what the hook needs is where that window is, not its handle.
+pub(crate) fn preview_window_rect() -> Option<(i32, i32, i32, i32)> {
+    PIN_WINDOW_BOX.get()
+}
 
 /// Notches turned over that band and not yet handed to the model: how many, and the screen point the last
 /// one was turned at, packed as two 16-bit fields.
@@ -1887,13 +1976,13 @@ pub(crate) use crate::shell::explorer_hook::{view_sort_of, SortKey, ViewSort};
 pub(crate) use crate::shell::tray::FONT_SIZE_CHOICES;
 pub(crate) use crate::ui::preview_window::{
     cursor_preview_hover, hide_preview, kill_stray_video_process, monitor_dpi_from_point,
-    note_engine_page_drag, pin_button_covers, pin_press_was_not_a_pick, pinned_path,
-    pointer_item_box, pointer_item_holds, press_pinned_preview, preview_pointer_hold,
-    preview_screen_rect, preview_stall_ms, preview_window_rect, publish_pin_media_press,
-    publish_pointer_item_box, refresh_pin, refresh_preview, refresh_preview_types,
-    refresh_render_html, request_pin_end, request_pin_menu_dismiss, show_preview,
-    show_preview_keyboard, take_pin_handed_off, take_pin_menu_pressed, take_pin_resumed,
-    trim_image_cache, trim_subtitle_cache, update_pinned_preview, PreviewCursorHover,
+    note_engine_page_drag, pin_button_covers, pin_press_was_not_a_pick, pointer_item_box,
+    pointer_item_holds, press_pinned_preview, preview_pointer_hold, preview_screen_rect,
+    preview_stall_ms, publish_pin_media_press, publish_pointer_item_box, refresh_pin,
+    refresh_preview, refresh_preview_types, refresh_render_html, request_pin_end,
+    request_pin_menu_dismiss, show_preview, show_preview_keyboard, take_pin_handed_off,
+    take_pin_menu_pressed, take_pin_resumed, trim_image_cache, trim_subtitle_cache,
+    update_pinned_preview, PreviewCursorHover,
 };
 
 #[cfg(test)]
@@ -2021,6 +2110,25 @@ mod tests {
         let long = PathBuf::from("a".repeat(SEAM_TEXT_UNITS + 1));
 
         assert!(SeamMessage::of_preview(&PreviewMessage::PinUpdate(long)).is_none());
+    }
+
+    #[test]
+    fn the_pinned_path_is_published_whole_or_not_at_all() {
+        // The facts are this process's own copy in a test (see `LOCAL_FACTS`), so a name published here is
+        // read back here — and put away again at the end, since the copy is one for the whole binary.
+        publish_the_pinned_path(None);
+        assert_eq!(pinned_path(), None);
+
+        let path = Path::new("listing/a note.txt");
+        publish_the_pinned_path(Some(path));
+        assert_eq!(pinned_path().as_deref(), Some(path));
+
+        // A name longer than the facts can hold is no name rather than half of one.
+        let long = PathBuf::from("a".repeat(SEAM_PIN_PATH_UNITS + 1));
+        publish_the_pinned_path(Some(long.as_path()));
+        assert_eq!(pinned_path(), None);
+
+        publish_the_pinned_path(None);
     }
 
     #[test]

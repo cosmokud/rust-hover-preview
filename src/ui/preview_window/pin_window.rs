@@ -380,6 +380,9 @@ pub(super) fn install(pin: PinnedPreview) {
         // first notch after a take-up is answered rather than waiting for the tick to publish it
         // (see `publish_pin_volume_region`).
         super::pin_input::publish_pin_volume_region(Some(&pin));
+        // And the file it is showing, published here because the side that asks what is pinned is a
+        // process of its own (see `seam::publish_the_pinned_path`).
+        crate::app::seam::publish_the_pinned_path(Some(pin.path.as_path()));
         *state = PinState::Up(PinUp {
             pin,
             keyboard: None,
