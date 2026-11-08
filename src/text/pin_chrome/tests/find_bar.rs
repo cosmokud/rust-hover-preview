@@ -34,7 +34,7 @@ fn card_state(query: &str, current: Option<usize>, total: usize) -> FindBarPaint
 /// below that (see `find_bar_layout`).
 #[test]
 fn the_card_sits_against_the_pages_top_right_corner_under_its_caption() {
-    let card = find_bar_layout(400, 300, 30, 96, "1/3");
+    let card = find_bar_layout(400, 300, 30, 96, "1/3", false);
 
     assert_eq!(
         card.panel.top,
@@ -84,8 +84,8 @@ fn the_card_sits_against_the_pages_top_right_corner_under_its_caption() {
 /// size, rather than a small card in a large corner (see `find_bar_layout`).
 #[test]
 fn every_metric_of_the_card_scales_with_the_display() {
-    let at_96 = find_bar_layout(800, 600, 0, 96, "1/3");
-    let at_192 = find_bar_layout(800, 600, 0, 192, "1/3");
+    let at_96 = find_bar_layout(800, 600, 0, 96, "1/3", false);
+    let at_192 = find_bar_layout(800, 600, 0, 192, "1/3", false);
 
     let width = |card: FindBar| card.panel.right - card.panel.left;
     let height = |card: FindBar| card.panel.bottom - card.panel.top;
@@ -110,7 +110,7 @@ fn every_metric_of_the_card_scales_with_the_display() {
 /// `FindBar::part_at`).
 #[test]
 fn every_control_answers_at_its_own_box_and_the_card_holds_the_rest() {
-    let card = find_bar_layout(400, 300, 0, 96, "1/3");
+    let card = find_bar_layout(400, 300, 0, 96, "1/3", false);
 
     for (rect, part) in [
         (card.case, FindBarPart::Case),
@@ -147,7 +147,7 @@ fn every_control_answers_at_its_own_box_and_the_card_holds_the_rest() {
 #[test]
 fn the_card_is_painted_over_the_page_and_its_pressed_switches_and_count_change_it() {
     let (page_width, page_height) = (400, 300);
-    let card = find_bar_layout(page_width, page_height, 0, 96, "1/3");
+    let card = find_bar_layout(page_width, page_height, 0, 96, "1/3", false);
     let surface = DibSurface::create(
         (card.panel.right - card.panel.left) as u32,
         (card.panel.bottom - card.panel.top) as u32,
@@ -224,7 +224,7 @@ fn painted_card_on(
     state: &FindBarPaint,
     dpi: u32,
 ) -> (Vec<u8>, FindBar) {
-    let card = find_bar_layout(page_width, page_height, 0, dpi, "1/3");
+    let card = find_bar_layout(page_width, page_height, 0, dpi, "1/3", false);
     let surface = DibSurface::create(
         (card.panel.right - card.panel.left) as u32,
         (card.panel.bottom - card.panel.top) as u32,
@@ -317,7 +317,7 @@ fn the_caret_stands_after_the_last_character_of_a_query_too_long_for_its_field()
     let state = card_state(query, Some(0), 1);
 
     // The text, measured the way the paint measures it, is wider than the room the field has.
-    let probe = find_bar_layout(400, 300, 0, 96, "1/3");
+    let probe = find_bar_layout(400, 300, 0, 96, "1/3", false);
     let surface = DibSurface::create(
         (probe.panel.right - probe.panel.left) as u32,
         (probe.panel.bottom - probe.panel.top) as u32,
@@ -447,7 +447,7 @@ fn the_control_under_the_pointer_is_washed_and_a_press_is_washed_further() {
 /// `query_index_at`).
 #[test]
 fn a_press_names_a_place_in_the_query_from_the_column_it_is_drawn_at() {
-    let card = find_bar_layout(400, 300, 0, 96, "1/3");
+    let card = find_bar_layout(400, 300, 0, 96, "1/3", false);
 
     // The boundary nearest the point: a point on a character's left half is before it and one on its
     // right half after it, which is the same rule for a real run and for these columns.
@@ -770,7 +770,7 @@ fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
 /// `query_index_at`).
 #[test]
 fn a_press_on_a_scrolled_run_names_the_character_under_the_pointer() {
-    let card = find_bar_layout(400, 300, 0, 96, "1/3");
+    let card = find_bar_layout(400, 300, 0, 96, "1/3", false);
     let long =
         "When the same word runs on far past the width of this card's own field it keeps going";
     let surface = DibSurface::create(
@@ -869,8 +869,8 @@ fn select_all_on_a_long_query_washes_only_the_part_of_the_run_the_field_holds() 
 #[test]
 fn a_count_too_wide_for_its_room_takes_the_room_rather_than_being_cut() {
     let (page_width, page_height) = (400, 300);
-    let small = find_bar_layout(page_width, page_height, 0, 96, "1/3");
-    let long = find_bar_layout(page_width, page_height, 0, 96, "1210/19000");
+    let small = find_bar_layout(page_width, page_height, 0, 96, "1/3", false);
+    let long = find_bar_layout(page_width, page_height, 0, 96, "1210/19000", false);
 
     let surface = DibSurface::create(1, 1).expect("a surface");
     let style = caption_style([30, 30, 30]);
@@ -924,7 +924,7 @@ fn a_count_too_wide_for_its_room_takes_the_room_rather_than_being_cut() {
 #[test]
 fn a_switch_names_itself_while_the_pointer_rests_on_it() {
     let (page_width, page_height) = (400, 300);
-    let card = find_bar_layout(page_width, page_height, 0, 96, "1/3");
+    let card = find_bar_layout(page_width, page_height, 0, 96, "1/3", false);
     let (surface_width, surface_height) = find_bar_surface_size(&card, 96);
     let surface = DibSurface::create(surface_width, surface_height).expect("a surface");
 
@@ -985,4 +985,44 @@ fn a_switch_names_itself_while_the_pointer_rests_on_it() {
         pixel_at(&plain, page_width, card.case.left + 1, card.case.top + 2),
         "the switch under the pointer is still drawn as the one it is"
     );
+}
+
+/// A page longer than its frame draws its scrollbar in the page's own right margin, and the card keeps
+/// clear of it: on such a page the card's margin is measured from the scrollbar's left edge rather than
+/// from the frame's, which is the same rule at every scale and every width a pin is resized to (see
+/// `find_bar_layout` and `scrollbar_room`).
+#[test]
+fn the_card_keeps_clear_of_the_pages_scrollbar_at_every_scale_and_width() {
+    for dpi in [96, 120, 144, 192] {
+        let scale = dpi as f32 / 96.0;
+        let scrollbar_left = |width: i32| {
+            width
+                - text_paint::scaled(text_paint::PADDING_PIXELS as i32, scale)
+                - text_paint::scaled(text_paint::SCROLLBAR_WIDTH_PIXELS, scale).max(1)
+        };
+
+        for width in [420, 640, 1200, 2400] {
+            let scrolling = find_bar_layout(width, 600, 0, dpi, "1/3", true);
+            let plain = find_bar_layout(width, 600, 0, dpi, "1/3", false);
+
+            assert!(
+                scrolling.panel.right <= scrollbar_left(width),
+                "{dpi} dpi in {width} px: the card ends left of the scrollbar's column"
+            );
+            assert_eq!(
+                scrollbar_left(width) - scrolling.panel.right,
+                text_paint::scaled(FIND_BAR_MARGIN as i32, scale),
+                "{dpi} dpi in {width} px: and keeps its own margin from the scrollbar"
+            );
+            assert!(
+                scrolling.panel.right < plain.panel.right,
+                "{dpi} dpi in {width} px: which moves it left of where a page that does not scroll puts it"
+            );
+            assert_eq!(
+                (scrolling.panel.top, scrolling.query.bottom),
+                (plain.panel.top, plain.query.bottom),
+                "{dpi} dpi in {width} px: the card moves along the row, not down it"
+            );
+        }
+    }
 }

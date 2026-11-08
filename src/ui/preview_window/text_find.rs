@@ -207,6 +207,9 @@ fn find_bar_over(pin: &PinnedPreview) -> Option<FindBarPlacement> {
             page_top,
             dpi,
             &pin_chrome::find_bar_count_text(find.current, find.matches.len()),
+            // The card is placed on the page the reader has, and a page that scrolls draws its bar in
+            // the corner the card would otherwise take (see `pin_chrome::find_bar_layout`).
+            state.scrollbar.is_some(),
         ),
         state: pin_chrome::FindBarPaint {
             query: find.field.text().to_string(),
