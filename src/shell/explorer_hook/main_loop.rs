@@ -90,10 +90,12 @@ pub fn run_explorer_hook() {
     // the pin is showing, where the pointer was the last time it was read, and the item the
     // keyboard is on (see `PinUpdateWatch`).
     let mut pin_watch = PinUpdateWatch::default();
-    // Whether Explorer held the foreground the last time a pinned tick asked: the pin takes the
-    // focus away from it and gives it back, and what the resolver has cached across that is what
-    // a listing that has moved on under the pin still reads as (see the pinned branch below).
-    let mut pin_saw_explorer_foreground = is_foreground_explorer();
+    // Where the pin's front stands: whether Explorer held the foreground on the last pinned tick,
+    // whether a pin was up on it, and whether the pin itself has held the foreground since it came up.
+    // The pin takes the focus away from Explorer and gives it back, and what the resolver has cached
+    // across that is what a listing that has moved on under the pin still reads as; the ask that puts
+    // the pin behind the listing is the same reading (see `pin_front::PinFront`).
+    let mut pin_front = PinFront::default();
     let mut last_user_input_at: Option<Instant> = None;
     let mut last_keyboard_navigation_input_at: Option<Instant> = None;
     // Set on a click, Enter or a navigation key press: the folder probe runs at
@@ -528,7 +530,15 @@ pub fn run_explorer_hook() {
         // that the hover machinery is quiet behind it. The loop stays here, at the tick's own pace,
         // rather than sleeping deeply, and what is not quiet behind it is the pin's own following
         // where `Pin Mode … Update Preview` asks for it (see `PinUpdateWatch`).
-        if crate::app::seam::the_pin_is_up() {
+        // A pin that is up is the only thing that reads the foreground below, so a pin that is not up
+        // says so here: the tick the next one comes up on asks its baseline rather than comparing
+        // against a window nothing has looked at since (see `pin_front::PinFront`).
+        let pin_up = crate::app::seam::the_pin_is_up();
+        if !pin_up {
+            pin_front.pin_is_down();
+        }
+
+        if pin_up {
             // The tick's one reading of the pointer, taken at the tick's
             // opening and before the input pass reads the press bits: every
             // question this tick asks about the pointer — including which
@@ -556,7 +566,8 @@ pub fn run_explorer_hook() {
             // which is read a tick before the shell has caught up with it (see
             // `PinUpdateWatch::follow`).
             let explorer_fg = is_foreground_explorer();
-            if explorer_fg != pin_saw_explorer_foreground {
+            let front = pin_front.read(explorer_fg);
+            if front.changed {
                 resolver.forget_item();
                 resolver.forget_window_views();
                 // **The user has come back to a listing, and the pin is a window that cannot hear it.**
@@ -568,12 +579,27 @@ pub fn run_explorer_hook() {
                 // viewer's, so the ask crosses to it and the lowering is decided there (see
                 // `app::seam::PIN_BEHIND_ASK` and `pin_lifecycle::lower_pinned_preview`, which answers
                 // for `Always On Top`, a collapsed pin and `Move To Top` off exactly as a press does).
-                if explorer_fg {
+                //
+                // **And only a pin that had the front can lose it back.** A pin raised over the listing
+                // the user is working in keeps the keyboard there, so Explorer is the foreground window
+                // at the moment of the raise and stays it — a state the ask must not read as a return to
+                // the listing, or the pin comes up behind the window it was raised over (see
+                // `pin_front::PinFront`).
+                if front.explorer_took_the_front_back {
                     // Safety: asks the desktop which window is in front; dereferences nothing.
                     let foreground = unsafe { GetForegroundWindow() };
+                    if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+                        eprintln!(
+                            "seam: pin lower asked: Explorer took the foreground back from the pin, behind {}",
+                            foreground.0 as isize
+                        );
+                    }
                     crate::app::seam::ask_the_pin_to_go_behind(foreground.0 as isize);
+                } else if explorer_fg && std::env::var_os("RHP_SEAM_TRACE").is_some() {
+                    eprintln!(
+                        "seam: pin lower skipped: no pin has held the foreground since this one came up"
+                    );
                 }
-                pin_saw_explorer_foreground = explorer_fg;
             }
 
             let (update, on_hover) = pin_update_settings();

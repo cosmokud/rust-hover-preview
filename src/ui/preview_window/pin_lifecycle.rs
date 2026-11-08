@@ -2114,6 +2114,7 @@ pub(super) unsafe fn raise_pinned_preview(hwnd: HWND, keep_the_band: bool) {
 /// What stands in the pin's band is somebody else's window and is brought along with it, so the
 /// raise is a whole preview rather than a caption over whatever happened to be behind it.
 pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
+    note_the_place(hwnd, "raise");
     // **A pin that is a window and already holds the foreground is in front.** The press that asks
     // for this has activated the window it landed on, and a window Windows has activated is the one
     // in front of the ordinary band: taking the topmost band and giving it back would be a second
@@ -2142,7 +2143,13 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
         // `paint::a_pages_band_is_hit_testable`).
         if a_running_page_holds_the_band() && !pin_always_on_top() && GetForegroundWindow() != hwnd
         {
+            note_the_place(
+                hwnd,
+                "raise: a running page takes the band and gives it back",
+            );
             take_the_band_and_give_it_back(hwnd, "a press on a running page");
+        } else {
+            note_the_place(hwnd, "raise: left to Windows, a press activated it");
         }
 
         // What stands in this window's band is placed again after the raise: a page that runs is a window
@@ -2157,6 +2164,7 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // the user's own press gives it back (see `pin_holds_the_front`, `lower_pinned_preview`). What
     // stands in the pin's band is put in it too, in the order `place_pinned_siblings` asks for.
     if pin_holds_the_front() {
+        note_the_place(hwnd, "raise: the band is kept, the pin owes the front");
         unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST) };
         place_pinned_siblings();
         settle_pinned_mpv_ontop();
@@ -2165,8 +2173,18 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
 
     // Taken and given straight back: the band is the only way to the front of the ordinary one for a
     // window this process cannot ask the foreground for (see `take_the_band_and_give_it_back`).
+    note_the_place(hwnd, "raise: the band taken and given back");
     take_the_band_and_give_it_back(hwnd, "a press");
     place_pinned_siblings();
+}
+
+/// Say where a pin was put and why, where `RHP_SEAM_TRACE` asks for it: a raise and a lowering are two
+/// windows' order, and the reason one did **not** happen is the half of it nothing else writes down (see
+/// `put_pin_at_the_front` and `lower_pinned_preview`).
+fn note_the_place(hwnd: HWND, what: &str) {
+    if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+        eprintln!("seam: pin {} {what}", hwnd.0 as isize);
+    }
 }
 
 /// Put a pinned window back where the user's own clicks had it: behind the window the press was
@@ -2213,10 +2231,15 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     // own window is one a click may activate, so a click on the pin brings it back (see
     // `pin_set_focusable`).
     if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
+        note_the_place(
+            hwnd,
+            "lower: kept where it is, by the settings and its own box",
+        );
         return;
     }
 
     if window == hwnd {
+        note_the_place(hwnd, "lower: the window asked for is the pin itself");
         return;
     }
 
@@ -2249,10 +2272,12 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
         // and the front a pick owed ends here instead — a front left owed is a grace ticking to undo a
         // press that has already been answered.
         PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+        note_the_place(hwnd, "lower: already behind it, or no window to go behind");
         return;
     }
 
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    note_the_place(hwnd, "lower: going behind the window the user is in");
     // The band is left before the place is asked for, and both are asked of the window of the pair
     // that holds it: Windows carries the chrome with the host that owns it, so a pin put behind this
     // window is the film and the chrome together rather than a chrome behind it and a film over it

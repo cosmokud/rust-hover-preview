@@ -21,6 +21,7 @@
 //! - `input` — the keys and the buttons, read once per tick.
 //! - `hover_location` — where the pointer is, and which listing it is over.
 //! - `pin_watch` — what a pinned preview watches while it waits to be given the next file.
+//! - `pin_front` — where a standing pin's front stands: whether Explorer has just taken it back.
 //! - `focus_items` — the item the keyboard is on rather than the one under the pointer.
 //! - `main_loop` — `run_explorer_hook` itself.
 //!
@@ -39,6 +40,7 @@ mod hover_location;
 mod input;
 mod locations;
 mod main_loop;
+mod pin_front;
 mod pin_watch;
 mod probe_trace;
 mod resolver;
@@ -134,6 +136,7 @@ use focus_items::*;
 use hover_location::*;
 use input::*;
 use locations::*;
+use pin_front::*;
 use pin_watch::*;
 pub(crate) use probe_trace::note_pin_click;
 use probe_trace::*;
