@@ -16,6 +16,8 @@
 
 - **A page's find count is drawn whole, however many places the query was found** — `1210/19000` was cut after its first digits, because the count was given a fixed column measured for a count of four figures; the column is the room its own text needs now, taken out of the query's field rather than out of the count, so a page of nineteen thousand matches reads as `1210/19000` with every digit on it.
 
+- **A `Ctrl`+`F` over a pinned page is answered on the press rather than depending on which reader of the keyboard saw it first** — the chord was read from the key's "pressed since the last read" bit, and that bit is spent by whoever reads the key first: the Explorer hook's own type-ahead pass reads every letter's, so a chord whose `Ctrl` was let go before the pin's next tick could be spent there and lost. The key being *down* where the last pass found it up is asked as well, the key is read only under `Ctrl` so no reader can spend a press it has no chord for, and a batch that searched always paints the find bar — a bar opened over a query its page does not hold used to find nothing, draw nothing, and stay invisible until something else repainted the window.
+
 ## [0.4.11] - 2026-11-08
 
 ### Added

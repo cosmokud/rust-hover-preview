@@ -489,6 +489,33 @@ fn the_caret_keys_move_the_caret_under_a_query() {
     );
 }
 
+/// A batch that searched paints, even where the places it found are the ones the bar already drew:
+/// a bar opened over a query its page does not hold finds nothing, and the state it draws of that —
+/// `0/0` and no place to be — is the state it was opened on, so a batch compared only on what it
+/// draws would leave the card out of the window's pixels until something else repainted them (see
+/// `text_find::settle` and `text_find::BAR_PAINTS`).
+#[test]
+fn a_search_that_finds_nothing_still_asks_for_the_paint() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-searched-nothing.txt");
+
+    text_find::open_text_find();
+    type_into_the_bar("a word the page does not hold");
+    assert_eq!(bar_now().2, 0, "the page holds no such word");
+
+    let paints = || text_find::BAR_PAINTS.load(Ordering::Relaxed);
+    let before = paints();
+    text_find::note(FindEdit::SearchAgain);
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(
+        paints(),
+        before + 1,
+        "a search that found nothing draws the bar it was asked of"
+    );
+}
+
 /// A key that moved nothing draws nothing: `←` at the start of a query is an edit the road queues
 /// like any other, and a repaint of this band copies the whole page frame under the card (see
 /// `text_find::settle` and `text_find::BAR_PAINTS`).
