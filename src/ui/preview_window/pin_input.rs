@@ -209,8 +209,9 @@ pub(super) struct PinnedCaption {
 }
 
 /// The caption button a point in the pinned window is on, if it is one a hand can have: a detached
-/// window's own **Detach** is drawn faded and answers nothing, so no pointer is ever said to be on it
-/// and no press is ever armed by it (see `pin_chrome::Caption::detachable` and `app::detach`).
+/// window's own **Detach** answers nothing — it is drawn in the ink of the window being one of its own,
+/// which is not an offer — so no pointer is ever said to be on it and no press is ever armed by it (see
+/// `pin_chrome::Caption::detachable` and `app::detach`).
 fn caption_button_at(x: i32, y: i32, caption: &PinnedCaption) -> Option<pin_chrome::CaptionButton> {
     let button = pin_chrome::button_at(
         x,
