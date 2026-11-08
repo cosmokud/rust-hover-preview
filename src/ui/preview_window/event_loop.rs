@@ -1697,6 +1697,13 @@ pub fn run_preview_window() {
             if pin_chrome_owes_a_repaint() {
                 needs_repaint = true;
             }
+            // And the playlist band under a pinned sound's card owes one for the whole of what it
+            // does on its own: the rows rebuilt where the walk has moved, the notch the hook left
+            // for it, and a name travelling across a row the hand is on (see
+            // `pin_playlist::the_tick_is_owed_a_repaint`).
+            if pin_playlist::the_tick_is_owed_a_repaint() {
+                needs_repaint = true;
+            }
             // And a hand carrying the picture inside its window owes the loop the repaint that shows
             // where it has got to: a pan is movement, and movement is drawn once per frame the
             // display shows rather than once per position the pointer reports (see

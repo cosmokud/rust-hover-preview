@@ -305,17 +305,39 @@ pub(super) fn pinned_window_box_of(
 /// otherwise. What the chrome is drawn *over* is what this answers — a caption over a picture, or
 /// a caption sharing the window's first rows with nothing else. A kind with no caption at all has
 /// no top band, so the media begins at the window's own first row (see `pinned_caption_height`).
+///
+/// `playlist` is the band a pinned sound's card grows under it, which is a band like the other two
+/// and is taken off the media's rows the same way: a card is the box it was taken up at however
+/// tall the window under it has become, and a media composed into a band that had grown for the
+/// playlist would be a card stretched down the window (see `pin_playlist`).
 pub(super) fn pinned_band_rows(
     height: i32,
     caption: i32,
     transport: i32,
     overlay: bool,
+    playlist: i32,
 ) -> (i32, i32) {
     if overlay {
         (0, height.max(1))
     } else {
-        (caption, (height - caption - transport).max(1))
+        (
+            caption,
+            (height - caption - transport - playlist.max(0)).max(1),
+        )
     }
+}
+
+/// The rows a pin's own media is drawn in, and how many of them there are: `pinned_band_rows`
+/// asked of one pin rather than of four numbers, so that the playlist band is taken off the media's
+/// rows in the one place a paint, a card's geometry and a press all read from.
+pub(super) fn pinned_media_band_rows(pin: &PinnedPreview) -> (i32, i32) {
+    pinned_band_rows(
+        pin.window_size().1,
+        pin.caption,
+        pinned_transport_height(pin.dpi, pin.transport_bar),
+        pin.overlay,
+        pin_playlist::playlist_rows(pin),
+    )
 }
 
 /// The box the media of a pinned preview takes when its window is given a room: the largest box

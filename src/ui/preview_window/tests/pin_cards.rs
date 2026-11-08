@@ -206,8 +206,8 @@ fn a_pinned_windows_box_is_its_media_plus_the_room_its_chrome_needs() {
 
     // And where each part of the window is drawn: the media between the two bands, or under
     // the chrome the whole of the window down, with the strips over its first and last rows.
-    assert_eq!(pinned_band_rows(500, 30, 30, false), (30, 440));
-    assert_eq!(pinned_band_rows(500, 30, 30, true), (0, 500));
+    assert_eq!(pinned_band_rows(500, 30, 30, false, 0), (30, 440));
+    assert_eq!(pinned_band_rows(500, 30, 30, true, 0), (0, 500));
 
     // What the room of a display is follows from the same answer: a pin that keeps its chrome
     // inside its own box has the whole work area to be placed in.
@@ -265,12 +265,12 @@ fn a_sound_is_given_no_caption_above_its_card() {
     let window = pinned_window_box_of((100, 100, 500, 600), 96, false, false, 0);
     assert_eq!(window, (100, 100, 500, 600));
     assert_eq!(content_box_of(window, 96, false, false, 0), window);
-    assert_eq!(pinned_band_rows(600, 0, 0, false), (0, 600));
+    assert_eq!(pinned_band_rows(600, 0, 0, false, 0), (0, 600));
 
     // A picture's band begins below the caption it has always had.
     let caption = pinned_caption_height(96, None);
     assert_eq!(
-        pinned_band_rows(600, caption, 0, false),
+        pinned_band_rows(600, caption, 0, false, 0),
         (caption, 600 - caption)
     );
 }
@@ -315,8 +315,7 @@ fn sound_pin_volume_button(pin: &PinnedPreview) -> (i32, i32) {
     )
     .expect("a box on a card that carries its controls");
     let window = pin.window_box();
-    let (_, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(height, pin.caption, 0, pin.overlay);
+    let (top, _) = pinned_media_band_rows(pin);
 
     (
         window.0 + (button.left + button.right) / 2,
@@ -702,8 +701,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
         true,
     )
     .expect("a box on a card that carries its controls");
-    let (_, window_height) = pin.window_size();
-    let (top, _) = pinned_band_rows(window_height, pin.caption, 0, pin.overlay);
+    let (top, _) = pinned_media_band_rows(&pin);
     assert_eq!(
         pin_audio_control_at(
             &pin,
@@ -774,8 +772,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
         true,
     )
     .expect("a box on a card that carries its controls");
-    let (_, walked_height) = walked.window_size();
-    let (walked_top, _) = pinned_band_rows(walked_height, walked.caption, 0, walked.overlay);
+    let (walked_top, _) = pinned_media_band_rows(&walked);
     assert_eq!(
         pin_audio_control_at(
             &walked,
@@ -967,8 +964,7 @@ fn a_pin_taken_up_after_a_change_keeps_the_hovers_size() {
         true,
     )
     .expect("a box on a card that carries its controls");
-    let (_, window_height) = pin.window_size();
-    let (top, _) = pinned_band_rows(window_height, pin.caption, 0, pin.overlay);
+    let (top, _) = pinned_media_band_rows(&pin);
     assert_eq!(
         pin_audio_control_at(
             &pin,
@@ -1077,6 +1073,69 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// A band under a pinned sound's card grows the window downward and leaves the card exactly where
+/// it was: the same box, the same first row, and the same media band — the rows the band takes are
+/// window the card never had, not rows of the card given away.
+///
+/// The band is the session's rather than the pin's (it is remembered so that the next pin comes up
+/// with it), so the test puts it back down before it ends.
+#[test]
+fn a_band_under_a_card_grows_the_window_and_leaves_the_card_alone() {
+    let _room = the_room_to_itself();
+
+    let pin = sound_pin();
+    assert_eq!(
+        pin_playlist::playlist_rows(&pin),
+        0,
+        "a band is down until a hand opens one"
+    );
+    assert_eq!(pin.window_box(), pin.content);
+
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+
+    assert!(
+        band_height > 0,
+        "a band opened on a display is a band with a height"
+    );
+    assert_eq!(
+        band_top, pin.content.3,
+        "it begins at the card's own bottom edge, so nothing of the card moves for it"
+    );
+    assert_eq!(
+        pin.window_box(),
+        (
+            pin.content.0,
+            pin.content.1,
+            pin.content.2,
+            pin.content.3 + band_height
+        ),
+        "the window is the card's box grown downward and no other way"
+    );
+    assert_eq!(
+        (pin.content.2 - pin.content.0, pin.content.3 - pin.content.1),
+        (400, 200),
+        "and the card's own box is the one it was taken up with"
+    );
+
+    // The media band is the card's rows and no more of them: what the band took is window the card
+    // was never drawn in, which is what keeps `compose_media_into_band` from stretching it.
+    let (top, rows) = pinned_media_band_rows(&pin);
+    assert_eq!(
+        top, 0,
+        "the card still begins at the window's own first row"
+    );
+    assert_eq!(rows, 200, "and it is still as tall as the card is");
+
+    pin_playlist::toggle(&pin);
+    assert_eq!(
+        pin.window_box(),
+        pin.content,
+        "and closing it puts the window back to the card's box"
+    );
+}
+
 /// A pinned sound's window is the card's own box and the card is drawn from its first row, so
 /// every control on the card is inside the window rather than under its edge — which is what a
 /// press on the bar needs and what a window a band taller than its card would have taken from
@@ -1104,7 +1163,7 @@ fn a_pinned_sounds_bar_is_answered_from_the_card_and_not_from_below_it() {
     // The window is the card's box: no caption above it, no transport strip below it.
     assert_eq!(pin.window_box(), pin.content);
     let (width, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(height, pin.caption, 0, pin.overlay);
+    let (top, _) = pinned_media_band_rows(&pin);
     assert_eq!(
         top, 0,
         "and the card is drawn from the window's own first row"
@@ -1438,7 +1497,7 @@ fn a_pinned_page_floats_its_chrome_over_the_picture_unless_the_page_runs() {
     );
     let (_, height) = svg.window_size();
     assert_eq!(
-        pinned_band_rows(height, svg.caption, 0, svg.overlay),
+        pinned_media_band_rows(&svg),
         (0, height),
         "and the page it frames is drawn the whole window down"
     );
