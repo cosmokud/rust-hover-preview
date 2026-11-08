@@ -1595,6 +1595,9 @@ fn a_return_plays_the_row_a_sounds_band_has_picked() {
 
     // And a band that is up with nothing picked is a band no row of the hand's own.
     pin_playlist::toggle(&pin);
+    // The band's own turn over asks the walk behind it again, and that is not the key's answer
+    // (see `PreviewMessage::PinWalkAgain`).
+    let _ = answers.try_recv();
     assert!(
         a_return().is_err(),
         "and one with no row picked asks for none either"
@@ -1625,6 +1628,157 @@ fn a_return_plays_the_row_a_sounds_band_has_picked() {
         matches!(asked, Ok(PreviewMessage::PinUpdate(ref path)) if *path == sounds[1]),
         "the key asks the pin for the file of the row it has picked"
     );
+}
+
+/// The band is the width of the walk behind it: opening it narrows a sound's playlist to the
+/// folder's sounds and closing it puts the setting's own order back, and neither is a press —
+/// the band turned over is the only thing that asks, and the file the pin is showing is the file
+/// it keeps (see `pin_walk::ask_the_walk_again` and `pin_navigation::nav_mode_for`).
+#[test]
+fn a_band_turned_over_asks_the_walk_behind_it_again() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    // A folder of a test's own, because a walk of one is read off the disk: a sound with a picture
+    // beside it is the whole question the band asks.
+    let folder = std::env::temp_dir().join("rust-hover-preview-band-asks-the-walk");
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).expect("a folder a test can write to");
+    for file in ["a.mp3", "b.mp3", "a.png"] {
+        std::fs::write(folder.join(file), vec![0u8; 8]).expect("a file a test can write");
+    }
+    let sound = folder.join("a.mp3");
+    let picture = folder.join("a.png");
+
+    // `Audio -> All`: the pin's own walk is the folder end to end, the picture with the sounds.
+    let was = {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = (
+            config.pin_nav_audio,
+            config.pin_nav_image,
+            config.pin_mode_audio_shuffle,
+        );
+        config.pin_nav_audio = PinNavFileTypes::All;
+        config.pin_nav_image = PinNavFileTypes::Category;
+        config.pin_mode_audio_shuffle = false;
+        was
+    };
+    let mut standing = sound_pin();
+    standing.path = sound.clone();
+    stand_pin(Some(standing));
+    let full = match answer_pin_job(&PinJob::Walk {
+        at: sound.clone(),
+        step: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+        config: Box::new(CONFIG.lock().expect("the configuration").clone()),
+        session: None,
+    }) {
+        Some(PinPlanned::Walk(walk)) => walk,
+        _ => panic!("a walk is always answered"),
+    };
+    assert!(
+        full.order.contains(&picture),
+        "under `All` the walk is the folder end to end: {:?}",
+        full.order
+    );
+    stand_pin_walk(Some(full.clone()));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows it has a walk for"
+    );
+
+    // A channel of the test's own, stood where the loop's is: what the band asks the loop for is
+    // what this test reads (see `show_pinned_file`).
+    let (sender, asked) = channel();
+    let previous_sender = PREVIEW_SENDER
+        .lock()
+        .ok()
+        .and_then(|mut held| held.replace(sender));
+
+    // The band up: the toggle asks the walk again, and the loop asks the planner for it.
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(
+        matches!(asked.try_recv(), Ok(PreviewMessage::PinWalkAgain)),
+        "a band opened is the walk behind it asked again, with no press to ask it"
+    );
+    ask_the_walk_again();
+    let job = PIN_JOBS
+        .0
+        .lock()
+        .expect("the pin's job slot")
+        .take()
+        .expect("the walk the band asked for");
+    assert!(
+        matches!(&job, PinJob::Walk { step, .. } if *step == 0),
+        "and it asks for the walk's order rather than for a step along it"
+    );
+    let Some(PinPlanned::Walk(audio_only)) = answer_pin_job(&job) else {
+        panic!("a walk is always answered")
+    };
+    assert_eq!(
+        audio_only.at, sound,
+        "a walk with no step asked for stands where it asked from, so nothing the pin shows moves"
+    );
+    assert!(
+        audio_only
+            .order
+            .iter()
+            .all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
+        "the band's own walk is the folder's sounds: {:?}",
+        audio_only.order
+    );
+    // What the loop does with that answer: its order goes onto the pin's walk, which is what the
+    // rows are built from (see `PreviewMessage::PinAnswered`).
+    pin_walk_synced_its_playlist(&audio_only);
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "and the rows banded are the rows of a walk that moved"
+    );
+    assert_eq!(
+        pin_state().and_then(|state| state.walk().map(|walk| walk.order.clone())),
+        Some(audio_only.order.clone()),
+        "which is the audio-only walk the band asked for"
+    );
+
+    // And the band down: the order the setting asks for comes back, by the same road.
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(
+        matches!(asked.try_recv(), Ok(PreviewMessage::PinWalkAgain)),
+        "a band put down asks the walk again too"
+    );
+    ask_the_walk_again();
+    let job = PIN_JOBS
+        .0
+        .lock()
+        .expect("the pin's job slot")
+        .take()
+        .expect("the walk the band asked for");
+    let Some(PinPlanned::Walk(restored)) = answer_pin_job(&job) else {
+        panic!("a walk is always answered")
+    };
+    assert_eq!(
+        restored.order, full.order,
+        "a band put down gives back the order the setting asks for"
+    );
+    assert_eq!(
+        restored.at, sound,
+        "and the pin is still standing on the file it was showing"
+    );
+    pin_walk_synced_its_playlist(&restored);
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "and the rows the band is owed are the folder's again"
+    );
+
+    if let Ok(mut held) = PREVIEW_SENDER.lock() {
+        *held = previous_sender;
+    }
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_nav_audio = was.0;
+        config.pin_nav_image = was.1;
+        config.pin_mode_audio_shuffle = was.2;
+    }
+    let _ = std::fs::remove_dir_all(&folder);
+    stand_pin(previous_pin);
 }
 
 /// The band's two edges are the window's two edges, and a press on either is the height being

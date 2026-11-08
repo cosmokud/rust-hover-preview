@@ -408,6 +408,23 @@ pub(super) fn ask_pin_walk(at: PathBuf, step: i32, anchor: Option<NavCategory>) 
     })
 }
 
+/// Ask the pin's walk again for the mode that now applies, with no step asked for.
+///
+/// The band under a sound's card turns the walk behind it over — up, it is the folder's sounds;
+/// down, the order the setting asks for — and nothing else asks the walk again when it does (see
+/// `pin_navigation::nav_mode_for`). A walk with no step asked for stands on the file it asked
+/// from, so asking again moves nothing (see `answer_pin_job`).
+///
+/// Asked from the loop rather than from `pin_playlist::toggle`, because the path it is asked
+/// about is the pin's and the toggle is reached with the pin's own lock held.
+pub(super) fn ask_the_walk_again() {
+    let Some(at) = pinned_path() else {
+        return;
+    };
+
+    ask_pin_walk(at, 0, pin_walk_anchor(&None));
+}
+
 /// Ask the planner which program this file would open with.
 pub(super) fn ask_pin_open_with(path: PathBuf) {
     queue_pin_job(PinJob::OpenWith { path });
@@ -638,7 +655,13 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
 
             // A step that lands is the walk; one that does not leaves it standing where it
             // was asked from, which the loop reads as a walk with nowhere to step to.
-            walk.step();
+            //
+            // No step asked for is no step taken: the walk stands where it asked from, which is
+            // what a walk re-asked for the mode that now applies wants — the file the pin is
+            // showing is the file it keeps (see `ask_the_walk_again`).
+            if *step != 0 {
+                walk.step();
+            }
 
             Some(PinPlanned::Walk(walk))
         }

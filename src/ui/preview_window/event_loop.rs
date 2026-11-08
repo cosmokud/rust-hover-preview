@@ -2826,7 +2826,16 @@ pub fn run_preview_window() {
                                         // this order, so it steps the same playlist instead
                                         // of starting another (see `pin_walk_synced_its_playlist`).
                                         pin_walk_synced_its_playlist(&walk);
-                                        pin_walk = Some(walk);
+                                        // A walk that landed back on the file it was asked from is
+                                        // a walk asked for its order rather than for a step — the
+                                        // one the band asks when it turns over (see
+                                        // `ask_the_walk_again`). Its order is on the pin either
+                                        // way; as a pick it would be the file the pin is already
+                                        // showing, and the load that file may still be in would be
+                                        // dropped for nothing.
+                                        if !pin_navigation::same_file(walk.from(), &walk.at) {
+                                            pin_walk = Some(walk);
+                                        }
                                     }
                                     // The pin has left the file this walk was asked from: the
                                     // answer is dropped rather than carried onto the file that
@@ -2850,6 +2859,12 @@ pub fn run_preview_window() {
                             pin_walk_wait = None;
                         }
                     }
+                    // The band under a sound's card turned over, so the walk behind it is asked
+                    // again: what the band's rows are comes from that walk's order, and the mode
+                    // the order is built in changed with the band and nothing else re-reads it
+                    // (see `pin_navigation::nav_mode_for`). No step is taken, so the file the pin
+                    // is showing is the file it keeps.
+                    PreviewMessage::PinWalkAgain => ask_the_walk_again(),
                     PreviewMessage::MeasureProbed { path, size } => {
                         // The same pick again for a pin, where the measure answered with a box:
                         // that a reader has no box for the file at all is no box to lay anything
@@ -4433,6 +4448,9 @@ pub fn run_preview_window() {
                     // hand-off name rather than a hover — taken where a pin is acted on, not
                     // here (see `PreviewMessage::PinAnswered`).
                     PreviewMessage::PinAnswered(_) => {}
+                    // And the band's own turn over, which asks the pin's walk again rather than
+                    // laying anything out here (see `PreviewMessage::PinWalkAgain`).
+                    PreviewMessage::PinWalkAgain => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard

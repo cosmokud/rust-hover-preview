@@ -160,6 +160,10 @@ pub enum PreviewMessage {
     /// with nothing in it to step onto are both answers, not the absence of one, so the pin's
     /// arc comes down when they land rather than waiting out a bound (see `answer_pin_job`).
     PinAnswered(PinPlanned),
+    /// The band under a pinned sound turned over, so the walk behind it is asked again: how wide
+    /// that walk is depends on the band, and nothing else re-reads the mode now that it has changed
+    /// (see `pin_playlist::toggle` and `pin_walk::ask_the_walk_again`).
+    PinWalkAgain,
     /// The small subtitle files a film's own tracks were copied into are ready, sent the
     /// moment the extraction's one pass finishes (see `subtitle_files`).
     ///
