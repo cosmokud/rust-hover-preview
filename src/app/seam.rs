@@ -2391,18 +2391,20 @@ mod tests {
     const THE_SECOND_PROCESS: &str = "RHP_SEAM_SECOND_PROCESS";
 
     /// How long the first process waits on anything the second one owes it.
-    const AN_ANSWER: Duration = Duration::from_secs(10);
+    const AN_ANSWER: Duration = Duration::from_secs(5);
 
     /// How long the second process's own waits are given: the bound a wake that never came sits out, and
     /// the whole of what a broken seam can cost this test.
-    const A_WAKE: u32 = 4000;
+    const A_WAKE: u32 = 2000;
 
     /// How long the first process paces before it signals, so that the wait it is signalling is one that is
-    /// already armed: a wake answered before the wait exists proves the ring, not the wake.
-    const AN_ARMED_WAIT: Duration = Duration::from_millis(200);
+    /// already armed: a wake answered before that wait exists proves the ring, not the wake. The second
+    /// process arms it within microseconds of publishing the fact above, and the whole test is kept short —
+    /// the window tests beside it are the suite's own flake and a long block here is what tips them over.
+    const AN_ARMED_WAIT: Duration = Duration::from_millis(30);
 
     /// How often the first process looks at a fact the second one publishes.
-    const A_LOOK: Duration = Duration::from_millis(2);
+    const A_LOOK: Duration = Duration::from_millis(1);
 
     /// Every preview message a slot carries, with something in every field of each.
     fn carried_preview_messages() -> Vec<PreviewMessage> {
