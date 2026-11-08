@@ -399,7 +399,10 @@ pub(super) fn counted_length(track: audio_track::Track, path: &Path) -> audio_tr
 /// what the card beside it says. A machine without FFmpeg is answered by the engine above or
 /// not at all.
 pub(super) fn ffprobe_audio_track(path: &Path) -> Option<audio_track::Track> {
-    if !codecs::ffplay_available() {
+    // Asked of the probe's own presence rather than the player's: it is this program's report the
+    // card is drawn from, and a machine can hold it with no player beside it — which is the only
+    // backend a FLAC has here, the engine in this process decoding nothing for it.
+    if !codecs::ffprobe_available() {
         return None;
     }
 
