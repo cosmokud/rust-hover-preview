@@ -1405,6 +1405,119 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
     stand_pin(previous_pin);
 }
 
+/// A `Return` in a pinned sound's card plays the row the band has picked, and asks for nothing at all
+/// where there is no band up or no row picked: the file is the hand's own pick, and a key that guessed
+/// one would start a file nobody asked for (see `pin_playlist::play_the_pick`).
+#[test]
+fn a_return_plays_the_row_a_sounds_band_has_picked() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of two sounds for the return key");
+    let sounds = [folder.join("a.mp3"), folder.join("b.mp3")];
+
+    // The pin's walk is two files of which it is showing the first, so the row a hand picks is one
+    // that names a file the pin is not already on: a pick of the file on screen has nothing to ask.
+    let pin = sound_pin();
+    let mut standing = sound_pin();
+    standing.path = sounds[0].clone();
+    stand_pin(Some(standing));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    // A pin is a window onto something, and what the drain below asks before it answers a key: the
+    // media slot is stood with a card so that the pin is not read as one that came apart.
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(40, 24);
+        media.media_type = MediaType::Audio;
+        *slot = Some(media);
+    }
+
+    // A channel of the preview's own, stood in the slot a pick is sent on, so that what the key asks
+    // for is what this test reads and a later test's channel is not read here (see
+    // `show_pinned_file`).
+    let (sender, answers) = channel();
+    let previous_sender = PREVIEW_SENDER
+        .lock()
+        .ok()
+        .and_then(|mut held| held.replace(sender));
+    note_the_pin_file_in_flight(None);
+
+    // One `Return`, through the loop's own drain, which is where a key is answered.
+    let a_return = || {
+        ask_pin(PinCommand::PlayRow);
+        let mut request = None;
+        unsafe {
+            pin_command_request(
+                HWND(0x1000 as *mut _),
+                &mut request,
+                &mut None,
+                &mut None,
+                &mut 0.0,
+                &mut None,
+                false,
+                None,
+            );
+        }
+        assert!(
+            request.is_none(),
+            "a row played is not a box asked for and not a pin taken down"
+        );
+        answers.try_recv()
+    };
+
+    // A band that is down is no list for a key to be in, whatever row it was left on.
+    assert!(
+        a_return().is_err(),
+        "a `Return` with no band up asks for no file"
+    );
+
+    // And a band that is up with nothing picked is a band no row of the hand's own.
+    pin_playlist::toggle(&pin);
+    assert!(
+        a_return().is_err(),
+        "and one with no row picked asks for none either"
+    );
+
+    // The row a `Down` arrow picks is the row the key plays, and it is the second of the walk.
+    assert!(
+        pin_playlist::step_the_pick(1),
+        "the band takes the arrow over it"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
+        Some(Some(1)),
+        "and the row it picked is the second of the walk"
+    );
+    let asked = a_return();
+
+    pin_playlist::toggle(&pin);
+    if let Ok(mut held) = PREVIEW_SENDER.lock() {
+        *held = previous_sender;
+    }
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = previous_media;
+    }
+    stand_pin(previous_pin);
+
+    assert!(
+        matches!(asked, Ok(PreviewMessage::PinUpdate(ref path)) if *path == sounds[1]),
+        "the key asks the pin for the file of the row it has picked"
+    );
+}
+
 /// The band's two edges are the window's two edges, and a press on either is the height being
 /// dragged rather than a row being picked: the card is never resized, and the band is the only thing
 /// a pinned sound's window has to be resized by.

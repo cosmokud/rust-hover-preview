@@ -795,6 +795,14 @@ pub(super) unsafe fn pin_command_request(
                 step_pinned_subtitle();
                 None
             }
+            // A `Return` in a card plays the row the band's highlight is on, which is the one key a list
+            // answers a hand already inside it with. Nothing at all to a window with no band up, or to a
+            // band with no row picked, so it is asked rather than assumed (see
+            // `pin_playlist::play_the_pick`).
+            PinCommand::PlayRow => {
+                pin_playlist::play_the_pick();
+                None
+            }
         };
 
         break;

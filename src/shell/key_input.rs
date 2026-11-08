@@ -95,7 +95,7 @@ static PIN_KEYS_TOPMOST: AtomicBool = AtomicBool::new(false);
 /// would leave the caret's line moves indistinguishable from the folder's walk. A pin holding no
 /// page still walks on `VK_UP`/`VK_DOWN` — that is the loop's answer rather than this table's (see
 /// `pin_command_request`).
-pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
+pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 13] = [
     (0x25, 0),  // VK_LEFT   -> Previous
     (0x27, 1),  // VK_RIGHT  -> Next
     (0x1B, 2),  // VK_ESCAPE -> Close
@@ -108,6 +108,7 @@ pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
     (0x24, 9),  // VK_HOME   -> PageTop
     (0x23, 10), // VK_END   -> PageBottom
     (0x72, 11), // VK_F3    -> FindNext
+    (0x0D, 12), // VK_RETURN -> PlayRow
 ];
 
 /// How many commands `PIN_KEY_COMMANDS` names, which is how many counters are kept for them.
@@ -115,7 +116,7 @@ pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
 /// Named rather than written as the `12` of an array length so that a command added to the table
 /// above is a command this count has to be told about, rather than a command whose presses are
 /// counted into a counter that was never reserved for it.
-const PIN_COMMAND_COUNT: usize = 12;
+const PIN_COMMAND_COUNT: usize = 13;
 
 /// The command that means `PinCommand::TogglePlayback`, which is the one row of
 /// `PIN_KEY_COMMANDS` whose repeats are not commands.
@@ -165,6 +166,7 @@ pub(crate) fn publish_pin_always_on_top(always_on_top: bool) {
 /// command travels the same path a press of the pin's own caption button does: it is queued, and
 /// the loop acts on it (see `ask_pin`).
 static PIN_KEY_PRESSES: [AtomicU32; PIN_COMMAND_COUNT] = [
+    AtomicU32::new(0),
     AtomicU32::new(0),
     AtomicU32::new(0),
     AtomicU32::new(0),
@@ -851,14 +853,19 @@ mod tests {
             Some(11),
             "VK_F3 takes the page to the next place its selection appears"
         );
+        assert_eq!(
+            pin_key_command(0x0D),
+            Some(12),
+            "VK_RETURN plays the row a sound's band has picked"
+        );
 
         // A key this app does not answer is passed on untouched, or the hook would eat a letter of a
         // file the user is renaming in the window behind the pin.
         assert_eq!(pin_key_command(0x41), None, "VK_A is not this app's key");
         assert_eq!(
             pin_key_command(0x0D),
-            None,
-            "VK_RETURN is left to the pin's own window, which ignores it"
+            Some(12),
+            "VK_RETURN plays the row a sound's band has picked"
         );
 
         // Every command the table names has a counter counted into it, because a command counted

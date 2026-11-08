@@ -109,6 +109,14 @@ pub(super) fn pinned_key_command(vk: i32) -> Option<PinCommand> {
         return Some(PinCommand::TogglePlayback);
     }
 
+    // `Return` is a list's own key wherever a hand already is in the list, and a sound's card with its
+    // band up is a list the hand is inside: the row it has picked is the row it plays. Nothing else on
+    // a pin is a list, so a `Return` elsewhere is answered by the command and not by the mapping — a
+    // band that is down or holds no pick has nothing to play (see `PinCommand::PlayRow`).
+    if vk == VK_RETURN.0 as i32 {
+        return Some(PinCommand::PlayRow);
+    }
+
     // `T` is FFmpeg's own key for the next subtitle track, which is why it is this letter and
     // not one invented here — a user who has used the player elsewhere presses the key they
     // already know. It is answered as a relaunch rather than as a key, because the choice has to
@@ -146,6 +154,7 @@ pub(super) fn hook_pin_key_command(command: u8) -> Option<PinCommand> {
         9 => Some(PinCommand::PageTop),
         10 => Some(PinCommand::PageBottom),
         11 => Some(PinCommand::FindNext),
+        12 => Some(PinCommand::PlayRow),
         _ => None,
     }
 }
