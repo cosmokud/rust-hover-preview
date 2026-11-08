@@ -358,8 +358,6 @@ fn the_bars_keys_are_not_the_pins_while_it_is_up() {
     };
 
     assert_eq!(caret_now(), (6, 6), "the caret is after the query typed");
-    let (_, query, count, current, ..) = bar_now();
-    let standing = (query, count, current, first_line_now());
 
     assert_eq!(
         press(VK_LEFT.0),
@@ -370,15 +368,22 @@ fn the_bars_keys_are_not_the_pins_while_it_is_up() {
     assert_eq!(press(VK_RIGHT.0), None);
     assert_eq!(caret_now(), (6, 6), "and the right arrow moves it back");
 
-    // The page keys step the matches rather than the page, and the caret stays where it was.
+    // `Enter` steps the matches on and wraps, and the caret stays where it was; the page keys are not
+    // steps at all under a query, which is the widget an editor draws rather than a browser's bar (see
+    // `text_find::key_edit_with`).
+    let (caret, anchor) = caret_now();
+    assert_eq!(press(VK_RETURN.0), None);
+    assert_eq!(bar_now().3, Some(1), "`Enter` steps to the next match");
+    assert_eq!((caret, anchor), caret_now(), "and the caret did not move");
     assert_eq!(press(VK_PRIOR.0), None);
-    assert_eq!(
-        bar_now().3,
-        Some(1),
-        "`PgUp` steps the matches back, wrapping to the last"
-    );
+    assert_eq!(bar_now().3, Some(1), "and `PgUp` is nothing under a query");
     assert_eq!(press(VK_NEXT.0), None);
-    assert_eq!(bar_now().3, Some(0), "and `PgDn` steps them on again");
+    assert_eq!(bar_now().3, Some(1), "and neither is `PgDn`");
+
+    // What the page answers is what it answered before the keys below: the walk it took to the match
+    // `Enter` stepped to is the search's, and not something `Space`, `T` or `Tab` moved.
+    let (_, query, count, current, ..) = bar_now();
+    let standing = (query, count, current, first_line_now());
 
     // A Space, a subtitle step and a `Tab` are inert: they are characters a query does not type here,
     // and none of them is the pin's while the bar is up.
@@ -470,18 +475,14 @@ fn the_caret_keys_move_the_caret_under_a_query() {
     press(VK_RIGHT.0, control);
     assert_eq!(caret_now(), (6, 6), "`Ctrl`+`→` goes to the end of it");
 
-    // The page keys step the matches and leave the caret where they found it.
+    // `Enter` and `Shift`+`Enter` step the matches and leave the caret where they found them.
     let (caret, anchor) = caret_now();
-    press(VK_NEXT.0, plain);
+    press(VK_RETURN.0, plain);
     assert_eq!(bar_now().3, Some(1), "the next match is the reader's");
     assert_eq!((caret, anchor), caret_now(), "and the caret did not move");
     assert_eq!(bar_now().2, count, "over the places the same query found");
-    press(VK_PRIOR.0, plain);
-    assert_eq!(
-        bar_now().3,
-        Some(0),
-        "and the page key back steps them back"
-    );
+    press(VK_RETURN.0, shift);
+    assert_eq!(bar_now().3, Some(0), "and `Shift`+`Enter` steps them back");
     assert_eq!(
         (caret, anchor),
         caret_now(),
@@ -745,15 +746,18 @@ fn every_key_the_field_needs_reaches_it_by_the_road_a_pin_gives_it() {
         (VK_HOME.0, control, None, Some(FindEdit::Move(home, false))),
         (VK_END.0, plain, None, Some(FindEdit::Move(end, false))),
         (VK_END.0, shift, None, Some(FindEdit::Move(end, true))),
-        // The matches: the arrows, the page keys and `F3` step them.
-        (VK_UP.0, plain, None, Some(FindEdit::Step(-1))),
-        (VK_PRIOR.0, plain, None, Some(FindEdit::Step(-1))),
-        (VK_DOWN.0, plain, None, Some(FindEdit::Step(1))),
-        (VK_DOWN.0, control, None, Some(FindEdit::Step(1))),
-        (VK_NEXT.0, plain, None, Some(FindEdit::Step(1))),
+        // The matches: `Enter` and `F3` step them, and `Shift` makes either the step back.
         (VK_F3.0, plain, None, Some(FindEdit::Step(1))),
+        (VK_F3.0, shift, None, Some(FindEdit::Step(-1))),
         (VK_RETURN.0, plain, None, Some(FindEdit::Step(1))),
         (VK_RETURN.0, shift, None, Some(FindEdit::Step(-1))),
+        // The arrows are the run's search history, as an editor's find field answers them, and the page
+        // keys are not the bar's at all.
+        (VK_UP.0, plain, None, Some(FindEdit::History(-1))),
+        (VK_DOWN.0, plain, None, Some(FindEdit::History(1))),
+        (VK_DOWN.0, control, None, Some(FindEdit::History(1))),
+        (VK_PRIOR.0, plain, None, None),
+        (VK_NEXT.0, plain, None, None),
         (VK_ESCAPE.0, plain, None, Some(FindEdit::ClearOrClose)),
         // The edits, which are the field's own keys.
         (VK_BACK.0, plain, None, Some(FindEdit::Backspace)),
@@ -1036,7 +1040,9 @@ fn a_tall_page_with_two_needles(name: &str) {
         })
         .collect();
 
-    put_page(&text, name, 240, 140);
+    // Wide enough for the card's one row: a page narrower than the card leaves the field the room the
+    // switches and the count do not take, which is a field of a few pixels (see `find_bar_layout`).
+    put_page(&text, name, 420, 140);
 }
 
 /// The middle of one of the card's boxes, in the window's own coordinates.
@@ -1378,8 +1384,8 @@ fn a_ctrl_f_over_a_page_with_a_selection_seeds_the_query_with_it() {
     assert_eq!(current, Some(0), "with the reader on the first of them");
     assert_eq!(
         caret_now(),
-        ("needle".len(), "needle".len()),
-        "and the caret after it, where the next character typed lands"
+        ("needle".len(), 0),
+        "and the whole of it selected, with the caret at its end"
     );
 }
 
@@ -1429,7 +1435,11 @@ fn a_second_ctrl_f_takes_the_word_picked_out_of_the_page_since() {
         Some(FindFocus::Field),
         "with the query focused"
     );
-    assert_eq!(caret_now(), (4, 4), "and the caret after the seed");
+    assert_eq!(
+        caret_now(),
+        (4, 0),
+        "and the whole of it selected, with the caret at its end"
+    );
     assert!(
         current.is_some(),
         "and the reader on a place the new query was found"
@@ -1455,10 +1465,9 @@ fn the_result_keys_still_step_with_the_field_in_hand() {
     );
 
     for (vk, step, expected) in [
-        (VK_DOWN, 1, Some(1)),
+        (VK_RETURN, 1, Some(1)),
         (VK_F3, 1, Some(0)),
         (VK_RETURN, 1, Some(1)),
-        (VK_UP, -1, Some(0)),
     ] {
         assert_eq!(
             text_find::key_edit(vk.0 as i32),
@@ -1473,6 +1482,88 @@ fn the_result_keys_still_step_with_the_field_in_hand() {
     let (open, query, ..) = bar_now();
     assert!(open, "the bar is still up through all of it");
     assert_eq!(query, "needle", "and the query is untouched");
+}
+
+/// `↑` and `↓` step the field back and forward through the queries this run has searched — the widget
+/// an editor's find box is — and `↓` at the newest entry comes back to the query the reader was
+/// typing, which the first step back kept (see `text_find::step_the_history` and `remember_the_query`).
+#[test]
+fn the_arrows_step_through_the_queries_the_run_has_searched() {
+    let _room = the_room_to_itself();
+    let _pin = PinPutBack::take();
+    stand_pin(Some(PinnedPreview::for_test()));
+    a_page_with_two_needles("a-bar-history.txt");
+    text_find::forget_the_history();
+
+    let key = |edit: FindEdit| {
+        text_find::note(edit);
+        unsafe { text_find::settle(a_pin_window()) };
+    };
+
+    // Two queries the reader has asked and finished with: `Enter` commits the first, and the cross puts
+    // the bar away with the second — the two moments a query is written down (see `remember_the_query`).
+    text_find::open_text_find();
+    type_into_the_bar("needle");
+    key(FindEdit::Step(1));
+    key(FindEdit::ClearOrClose);
+    assert_eq!(bar_now().1, "", "the query is emptied");
+    type_into_the_bar("line");
+    key(FindEdit::Close);
+
+    // The bar comes back at the query it was left with, and a query typed over it is the draft the
+    // first step back keeps.
+    text_find::open_text_find();
+    type_into_the_bar("owls");
+    assert_eq!(bar_now().1, "owls", "the query is the reader's own");
+    assert_eq!(bar_now().2, 0, "and the page holds none of it");
+
+    let stepped = |expected: &str, list: &str| {
+        key(FindEdit::History(-1));
+        assert_eq!(
+            bar_now().1,
+            expected,
+            "{list}: `↑` steps back to {expected}"
+        );
+        assert_eq!(
+            caret_now(),
+            (expected.len(), 0),
+            "{list}: and the entry is selected, as a seed is"
+        );
+    };
+
+    stepped("line", "the newest query of the run");
+    stepped("needle", "and the one before it");
+
+    // The oldest entry is the end of the list: a step past it stays there rather than wrapping round to
+    // the query the reader was typing.
+    key(FindEdit::History(-1));
+    assert_eq!(bar_now().1, "needle", "`↑` at the oldest entry stays on it");
+
+    // And forward again, through the same queries and back to the draft.
+    key(FindEdit::History(1));
+    assert_eq!(bar_now().1, "line", "`↓` steps forward again");
+    key(FindEdit::History(1));
+    assert_eq!(bar_now().1, "owls", "and the last step is the query typed");
+    assert_eq!(
+        caret_now(),
+        (4, 0),
+        "which is selected for what is typed next"
+    );
+    key(FindEdit::History(1));
+    assert_eq!(bar_now().1, "owls", "with nothing after the query typed");
+
+    // A query the reader types over a stepped one is their own search, so the list is behind them: a
+    // step back starts again from the newest entry.
+    key(FindEdit::History(-1));
+    assert_eq!(bar_now().1, "line");
+    type_into_the_bar("n");
+    assert_eq!(bar_now().1, "n", "the typed character replaced the entry");
+    key(FindEdit::History(-1));
+    assert_eq!(
+        bar_now().1,
+        "line",
+        "and the history starts at the newest entry again"
+    );
 }
 
 /// A press in the query places the caret, a drag from it selects, and a second press of the same
@@ -1685,11 +1776,15 @@ fn a_copy_with_nothing_selected_in_the_query_is_the_page_s() {
     stand_pin(Some(PinnedPreview::for_test()));
     a_page_with_two_needles("a-bar-copy-page-only.txt");
 
-    // A selection in the page, and the bar opened over it: the query is empty, so it selects nothing.
+    // A selection in the page, and the bar opened over it: the page's selection is what the query is
+    // seeded with, and `Esc` empties it again — a query with nothing in it, which is what this is about.
     begin_text_selection(20, 10);
     unsafe { select_all_text_preview(a_pin_window()) };
     text_find::open_text_find();
     assert_eq!(focus_now(), Some(FindFocus::Field));
+    text_find::note(FindEdit::ClearOrClose);
+    unsafe { text_find::settle(a_pin_window()) };
+    assert_eq!(bar_now().1, "", "the query is empty again");
 
     assert_eq!(
         a_copy_now(),

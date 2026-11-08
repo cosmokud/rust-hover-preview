@@ -53,23 +53,29 @@ fn the_card_sits_against_the_pages_top_right_corner_under_its_caption() {
     assert!(card.panel.bottom < 30 + 300, "and above its bottom edge");
 
     assert!(
-        card.query.right <= card.count.left,
-        "the count keeps its own room at the right end of the query's row"
+        card.query.right <= card.case.left,
+        "the query is what is left of the row the switches are on"
     );
-    assert!(
-        card.case.top >= card.query.bottom,
-        "the switches are on the row under the query"
-    );
+    for rect in [card.case, card.whole_word, card.count, card.previous] {
+        assert!(
+            card.query.right <= rect.left,
+            "and every control of the row sits to the right of it"
+        );
+    }
     for rect in [
         card.case,
         card.whole_word,
+        card.count,
         card.previous,
         card.next,
         card.close,
     ] {
         assert!(
-            rect.top >= card.panel.top && rect.bottom <= card.panel.bottom,
-            "every control is inside the card it is drawn on"
+            rect.top >= card.panel.top
+                && rect.bottom <= card.panel.bottom
+                && rect.top <= card.query.bottom
+                && rect.bottom >= card.query.top,
+            "every one of them is on the card's one row"
         );
     }
 }
@@ -207,7 +213,17 @@ fn the_card_is_painted_over_the_page_and_its_pressed_switches_and_count_change_i
 /// The card painted over an empty page, at the scale a display is drawn at: what a test asks its
 /// pixels of, and the card it stood on (see `paint_find_bar`).
 fn painted_card(state: &FindBarPaint, dpi: u32) -> (Vec<u8>, FindBar) {
-    let (page_width, page_height) = (400, 300);
+    painted_card_on((400, 300), state, dpi)
+}
+
+/// The same card painted on a page of a size of the test's own: a row wide enough to hold the query
+/// and every control needs a page that is, and the narrow page is the case a test paints on purpose
+/// (see `find_bar_layout`).
+fn painted_card_on(
+    (page_width, page_height): (i32, i32),
+    state: &FindBarPaint,
+    dpi: u32,
+) -> (Vec<u8>, FindBar) {
     let card = find_bar_layout(page_width, page_height, 0, dpi, "1/3");
     let surface = DibSurface::create(
         (card.panel.right - card.panel.left) as u32,
@@ -561,14 +577,19 @@ fn a_selection_is_washed_in_the_field_and_the_caret_obeys_its_blink() {
 /// The pixels of the query's own row that are outside the field, as `(x, y)`: what a run drawn wider
 /// than its field — or a wash or a caret welded past its edge — would ink over the card's padding
 /// (see `paint_find_bar`).
-fn strays_on_the_query_row(buffer: &[u8], plain: &[u8], card: FindBar) -> Vec<(i32, i32)> {
+fn strays_on_the_query_row(
+    buffer: &[u8],
+    plain: &[u8],
+    card: FindBar,
+    width: i32,
+) -> Vec<(i32, i32)> {
     (card.query.top..card.query.bottom)
         .flat_map(|y| {
             (card.panel.left..card.query.left)
                 .chain(card.query.right..card.panel.right)
                 .map(move |x| (x, y))
         })
-        .filter(|(x, y)| pixel_at(buffer, 400, *x, *y) != pixel_at(plain, 400, *x, *y))
+        .filter(|(x, y)| pixel_at(buffer, width, *x, *y) != pixel_at(plain, width, *x, *y))
         .collect()
 }
 
@@ -612,7 +633,7 @@ fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
         96,
     );
     assert_eq!(
-        strays_on_the_query_row(&home.0, &plain, card),
+        strays_on_the_query_row(&home.0, &plain, card, 400),
         Vec::new(),
         "the beginning the field has no room for is cut at its edge, not drawn over the padding"
     );
@@ -630,7 +651,7 @@ fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
     // inside its right edge, and it is the run's beginning that is cut.
     let end = painted_card(&card_state(LONG, Some(0), 3), 96);
     assert_eq!(
-        strays_on_the_query_row(&end.0, &plain, card),
+        strays_on_the_query_row(&end.0, &plain, card, 400),
         Vec::new(),
         "a run that overflows the field is cut at its right edge too"
     );
@@ -704,7 +725,7 @@ fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
     );
     for painted in [&first_caret, &last_caret] {
         assert_eq!(
-            strays_on_the_query_row(&painted.0, &plain, card),
+            strays_on_the_query_row(&painted.0, &plain, card, 400),
             Vec::new(),
             "and is still cut at the field"
         );
@@ -712,8 +733,12 @@ fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
 
     // The margin is the display's like every other metric of the card, and the cut is the field's at
     // any scale (see `find_bar_layout`).
-    let (plain_200, card_200) = painted_card(&card_state("", Some(0), 3), 192);
-    let home_200 = painted_card(
+    // The card at 200% needs a page twice as wide to hold one row, so this leg is painted on one: a
+    // 400 px page at 200% is a card 200 logical pixels across, which is a field of nothing.
+    let page = (800, 600);
+    let (plain_200, card_200) = painted_card_on(page, &card_state("", Some(0), 3), 192);
+    let home_200 = painted_card_on(
+        page,
         &FindBarPaint {
             caret: 0,
             anchor: 0,
@@ -724,7 +749,7 @@ fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
     let caret_200: Vec<i32> = (card_200.query.left..card_200.query.right)
         .filter(|x| {
             (card_200.query.top..card_200.query.bottom)
-                .any(|y| pixel_at(&home_200.0, 400, *x, y) == accent_column)
+                .any(|y| pixel_at(&home_200.0, page.0, *x, y) == accent_column)
         })
         .collect();
     assert_eq!(
@@ -733,7 +758,7 @@ fn a_long_query_scrolls_under_its_caret_and_is_cut_at_the_field() {
         "the margin is the display's: twice as wide at 200%"
     );
     assert_eq!(
-        strays_on_the_query_row(&home_200.0, &plain_200, card_200),
+        strays_on_the_query_row(&home_200.0, &plain_200, card_200, page.0),
         Vec::new(),
         "and the field still cuts the run at 200%"
     );
@@ -831,7 +856,7 @@ fn select_all_on_a_long_query_washes_only_the_part_of_the_run_the_field_holds() 
         "and the columns up to the run's own end"
     );
     assert_eq!(
-        strays_on_the_query_row(&all.0, &plain, card),
+        strays_on_the_query_row(&all.0, &plain, card, 400),
         Vec::new(),
         "and no column of it is the card's padding"
     );

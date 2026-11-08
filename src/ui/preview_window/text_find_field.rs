@@ -124,17 +124,22 @@ impl Field {
     }
 
     /// Put a run of text in the query whole, in place of what it held: what `Ctrl`+`F` over a page
-    /// with something selected seeds the bar with (see `text_find::open_text_find`).
+    /// with something selected seeds the bar with, and what a step through the run's search history
+    /// puts there (see `text_find::open_text_find` and `text_find::step_the_history`).
     ///
     /// **A seed is not a paste.** `paste` tidies what it is given, and tidying is right for text
     /// from another program and wrong for this one: a reader who selected two spaces and pressed the
     /// key asked for a query of two spaces, so the run is taken as written, capped at `QUERY_LIMIT`
     /// and cut at its first line break — the query is one line, and what follows a break in a
-    /// selection is a second line of it rather than more of the same query. The caret is left at
-    /// the end of it, where the next character typed lands.
+    /// selection is a second line of it rather than more of the same query. The caret is left at the
+    /// end of it, where the next character typed lands.
+    ///
+    /// **The whole of it is selected**, which is the one thing an editor's find box does with a seed
+    /// that is not a caret: the reader asked for the text that is now in the box, and the next
+    /// character typed is the new query rather than an append to the old one (see `select_all`).
     ///
     /// Answers whether there was anything to seed, so that a page with an empty selection leaves the
-    /// query the bar was last left holding alone (see `select_all`).
+    /// query the bar was last left holding alone.
     pub(super) fn seed(&mut self, seeded: &str) -> bool {
         let line = seeded.split(['\r', '\n']).next().unwrap_or_default();
         let taken: String = line
@@ -148,8 +153,8 @@ impl Field {
 
         self.snapshot();
         self.text = taken;
+        self.anchor = 0;
         self.caret = self.text.len();
-        self.anchor = self.caret;
         self.typing = false;
         true
     }
