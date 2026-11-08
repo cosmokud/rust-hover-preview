@@ -130,6 +130,18 @@ pub(super) fn is_key_down(vk: i32) -> bool {
     unsafe { is_key_down_state(GetAsyncKeyState(vk) as u16) }
 }
 
+/// What one type-ahead key says about a name being typed: nothing at all where a modifier that makes it a
+/// command is held, whether or not the key is down. Its press bit has already been spent by the read that
+/// produced `state`, which is the whole of what a modifier-held letter owes this app (see
+/// `navigation_input`).
+fn typed_name_reported(typed: bool, state: u16) -> (bool, bool) {
+    if !typed {
+        return (false, false);
+    }
+
+    (is_pressed_or_down_state(state), state & 0x0001 != 0)
+}
+
 pub(super) fn is_explorer_navigation_shortcut_key(
     key_vk: i32,
     alt_down: bool,
@@ -202,9 +214,10 @@ pub(super) fn type_ahead_keys() -> impl Iterator<Item = i32> {
 /// because the focus is only probed for a moment after input
 /// (`should_probe_keyboard_focus`) and typing would never open that moment again. They open
 /// it as a navigation key does, and their fresh press is the same fresh press: what the
-/// typing selected is the user's own choice and must not be swallowed as a baseline. They
-/// are read only where neither Ctrl nor Alt is held, so a command is not read as a name and
-/// the keys a command is made of are left to whoever reads them (see `type_ahead_keys`).
+/// typing selected is the user's own choice and must not be swallowed as a baseline. They are
+/// read on every tick and *reported* only where neither Ctrl nor Alt is held, so a command is not
+/// read as a name; the read itself is what spends the press bit a clipboard chord would otherwise
+/// leave standing (see `type_ahead_keys` and `typed_name_reported`).
 ///
 /// The two keys that make a shortcut and are not navigation keys are read whatever the
 /// modifiers are, and that is not an oversight. A Backspace navigates with no modifier at
@@ -257,17 +270,16 @@ pub(super) fn navigation_input() -> NavigationInput {
         }
     }
 
-    if !ctrl_down && !alt_down {
-        for key_vk in type_ahead_keys() {
-            let state = unsafe { GetAsyncKeyState(key_vk) as u16 };
+    // **Read whatever the modifiers are, and act on it only where a name is being typed.** A press bit
+    // belongs to whoever reads it first, so a chord left unread here is a letter read as a typed name on
+    // the tick `Ctrl` comes up: the listing re-read for a `Ctrl+C`, `X` or `V` that was the clipboard's
+    // and moved nothing. Spent here instead, and reported as nothing at all (see `typed_name_reported`).
+    for key_vk in type_ahead_keys() {
+        let state = unsafe { GetAsyncKeyState(key_vk) as u16 };
+        let (active, pressed) = typed_name_reported(!ctrl_down && !alt_down, state);
 
-            if is_pressed_or_down_state(state) {
-                input.active = true;
-            }
-            if (state & 0x0001) != 0 {
-                input.pressed = true;
-            }
-        }
+        input.active |= active;
+        input.pressed |= pressed;
     }
 
     // The pass is over and the press bits it found are spent, so there is nothing left to
@@ -365,5 +377,29 @@ pub(super) fn focus_move_input() -> FocusMoveInput {
             || is_key_down(VK_LWIN_CODE)
             || is_key_down(VK_RWIN_CODE),
         clicked: mouse.pressed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **A clipboard chord is not a name being typed.** `Ctrl+C`, `X` and `V` are Explorer's own, and the
+    /// letter is read every tick only to spend the press bit it leaves: read as a typed name on the tick
+    /// `Ctrl` comes up, it re-hovers a listing nothing moved in (see `navigation_input`).
+    #[test]
+    fn a_letter_under_a_modifier_reports_nothing() {
+        // Bit 1 is the press since the last read, bit 15 the key being down.
+        for state in [0x8001, 0x0001, 0x8000, 0x0000] {
+            assert_eq!(
+                typed_name_reported(false, state),
+                (false, false),
+                "a command is not a name, whatever the key says"
+            );
+        }
+
+        assert_eq!(typed_name_reported(true, 0x8001), (true, true));
+        assert_eq!(typed_name_reported(true, 0x8000), (true, false));
+        assert_eq!(typed_name_reported(true, 0x0000), (false, false));
     }
 }
