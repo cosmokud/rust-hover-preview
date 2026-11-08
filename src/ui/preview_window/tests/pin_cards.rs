@@ -1096,6 +1096,11 @@ fn a_band_under_a_card_grows_the_window_and_leaves_the_card_alone() {
         pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
 
     assert!(
+        pin_playlist::the_tick_is_owed_a_repaint(),
+        "a band opened is a box the window has to be given, so the tick owes the paint that gives it"
+    );
+
+    assert!(
         band_height > 0,
         "a band opened on a display is a band with a height"
     );
@@ -1134,6 +1139,57 @@ fn a_band_under_a_card_grows_the_window_and_leaves_the_card_alone() {
         pin.content,
         "and closing it puts the window back to the card's box"
     );
+    assert!(
+        pin_playlist::the_tick_is_owed_a_repaint(),
+        "and a box given back is owed a paint as much as one given: the band is down, and the \
+         window it grew is the size it grew to until a paint says otherwise"
+    );
+}
+
+/// A press the band took is a press the band gives back, and only that one: the flag a release is
+/// answered by is spent where it is read.
+///
+/// A flag left standing is the release of every drag, every caption button and every seek the card
+/// begins afterwards, taken for a press the band is still holding — a window left carrying the
+/// pointer for the rest of the run, and a bar that never lets go of a seek.
+#[test]
+fn a_press_the_band_took_is_given_back_by_the_release_that_follows_it() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    stand_pin(Some(pin));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band owes a paint for the rows it just built"
+    );
+
+    // A row of the band, and a press on it: the band's own, and not the window's to carry.
+    let row = band_top + pin_chrome::playlist_row_height(1.0) / 2;
+    assert!(row < band_top + band_height, "a row inside the band");
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), row, false) },
+        "a press on a row is the band's"
+    );
+
+    // The release that follows it is the band's too — once, and only once: the press it answers is
+    // spent by it, so the next release the window is sent is the window's again.
+    assert!(
+        unsafe { pin_playlist::release(HWND::default()) },
+        "the release of a press the band took is the band's"
+    );
+    assert!(
+        !unsafe { pin_playlist::release(HWND::default()) },
+        "and a release with no press behind it is the window's"
+    );
+
+    // And the band is put back down, so the next test does not come up with one.
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
 }
 
 /// A pinned sound's window is the card's own box and the card is drawn from its first row, so

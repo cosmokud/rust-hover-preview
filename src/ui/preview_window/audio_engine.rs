@@ -302,10 +302,7 @@ pub(super) fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) ->
 /// it: one read of one file, on the thread the hover is waiting on anyway, and the gain every
 /// hover after this one is played at (see `measure_audio_gain`).
 pub(super) fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
-    let track = match video_player::audio_probe(path) {
-        Some(track) => Some(track),
-        None => ffprobe_audio_track(path),
-    };
+    let track = probe_audio_track_briefly(path);
 
     let track = track.map(|track| counted_length(track, path));
 
@@ -314,6 +311,17 @@ pub(super) fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
     }
 
     track
+}
+
+/// What a file is, without what playing it costs: the same two roads `probe_audio_track` takes, less
+/// the length correction and the loudness measure — which are answers about *playing* the file, read
+/// by running over the whole of it, and are nothing a row of a list is asking.
+///
+/// It is the playlist's own probe (see `pin_playlist::start_the_prober`): a folder of songs is a
+/// folder's worth of files to read, and the measure a card waits for on its one file would be the
+/// whole of a list waiting a minute for its facts.
+pub(super) fn probe_audio_track_briefly(path: &Path) -> Option<audio_track::Track> {
+    video_player::audio_probe(path).or_else(|| ffprobe_audio_track(path))
 }
 
 /// The track a sound is held as, with the length its own frames answer for in place of the

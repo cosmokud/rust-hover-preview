@@ -560,6 +560,12 @@ pub(super) fn refresh_pin_chrome(
     // has no arrival window to be spent in: it is showing for as long as the window is up.
     let card = pin_audio_hover_refresh(pin, cursor);
 
+    // And the playlist band under a card, which is a band of rows the same way: the pointer that
+    // has left the pin sends it no more moves, and a row left marqueed under one that is somewhere
+    // else is a name travelling across a row nobody is looking at (see
+    // `pin_playlist::pin_playlist_hover_refresh`).
+    let playlist = pin_playlist::pin_playlist_hover_refresh(pin, cursor);
+
     // A name belongs to a button, and a button belongs to a pointer that is still on it. The
     // pointer is read from the cursor rather than from `pin.hovered`, because that is only
     // written on a move *this* window is sent, and a pointer that has left the pin — over a
@@ -597,7 +603,7 @@ pub(super) fn refresh_pin_chrome(
         .map(|(x, y)| text_find::hover_over(pin, x - window.0, y - window.1))
         .unwrap_or_else(|| text_find::hover_over(pin, -1, -1));
 
-    spoken || shown || closed || card || menu || find
+    spoken || shown || closed || card || playlist || menu || find
 }
 
 /// The card's own control the pointer is on, asked of the cursor's place on the screen rather than
