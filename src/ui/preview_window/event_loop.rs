@@ -1610,6 +1610,13 @@ pub fn run_preview_window() {
                                     audio_paused,
                                 );
 
+                                // Where the sound on screen has got to, written down for the one
+                                // thing that has to carry it over a process boundary: the window
+                                // this one is handed to, which opens the file from nothing and
+                                // cannot ask a player it does not own (see
+                                // `pin_detach::note_the_sounds_position`).
+                                pin_detach::note_the_sounds_position(path, elapsed);
+
                                 // A start position that was a share of a length nothing had
                                 // read is asked for here, on the first tick a player says how
                                 // long the file is — the ask is one that can be made at any
@@ -1975,9 +1982,19 @@ pub fn run_preview_window() {
                                 let seek = current_audio_seek();
                                 let length = audio_track::playable(&result.path)
                                     .and_then(|track| track.duration);
-                                let start = audio_seek::start_position(&result.path, seek, length);
+                                // A sound this window was handed over is taken up where the pin it
+                                // came from had got to rather than where the way a *hover* drops
+                                // one in would have it: what the hand-off becomes is the window
+                                // that was standing, and a sound that came up at the second its
+                                // own settings alone would name is the one thing about it that
+                                // moved (see `crate::app::detach::the_sound_starts_at`).
+                                let handed = crate::app::detach::the_sound_starts_at(&result.path);
+                                let start = handed.unwrap_or_else(|| {
+                                    audio_seek::start_position(&result.path, seek, length)
+                                });
 
-                                audio_share_seek = (start == 0.0
+                                audio_share_seek = (handed.is_none()
+                                    && start == 0.0
                                     && matches!(seek, AudioSeek::Middle | AudioSeek::Random)
                                     && length.is_none())
                                 .then_some(seek);
