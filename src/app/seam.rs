@@ -869,6 +869,13 @@ fn the_rings_carry_messages() -> bool {
     THE_RINGS_CARRY_MESSAGES.load(Ordering::Acquire)
 }
 
+/// Whether this run's messages cross the rings at all, which is the road it took at start-up (see
+/// `THE_RINGS_CARRY_MESSAGES`). A run that draws its own previews never sends one anywhere, so there is no
+/// viewer for it to owe one to.
+pub(crate) fn the_rings_are_the_road() -> bool {
+    the_rings_carry_messages()
+}
+
 /// Whether the preview ring is this process's to read and to write, right now: the rings are the road,
 /// and this process is still in the room the ring belongs to.
 ///
