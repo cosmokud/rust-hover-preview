@@ -558,7 +558,8 @@ fn for_each_token(line: &DocLine, mut visit: impl FnMut(Token) -> bool) {
 /// `max_lines` of them, each with the character of the document line it starts at.
 /// A word wider than the page — a URL, a hash — is cut rather than allowed to run
 /// off it, and a space that lands at a wrap point is dropped instead of starting a
-/// line.
+/// line. The indentation a document line begins with is not at a wrap point and is
+/// drawn where the line's own characters put it.
 ///
 /// What the offsets are for is a selection: a copy is taken from the document
 /// rather than from what was drawn, so a wrap point has to say where the next
@@ -585,10 +586,17 @@ fn wrap_line(
         let width = count as i32 * advance;
 
         if token.space {
-            // A space at a wrap point is dropped rather than starting a line, and
-            // the character it is stays part of the line it was dropped from.
+            // A space with no room left is the space at a wrap point: it is
+            // dropped rather than starting a line, and the character it is stays
+            // part of the line it was dropped from. A space with room is drawn,
+            // **including the whitespace a document line begins with** — that is
+            // the line's own indentation, and it is part of the characters a
+            // selection, a caret and a find are measured in. Dropped, the row
+            // began at its first non-space character and every mark after the
+            // indent landed that many characters too far along (see `find_all`
+            // and `Selection`).
             emitted += count;
-            if runs.is_empty() || x + width > limit {
+            if !runs.is_empty() && x + width > limit {
                 return true;
             }
             runs.push(LaidRun {
