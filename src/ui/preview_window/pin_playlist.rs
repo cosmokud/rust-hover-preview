@@ -238,6 +238,15 @@ pub(super) fn the_band_is_open() -> bool {
     OPEN.load(Ordering::Acquire)
 }
 
+/// Whether the band is up, for the walk a press asks for: a sound's band is a list of the folder's
+/// sounds, so the walk is `Category` while it is (see `pin_navigation::nav_mode_for`).
+///
+/// Only the anchor gates it — the band is a sound's card's and nothing else's — so a film's or a
+/// page's walk is the same walk whatever this flag is left at.
+pub(super) fn playlist_band_is_open() -> bool {
+    OPEN.load(Ordering::Acquire)
+}
+
 /// Turn the band over, from the card's own menu row, and settle the box that comes out of it: a
 /// band opened for the first time in a run takes the share of the display it stands on that a band
 /// opens at, and every opening after it takes the height the hand last left.

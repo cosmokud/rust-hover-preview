@@ -55,10 +55,14 @@ struct NavEntry {
 /// The order is the listing's own where the listing has one to give (see [`ViewSort`]) and
 /// natural name order where it does not — which is also what an Explorer default view
 /// shows, since `Name` ascending *is* the natural comparison a file manager uses.
+///
+/// `band_open` is whether the pinned sound's playlist band is up, which narrows a sound's walk to
+/// the folder's sounds whatever `Audio` is set to (see `nav_mode_for`).
 pub fn list_for(
     current: &Path,
     anchor: Option<routing::NavCategory>,
     config: &AppConfig,
+    band_open: bool,
 ) -> Option<Vec<PathBuf>> {
     let folder = current.parent()?;
 
@@ -69,7 +73,7 @@ pub fn list_for(
     // sounds-only after stepping onto an MP3. `None` anchors on `current` itself, which
     // is what a first press (and a walk with no session behind it) wants.
     let wanted = anchor.or_else(|| wanted_category(current, config));
-    let mode = nav_mode_for(wanted, config);
+    let mode = nav_mode_for(wanted, config, band_open);
 
     Some(
         entries
@@ -91,10 +95,22 @@ pub(crate) fn wanted_category(current: &Path, config: &AppConfig) -> Option<rout
 /// to the Video switch, sounds to the Audio switch, and everything else — including a file
 /// nothing claims — to Others. The walk is anchored on the first file pinned, so a document
 /// walks end to end while a sound walks sounds only (see `list_for`).
-pub fn nav_mode_for(wanted: Option<routing::NavCategory>, config: &AppConfig) -> PinNavFileTypes {
+///
+/// A sound's walk is `Category` for as long as its playlist band is up (`band_open`), whatever
+/// `Audio` says: the band is a list of the folder's sounds, and a walk it lists non-sounds in is a
+/// band that steps the pin off the sound it was pinned on. The switch is read here and never
+/// written — the tray keeps showing what the user chose, and the walk goes back to it the moment
+/// the band is down. Every other category is left exactly as its switch says, so a film's or a
+/// page's walk cannot be narrowed whatever the band's own flag is left at.
+pub fn nav_mode_for(
+    wanted: Option<routing::NavCategory>,
+    config: &AppConfig,
+    band_open: bool,
+) -> PinNavFileTypes {
     match wanted {
         Some(routing::NavCategory::Images) => config.pin_nav_image,
         Some(routing::NavCategory::Video) => config.pin_nav_video,
+        Some(routing::NavCategory::Audio) if band_open => PinNavFileTypes::Category,
         Some(routing::NavCategory::Audio) => config.pin_nav_audio,
         _ => config.pin_nav_others,
     }
@@ -550,7 +566,7 @@ mod tests {
         // The same filter the walk itself applies, so a test cannot pass while production
         // filters differently.
         let wanted = wanted_category(current, &config);
-        let mode = nav_mode_for(wanted, &config);
+        let mode = nav_mode_for(wanted, &config, false);
         let walked: Vec<PathBuf> = ordered
             .iter()
             .filter(|entry| walks(entry.kind, wanted, mode))
@@ -826,6 +842,57 @@ mod tests {
         );
     }
 
+    /// A sound's playlist band is a list of the folder's sounds, so the walk behind it is the
+    /// folder's sounds for as long as it is up whatever `Audio` is set to — and the switch is read
+    /// and never written, so a band opened and closed leaves the user's choice exactly as it was.
+    #[test]
+    fn a_sound_band_walks_the_folders_sounds_whatever_the_audio_switch_says() {
+        let folder = folder_named("band-open");
+        let song = file_of(&folder, "a.mp3", 10);
+        file_of(&folder, "b.txt", 10);
+        file_of(&folder, "c.mp3", 10);
+
+        FOLDERS.lock().expect("the walk's own map").clear();
+
+        let config = AppConfig {
+            pin_nav_audio: PinNavFileTypes::All,
+            ..Default::default()
+        };
+        let wanted = wanted_category(&song, &config);
+
+        assert_eq!(
+            nav_mode_for(wanted, &config, true),
+            PinNavFileTypes::Category,
+            "a band that is up lists sounds, so the walk behind it is the folder's sounds"
+        );
+        assert_eq!(
+            list_for(&song, None, &config, true).map(|list| names(&list)),
+            Some(vec!["a.mp3".to_string(), "c.mp3".to_string()]),
+            "and a document beside them is not in it"
+        );
+
+        assert_eq!(
+            nav_mode_for(wanted, &config, false),
+            PinNavFileTypes::All,
+            "a band that is down is the walk the user's own switch asks for"
+        );
+        assert_eq!(
+            list_for(&song, None, &config, false).map(|list| names(&list)),
+            Some(vec![
+                "a.mp3".to_string(),
+                "b.txt".to_string(),
+                "c.mp3".to_string()
+            ]),
+            "which is every file of the folder here"
+        );
+
+        assert_eq!(
+            config.pin_nav_audio,
+            PinNavFileTypes::All,
+            "and the switch is never written: the tray keeps showing what the user chose"
+        );
+    }
+
     /// A kind the tray has switched off is not walked, whatever else it is: a file a pin
     /// could step onto and then show nothing of is a step into nowhere, and the walk is of
     /// the files this configuration previews rather than of the files on the disk.
@@ -843,7 +910,7 @@ mod tests {
         };
         let current = folder.join("a.txt");
 
-        let list = list_for(&current, None, &config)
+        let list = list_for(&current, None, &config, false)
             .map(|list| names(&list))
             .unwrap_or_default();
         assert_eq!(list, vec!["a.txt"], "a switched-off kind is not a step");
