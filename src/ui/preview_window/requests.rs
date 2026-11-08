@@ -13,6 +13,18 @@ pub fn pinned() -> bool {
     pin_window::pin_is_up()
 }
 
+/// Note that the pin being asked for its end was handed to a window of this app's own — a detached
+/// one — rather than closed, so that the Explorer hook reads the end as a hand-off rather than as a
+/// close: what the hand asked for is a window of its own, and the file under the pointer is not a
+/// file it has just moved onto (see `pin_window::note_pin_handed_off` and `PIN_HANDED_OFF`).
+///
+/// Said where the end is asked for rather than where the hand-off is made, which is the difference
+/// between a note about a road and a note about a fact: a hand-off this machine refuses ends no pin,
+/// and a note left behind by one would be read against the next pin's ordinary close.
+pub fn note_the_pin_was_handed_off() {
+    pin_window::note_pin_handed_off();
+}
+
 /// Ask for the pinned preview to come down, from any thread. What a pin is belongs to the
 /// preview loop, so the loop is what ends it — on its next tick, by the same path its own
 /// close button takes. Asking twice is asking once.

@@ -518,6 +518,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 maximized: paint.maximized,
                 read_only: paint.read_only,
                 maximizable: paint.maximizable,
+                detachable: paint.detachable,
                 always_on_top: paint.always_on_top,
                 hovered: paint.hovered,
                 pressed: paint.pressed,
@@ -851,6 +852,10 @@ pub(super) struct PinnedPaint {
     pub(super) maximized: bool,
     /// Whether this pin's caption offers a maximize at all (see `PinFrame`).
     pub(super) maximizable: bool,
+    /// Whether this pin's caption offers its **Detach** button as one a hand can have: a window of its
+    /// own has no more to hand over, so its detach answers nothing and says so in the ink a state of the
+    /// window's own is read in (see `pin_chrome::Caption::detachable` and `app::detach`).
+    pub(super) detachable: bool,
     pub(super) always_on_top: bool,
     pub(super) hovered: Option<pin_chrome::CaptionButton>,
     pub(super) pressed: Option<pin_chrome::CaptionButton>,
@@ -957,6 +962,10 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             read_only: pinned_read_only(),
             maximized: pin.restore.is_some(),
             maximizable: pin.frame != PinFrame::None,
+            // A pin is a window this process is showing the file in, and a detached window is one of
+            // its own: the road out of being a pin is spent, and what says so in the strip is its ink
+            // (see `app::detach`).
+            detachable: !crate::app::detach::is_detached(),
             always_on_top: pin_always_on_top(),
             hovered: pin.hovered,
             pressed: pin.pressed,

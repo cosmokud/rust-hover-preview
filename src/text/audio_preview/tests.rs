@@ -38,6 +38,7 @@ fn card() -> Card {
 fn pinned() -> Card {
     Card {
         controls: Some(CardChrome {
+            detached: false,
             playing: false,
             volume: 40,
             hovered: None,
@@ -1007,11 +1008,11 @@ fn a_pinned_card_carries_its_four_controls_where_they_are_drawn() {
     let _ = boxes;
 }
 
-/// The two window buttons a pinned sound carries are answered in their
+/// The four window buttons a pinned sound carries are answered in their
 /// own boxes and nowhere else: a hand in one is a hand on that button,
 /// and the cell the card's mark is drawn in answers for nothing at all —
 /// the mark is a dot no hand can press (see `Mark`). There is
-/// no third window button: the card's menu opens from a right-click on
+/// no other window button: the card's menu opens from a right-click on
 /// the window rather than from a gear (see `pin_menu::open_pin_menu`).
 #[test]
 fn the_two_window_buttons_are_answered_in_their_own_boxes() {
@@ -1035,11 +1036,12 @@ fn the_two_window_buttons_are_answered_in_their_own_boxes() {
         "the cell the mark is drawn in answers for nothing"
     );
 
-    // The three window buttons keep their own boxes, and the card answers
+    // The four window buttons keep their own boxes, and the card answers
     // for each in its own box — wherever it stands, with no flag saying
     // whether the band it stands in is showing.
     for (control, button) in [
         (CardControl::AlwaysOnTop, &boxes.always_on_top),
+        (CardControl::Detach, &boxes.detach),
         (CardControl::Minimize, &boxes.minimize),
         (CardControl::Close, &boxes.close),
     ] {
@@ -1059,20 +1061,25 @@ fn the_two_window_buttons_are_answered_in_their_own_boxes() {
         );
     }
 
-    // The gap between the two of them is the card's own, and the margin
-    // to the left of the minimize as well: a hand in either is a hand on
+    // The gap between any two of them is the card's own, and the margin
+    // to the left of the leftmost as well: a hand in either is a hand on
     // no button.
-    let button_gap = (boxes.minimize.drawn.right + boxes.close.drawn.left) / 2;
     let middle_row = (boxes.minimize.drawn.top + boxes.minimize.drawn.bottom) / 2;
-    assert_eq!(
-        boxes.window_button_at(button_gap, middle_row),
-        None,
-        "the gap between the two is no button's"
-    );
+    for gap in [
+        (boxes.always_on_top.drawn.right + boxes.detach.drawn.left) / 2,
+        (boxes.detach.drawn.right + boxes.minimize.drawn.left) / 2,
+        (boxes.minimize.drawn.right + boxes.close.drawn.left) / 2,
+    ] {
+        assert_eq!(
+            boxes.window_button_at(gap, middle_row),
+            None,
+            "the gap between two buttons is no button's: ({gap}, {middle_row})"
+        );
+    }
     assert_eq!(
         boxes.window_button_at(0, middle_row),
         None,
-        "the margin to the left of the minimize is the card's own"
+        "the margin to the left of the leftmost button is the card's own"
     );
 }
 
@@ -1344,6 +1351,7 @@ fn control_boxes_for(card: &Card, width: u32) -> Option<CardBoxes> {
 fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
     Card {
         controls: Some(CardChrome {
+            detached: false,
             playing: false,
             volume: 40,
             hovered,
@@ -1355,7 +1363,17 @@ fn lit(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
     }
 }
 
-/// The two window buttons stand in the card's top corner, over the name line: the
+/// The same card on the window a hand-off made of it: a window of its own rather than a pin of this
+/// process, which is the state its own detach button says (see `CardChrome::detached`).
+fn detached(hovered: Option<CardControl>, pressed: Option<CardControl>) -> Card {
+    let mut card = lit(hovered, pressed);
+    if let Some(chrome) = card.controls.as_mut() {
+        chrome.detached = true;
+    }
+    card
+}
+
+/// The four window buttons stand in the card's top corner, over the name line: the
 /// drawn boxes begin at the gap below the window's own top edge and reach into the
 /// name line's own rows — room the margin does not have, a button being twice the
 /// side the margin alone would hold — and the name keeps the box and the scroll it
@@ -1394,7 +1412,12 @@ fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
     // the margin does not have: the drawn box reaches into the name line's own
     // rows, which is where a button that size ends.
     let margin_side = metrics.padding - gap * 2;
-    for button in [&boxes.always_on_top, &boxes.minimize, &boxes.close] {
+    for button in [
+        &boxes.always_on_top,
+        &boxes.detach,
+        &boxes.minimize,
+        &boxes.close,
+    ] {
         assert_eq!(
             button.drawn.top, gap,
             "a drawn box stood back by the gap from the window's own top edge: {:?}",
@@ -1428,12 +1451,18 @@ fn the_window_buttons_stand_in_the_top_corner_over_the_name_line() {
     assert_eq!(
         boxes.minimize.drawn.right,
         boxes.close.drawn.left - gap,
-        "and the minimize stands beside it with the same gap between the two"
+        "and the minimize stands beside the close with the same gap between the two"
+    );
+    assert_eq!(
+        boxes.detach.drawn.right,
+        boxes.minimize.drawn.left - gap,
+        "and the detach stands beside the minimize, the window buttons reading left to right \
+         along the corner as one row of the same gap"
     );
     assert_eq!(
         boxes.always_on_top.drawn.right,
-        boxes.minimize.drawn.left - gap,
-        "and the always_on_top stands beside minimize with the same gap between the two"
+        boxes.detach.drawn.left - gap,
+        "with the always_on_top at the far end of it, beside the detach"
     );
 
     // The name's own box is the card's content box — the same box it is drawn
@@ -1466,6 +1495,7 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
     let mut named = card();
     named.name = long.to_string();
     named.controls = Some(CardChrome {
+        detached: false,
         playing: false,
         volume: 40,
         hovered: None,
@@ -1496,6 +1526,7 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
     down.name_offset = offset;
     let chrome = down.controls.expect("a card that carries controls");
     down.controls = Some(CardChrome {
+        detached: false,
         window_buttons: false,
         ..chrome
     });
@@ -1577,7 +1608,7 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
     );
 }
 
-/// The two window buttons are answered where their glyphs are drawn and a little
+/// The four window buttons are answered where their glyphs are drawn and a little
 /// beyond them: the middle of a drawn box is the button, the hit box reaches the
 /// window's own top edge above it and a cushion below it, and a row past the
 /// cushion is nothing at all.
@@ -1593,6 +1624,7 @@ fn a_window_button_is_answered_where_its_glyph_is_and_a_little_beyond_it() {
 
     for (control, button) in [
         (CardControl::AlwaysOnTop, &boxes.always_on_top),
+        (CardControl::Detach, &boxes.detach),
         (CardControl::Minimize, &boxes.minimize),
         (CardControl::Close, &boxes.close),
     ] {
@@ -1667,7 +1699,7 @@ fn a_window_button_is_answered_where_its_glyph_is_and_a_little_beyond_it() {
     }
 }
 
-/// The two window buttons wear nothing but their marks: at rest each is drawn in
+/// The window buttons wear nothing but their marks: at rest each is drawn in
 /// the card's own ink, the one the pointer is on or holds is drawn in the accent
 /// the played part of the bar is drawn in, and the corner around them is the
 /// page's own color in every state — no wash, no box, no fill, in any state.
@@ -1728,9 +1760,9 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
             .any(|y| (box_.left..box_.right).any(|x| pixel(painted, x, y) == want))
     };
 
-    // At rest, both buttons are drawn in the card's own ink — the ink the
+    // At rest, every button is drawn in the card's own ink — the ink the
     // row's glyphs are painted in, verbatim.
-    for button in [&boxes.minimize, &boxes.close] {
+    for button in [&boxes.detach, &boxes.minimize, &boxes.close] {
         assert!(
             holds(&resting, button.drawn, ink(foreground)),
             "a resting button is drawn in the card's own ink: {:?}",
@@ -1766,6 +1798,7 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
             for x in 0..width as i32 {
                 let on_a_button = [
                     &boxes.always_on_top.drawn,
+                    &boxes.detach.drawn,
                     &boxes.minimize.drawn,
                     &boxes.close.drawn,
                 ]
@@ -1800,6 +1833,149 @@ fn the_window_buttons_are_drawn_as_ink_on_the_corner_and_nothing_else() {
     assert!(
         rows_of_ink(&resting, boxes.close.drawn).len() > 1,
         "and the close is two strokes crossing, more than one row of them"
+    );
+    assert!(
+        rows_of_ink(&resting, boxes.detach.drawn).len() > 1,
+        "and the detach is two windows, more than one row of them"
+    );
+
+    // And it is two windows rather than a block: the middle of the mark is the inside of the
+    // window in front, and the column its outline runs down is ink.
+    let drawn = boxes.detach.drawn;
+    let inset = (drawn.right - drawn.left) / 4;
+    let middle = (
+        (drawn.left + drawn.right) / 2,
+        (drawn.top + drawn.bottom) / 2,
+    );
+    assert_eq!(
+        pixel(&resting, middle.0, middle.1),
+        ink(page_color),
+        "the window in front of the detach is an outline, its own inside left clear"
+    );
+    assert_eq!(
+        pixel(&resting, drawn.left + inset, middle.1),
+        ink(foreground),
+        "and its outline is drawn in the ink the buttons beside it wear"
+    );
+}
+
+/// A window of its own says so in its own detach button: the mark wears the ink the pin beside it
+/// wears when the window is kept on top — the numbers' own — and lights a step further toward white
+/// under the hand, which is the same pair of states the always-on-top button is drawn in (see
+/// `CardChrome::detached`). A pin's detach is the card's own ink at rest and the accent under the
+/// hand, so what became of the window is read from the ink alone.
+#[test]
+fn the_detach_of_a_window_of_its_own_wears_the_pin_s_own_ink() {
+    let (width, height) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&pinned(), width, 0);
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+
+    // The colors the paint reads, worked out here the same way the card's own paint works them out.
+    let theme = text_theme::loaded(options().theme).expect("the bundled theme");
+    let page_color = rgb(theme.background());
+    let foreground = rgb(theme.foreground());
+    let number = readable(
+        rgb(theme.style_for_scopes(&["constant.numeric"]).foreground),
+        page_color,
+    );
+    let accent = readable(
+        rgb(theme.style_for_scopes(&["support.function"]).foreground),
+        page_color,
+    );
+    // The brighter one a mark that carries a state is drawn in while the hand is on it.
+    let lit_number = crate::text::text_paint::blend(number, [255, 255, 255], 0.35);
+
+    let pin = render(&pinned(), width, height, 96, options()).expect("a painted card");
+    let own = render(&detached(None, None), width, height, 96, options()).expect("a painted card");
+    let own_lit = render(
+        &detached(Some(CardControl::Detach), None),
+        width,
+        height,
+        96,
+        options(),
+    )
+    .expect("a painted card");
+
+    // The ink of a pixel is its color read backwards: the buffer is blue, green, red, alpha.
+    let ink = |color: [u8; 3]| [color[2], color[1], color[0], 255];
+    let holds = |painted: &(Vec<u8>, u32, u32), box_: RECT, want: [u8; 4]| -> bool {
+        (box_.top..box_.bottom).any(|y| {
+            (box_.left..box_.right).any(|x| {
+                let index = (y as usize * width as usize + x as usize) * 4;
+                [
+                    painted.0[index],
+                    painted.0[index + 1],
+                    painted.0[index + 2],
+                    painted.0[index + 3],
+                ] == want
+            })
+        })
+    };
+
+    // A pin's own detach is the card's ink, and the pin beside it is the numbers' because the window
+    // is kept on top: the two buttons are told apart at rest.
+    assert!(
+        holds(&pin, boxes.detach.drawn, ink(foreground)),
+        "a pin's detach is drawn in the card's own ink: {:?}",
+        boxes.detach.drawn
+    );
+    assert!(
+        holds(&pin, boxes.always_on_top.drawn, ink(number)),
+        "and the pin that is kept on top in the numbers' ink"
+    );
+
+    // The same button on a window of its own: the ink the pin beside it says its state in, and a step
+    // toward white under the hand — not the accent, which is a button with no state to show.
+    assert!(
+        holds(&own, boxes.detach.drawn, ink(number)),
+        "a window of its own draws its detach in the pin's own ink: {:?}",
+        boxes.detach.drawn
+    );
+    assert!(
+        holds(&own_lit, boxes.detach.drawn, ink(lit_number)),
+        "and lights it a step toward white while the hand is on it"
+    );
+    assert!(
+        !holds(&own_lit, boxes.detach.drawn, ink(accent)),
+        "not the accent, which a window of its own has no state to be drawn in"
+    );
+    assert!(
+        holds(&own, boxes.always_on_top.drawn, ink(number)),
+        "and the pin beside it keeps the ink its own state is read in"
+    );
+}
+
+/// The detach takes its place in the corner without moving either end of the cluster: the row a
+/// hand asks the buttons for is still the one the band says — a band as tall as a hit box, which
+/// a button fewer or more does not touch — and the span still begins at the always-on-top's own
+/// left and ends past the close's right, the detach standing inside the two rather than beside
+/// them.
+#[test]
+fn the_detach_stays_inside_the_span_the_buttons_are_asked_for_in() {
+    let (width, _) = measure(&pinned(), 4096, 2160, 96, options()).expect("a measured card");
+    let page = scrolled(&pinned(), width, 0);
+    let boxes = page.boxes.as_ref().expect("a card that carries controls");
+
+    let (left, right) = window_button_span(96, options(), width as i32);
+    assert!(
+        left < boxes.always_on_top.drawn.left && boxes.detach.drawn.left > left,
+        "the span reaches past the always_on_top's own left, which is where it begins: {left}"
+    );
+    assert_eq!(
+        boxes.always_on_top.drawn.left - left,
+        right - boxes.close.drawn.right,
+        "and keeps the same margin past each end of the cluster it began and ended at"
+    );
+    assert!(
+        right > boxes.close.drawn.right && boxes.detach.drawn.right < right,
+        "ending past the close's own right, with the detach inside it: {right}"
+    );
+
+    assert_eq!(
+        window_button_band(96, options()),
+        boxes.close.hit.bottom,
+        "and the band a hand asks the buttons for is as tall as their own hit boxes, \
+         whatever the row holds"
     );
 }
 
@@ -1904,6 +2080,7 @@ fn the_pin_says_it_is_on_top_in_the_ink_the_numbers_are_read_in() {
         let ink_in = |always_on_top: bool, hovered: Option<CardControl>, rect: RECT| -> [u8; 4] {
             let card = Card {
                 controls: Some(CardChrome {
+                    detached: false,
                     playing: false,
                     volume: 40,
                     hovered,

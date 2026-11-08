@@ -347,9 +347,8 @@ pub fn run_preview_window() {
         let mut first_frame_wait: Option<FirstFrameWait> = None;
 
         // Message loop
-        let mut msg = MSG::default();
-        // A message the idle wait took off the channel, held for the drain below
-        // rather than acted on where it was received.
+        let mut msg = MSG::default(); // A message the idle wait took off the channel, held for the drain below
+                                      // rather than acted on where it was received.
         let mut carried_preview_msg: Option<PreviewMessage> = None;
         // What a carry of a pinned drag took off the channel while it was inside the tick, in
         // the order it arrived. A carry cannot act on a message itself — the tick owns the media
@@ -380,6 +379,12 @@ pub fn run_preview_window() {
         // static preview republishes at most twice a second plus on transitions.
         let mut last_hold_publish = Instant::now() - Duration::from_secs(10);
         let mut last_hold_key = (false, false, false, 0u64);
+        // **A window handed to this process by another one is opened here**, before the loop turns:
+        // the file is read on a thread of its own and put on the screen through the same message a
+        // pin key would have sent (see `detach_open`). A process that is not a detached window asks
+        // nothing and does nothing.
+        detach_open::begin();
+
         while RUNNING.load(Ordering::SeqCst) {
             // Every tick is noted, whether it does anything or not: what the note is
             // for is the Explorer hook telling a loop that is working from one that has
@@ -4899,6 +4904,12 @@ pub fn run_preview_window() {
             if render_wait == Some(false) {
                 page_render_pending = None;
             }
+
+            // **A detached window's own two answers**, taken where the pin and its paints have just
+            // been looked at: whether the window it was handed is up — which is the moment the pin it
+            // came from may come down — and whether that window has ended, which is this process's
+            // own end (see `detach_open`). A process that is not a detached window answers at once.
+            detach_open::settle(current_show.as_ref(), pending_load.is_some());
 
             // The preview has waited as long as it waits — a page that has not arrived by
             // now may still be coming, a very large document takes as long as it takes —

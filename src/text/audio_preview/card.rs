@@ -73,8 +73,8 @@ pub(super) const BAR_REACH_PIXELS: i32 = 8;
 pub(super) const CONTROL_SIDE_PIXELS: i32 = 16;
 pub(super) const CONTROL_GAP_PIXELS: i32 = 2;
 
-/// The room around the two window buttons a pinned card carries in its top
-/// margin: between each of them and the card's own border, and between the
+/// The room around the window buttons a pinned card carries in its top
+/// margin: between each of them and the card's own border, and between any
 /// two of them. A logical pixel, like every other pixel of the card — at
 /// 200% it is two physical pixels, and the buttons stay the same proportion
 /// of the card they are part of.
@@ -167,7 +167,7 @@ pub(crate) struct Card {
 }
 
 /// The parts of a pinned sound's card a pointer can be on: the three buttons at the left of the
-/// bar, the bar itself, the volume button at its right, and the two window buttons standing in
+/// bar, the bar itself, the volume button at its right, and the four window buttons standing in
 /// the card's top margin.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CardControl {
@@ -184,6 +184,12 @@ pub(crate) enum CardControl {
     Volume,
     /// The window button that keeps the pinned window on top of other windows.
     AlwaysOnTop,
+    /// The window button that hands the pinned window to a process of its own, where the file in it
+    /// is nobody's preview: the pin's own detach, which is the caption's detach button by another
+    /// name (see `pin_detach`). It is a window button rather than one of the card's own controls
+    /// because what it acts on is the pin rather than the sound: it is asked for as the pin's own
+    /// detach command (see `pinned_audio_control_release`).
+    Detach,
     /// The window button that shrinks the pin into the bubble it leaves, which stands where
     /// the button did (see `pinned_minimize_box`). It is a window button rather than one of
     /// the card's own controls because what it acts on is the pin rather than the sound: it
@@ -205,9 +211,13 @@ pub(crate) struct CardChrome {
     /// the panel that opens off it is drawn at.
     pub volume: u32,
     pub always_on_top: bool,
+    /// Whether the window this card is drawn in is a detached one — a window of its own rather than a
+    /// pin of the process that drew it — which is the state its detach button says in the same ink
+    /// the pin says it is kept on top in (see `app::detach`).
+    pub detached: bool,
     pub hovered: Option<CardControl>,
     pub pressed: Option<CardControl>,
-    /// Whether the three window buttons are showing, which is what the card is painted
+    /// Whether the four window buttons are showing, which is what the card is painted
     /// from: a hand near the buttons themselves.
     pub window_buttons: bool,
 }
@@ -454,7 +464,7 @@ pub(crate) fn bar_share_at(
 /// by one arithmetic and drawn by another answers a press in the middle of the facts line (see
 /// `BarRow`).
 ///
-/// The two window buttons in the top margin are answered before anything else, and the order is
+/// The four window buttons in the top margin are answered before anything else, and the order is
 /// not arbitrary: a press on one is a press on a button of the window, which is a thing a hand
 /// is on before it is a hand on the card, and the cushion above a drawn button reaches into the
 /// name line's own leading — the one band of the card the row's controls do not share rows with,
@@ -485,7 +495,7 @@ pub(crate) fn control_at(
         let boxes = control_boxes(&metrics, width, controls)?;
         let row = bar_row(&metrics);
 
-        // The two window buttons, which a hand on the top margin is on before
+        // The window buttons, which a hand on the top margin is on before
         // it is on anything the card carries lower down (see the order above).
         boxes
             .window_button_at(x, y)
@@ -531,7 +541,7 @@ pub(crate) fn control_at(
 /// box a press on it is answered against, read back out of the same arithmetic (see
 /// [`control_at`]).
 ///
-/// For the two window buttons in the top margin this is the box a press is answered against
+/// For the four window buttons in the top margin this is the box a press is answered against
 /// rather than the box the glyph is drawn in: the drawn box plus the cushion above it (see
 /// [`WindowButtonBox`]), which is the box the bubble a minimize leaves stands on (see
 /// `pinned_minimize_box`).

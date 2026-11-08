@@ -94,6 +94,7 @@ fn a_real_font_cuts_the_name_where_the_measured_width_runs_out() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let surface = DibSurface::create(600, 30).expect("a surface");
@@ -144,7 +145,7 @@ fn a_real_font_cuts_the_name_where_the_measured_width_runs_out() {
 #[test]
 fn every_button_of_a_caption_is_the_one_under_the_pointer() {
     let buttons = button_boxes(600, 30, 96, true);
-    assert_eq!(buttons.len(), 8);
+    assert_eq!(buttons.len(), 9);
 
     for button in &buttons {
         let middle_x = (button.rect.left + button.rect.right) / 2;
@@ -181,9 +182,10 @@ fn a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons() {
     let narrow = button_boxes(200, 30, 96, true);
 
     // Buttons are 46 wide and never narrower, so a strip 200 wide holds four of them: the window's
-    // own, taken from close at the right edge back to the left (see `button_boxes`).
+    // own, taken from close at the right edge back to the left (see `button_boxes`) — the detach
+    // among them, because the road out of being a pin is a window's road and stands with them.
     assert_eq!(narrow.len(), 4);
-    assert_eq!(narrow[0].kind, CaptionButton::AlwaysOnTop);
+    assert_eq!(narrow[0].kind, CaptionButton::Detach);
     assert_eq!(narrow[1].kind, CaptionButton::Minimize);
     assert_eq!(narrow[2].kind, CaptionButton::Maximize);
     assert_eq!(narrow[3].kind, CaptionButton::Close);
@@ -219,18 +221,21 @@ fn a_caption_narrower_than_its_own_walk_keeps_the_window_s_buttons() {
 /// right at every width in the middle of a step.
 #[test]
 fn a_caption_gives_up_its_buttons_one_at_a_time_from_the_left() {
-    const ORDER: [CaptionButton; 8] = [
+    const ORDER: [CaptionButton; 9] = [
         CaptionButton::Previous,
         CaptionButton::Next,
         CaptionButton::OpenWith,
         CaptionButton::OpenWithList,
         CaptionButton::AlwaysOnTop,
+        CaptionButton::Detach,
         CaptionButton::Minimize,
         CaptionButton::Maximize,
         CaptionButton::Close,
     ];
 
     let boundaries = [
+        (9 * 46, 9),
+        (9 * 46 - 1, 8),
         (8 * 46, 8),
         (8 * 46 - 1, 7),
         (7 * 46, 7),
@@ -285,6 +290,7 @@ fn a_caption_too_narrow_for_close_still_paints_its_bar() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let (width, height) = (30u32, 30u32);
@@ -295,6 +301,7 @@ fn a_caption_too_narrow_for_close_still_paints_its_bar() {
 
     let surface = DibSurface::create(width, height).expect("a surface");
     let caption = Caption {
+        detachable: true,
         title: "notes.txt",
         read_only: false,
         maximized: false,
@@ -340,11 +347,13 @@ fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let strip = |width: u32, title: &str| {
         let surface = DibSurface::create(width, 30).expect("a surface");
         let caption = Caption {
+            detachable: true,
             title,
             read_only: false,
             maximized: false,
@@ -357,7 +366,7 @@ fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
         surface.pixels()
     };
 
-    // A caption 240 wide has dropped three of its eight buttons and still says nothing.
+    // A caption 240 wide has dropped four of its nine buttons and still says nothing.
     assert!(
         !buttons_fit(240, 96, true) && !title_fits(240, 96, true),
         "a caption with buttons missing has given the name up"
@@ -368,14 +377,14 @@ fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
         "a strip with buttons missing painted a name beside them"
     );
 
-    // And a caption that carries all eight says the name it has room for.
+    // And a caption that carries all nine says the name it has room for.
     assert!(
-        buttons_fit(440, 96, true) && title_fits(440, 96, true),
+        buttons_fit(520, 96, true) && title_fits(520, 96, true),
         "a caption with every button has room for a name beside them"
     );
     assert_ne!(
-        strip(440, "notes.txt"),
-        strip(440, ""),
+        strip(520, "notes.txt"),
+        strip(520, ""),
         "a whole caption did not paint the name it had room for"
     );
 
@@ -398,14 +407,15 @@ fn a_caption_without_a_maximize_keeps_the_close_button_where_it_was() {
     let three = button_boxes(600, 30, 96, true);
     let two = button_boxes(600, 30, 96, false);
 
-    assert_eq!(two.len(), 7);
+    assert_eq!(two.len(), 8);
     assert_eq!(two[0].kind, CaptionButton::Previous);
     assert_eq!(two[1].kind, CaptionButton::Next);
     assert_eq!(two[2].kind, CaptionButton::OpenWith);
     assert_eq!(two[3].kind, CaptionButton::OpenWithList);
     assert_eq!(two[4].kind, CaptionButton::AlwaysOnTop);
-    assert_eq!(two[5].kind, CaptionButton::Minimize);
-    assert_eq!(two[6].kind, CaptionButton::Close);
+    assert_eq!(two[5].kind, CaptionButton::Detach);
+    assert_eq!(two[6].kind, CaptionButton::Minimize);
+    assert_eq!(two[7].kind, CaptionButton::Close);
 
     let close = three
         .iter()
@@ -418,12 +428,12 @@ fn a_caption_without_a_maximize_keeps_the_close_button_where_it_was() {
         .expect("a minimize button")
         .rect;
 
-    assert_eq!(two[6].rect.left, close.left);
-    assert_eq!(two[6].rect.right, close.right);
+    assert_eq!(two[7].rect.left, close.left);
+    assert_eq!(two[7].rect.right, close.right);
+    assert_eq!(two[6].rect.right, two[7].rect.left);
     assert_eq!(two[5].rect.right, two[6].rect.left);
-    assert_eq!(two[4].rect.right, two[5].rect.left);
     assert_eq!(
-        two[5].rect.right - two[5].rect.left,
+        two[6].rect.right - two[6].rect.left,
         minimize.right - minimize.left
     );
 
@@ -461,6 +471,7 @@ fn a_caption_is_opaque_everywhere_it_is_painted() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let width = 600u32;
@@ -473,6 +484,7 @@ fn a_caption_is_opaque_everywhere_it_is_painted() {
     // only happened to be opaque on a strip with nothing written on it is not opaque.
     for title in ["picture.png", ""] {
         let caption = Caption {
+            detachable: true,
             title,
             read_only: false,
             maximized: false,
@@ -514,18 +526,21 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
     let dark = ChromePalette {
         background: [30, 30, 30],
         foreground: [220, 220, 220],
         accent: [10, 140, 240],
+        number: [209, 154, 102],
         dark: true,
     };
     // A name short enough to be drawn whole on the strip: a caption whose name is cut away
     // entirely is the same picture whichever file it is, so a test on one of those could not
     // tell a stale strip from a changed one.
     let caption = Caption {
+        detachable: true,
         title: "Readme.md",
         read_only: false,
         maximized: false,
@@ -618,6 +633,15 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
             },
             96,
         ),
+        (
+            "the detach given up, which is a mark drawn faded",
+            &palette,
+            &Caption {
+                detachable: false,
+                ..caption
+            },
+            96,
+        ),
         ("another display's scale", &palette, &caption, 144),
         ("another theme", &dark, &caption, 96),
     ];
@@ -666,6 +690,7 @@ fn draws_the_caption_glyphs() {
         ("open-with", CaptionButton::OpenWith, false),
         ("open-with-list", CaptionButton::OpenWithList, false),
         ("always-on-top", CaptionButton::AlwaysOnTop, false),
+        ("detach", CaptionButton::Detach, false),
         ("minimize", CaptionButton::Minimize, false),
         ("maximize", CaptionButton::Maximize, false),
         ("restore", CaptionButton::Maximize, true),
@@ -1137,6 +1162,154 @@ fn the_chevrons_arms_carry_a_share_of_the_ink() {
     );
 }
 
+/// The two buttons that say a state of the window's own rather than a choice it still offers — that it is
+/// kept on top, that it is a window of its own — say it in the ink those states are read in, standing in
+/// the wash a button that is saying something about its window stands in, and light a step further toward
+/// white under the hand: the same two inks a sound's card says the same two things in (see
+/// `ChromePalette::number` and `paint_button`).
+#[test]
+fn a_window_s_own_states_are_said_in_the_ink_they_are_read_in() {
+    let palette = ChromePalette {
+        background: [40, 44, 52],
+        foreground: [171, 178, 191],
+        accent: [97, 175, 239],
+        number: [209, 154, 102],
+        dark: true,
+    };
+    // A strip wide enough for every button the caption carries, so that both of these are drawn at all.
+    let (width, height) = (9 * 46, 30);
+    let surface = DibSurface::create(width as u32, height as u32).expect("a surface");
+
+    let strip = |detachable: bool,
+                 always_on_top: bool,
+                 hovered: Option<CaptionButton>,
+                 pressed: Option<CaptionButton>| {
+        let caption = Caption {
+            title: "picture.png",
+            read_only: false,
+            maximized: false,
+            maximizable: true,
+            detachable,
+            always_on_top,
+            hovered,
+            pressed,
+        };
+        paint_caption(&surface, &palette, &caption, 96);
+        surface.pixels().to_vec()
+    };
+
+    let box_of = |kind: CaptionButton| {
+        button_boxes(width, height, 96, true)
+            .into_iter()
+            .find(|button| button.kind == kind)
+            .expect("a caption this wide carries every button")
+    };
+
+    // The colours a pixel of one button's own box is made of, in the order of the surface, which is the
+    // desktop's own: the bar, the wash under it, and the ink of what is drawn on it.
+    fn inks(button: &CaptionButtonBox, width: i32, painted: &[u8]) -> Vec<[u8; 3]> {
+        let mut seen: Vec<[u8; 3]> = Vec::new();
+        for y in button.rect.top..button.rect.bottom {
+            for x in button.rect.left..button.rect.right {
+                let index = (y as usize * width as usize + x as usize) * 4;
+                let pixel = [painted[index + 2], painted[index + 1], painted[index]];
+                if !seen.contains(&pixel) {
+                    seen.push(pixel);
+                }
+            }
+        }
+        seen
+    }
+
+    let pin = box_of(CaptionButton::AlwaysOnTop);
+    let detach = box_of(CaptionButton::Detach);
+
+    // A pin that is kept on top: the numbers' ink on the mark and the wash a button saying something
+    // about its window stands in, and under the hand the same ink a step toward white — not the strip's
+    // own ink, which is what a button that says nothing but that it is a button wears.
+    let kept = inks(&pin, width, &strip(true, true, None, None));
+    assert!(
+        kept.contains(&palette.number),
+        "a pin kept on top is drawn in the ink that state is read in: {kept:?}"
+    );
+    assert!(
+        kept.contains(&palette.hover(0.10)),
+        "and stands in the wash of a button that is saying something"
+    );
+    assert!(
+        !kept.contains(&palette.foreground),
+        "with nothing of a bare button left on it: {:?}",
+        palette.foreground
+    );
+
+    let held = inks(
+        &pin,
+        width,
+        &strip(true, true, Some(CaptionButton::AlwaysOnTop), None),
+    );
+    assert!(
+        held.contains(&palette.lit(palette.number)),
+        "and under the hand the same ink a step further toward white: {held:?}"
+    );
+    assert!(
+        held.contains(&palette.hover(0.15)),
+        "washed the way a hovered button of the strip is"
+    );
+
+    // The same button on a pin that is not kept on top is a mark the window is showing and not offering,
+    // which is the one thing that is still drawn faded.
+    let free = inks(&pin, width, &strip(true, false, None, None));
+    assert!(
+        free.contains(&palette.faded()),
+        "a pin that is not kept on top is drawn in the faded ink: {free:?}"
+    );
+    assert!(!free.contains(&palette.number));
+
+    // A window of its own: its detach says what became of the window, in the same two inks as the pin
+    // beside it — and it is still not a hand's to have, so a pointer on it changes nothing at all.
+    let own = inks(&detach, width, &strip(false, false, None, None));
+    assert!(
+        own.contains(&palette.number),
+        "a window's own detach wears the ink its state is read in: {own:?}"
+    );
+    assert!(
+        own.contains(&palette.hover(0.10)),
+        "and stands in the wash the pin beside it stands in"
+    );
+    assert_eq!(
+        own,
+        inks(
+            &detach,
+            width,
+            &strip(false, false, Some(CaptionButton::Detach), None)
+        ),
+        "a pointer on a detach the window does not offer is a pointer on nothing"
+    );
+    for absent in [palette.faded(), palette.foreground] {
+        assert!(
+            !own.contains(&absent),
+            "with nothing of a spent road left on it: {absent:?}"
+        );
+    }
+
+    // And a pin that still has its detach to hand over wears the plain ink of a button, washed under the
+    // pointer: the state ink belongs to the window being one of its own, not to the button.
+    let live = inks(
+        &detach,
+        width,
+        &strip(true, false, Some(CaptionButton::Detach), None),
+    );
+    assert!(
+        live.contains(&palette.foreground),
+        "a detach a pin still has is drawn in the caption's own ink"
+    );
+    assert!(
+        live.contains(&palette.hover(0.10)),
+        "and is washed by the pointer, the way its neighbours are"
+    );
+    assert!(!live.contains(&palette.number));
+}
+
 /// A caption is narrowed in steps, and each is the width the one before it stopped being worth it at:
 /// the name is cut, then the name is given up, then the buttons go one at a time, and the bare bar is
 /// the last of it.
@@ -1153,7 +1326,7 @@ fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
     // padding at either end of the run.
     assert_eq!(
         title_room(600, 96, true),
-        600 - 8 * 46 - 24,
+        600 - 9 * 46 - 24,
         "a caption wide enough carries the walk as well"
     );
     assert_eq!(
@@ -1180,11 +1353,11 @@ fn a_caption_gives_up_its_name_before_it_gives_up_itself() {
         "and a caption too narrow for even close is a bare bar rather than no bar at all"
     );
 
-    // A pin with nothing to maximize carries three window buttons rather than four, so it has a button's
-    // width more to say a name in: at 390 the caption with a maximize has given its name up and the one
-    // without has not.
+    // A pin with nothing to maximize carries one window button fewer, so it has a button's width more
+    // to say a name in: at 460 the caption with a maximize has given its name up and the one without
+    // has not.
     assert!(
-        !title_fits(390, 96, true) && title_fits(390, 96, false),
+        !title_fits(460, 96, true) && title_fits(460, 96, false),
         "a caption's room is measured against the buttons it is actually carrying"
     );
 
@@ -1207,6 +1380,7 @@ fn a_page_says_it_is_read_only_and_a_caption_for_another_kind_does_not() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
 
@@ -1217,6 +1391,7 @@ fn a_page_says_it_is_read_only_and_a_caption_for_another_kind_does_not() {
         let surface = DibSurface::create(width, height).expect("a surface");
         let strip = |read_only: bool| {
             let caption = Caption {
+                detachable: true,
                 title: "notes.txt",
                 read_only,
                 maximized: false,
@@ -1275,12 +1450,14 @@ fn a_name_stops_at_the_pill_and_is_only_given_up_where_the_pill_takes_its_room()
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        number: [209, 154, 102],
         dark: false,
     };
 
     let strip = |width: u32, title: &str, read_only: bool| {
         let surface = DibSurface::create(width, 30).expect("a surface");
         let caption = Caption {
+            detachable: true,
             title,
             read_only,
             maximized: false,
@@ -1361,6 +1538,7 @@ fn the_pills_ring_closes_at_the_end_the_words_stop_at() {
         background: [30, 32, 40],
         foreground: [220, 220, 220],
         accent: [80, 170, 240],
+        number: [209, 154, 102],
         dark: true,
     };
 

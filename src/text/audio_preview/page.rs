@@ -164,7 +164,7 @@ pub(super) fn bar_band(row: BarRow, left: i32, right: i32, metrics: &TextMetrics
 
 /// The boxes of the controls a pinned card carries, laid out across the card's own content box:
 /// the three buttons at its left, the bar filling what is left of the row, the volume button
-/// against its right edge, and the two window buttons standing in the top corner.
+/// against its right edge, and the four window buttons standing in the top corner.
 ///
 /// They are one walk rather than five numbers each because the card is drawn from these boxes and
 /// pressed against them: a button laid out here and hit-tested elsewhere answers a press in the
@@ -178,11 +178,12 @@ pub(super) struct CardBoxes {
     pub(super) volume: RECT,
     pub(super) bar: RECT,
     pub(super) always_on_top: WindowButtonBox,
+    pub(super) detach: WindowButtonBox,
     pub(super) minimize: WindowButtonBox,
     pub(super) close: WindowButtonBox,
 }
 
-/// One of the two window buttons a pinned card carries in its top corner, with the
+/// One of the four window buttons a pinned card carries in its top corner, with the
 /// two boxes it has: the one its glyph is drawn in, and the one a press on it is
 /// answered against.
 ///
@@ -202,7 +203,7 @@ pub(super) struct WindowButtonBox {
 impl CardBoxes {
     /// The box one of the row's controls is drawn in, which is the box a press on it is answered
     /// against — except the bar's, whose is its own box inside the row and whose band is wider,
-    /// and the two window buttons', whose is the box their glyphs are drawn in plus the cushion
+    /// and the four window buttons', whose is the box their glyphs are drawn in plus the cushion
     /// above them (see [`WindowButtonBox`]).
     pub(super) fn rect(&self, control: CardControl) -> Option<RECT> {
         Some(match control {
@@ -212,12 +213,13 @@ impl CardBoxes {
             CardControl::Seek => self.bar,
             CardControl::Volume => self.volume,
             CardControl::AlwaysOnTop => self.always_on_top.hit,
+            CardControl::Detach => self.detach.hit,
             CardControl::Minimize => self.minimize.hit,
             CardControl::Close => self.close.hit,
         })
     }
 
-    /// Which of the window buttons in the top margin a point is on, if either.
+    /// Which of the window buttons in the top margin a point is on, if any.
     ///
     /// Asked of the cushion each is answered against rather than of the drawn boxes,
     /// because a hand aiming at a button this small is given the room above it
@@ -225,6 +227,9 @@ impl CardBoxes {
     pub(super) fn window_button_at(&self, x: i32, y: i32) -> Option<CardControl> {
         if holds(self.always_on_top.hit, x, y) {
             return Some(CardControl::AlwaysOnTop);
+        }
+        if holds(self.detach.hit, x, y) {
+            return Some(CardControl::Detach);
         }
         if holds(self.minimize.hit, x, y) {
             return Some(CardControl::Minimize);
@@ -273,7 +278,7 @@ pub(super) fn control_boxes(
     let next = button(play.right + gap);
     let volume = button(right - side);
     let bar_left = next.right + gap;
-    let (always_on_top, minimize, close) = window_button_boxes(metrics, width as i32);
+    let (always_on_top, detach, minimize, close) = window_button_boxes(metrics, width as i32);
 
     Some(CardBoxes {
         previous,
@@ -292,6 +297,7 @@ pub(super) fn control_boxes(
             bottom: row.top + row.height,
         },
         always_on_top,
+        detach,
         minimize,
         close,
     })
@@ -322,7 +328,7 @@ fn header_line(metrics: &TextMetrics) -> (i32, i32) {
     (header_top, rule_top)
 }
 
-/// The side one of the two window buttons is drawn at: twice what the card's own top
+/// The side one of the four window buttons is drawn at: twice what the card's own top
 /// margin would hold on its own — the margin's height less the gap above the button
 /// and the gap below it — which is room the margin does not have, so a button stands
 /// in the name line's own rows as well (see [`window_button_boxes`]).
@@ -333,7 +339,7 @@ fn window_button_side(metrics: &TextMetrics) -> i32 {
 
 /// The bottom of the box a press on a window button is answered against: the drawn
 /// box's own bottom plus the cushion below it, which is the bottom of the band the
-/// two buttons stand in (see [`window_button_boxes`]).
+/// buttons stand in (see [`window_button_boxes`]).
 fn window_button_reach(metrics: &TextMetrics) -> i32 {
     let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
     window_button_side(metrics) + gap + scaled(WINDOW_BUTTON_CUSHION_PIXELS, metrics.scale)
@@ -349,7 +355,7 @@ pub(crate) fn window_button_band(dpi: u32, options: AudioPreviewOptions) -> i32 
     window_button_layout(dpi, options, window_button_reach).unwrap_or(0)
 }
 
-/// The columns the two window buttons and a hand's margin around them reach across, on a
+/// The columns the four window buttons and a hand's margin around them reach across, on a
 /// card of `width` pixels: from the leftmost button's own left to the rightmost one's own
 /// right, widened by `WINDOW_BUTTON_REVEAL_PIXELS` on each side at the display's scale.
 ///
@@ -358,7 +364,7 @@ pub(crate) fn window_button_band(dpi: u32, options: AudioPreviewOptions) -> i32 
 /// hand near neither.
 pub(crate) fn window_button_span(dpi: u32, options: AudioPreviewOptions, width: i32) -> (i32, i32) {
     window_button_layout(dpi, options, |metrics| {
-        let (always_on_top, _, close) = window_button_boxes(metrics, width);
+        let (always_on_top, _, _, close) = window_button_boxes(metrics, width);
         let margin = scaled(WINDOW_BUTTON_REVEAL_PIXELS, metrics.scale);
         (
             always_on_top.drawn.left - margin,
@@ -390,9 +396,10 @@ fn window_button_layout<R>(
     answer
 }
 
-/// The two window buttons a pinned card carries in its top corner: the minimize that
-/// shrinks the pin into the bubble it leaves, and the close that ends the pin, the
-/// player and the window together.
+/// The four window buttons a pinned card carries in its top corner: the always-on-top that keeps
+/// the window over other windows, the detach that hands it to a process of its own, the minimize
+/// that shrinks the pin into the bubble it leaves, and the close that ends the pin, the player and
+/// the window together.
 ///
 /// Each button is a square stood against the card's right border with the same gap on every
 /// side that has room — above it to the window's own top edge, between each pair of
@@ -401,7 +408,7 @@ fn window_button_layout<R>(
 /// underneath them while they are up, its box and its scroll unchanged (see `paint`).
 ///
 /// A button's *hit* box is its drawn box widened upward to the window's own top edge and by the
-/// cushion below it: the two buttons are small, so a hand is given the room above them and
+/// cushion below it: the buttons are small, so a hand is given the room above them and
 /// a pixel of the name line's invisible leading, and the name's own rows below that as well —
 /// the room the buttons stand in, which a hit box that stopped at the name line's top would
 /// cut off, leaving a box smaller than the button it answers for. The cushion is a logical
@@ -410,12 +417,17 @@ fn window_button_layout<R>(
 pub(super) fn window_button_boxes(
     metrics: &TextMetrics,
     width: i32,
-) -> (WindowButtonBox, WindowButtonBox, WindowButtonBox) {
+) -> (
+    WindowButtonBox,
+    WindowButtonBox,
+    WindowButtonBox,
+    WindowButtonBox,
+) {
     let gap = scaled(WINDOW_BUTTON_GAP_PIXELS, metrics.scale);
     let side = window_button_side(metrics);
 
-    // The close against the right border, the minimize beside it, and always-on-top
-    // to the left of minimize, each with the same gap and side.
+    // The close against the right border, the minimize beside it, the detach to the left of
+    // the minimize and always-on-top to the left of the detach, each with the same gap and side.
     let close = RECT {
         left: (width - gap - side).max(0),
         top: gap,
@@ -428,10 +440,16 @@ pub(super) fn window_button_boxes(
         right: (close.left - gap).max(0),
         bottom: gap + side,
     };
-    let always_on_top = RECT {
+    let detach = RECT {
         left: (minimize.left - gap - side).max(0),
         top: gap,
         right: (minimize.left - gap).max(0),
+        bottom: gap + side,
+    };
+    let always_on_top = RECT {
+        left: (detach.left - gap - side).max(0),
+        top: gap,
+        right: (detach.left - gap).max(0),
         bottom: gap + side,
     };
 
@@ -451,6 +469,15 @@ pub(super) fn window_button_boxes(
                 left: always_on_top.left,
                 top: 0,
                 right: always_on_top.right,
+                bottom,
+            },
+        },
+        WindowButtonBox {
+            drawn: detach,
+            hit: RECT {
+                left: detach.left,
+                top: 0,
+                right: detach.right,
                 bottom,
             },
         },
@@ -1062,7 +1089,7 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
             }
         }
 
-        // The two window buttons in the top corner, painted last of all and painted as
+        // The window buttons in the top corner, painted last of all and painted as
         // nothing but their marks: no wash under them and no box around them in any
         // state, the ink being the only thing that changes. At rest it is the card's
         // own foreground, which is the ink the row's glyphs are painted in, and while
@@ -1074,6 +1101,11 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         // brighter one: the accent is what a button with no state of its own wears there, and a pin
         // kept on top that took it would say nothing but that the hand is near.
         //
+        // The detach beside it is the second of the two, and says the same way what became of the
+        // window it stands on: a pin is a window this process is showing the file in, and a detached
+        // window is one of its own — so the button that made it one wears the ink of a state it is in
+        // rather than the ink of a choice it still offers (see `CardChrome::detached`).
+        //
         // They are the one thing on the card that comes and goes: a button twice the
         // margin's own side stands in the name's own rows, so a hand near the buttons
         // themselves — in their own band and across their own columns — is what asks for
@@ -1084,14 +1116,23 @@ pub(super) fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scal
         if chrome.window_buttons {
             for (control, button) in [
                 (CardControl::AlwaysOnTop, &boxes.always_on_top),
+                (CardControl::Detach, &boxes.detach),
                 (CardControl::Minimize, &boxes.minimize),
                 (CardControl::Close, &boxes.close),
             ] {
                 fill_rect(surface, button.drawn, page_color);
 
                 let lit = chrome.hovered == Some(control) || chrome.pressed == Some(control);
-                let on_top = control == CardControl::AlwaysOnTop && chrome.always_on_top;
-                let color = match (on_top, lit) {
+                // The two window buttons that carry a state of the window's own — that it is kept on
+                // top, that it is a window of its own — are drawn in the numbers' ink, and light a
+                // step further toward white under the hand. The other two are the card's own ink, lit
+                // to the accent, which is what a button with no state to show wears.
+                let wearing_state = match control {
+                    CardControl::AlwaysOnTop => chrome.always_on_top,
+                    CardControl::Detach => chrome.detached,
+                    _ => false,
+                };
+                let color = match (wearing_state, lit) {
                     (false, false) => foreground,
                     (false, true) => accent,
                     (true, false) => number,
@@ -1119,8 +1160,8 @@ fn card_pixels(surface: &DibSurface) -> &mut [u8] {
 }
 
 /// One of the window buttons, drawn as the one mark that says what it
-/// is: a pin for the always-on-top, a dash for the minimize and two crossing
-/// strokes for the close.
+/// is: a pin for the always-on-top, two windows for the detach, a dash for the minimize
+/// and two crossing strokes for the close.
 ///
 /// The marks are drawn by hand rather than with the caption's glyph machinery, because that
 /// machinery's smallest mark has a floor of six pixels and a button this small is barely
@@ -1215,6 +1256,79 @@ fn paint_window_button(
                     1.0,
                 );
             }
+        }
+        CardControl::Detach => {
+            // Two windows, one stepped out behind the other, as the caption's own detach button is
+            // drawn (see `draw_detached_window`): the front window's whole outline and the back
+            // one's top and right edges. Runs of whole rows and columns rather than strokes for the
+            // reason the dash and the cross are — a box this small has no room for an edge that is
+            // a ramp on either side of itself — and the mark stands inside the box's own inset,
+            // where the marks beside it stand.
+            let thick = stroke.round().max(1.0) as i32;
+            let quarter = inset as i32;
+            let left = rect.left + quarter;
+            let top = rect.top + quarter;
+            let right = rect.right - quarter;
+            let bottom = rect.bottom - quarter;
+            // How far the window behind is stepped out from the one in front: a quarter of the
+            // mark, and never so far that the window in front has no room left to be one.
+            let step = ((right - left) / 4).max(1).min((right - left) / 2);
+
+            // The window in front: the whole outline, stepped down and left of the one behind it.
+            let (front_left, front_top) = (left, top + step);
+            let (front_right, front_bottom) = (right - step, bottom);
+            for edge in [
+                RECT {
+                    left: front_left,
+                    top: front_top,
+                    right: front_right,
+                    bottom: front_top + thick,
+                },
+                RECT {
+                    left: front_left,
+                    top: front_bottom - thick,
+                    right: front_right,
+                    bottom: front_bottom,
+                },
+                RECT {
+                    left: front_left,
+                    top: front_top,
+                    right: front_left + thick,
+                    bottom: front_bottom,
+                },
+                RECT {
+                    left: front_right - thick,
+                    top: front_top,
+                    right: front_right,
+                    bottom: front_bottom,
+                },
+            ] {
+                fill_rect(surface, edge, ink);
+            }
+
+            // The window behind: its top edge across the whole mark, and its right edge down to
+            // where the window in front takes the corner — the two edges the front one does not
+            // cover, a whole second outline being one thicker square rather than two windows.
+            fill_rect(
+                surface,
+                RECT {
+                    left: left + step,
+                    top,
+                    right,
+                    bottom: (top + thick).min(bottom),
+                },
+                ink,
+            );
+            fill_rect(
+                surface,
+                RECT {
+                    left: (right - thick).max(left),
+                    top: top + thick,
+                    right,
+                    bottom: bottom - step,
+                },
+                ink,
+            );
         }
         CardControl::Minimize => {
             stroke_segment(
