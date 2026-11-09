@@ -2609,10 +2609,10 @@ pub fn run_preview_window() {
             // tick: what the loop answers by showing the pin that file instead of the one it has
             // (see `PinUpdate`).
             let mut pin_pick: Option<PathBuf> = None;
-            // And a file dragged onto the pin, if one landed since the last tick (see the take below
-            // and `pin_drop`), carried down to the gate a pick is answered at: a drop is a file the
-            // user handed the window itself, which is what the row gating the picks behind it is
-            // about another hand choosing (see `take_pin_pick`).
+            // Whether this tick's pick was dragged onto the window rather than made behind it, carried
+            // down to the gate a pick is answered at: a drop is a file the user handed the window
+            // itself, and the row that gates those is about another hand choosing (see `take_pin_pick`
+            // and `pin_drop`).
             let mut pin_pick_dropped = false;
             // And a file dragged onto the pin, if one landed since the last tick, which is the same
             // pick read from a different road: the window procedure reads the drop and leaves it
@@ -2631,23 +2631,6 @@ pub fn run_preview_window() {
             // with `Pin Mode → Update Preview → Move To Top` on, and the pin is owed the same thing
             // there: the file is not held for the key, because the hand that dropped it is asking to
             // look at it now (see `pin_bubble_pick` and `bring_a_put_away_pin_back`).
-            if let Some(drop) = pin_drop::take_dropped_on() {
-                pin_walk = None;
-                pin_swap_requested = drop.put_away.then(|| drop.path.clone());
-                pin_pick_dropped = true;
-                pin_pick = Some(drop.path);
-            } // And a file dragged onto the pin, if one landed since the last tick, which is the same
-              // pick read from a different road: the window procedure reads the drop and leaves it
-              // here, and what a pick is — planned, loaded, installed — is this loop's (see
-              // `pin_drop`). It is taken before the collapse gate below rather than after, so that
-              // nothing of a dropped file is left standing across a tick.
-              //
-              // **A drop takes the pin's walk away with it.** The walk a caption's next steps is
-              // anchored on the file on screen and the folder it is in, so a pin left walking the
-              // folder it came from would step back into the listing the drop was carried out of —
-              // which is exactly the wrong folder. Dropped here rather than carried, the next press
-              // re-anchors on the dropped file and walks its own folder (see `pin_walk::ask_pin_walk`
-              // and `pin_navigation::list_for`).
             let dropped = pin_drop::take_dropped_on();
             if let Some(drop) = dropped {
                 pin_walk = None;
