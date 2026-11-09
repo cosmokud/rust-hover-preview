@@ -102,8 +102,8 @@ use windows::Win32::UI::Accessibility::{
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForSystem, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetDoubleClickTime, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_LBUTTON, VK_LEFT,
-    VK_MBUTTON, VK_NEXT, VK_PRIOR, VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP, VK_XBUTTON1,
-    VK_XBUTTON2,
+    VK_MBUTTON, VK_NEXT, VK_PRIOR, VK_RBUTTON, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
+    VK_XBUTTON1, VK_XBUTTON2,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::PROPERTYKEY;
 use windows::Win32::UI::Shell::{
@@ -133,6 +133,17 @@ pub(crate) use window_state::{
     a_press_puts_us_behind, a_window_of_ours_stands, is_foreground_explorer,
     our_window_stands_over_everything, press_is_inside_ours, the_pick_road_answers,
 };
+
+/// Whether one of the two Win keys is held, and whether either Shift is: the two modifiers a Win chord
+/// is made of, read through the key reader above rather than by a second `GetAsyncKeyState` of its own
+/// (see `key_input::pin_win_chord`).
+pub(crate) fn a_win_key_is_down() -> bool {
+    is_key_down(VK_LWIN_CODE) || is_key_down(VK_RWIN_CODE)
+}
+
+pub(crate) fn the_shift_key_is_down() -> bool {
+    is_key_down(VK_SHIFT.0 as i32)
+}
 
 // The parts, in one namespace (see the note above). The macro is named rather than globbed:
 // it is written from two parts and lives with the counter it is written beside.

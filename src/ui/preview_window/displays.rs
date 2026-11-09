@@ -41,9 +41,10 @@
 
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
-use windows::Win32::Foundation::{POINT, RECT};
+use windows::Win32::Foundation::{BOOL, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, HDC, HMONITOR, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -51,6 +52,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
 };
 
+use super::PinSide;
 use super::ScreenBounds;
 
 /// The scale Windows draws at where nothing has told us otherwise.
@@ -101,6 +103,15 @@ pub(super) trait Displays {
     /// at once, and a preview sized to that straddles the seam between two of them, which is
     /// the thing anchoring a layout to a display is for.
     fn primary(&self) -> ScreenBounds;
+
+    /// Every display this desk has, each one's room.
+    ///
+    /// The third question, and about the desk rather than about a point on it: a window carried from one
+    /// display to the next is chosen out of what there is, which neither `nearest` (where a point is) nor
+    /// `primary` (the one display a point missing one falls back on) can answer (see `the_display_beside`).
+    /// A machine that can name no display at all answers nothing here, and a move at such a desk is nothing
+    /// rather than a guess.
+    fn every(&self) -> Vec<ScreenBounds>;
 }
 
 /// The display a point belongs to, and what may be done where it cannot be named.
@@ -134,6 +145,30 @@ pub(super) fn work_area_at(x: i32, y: i32) -> ScreenBounds {
 /// rather than the monitor's own (see `pin_film_thumbnail::the_source_launch_origin`).
 pub(super) fn the_primary_work_area() -> ScreenBounds {
     work_area_at(0, 0)
+}
+
+/// The display beside `from` on `side`, or nothing where the desk has none there.
+///
+/// Chosen by work-area middle rather than by an edge two displays share, because two displays need not touch:
+/// what "the display on the left" means is one whose middle stands left of this display's middle, and the
+/// nearest of those by that distance. A desk is never wrapped around, so the leftmost display's left is
+/// nothing at all — the window stays where it is rather than appearing at the far end of the desk.
+pub(super) fn the_display_beside(
+    displays: &dyn Displays,
+    from: ScreenBounds,
+    side: PinSide,
+) -> Option<ScreenBounds> {
+    let middle = |bounds: ScreenBounds| (bounds.left + bounds.right) / 2;
+    let here = middle(from);
+
+    displays
+        .every()
+        .into_iter()
+        .filter(|room| match side {
+            PinSide::Left => middle(*room) < here,
+            PinSide::Right => middle(*room) > here,
+        })
+        .min_by_key(|room| (middle(*room) - here).abs())
 }
 
 /// The scale of the display a point is on, for the callers that size rather than place.
@@ -287,6 +322,47 @@ impl Displays for Desktop {
     fn primary(&self) -> ScreenBounds {
         self.primary_work_area()
     }
+
+    /// Every display on this machine, as `EnumDisplayMonitors` walks them.
+    ///
+    /// Each monitor's *work* area rather than its own rectangle, because that is the room a window is being
+    /// carried into: a window placed against a monitor's own edge is a window under the taskbar.
+    fn every(&self) -> Vec<ScreenBounds> {
+        /// One monitor's room, added to the list the caller's `LPARAM` points at. A monitor whose room
+        /// cannot be read is left out rather than guessed at, and the walk carries on to the next one.
+        unsafe extern "system" fn collect(
+            monitor: HMONITOR,
+            _dc: HDC,
+            _rect: *mut RECT,
+            data: LPARAM,
+        ) -> BOOL {
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if GetMonitorInfoW(monitor, &mut info).as_bool() {
+                let room = info.rcWork;
+                (*(data.0 as *mut Vec<ScreenBounds>)).push(ScreenBounds {
+                    left: room.left,
+                    top: room.top,
+                    right: room.right,
+                    bottom: room.bottom,
+                });
+            }
+
+            BOOL(1)
+        }
+
+        let mut rooms: Vec<ScreenBounds> = Vec::new();
+        unsafe {
+            let data = LPARAM(&mut rooms as *mut Vec<ScreenBounds> as isize);
+            // A walk that stops early still leaves what it walked, which is a desk with fewer displays on
+            // it rather than none: the caller's move is refused only where nothing at all came back.
+            let _ = EnumDisplayMonitors(None, None, Some(collect), data);
+        }
+
+        rooms
+    }
 }
 
 /// The last display asked about and the scale it answered with — one display's worth, for the
@@ -320,6 +396,8 @@ pub(super) struct RecordedDisplays {
     /// The scale that display answers with, and the primary's room.
     named_dpi: u32,
     primary: ScreenBounds,
+    /// The desk itself, which is what a move from one display to the next is chosen out of.
+    every: Vec<ScreenBounds>,
     asks: Mutex<Vec<DisplayAsk>>,
 }
 
@@ -337,10 +415,24 @@ pub(super) enum DisplayAsk {
 impl RecordedDisplays {
     /// A machine with one display at `(left, top)`, drawn at `dpi`.
     pub(super) fn one_display(bounds: ScreenBounds, dpi: u32) -> Self {
+        Self::desk_of(&[bounds], dpi)
+    }
+
+    /// A machine with several displays, drawn at one scale, whose point lookups are answered by the first
+    /// of them: what a window carried from one display to the next needs, and only that.
+    pub(super) fn desk_of(rooms: &[ScreenBounds], dpi: u32) -> Self {
+        let first = rooms.first().copied().unwrap_or(ScreenBounds {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        });
+
         Self {
-            named: Some(bounds),
+            named: rooms.first().copied(),
             named_dpi: dpi,
-            primary: bounds,
+            primary: first,
+            every: rooms.to_vec(),
             asks: Mutex::new(Vec::new()),
         }
     }
@@ -352,6 +444,7 @@ impl RecordedDisplays {
             named: None,
             named_dpi: BASELINE_DPI,
             primary,
+            every: Vec::new(),
             asks: Mutex::new(Vec::new()),
         }
     }
@@ -393,8 +486,19 @@ impl RecordedDisplays {
 impl Displays for RecordedDisplays {
     fn nearest(&self, x: i32, y: i32) -> Option<Display> {
         self.record(DisplayAsk::Nearest((x, y)));
-        self.named.map(|work_area| Display {
-            work_area,
+        // The display the point is *on*, which on a desk of several is the one it lies in: a recorder that
+        // answered one display for every point on a desk of three would make a window carried from one to
+        // the next impossible to say anything about. A point on none of them is answered by the first, which
+        // is what `named` is for.
+        let room = self
+            .every
+            .iter()
+            .copied()
+            .find(|room| x >= room.left && x < room.right && y >= room.top && y < room.bottom)
+            .or(self.named)?;
+
+        Some(Display {
+            work_area: room,
             dpi: self.named_dpi,
         })
     }
@@ -402,6 +506,10 @@ impl Displays for RecordedDisplays {
     fn primary(&self) -> ScreenBounds {
         self.record(DisplayAsk::Primary);
         self.primary
+    }
+
+    fn every(&self) -> Vec<ScreenBounds> {
+        self.every.clone()
     }
 }
 
@@ -570,6 +678,44 @@ mod tests {
                     bottom: 800,
                 },
             "a point no display can be named for is placed on one display rather than on the union"
+        );
+    }
+
+    /// The display a window is carried to is the one beside the one it stands on: nearest by work-area
+    /// middle on the side asked for, nothing at all at the desk's own edge.
+    ///
+    /// A desk is never wrapped around, and that is the whole of why the edge is a refusal: a `Win`+`Shift`+`Left`
+    /// on the leftmost display would otherwise carry the window to the far end of the desk, which is the one
+    /// thing a direction asked for can never mean.
+    #[test]
+    fn the_display_beside_is_the_nearest_one_on_that_side_and_nothing_at_the_edge() {
+        let third = ScreenBounds {
+            left: 2000,
+            top: 0,
+            right: 3000,
+            bottom: 800,
+        };
+        let desk = RecordedDisplays::desk_of(&[the_desk(), the_second_display(), third], 96);
+
+        assert_eq!(
+            the_display_beside(&desk, the_desk(), PinSide::Right),
+            Some(the_second_display()),
+            "the display beside this one is the nearest of those on that side, not the furthest"
+        );
+        assert_eq!(
+            the_display_beside(&desk, third, PinSide::Left),
+            Some(the_second_display()),
+            "and the same the other way"
+        );
+        assert_eq!(
+            the_display_beside(&desk, the_desk(), PinSide::Left),
+            None,
+            "the leftmost display has nothing to its left: the desk is not wrapped around"
+        );
+        assert_eq!(
+            the_display_beside(&desk, third, PinSide::Right),
+            None,
+            "nor does the rightmost have anything to its right"
         );
     }
 }
