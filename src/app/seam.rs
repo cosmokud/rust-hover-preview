@@ -107,6 +107,13 @@ pub(crate) struct ViewerFacts {
     /// the loop acts on it (see `ask_pin`). One count per command of `PIN_KEY_COMMANDS`, in the order
     /// that table lists them.
     pin_key_presses: [AtomicU32; PIN_COMMAND_COUNT],
+    /// Win chords the hook took for this block's pin, one count per chord, in the order
+    /// `PIN_WIN_CHORDS` lists them (see `take_pin_win_chords`).
+    ///
+    /// Apart from the table above because a Win chord is not a key of the pin's: it is the Shell's own
+    /// arrangement of a window, answered by this app only because the box is the pin's (see
+    /// `key_input::pin_win_chord`).
+    pin_win_chords: [AtomicU32; PIN_WIN_CHORD_COUNT],
     pin_find_bar_up: AtomicBool,
     pin_up: AtomicBool,
     pin_end_requested: AtomicBool,
@@ -197,6 +204,7 @@ impl ViewerFacts {
             pin_keys_video: AtomicU64::new(0),
             pin_keys_topmost: AtomicBool::new(false),
             pin_key_presses: [const { AtomicU32::new(0) }; PIN_COMMAND_COUNT],
+            pin_win_chords: [const { AtomicU32::new(0) }; PIN_WIN_CHORD_COUNT],
             pin_find_bar_up: AtomicBool::new(false),
             pin_up: AtomicBool::new(false),
             pin_end_requested: AtomicBool::new(false),
@@ -1606,6 +1614,38 @@ pub(crate) fn publish_pin_always_on_top(always_on_top: bool) {
 static PIN_KEY_PRESSES: Fact<[AtomicU32; PIN_COMMAND_COUNT]> =
     Fact::of(|facts| &facts.pin_key_presses);
 
+/// The Win chords a standing pin answers, in the order the numbers the hook counts them under name them:
+/// the pin's own minimize, and its window carried to the display on that side (see
+/// `key_input::pin_win_chord` and `preview_window::hook_pin_win_chord`).
+static PIN_WIN_CHORDS: Fact<[AtomicU32; PIN_WIN_CHORD_COUNT]> =
+    Fact::of(|facts| &facts.pin_win_chords);
+
+/// Take this pin's Win chords, one number per chord and per press since the last call, in order.
+///
+/// The mirror of `take_pin_key_presses` for the chords that are the Shell's rather than the pin's, drained
+/// on the same tick: a chord travels the path a press of the pin's own caption button does, and the loop
+/// acts on it (see `ask_pin`).
+pub(crate) fn take_pin_win_chords() -> Vec<u8> {
+    PIN_WIN_CHORDS
+        .iter()
+        .enumerate()
+        .flat_map(|(chord, count)| {
+            std::iter::repeat_n(chord as u8, count.swap(0, Ordering::AcqRel) as usize)
+        })
+        .collect()
+}
+
+/// Count one Win chord the hook took for `block`'s pin, which the loop drains (see `take_pin_win_chords`).
+///
+/// Counted in the block whose window held the caret and in no other, for the reason a key command is (see
+/// `note_a_pin_key_command`): the chord is about the pin of that window, and a viewer whose pin never held
+/// the caret has nothing to carry.
+pub(crate) fn note_a_pin_win_chord(block: &'static ViewerFacts, chord: u8) {
+    if let Some(count) = PIN_WIN_CHORDS.in_block(block).get(chord as usize) {
+        count.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
 /// Take the pin's own key commands, one count per command and per press since the last call.
 pub(crate) fn take_pin_key_presses() -> Vec<u8> {
     PIN_KEY_PRESSES
@@ -3000,6 +3040,11 @@ pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 13] = [
 /// a command this count has to be told about, rather than one whose presses are counted into a counter
 /// that was never reserved for it.
 pub(crate) const PIN_COMMAND_COUNT: usize = 13;
+
+/// How many Win chords the pin answers, which is how many counters are kept for them: the pin's own
+/// minimize, and its window carried to the display on either side, in that order (see
+/// `take_pin_win_chords` and `key_input::pin_win_chord`).
+pub(crate) const PIN_WIN_CHORD_COUNT: usize = 3;
 
 /// Which command of `PIN_KEY_COMMANDS` a virtual key is listed under, or `None` for a key this app does
 /// not answer.

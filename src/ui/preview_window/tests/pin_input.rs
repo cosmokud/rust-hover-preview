@@ -139,12 +139,66 @@ fn the_hook_and_the_pin_window_answer_the_same_keys_the_same_way() {
                  in merely because the caret is in FFmpeg's window instead"
         );
         assert_eq!(
-            pinned_key_message_command(message, VK_LEFT.0 as i32, 0).is_some(),
+            pinned_key_message_command(message, VK_LEFT.0 as i32, 0, false).is_some(),
             acted_on,
             "and {name} is answered by the pin's own window on the same question, or the same \
                  key is a walk for one of the two windows this app has and nothing for the other"
         );
     }
+}
+
+/// **A Win chord asks the pin nothing**, whatever the pin's own key table would have made of the key.
+///
+/// The hook swallows these wherever it stands, and the window answers one that reached it anyway with
+/// nothing at all: a `Win`+`Down` queued as the pin's own minimize would take the window away on a key the
+/// user pressed to put it away *the way Windows does it*, and a `Win`+`Up` queued as a walk of the folder is
+/// a file stepped on for a key that was an arrangement of the window (see `key_input::pin_win_chord`).
+#[test]
+fn a_win_chord_asks_the_pin_nothing_and_is_not_the_key_table() {
+    for (vk, name) in [
+        (VK_LEFT.0 as i32, "left"),
+        (VK_RIGHT.0 as i32, "right"),
+        (VK_UP.0 as i32, "up"),
+        (VK_DOWN.0 as i32, "down"),
+    ] {
+        for message in [WM_KEYDOWN, WM_SYSKEYDOWN] {
+            assert_eq!(
+                pinned_key_message_command(message, vk, 0, true),
+                None,
+                "the {name} arrow under a held Win key is the Shell's, and nothing is asked of \
+                 the pin for it"
+            );
+        }
+
+        // The same key with no Win key held is the arrangement it has always been, so the gate is the
+        // chord and not the arrow.
+        assert!(
+            pinned_key_message_command(WM_KEYDOWN, vk, 0, false).is_some(),
+            "the {name} arrow is the pin's own key whenever no Win key is held"
+        );
+    }
+
+    // Every number the seam reserved for a chord means a command here, and no other number does: a chord
+    // counted into one this mapping has no arm for is a key swallowed for nothing at all.
+    for chord in 0..crate::app::seam::PIN_WIN_CHORD_COUNT as u8 {
+        assert!(
+            hook_pin_win_chord(chord).is_some(),
+            "chord {chord} is one the loop has something to do with"
+        );
+    }
+    assert_eq!(
+        hook_pin_win_chord(crate::app::seam::PIN_WIN_CHORD_COUNT as u8),
+        None,
+        "and a number past them is nothing"
+    );
+
+    // And a key of the table that is not an arrow keeps its answer even under a Win key, because the Shell
+    // has an arrangement of its own for it: `Win`+`Space` is the keyboard layout's.
+    assert_eq!(
+        pinned_key_message_command(WM_KEYDOWN, VK_SPACE.0 as i32, 0, true),
+        Some(PinCommand::TogglePlayback),
+        "a Space under `Win` is the pin's hold, as it always was"
+    );
 }
 
 /// A window that hands the pointer back the way the machine does, by delivering the capture

@@ -159,6 +159,21 @@ pub(super) fn hook_pin_key_command(command: u8) -> Option<PinCommand> {
     }
 }
 
+/// What a Win chord the keyboard hook counted for a standing pin means, in the pin's own words.
+///
+/// The same one table `key_input::PinWinChord` counts into, read from its numbers in the order
+/// `app::seam::PIN_WIN_CHORDS` lists them — and the same rule the key table beside it keeps: the two must
+/// be kept in step, because a chord counted into a number nothing here names is a key swallowed for
+/// nothing at all.
+pub(super) fn hook_pin_win_chord(chord: u8) -> Option<PinCommand> {
+    match chord {
+        0 => Some(PinCommand::Minimize),
+        1 => Some(PinCommand::MoveToDisplay(PinSide::Left)),
+        2 => Some(PinCommand::MoveToDisplay(PinSide::Right)),
+        _ => None,
+    }
+}
+
 /// What one key-down on a pinned window leaves for the loop, if anything.
 ///
 /// It is the mapping above, and one more question: is this message Windows repeating a key that
@@ -180,12 +195,22 @@ pub(super) fn pinned_key_down_command(vk: i32, lparam: isize) -> Option<PinComma
 /// it too must not answer. The rule is therefore asked of the hook's one rather than repeated here,
 /// because a repeat is where the two copies of one arrangement drift apart (see
 /// `key_input::pin_key_message_acts`).
+///
+/// **A Win chord asks the pin nothing at all**, and that is the hook's rule as well: the pin has its own
+/// arrangement for one — its minimize, and a window carried to the display beside this one — and the rest
+/// are the Shell's, not something to walk a folder with (see `key_input::pin_win_chord`). The hook takes
+/// them wherever it stands, and this is where one that reached the window anyway is answered: with nothing.
 pub(super) fn pinned_key_message_command(
     message: u32,
     vk: i32,
     lparam: isize,
+    win_down: bool,
 ) -> Option<PinCommand> {
     if !crate::app::seam::pin_key_message_acts(message) {
+        return None;
+    }
+
+    if crate::shell::key_input::a_win_chord_takes(vk, win_down) {
         return None;
     }
 
@@ -364,7 +389,12 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
-            if let Some(command) = pinned_key_message_command(msg, wparam.0 as i32, lparam.0) {
+            if let Some(command) = pinned_key_message_command(
+                msg,
+                wparam.0 as i32,
+                lparam.0,
+                crate::shell::explorer_hook::a_win_key_is_down(),
+            ) {
                 ask_pin(command);
             }
 
