@@ -410,7 +410,9 @@ const SEAM_PIN_PATH_UNITS: usize = SEAM_TEXT_UNITS;
 const SEAM_RING_SLOTS: usize = 64;
 
 /// How many UTF-16 units of text a slot carries, which is how long a path it can name (see
-/// `SeamMessage`).
+/// `SeamMessage`, and `send_preview` for the road a longer one takes: it stays in the process that made
+/// it, where that process reads a channel of its own, and is a message the viewer never hears where it
+/// does not — the tray, which is why the bound is named on the trace rather than left to be guessed).
 const SEAM_TEXT_UNITS: usize = 512;
 
 /// How many numbers a slot carries, which is as many as the widest variant writes.
@@ -1235,21 +1237,32 @@ pub(crate) fn send_preview(message: PreviewMessage) {
             crate::app::viewer::make_sure_a_viewer_is_standing();
         }
 
-        // A message the ring has no room for is dropped rather than waited on (see `SeamRing`), and one
-        // a slot cannot carry at all falls through to the channel below rather than being dropped on the
-        // floor: see the note there.
+        // A message the ring has no room for is one not carried (see `SeamRing`), and one a slot cannot
+        // carry at all was never offered to it. Neither is waited on, and neither is dropped on the floor:
+        // both fall to this process's own channel below, where a loop here reads one.
         if let Some(slot) = SeamMessage::of_preview(&message) {
-            the_run_facts().preview_ring.push(slot, "preview");
+            let carried = the_run_facts().preview_ring.push(slot, "preview");
 
             // One line per hover and notice put in the ring, on the trace a run asks for: a run whose
             // previews are missing is told here whether the tray ever sent one (see
             // `next_preview_message`). Hovers are a pointer's pace and not a tick's, which is what a line
             // here costs.
-            if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+            if carried && std::env::var_os("RHP_SEAM_TRACE").is_some() {
                 eprintln!("seam: the ring took a message from the tray");
             }
 
-            // Safety: an event of this run's own, signalled: nothing here is dereferenced.
+            // **A full ring is not a message to wait on**, because this is called from the Explorer
+            // hook's callback and a wait there is Explorer not answering (see `SeamRing`). What a sender
+            // can do instead is say it to a loop of its own, where it has one: a viewer's own answer
+            // keeps its place in the drain after what the ring already holds, and a tray's, which has no
+            // loop, is lost with the trace `push` has already written.
+            if !carried {
+                send_preview_here(message);
+            }
+
+            // Safety: an event of this run's own, signalled: nothing here is dereferenced. Signalled
+            // either way: a reader woken by a ring with no room in it drains what it has, which is what
+            // makes room for the next.
             unsafe {
                 let _ = SetEvent(preview_channel_event());
             }
@@ -1265,24 +1278,38 @@ pub(crate) fn send_preview(message: PreviewMessage) {
         // `PIN_JOB_GIVEUP` and the pin would never be shown the file it stepped onto.
     }
 
-    send_preview_here(message);
+    // A message this process reads is a message kept; one nothing here reads is a loss, and the one road
+    // that can lead here is a name longer than a slot carries sent by a process with no loop of its own —
+    // the tray's, where the hover or the pick it names is a preview the viewer never hears (see
+    // `with_text` and `SeamMessage::of_preview`).
+    if !send_preview_here(message) {
+        note_a_name_a_slot_could_not_carry();
+    }
 }
 
 /// Send a message to this process's own preview loop, on the channel its threads share, and wake it.
 ///
 /// It is the whole of what a run that draws its own previews ever does with a message, and the one road
-/// a message no ring slot can carry has (see `send_preview` and `next_preview_message`).
-fn send_preview_here(message: PreviewMessage) {
-    if let Ok(sender) = PREVIEW_SENDER.lock() {
-        if let Some(tx) = sender.as_ref() {
-            let _ = tx.send(message);
-            // Signalled after the send rather than before, so an armed wait can only be woken
-            // by a message that is already in the channel to be read.
-            unsafe {
-                let _ = SetEvent(preview_channel_event());
-            }
-        }
+/// a message no ring slot can carry has (see `send_preview` and `next_preview_message`). The answer is
+/// whether a loop of this process will read it, which is whether this process has one.
+fn send_preview_here(message: PreviewMessage) -> bool {
+    let Ok(sender) = PREVIEW_SENDER.lock() else {
+        return false;
+    };
+    let Some(tx) = sender.as_ref() else {
+        return false;
+    };
+
+    if tx.send(message).is_err() {
+        return false;
     }
+
+    // Signalled after the send rather than before, so an armed wait can only be woken by a message
+    // that is already in the channel to be read.
+    unsafe {
+        let _ = SetEvent(preview_channel_event());
+    }
+    true
 }
 
 pub(crate) static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
@@ -2284,6 +2311,21 @@ fn note_a_lost_message(direction: &str) {
     }
 
     eprintln!("seam: the {direction} ring is full, message dropped");
+}
+
+/// Say that a name longer than a slot carries had no channel of this process to fall back to, on the trace
+/// a run asks for when what is under the seam is being measured.
+///
+/// A slot carries `SEAM_TEXT_UNITS` units and a longer name is a message `SeamMessage::of_preview` refuses
+/// (see `with_text`), which is the one way a message reaches the fall-through in `send_preview` without a
+/// slot: a hover of a path past that bound is a preview the viewer never hears, and the process that can
+/// only lose it this way is the tray, which has no loop of its own to hand it to.
+fn note_a_name_a_slot_could_not_carry() {
+    if std::env::var_os("RHP_SEAM_TRACE").is_none() {
+        return;
+    }
+
+    eprintln!("seam: a name longer than a slot carries, and this process reads no channel: message dropped");
 }
 
 /// The channel the two, and the one event its sends are announced on.
