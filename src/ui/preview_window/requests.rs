@@ -151,8 +151,14 @@ pub fn update_pinned_preview(path: &Path) {
 /// gate is left out on purpose: that setting is about a pin following the *listing's* picks — a
 /// window that moves under a hand that is working elsewhere — and a file the user has picked out of
 /// the pin's own list is one they asked this window for.
+///
+/// **Both doors ask the run's pin rather than this process's** (see `a_pin_is_up_anywhere`), and the
+/// difference is not a detail: the Explorer hook is the tray's and the pin is a viewer's, so read off
+/// `pinned()` alone every pick the listing made was answered with nothing here and never reached the
+/// ring at all — a pin that follows nothing. The window's own playlist door is answered the same way,
+/// because a pin that has become a window of its own is one `pinned()` still sees (see `app::detach`).
 pub(super) fn show_pinned_file(path: &Path) {
-    if !pinned() {
+    if !a_pin_is_up_anywhere() {
         return;
     }
 
