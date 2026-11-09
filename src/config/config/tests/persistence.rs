@@ -166,6 +166,7 @@ fn a_file_the_app_wrote_is_one_it_reads_back_as_itself() {
         document_cache_mb: 1024,
         tick_ms: 47,
         trigger_key_affect_pin_mode: true,
+        silent_auto_update: true,
         trigger_key: "ctrl+alt+f8".to_string(),
         pin_key: "ctrl+space,mouse3".to_string(),
         toggle_key: "ctrl+f9".to_string(),

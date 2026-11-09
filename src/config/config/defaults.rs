@@ -156,6 +156,15 @@ pub const DEFAULT_RENDER_HTML: bool = false;
 /// a newer release is offered. Off, nothing is asked at any moment — neither at startup
 /// nor when the menu is opened — and the row never appears (see `request_check`).
 pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
+/// Whether an update the app finds as it starts is put on without asking.
+///
+/// It is off where the app starts: a check asks GitHub one question, and putting on what the
+/// answer names is a larger thing to do unasked than leaving the check on agreed to. On, the
+/// one check a run makes as it starts installs what it finds — the same fetch and the same
+/// silent installer the `Auto` answer runs — and nothing happens at any other moment, because
+/// a menu opened mid-session can have windows on screen this app would have to close (see
+/// `silent_auto_update`).
+pub const DEFAULT_SILENT_AUTO_UPDATE: bool = false;
 /// The key that turns previews on or off while File Explorer is in front. F7 by default,
 /// so the switch has a shortcut without taking a key another program may be using.
 pub const DEFAULT_TOGGLE_KEY: &str = "f7";
