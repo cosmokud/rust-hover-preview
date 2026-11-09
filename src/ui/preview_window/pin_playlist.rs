@@ -1,6 +1,7 @@
 //! The playlist a pinned sound's card grows under it: the rows of the pin's own walk, the press
 //! that picks one, the drag that sets the band's height, the notch the wheel steps it by, and the
-//! name the hand sets moving.
+//! names the band keeps travelling — the row the hand is on, the one it has picked and the one the
+//! pin is showing, each of which parks back at its resting place when the band lets it go.
 //!
 //! The band is a session thing rather than a pin's: it is opened from the card's own menu, it is
 //! remembered as it was left — up or down, and how tall — so the next pin comes up with it, and
@@ -50,23 +51,19 @@ static PROBED: AtomicU64 = AtomicU64::new(0);
 static PROBE_RUN: AtomicU64 = AtomicU64::new(0);
 
 /// The band's own state: the rows it holds, where it has scrolled to, which row the hand is on and
-/// which it has picked, and the name a row is marooned with.
+/// which it has picked, and the names the band is travelling.
 static THE_PLAYLIST: Lazy<Mutex<PinPlaylist>> = Lazy::new(|| Mutex::new(PinPlaylist::default()));
 
-/// A name too long for its row, scrolled across it for as long as the hand is on the row: how far
-/// it has moved, which way it is going and when the hold at either end runs out — the card's own
-/// marquee, in a row rather than in a header (see `audio_preview::NameScroll`).
+/// A name too long for its row, scrolled across it for as long as the band is travelling that row:
+/// how far it has moved, which way it is going and when the hold at either end runs out — the card's
+/// own marquee, in a row rather than in a header (see `audio_preview::NameScroll`).
 #[derive(Debug, Clone, Copy)]
 struct Marquee {
+    /// The row whose name this is.
     row: usize,
-    offset: i32,
-    /// Pixels it may move before the end of the name is in sight.
-    travel: i32,
-    /// Pixels one advance of the font is: the unit the speed is counted in, so a band at any scale
-    /// scrolls the same characters a second.
-    advance: i32,
-    direction: i32,
-    hold_until: Instant,
+    /// The travel itself, held as the card holds its own: a name the band has let go of winds back to
+    /// its resting place rather than stopping where it stands (see `audio_preview::NameScroll`).
+    scroll: audio_preview::NameScroll,
     /// When this marquee was last advanced, which is the cadence the next step is counted in.
     last: Instant,
 }
@@ -118,7 +115,11 @@ struct PinPlaylist {
     /// The scrollbar's thumb being carried, as the share of it the press took hold of: the bar's own
     /// drag rather than the band's, and the one thing a press on the track begins.
     thumb: Option<i32>,
-    marquee: Option<Marquee>,
+    /// The names the band is travelling, one per row that is one of them — the row the hand is on,
+    /// the row it has picked and the row the pin is showing — because two of those can be in sight at
+    /// once. A name the band has let go of is kept here until it has wound home (see
+    /// `set_the_marquee`).
+    marquees: Vec<Marquee>,
 }
 
 impl PinPlaylist {
@@ -126,8 +127,10 @@ impl PinPlaylist {
     /// not the one in hand or a reading has landed since, since every row of it is a file read.
     ///
     /// Answers whether the order itself moved, which is the one thing that starts the prober: a
-    /// walk step moves the pin's own file and leaves the list exactly as it was.
-    fn hold_the_walk(&mut self, order: Vec<PathBuf>, path: PathBuf, probed: u64) -> bool {
+    /// walk step moves the pin's own file and leaves the list exactly as it was. And whether the row
+    /// the pin is showing moved, which is a name the band travels for and one it lets go of (see
+    /// `set_the_marquee`).
+    fn hold_the_walk(&mut self, order: Vec<PathBuf>, path: PathBuf, probed: u64) -> (bool, bool) {
         let moved = self.order != order;
         if moved {
             self.order = order;
@@ -136,7 +139,7 @@ impl PinPlaylist {
             self.hovered = None;
             self.picked = None;
             self.pressed = false;
-            self.marquee = None;
+            self.marquees.clear();
         }
 
         // A row of a file nothing has read yet is a row of the extension and the room the file takes
@@ -150,42 +153,63 @@ impl PinPlaylist {
             self.probed = probed;
         }
 
-        self.showing = self.order.iter().position(|row| *row == path);
+        let showing = self.order.iter().position(|row| *row == path);
+        let showing_moved = showing != self.showing;
+        self.showing = showing;
         self.path = Some(path);
-        moved
+        (moved, showing_moved)
     }
 
-    /// The marquee the row the hand is on needs, set up when the row becomes that row rather than
-    /// on every frame the name moves: what it costs is a measure of the name at the scale it is
-    /// drawn at.
+    /// The names the band's rows travel, set up when a row becomes one the band travels rather than
+    /// on every frame a name moves: what it costs is a measure of the name at the scale it is drawn
+    /// at.
+    ///
+    /// **Three rows a name travels for** — the one the hand is on, the one it has picked and the one
+    /// the pin is showing — so that a name too long for its column is readable without the pointer
+    /// being held over it. A row that stops being any of the three is *let go of* rather than dropped
+    /// where it stands: its name winds back to its resting place first, which is the card's own rule
+    /// for the line beside its name (see `audio_preview::NameScroll::set_engaged`, and
+    /// `advance_the_marquees`).
     fn set_the_marquee(&mut self, layout: &pin_chrome::PlaylistLayout, scale: f32) {
-        let row = self.hovered.or(self.picked);
-        if self.marquee.map(|marquee| marquee.row) == row {
-            return;
-        }
-
+        let travelling = [self.hovered, self.picked, self.showing];
         let room = layout.name_right - layout.text_left;
         let now = Instant::now();
-        self.marquee = row
-            .filter(|row| self.rows.get(*row).is_some())
-            .and_then(|row| {
-                let (travel, advance) = pin_chrome::name_travel(&self.rows[row].name, room, scale)?;
 
-                Some(Marquee {
-                    row,
-                    offset: 0,
-                    travel,
-                    advance,
-                    direction: 1,
-                    hold_until: now + audio_preview::NAME_HOLD,
-                    last: now,
-                })
+        for marquee in &mut self.marquees {
+            marquee
+                .scroll
+                .set_engaged(travelling.contains(&Some(marquee.row)));
+        }
+
+        for row in travelling.into_iter().flatten() {
+            if self.marquees.iter().any(|marquee| marquee.row == row) {
+                continue;
+            }
+            let Some((travel, advance)) = self
+                .rows
+                .get(row)
+                .and_then(|row| pin_chrome::name_travel(&row.name, room, scale))
+            else {
+                continue;
+            };
+
+            self.marquees.push(Marquee {
+                row,
+                // The run's own width is its travel plus the room it is drawn in, which is the one
+                // subtraction `fitted` works a travel out of (see `audio_preview::NameScroll`).
+                scroll: audio_preview::NameScroll::fitted(travel + room, room, advance),
+                last: now,
             });
+        }
     }
 
-    /// How far the marqueed name has been moved, which is nothing at all for a band with no marquee.
-    fn name_offset(&self) -> i32 {
-        self.marquee.map_or(0, |marquee| marquee.offset)
+    /// The names the band is travelling as the paint reads them: which row, and how far its name has
+    /// been carried — nothing at all for a band with no marquee.
+    fn scrolled(&self) -> Vec<(usize, i32)> {
+        self.marquees
+            .iter()
+            .map(|marquee| (marquee.row, marquee.scroll.offset()))
+            .collect()
     }
 }
 
@@ -336,7 +360,7 @@ pub(super) fn the_tick_is_owed_a_repaint() -> bool {
         owed |= step_the_notches(notches);
     }
 
-    owed | advance_the_marquee()
+    owed | advance_the_marquees()
 }
 
 /// The rows the band draws, rebuilt where the pin's walk is not the one they were built from.
@@ -375,13 +399,27 @@ pub(super) fn refresh_the_rows() -> bool {
         (order.to_vec(), pin.path.clone())
     };
 
-    let moved = match THE_PLAYLIST.lock() {
+    let (moved, showing_moved) = match THE_PLAYLIST.lock() {
         Ok(mut playlist) => playlist.hold_the_walk(order, path, probed),
         Err(_) => return false,
     };
     if moved {
         start_the_prober();
     }
+
+    // A pin that has walked to another file is a row whose name travels now, and the row it has
+    // walked off is a name let go of — set up here rather than left to the next move of a hand that
+    // may never come, since a highlighted row's name is one the band travels without one (see
+    // `set_the_marquee`).
+    if showing_moved {
+        if let Some((_, height, width, scale)) = the_band_of_the_pin() {
+            if let Ok(mut playlist) = THE_PLAYLIST.lock() {
+                let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
+                playlist.set_the_marquee(&layout, scale);
+            }
+        }
+    }
+
     true
 }
 
@@ -533,54 +571,47 @@ pub(super) fn the_band_in_hand() -> Option<(Option<usize>, Option<usize>, usize)
     Some((playlist.hovered, playlist.picked, playlist.scroll))
 }
 
-/// The row a marquee is set up for, how far its name has to travel and how far it has gone — nothing
-/// at all where the row has room for the whole of it.
+/// The rows a name is travelling across, as the row and how far its name has been carried — nothing
+/// at all for a band with no marquee.
 #[cfg(test)]
-pub(super) fn the_marquee_in_hand() -> Option<(usize, i32, i32)> {
-    let playlist = THE_PLAYLIST.lock().ok()?;
-    playlist
-        .marquee
-        .map(|marquee| (marquee.row, marquee.travel, marquee.offset))
+pub(super) fn the_marquees_in_hand() -> Vec<(usize, i32)> {
+    let Ok(playlist) = THE_PLAYLIST.lock() else {
+        return Vec::new();
+    };
+    playlist.scrolled()
 }
 
-/// Move the marqueed name on by one tick, answering whether it moved: it rests at either end for
-/// `NAME_HOLD` and ping-pongs between them, which is the card's own rule for the same name (see
-/// `audio_preview::NameScroll`).
-fn advance_the_marquee() -> bool {
+/// Move the band's travelling names on by one tick, answering whether any of them moved: each rests
+/// at either end for `NAME_HOLD` and ping-pongs between them, which is the card's own rule for the
+/// name it draws (see `audio_preview::NameScroll`).
+///
+/// A name the band has let go of is not stopped where it stands: it travels straight back to its
+/// resting place and is given up there, so a row a hand has left is a name that parks rather than one
+/// that jumps home (see `set_the_marquee`).
+fn advance_the_marquees() -> bool {
     let Ok(mut playlist) = THE_PLAYLIST.lock() else {
         return false;
     };
-    let Some(mut marquee) = playlist.marquee else {
+    if playlist.marquees.is_empty() {
         return false;
-    };
+    }
 
     let now = Instant::now();
-    let cadence = now.saturating_duration_since(marquee.last);
-    if now < marquee.hold_until || marquee.travel <= 0 {
+    let mut moved = false;
+
+    playlist.marquees.retain_mut(|marquee| {
+        let cadence = now.saturating_duration_since(marquee.last);
+        let before = marquee.scroll.offset();
+        marquee.scroll.advance(now, cadence);
         marquee.last = now;
-        playlist.marquee = Some(marquee);
-        return false;
-    }
+        moved |= marquee.scroll.offset() != before;
 
-    let step = ((marquee.advance as u128 * cadence.as_millis()) / audio_preview::NAME_ADVANCE_MS)
-        .max(1) as i32;
-    let next = marquee.offset + step * marquee.direction;
+        // A name that has come home and is one the band no longer travels is given up: what is left
+        // of it is the resting place it is drawn at anyway, and a marquee kept there would be a band
+        // repainted every tick for nothing (see `audio_preview::NameScroll::moves`).
+        marquee.scroll.moves()
+    });
 
-    if next >= marquee.travel {
-        marquee.offset = marquee.travel;
-        marquee.direction = -1;
-        marquee.hold_until = now + audio_preview::NAME_HOLD;
-    } else if next <= 0 {
-        marquee.offset = 0;
-        marquee.direction = 1;
-        marquee.hold_until = now + audio_preview::NAME_HOLD;
-    } else {
-        marquee.offset = next;
-    }
-    marquee.last = now;
-
-    let moved = playlist.marquee.map(|held| held.offset) != Some(marquee.offset);
-    playlist.marquee = Some(marquee);
     moved
 }
 
@@ -980,15 +1011,18 @@ pub(super) unsafe fn paint_the_band(
     let layout = pin_chrome::playlist_layout(width, paint.playlist, scale, playlist.rows.len());
     let first = playlist.scroll.min(playlist.rows.len());
     let last = (first + layout.visible.max(0) as usize).min(playlist.rows.len());
+    // The names travelling, as the rows and how far each has been carried: the paint is handed them
+    // beside the rows rather than told which row the hand is on, because a row the band has let go of
+    // is still on its way back to its resting place (see `set_the_marquee`).
+    let scrolled = playlist.scrolled();
     let band = pin_chrome::PlaylistBand {
         layout,
         rows: &playlist.rows[first..last],
         first,
         total: playlist.rows.len(),
         showing: playlist.showing,
-        hovered: playlist.hovered,
         picked: playlist.picked,
-        name_offset: playlist.name_offset(),
+        scrolled: &scrolled,
     };
 
     pin_chrome::paint_playlist(surface, &palette, &band, scale);

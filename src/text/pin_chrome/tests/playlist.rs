@@ -416,9 +416,8 @@ fn the_band_claims_its_whole_box_and_stripes_the_row_it_shows() {
             first: 0,
             total: 2,
             showing: Some(1),
-            hovered: None,
             picked: None,
-            name_offset: 0,
+            scrolled: &[],
         },
         SCALE,
     );
@@ -622,9 +621,8 @@ fn a_row_is_drawn_exactly_as_the_row_above_it() {
             first: 0,
             total: 2,
             showing: None,
-            hovered: None,
             picked: None,
-            name_offset: 0,
+            scrolled: &[],
         },
         SCALE,
     );
