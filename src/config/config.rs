@@ -23,11 +23,15 @@ mod app_config;
 mod defaults;
 mod engines_in_effect;
 mod ini_mapping;
+mod migrate;
 mod setting_types;
 mod settings_io;
 
 pub use app_config::AppConfig;
 pub use engines_in_effect::{latch_engines, office_engine_in_effect, video_engine_in_effect};
+#[cfg(test)]
+pub(crate) use ini_mapping::KEYS_NOTHING_READS;
+
 // Every name below is part of the path the app has always reached this module by, whether
 // a reader, an engine or a tray row uses it today or not. A `pub use` in a binary crate's
 // private module is a re-export the lint would call unused the moment nothing happens to
