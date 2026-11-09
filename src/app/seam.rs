@@ -3470,9 +3470,9 @@ mod tests {
     /// `send_preview` and `next_preview_message`).
     #[test]
     fn the_pin_planners_answer_has_a_road_a_slot_does_not() {
-        // The send below wakes this run's preview event, which is an event a second process of this binary
-        // is waiting on in the transport test: a wake it did not earn must not reach it (see
-        // `the_one_section`).
+        // It sends through the process's own channel and wakes this run's preview event, which are the two
+        // things every other test in this binary that sends a preview also touches: taking the section's
+        // turn is what keeps it from sharing a sender with one of them (see `the_one_section`).
         let _the_section_is_mine = the_one_section();
 
         let answer = PreviewMessage::PinAnswered(PinPlanned::OpenWith {
@@ -3726,6 +3726,15 @@ mod tests {
         let Some(facts) = a_section_of_this_run() else {
             panic!("a section a viewer can open");
         };
+
+        // **The run's three names are opened before the second process exists**, events included: a named
+        // event lives while a handle to it does, so a viewer that signalled one and exited before this side
+        // had ever asked for it would leave the tray creating a fresh object nothing was ever signalled on,
+        // and the wake this test is about would be waited out to the bound instead (see
+        // `preview_channel_event` and `tray_channel_event`).
+        let _ = preview_channel_event();
+        let _ = tray_channel_event();
+
         // Safety: a view of this run's own section, freshly written with the at-rest facts and told to the
         // second process by its name alone; nothing else in this process writes it.
         let facts = unsafe { &*facts };
@@ -3833,9 +3842,21 @@ mod tests {
             "the wait the tray's wake had to reach ends on that signal rather than on the bound"
         );
 
+        // **A wake is not the tray's until the ring says so.** The event is the run's, and this is a
+        // process of a test binary in which every other test that sends a preview signals the same one:
+        // a wake this process did not earn is one a viewer waits out rather than reads as an empty ring
+        // (see `wait_preview_channel`), and the wait above is what proves the signal reached — not what
+        // proves which signal it was.
         let run = the_run_facts();
+        let deadline = Instant::now() + AN_ANSWER;
+        let mut popped = run.preview_ring.pop();
+        while popped.is_none() && Instant::now() < deadline {
+            std::thread::sleep(A_LOOK);
+            popped = run.preview_ring.pop();
+        }
+
         let Some(PreviewMessage::Show(path, x, y, Some(region))) =
-            run.preview_ring.pop().and_then(|slot| slot.as_preview())
+            popped.and_then(|slot| slot.as_preview())
         else {
             panic!("the hover the tray pushed is in the ring");
         };
