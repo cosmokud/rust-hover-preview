@@ -980,7 +980,7 @@ fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
         ],
         missed: 0,
         shuffle: false,
-        forward: false,
+        progress: 0,
         anchor: None,
     });
     let load: Option<PinLoad> = None;
