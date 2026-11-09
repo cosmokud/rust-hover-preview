@@ -134,7 +134,8 @@ pub use view_sort::note_explorer_restart;
 pub(crate) use view_sort::{view_sort_of, SortKey, ViewSort};
 pub(crate) use window_state::{
     a_press_puts_us_behind, a_window_of_ours_stands, is_foreground_explorer,
-    our_window_stands_over_everything, press_is_inside_ours, the_pick_road_answers,
+    our_window_stands_over_everything, press_is_inside_ours, the_front_is_a_listing,
+    the_pick_road_answers,
 };
 
 // The parts, in one namespace (see the note above). The macro is named rather than globbed:
