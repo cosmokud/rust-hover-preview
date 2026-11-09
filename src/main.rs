@@ -221,7 +221,7 @@ fn main() {
     }
 
     // Watch config.ini changes off the hover hot path.
-    let config_watch_handle = std::thread::spawn(|| watch_the_configuration(false));
+    let config_watch_handle = std::thread::spawn(watch_the_configuration);
 
     // Start the explorer hook in a separate thread
     let hook_handle = std::thread::spawn(|| {
@@ -363,7 +363,7 @@ fn run_a_detached_window(trace: &mut StartupTrace) {
 
     // What the tray would have said out loud in its own process is said here off the same file (see
     // `watch_the_configuration`).
-    let config_watch_handle = std::thread::spawn(|| watch_the_configuration(true));
+    let config_watch_handle = std::thread::spawn(watch_the_configuration);
 
     // **The one watch a detached window keeps.** The wheel over a pinned picture, a pinned page and
     // a sound's knob is the low-level hook's rather than the window's — a pin is nobody's keyboard
@@ -440,10 +440,11 @@ fn run_a_viewer(trace: &mut StartupTrace, tray: u32) {
         ui::preview_window::run_preview_window();
     });
 
-    // The configuration is watched here as well, and `detached` is false because the tray's own rows are
-    // *spoken* to this window: the text size and the band arrive as the messages they have always been,
-    // sent by the tray's process rather than by its thread (see `watch_the_configuration`).
-    let config_watch_handle = std::thread::spawn(|| watch_the_configuration(false));
+    // The configuration is watched here as well, and the two rows that are *spoken* to a window already
+    // up are said by the tray's own process rather than by this one — so which of them this watcher says
+    // to itself is asked of the detach flag on every reload, because this window can become one of its
+    // own while it stands (see `watch_the_configuration` and `pin_detach::detach_the_pinned_window`).
+    let config_watch_handle = std::thread::spawn(watch_the_configuration);
 
     // **The one watch a viewer keeps.** The wheel over a pinned picture, a pinned page, a model's band and
     // a page of text is the low-level hook's rather than the window's — a pin is nobody's keyboard until it
@@ -494,14 +495,19 @@ fn run_a_viewer(trace: &mut StartupTrace, tray: u32) {
 
 /// Watch `config.ini` for changes, off both runs' hot paths.
 ///
-/// `detached` is whether this process is a detached window, and it decides one thing: a detached
-/// window is a process the tray's own rows are not spoken to. What the tray writes down reaches it
-/// through this watch the way it reaches a pin; the two rows that are *said* to a window already up
-/// — the text size and the band — are said to the tray's own preview thread and to no other, so
-/// this window says them to itself here, off the same reload. A row that is a window's own question
-/// at its take-up — the engine a film is played by, the scale its box was measured at — is not one
-/// of them and reaches a detached window at its next start, which is what a pin does.
-fn watch_the_configuration(detached: bool) {
+/// **Whether this process is a window of its own is asked of the flag on every reload rather than taken
+/// once from the launch**, because a pin can now become one inside a viewer that was begun as the run's
+/// own preview thread: that window keeps this watcher for the life of the process, and an answer copied
+/// from the launch is the wrong one from the moment it flips (see `app::detach::is_detached` and
+/// `pin_detach::detach_the_pinned_window`).
+///
+/// A detached window is a process the tray's own rows are not spoken to. What the tray writes down reaches
+/// it through this watch the way it reaches a pin; the two rows that are *said* to a window already up —
+/// the text size and the band — are said to the tray's own preview thread and to no other, so this window
+/// says them to itself here, off the same reload. A row that is a window's own question at its take-up —
+/// the engine a film is played by, the scale its box was measured at — is not one of them and reaches a
+/// detached window at its next start, which is what a pin does.
+fn watch_the_configuration() {
     let config_path = config::config::AppConfig::config_path();
     let mut last_modified = config_path
         .as_ref()
@@ -544,7 +550,7 @@ fn watch_the_configuration(detached: bool) {
             ui::preview_window::publish_tray_volume(true);
         }
 
-        if detached {
+        if crate::app::detach::is_detached() {
             let after = CONFIG
                 .lock()
                 .map(|config| (config.text_font_scale_percent, config.pin_always_on_top))
