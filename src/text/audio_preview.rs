@@ -70,7 +70,8 @@ use card::{
 };
 #[cfg(test)]
 use page::{
-    bar_band, bar_row, build_page, clock_runs, facts_right, fill_span, text_width, CardBoxes, Page,
+    bar_band, bar_row, build_page, clock_runs, facts_edge, facts_right, facts_width, fill_span,
+    text_width, CardBoxes, Page,
 };
 #[cfg(test)]
 use std::path::Path;
