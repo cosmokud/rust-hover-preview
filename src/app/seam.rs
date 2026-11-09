@@ -100,6 +100,7 @@ pub(crate) struct ViewerFacts {
     pin_keys_owner: AtomicU64,
     pin_keys_video: AtomicU64,
     pin_keys_topmost: AtomicBool,
+    pin_follows_the_listing: AtomicBool,
     /// Pin-key commands seen since this was last called, one per press, in the order pressed.
     ///
     /// Drained by the preview loop on the same tick that drains the pin key's own counter, so a
@@ -196,6 +197,7 @@ impl ViewerFacts {
             pin_keys_owner: AtomicU64::new(0),
             pin_keys_video: AtomicU64::new(0),
             pin_keys_topmost: AtomicBool::new(false),
+            pin_follows_the_listing: AtomicBool::new(false),
             pin_key_presses: [const { AtomicU32::new(0) }; PIN_COMMAND_COUNT],
             pin_find_bar_up: AtomicBool::new(false),
             pin_up: AtomicBool::new(false),
@@ -1599,6 +1601,35 @@ pub(crate) fn the_pointer_is_on(block: &'static ViewerFacts) -> bool {
 /// `pin_owns_foreground`).
 pub(crate) fn publish_pin_always_on_top(always_on_top: bool) {
     PIN_KEYS_TOPMOST.store(always_on_top, Ordering::Release);
+}
+
+/// Whether the standing pin is shown the file the listing picks (`Pin Mode → Update Preview`),
+/// published beside the two handles above for the same reason: the press road asks it from inside a
+/// `WH_MOUSE_LL` callback, which may take no lock, and every press on the machine waits for the answer.
+///
+/// **It is what tells a press the pin owes its place from one the pick road is going to answer.** A
+/// press in the listing behind a pin that follows that listing names the file the pin is about to be
+/// shown, and the answer to it is the raise the pick makes — so the press must not put the pin behind
+/// the listing first, which is the Explorer window flashing over the pin for the tick or ten the pick
+/// takes to resolve and the pin takes to come back (see `a_press_puts_us_behind`). A pin that follows
+/// nothing is a pin a press in the listing *is* the answer for, and it goes behind as it always has
+/// (see `note_a_press`).
+///
+/// No pin up is the same answer as a pin that follows nothing: a hover is no window to be kept over a
+/// listing it does not follow.
+pub(crate) static PIN_FOLLOWS_THE_LISTING: Fact<AtomicBool> =
+    Fact::of(|facts| &facts.pin_follows_the_listing);
+
+/// Tell the press road whether the standing pin is shown the file the listing picks (see
+/// `PIN_FOLLOWS_THE_LISTING`).
+pub(crate) fn publish_the_pin_follows_the_listing(follows: bool) {
+    PIN_FOLLOWS_THE_LISTING.store(follows, Ordering::Release);
+}
+
+/// Whether the standing pin is shown the file the listing picks, as the preview loop last published
+/// it (see `PIN_FOLLOWS_THE_LISTING`).
+pub(crate) fn the_pin_follows_the_listing() -> bool {
+    PIN_FOLLOWS_THE_LISTING.load(Ordering::Acquire)
 }
 
 /// The pin's own key commands, one count per command of `PIN_COMMAND_COUNT`, in the order that table

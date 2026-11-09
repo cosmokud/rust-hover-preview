@@ -566,6 +566,13 @@ pub fn run_preview_window() {
             // wheel asks before it takes a notch: a topmost pin is the window under the pointer
             // wherever the keyboard is (see `pin_owns_foreground`).
             crate::app::seam::publish_pin_always_on_top(pin_keys_owner != 0 && pin_always_on_top());
+            // And whether that pin is shown the file the listing picks, which is the one thing that
+            // tells a press in the listing from a press anywhere else on the press road: a pick is the
+            // listing naming the file the pin is about to be shown, and the pin goes behind the listing
+            // for it only where it is following nothing (see `crate::app::seam::PIN_FOLLOWS_THE_LISTING`).
+            crate::app::seam::publish_the_pin_follows_the_listing(
+                pin_keys_owner != 0 && super::pin_lifecycle::pin_update_enabled(),
+            );
             // And whether the preview is the surface the pointer is standing on, which is what the
             // wheel asks instead of the keyboard's question once a pin is raised over the listing
             // the user is working in: the pointer is over the pin while the keyboard stays behind

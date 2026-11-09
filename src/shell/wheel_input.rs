@@ -42,7 +42,7 @@ use crate::app::seam::{
 use crate::app::seam::{post_a_notch_to_the_model, wake_preview_loop};
 use crate::shell::explorer_hook::{
     a_press_puts_us_behind, a_window_of_ours_stands, our_window_stands_over_everything,
-    press_is_inside_ours, window_class_of,
+    press_is_inside_ours, the_pick_road_answers, window_class_of,
 };
 use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -117,6 +117,14 @@ static PRESS_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_SEAM_TRACE")
 /// inside the OS input path, so the ask is published and the preview loop makes it on its own tick: the
 /// same road a pick's press takes (see `ask_the_pin_to_go_behind`).
 ///
+/// **A press the pick road is going to answer is no press of this one.** The press that lands in the
+/// listing behind a pin that follows that listing is the press of a pick: the file under it is read by
+/// the hook's own tick and the pin is asked to show it, and asking the pin to go behind the listing
+/// first is one press answered twice — the listing over the pin until the pick's raise lands, which is
+/// the flash a mouse pick has and a keyboard pick does not (see `the_pick_road_answers` and
+/// `a_press_puts_us_behind`). A press that names no file is still answered, and answered behind: the
+/// hook's `pin_press_was_not_a_pick` is that press's own.
+///
 /// **Every process that draws a window of ours holds one of these hooks**, which is what makes the rule
 /// the same for a detached window as for a pin: each asks about the press, and each answers with the
 /// window it holds.
@@ -131,17 +139,20 @@ fn note_a_press(point: POINT) {
     let window = unsafe { WindowFromPoint(point) };
     let ours = press_is_inside_ours(window, point);
     let always_on_top = our_window_stands_over_everything();
+    let the_listing_answers = !ours && the_pick_road_answers(window);
 
-    if !a_press_puts_us_behind(true, ours, true, always_on_top) {
+    if !a_press_puts_us_behind(true, ours, true, always_on_top, the_listing_answers) {
         if *PRESS_TRACE {
             eprintln!(
-                "seam: press at {},{} on {} ({}), ours {} -> nothing asked (always on top {})",
+                "seam: press at {},{} on {} ({}), ours {} -> nothing asked (always on top {}, the \
+                 listing answers {})",
                 point.x,
                 point.y,
                 window.0 as isize,
                 window_class_of(window),
                 ours as u8,
                 always_on_top as u8,
+                the_listing_answers as u8,
             );
         }
         return;
