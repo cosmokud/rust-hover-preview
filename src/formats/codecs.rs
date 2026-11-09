@@ -51,7 +51,16 @@ use windows::Win32::System::Registry::{
 /// The player FFmpeg is recognized by. One probe answers for the whole install: `ffplay`,
 /// `ffprobe` and `ffmpeg` arrive together, and the player is the one whose absence a
 /// video preview has to answer for.
+///
+/// Not quite together: a build can ship `ffprobe` and `ffmpeg` and no `ffplay` at all, so a
+/// question about what a file holds is asked of [`ffprobe_available`] rather than of this one
+/// (see `ffprobe_audio_track`).
 const FFPLAY_NAME: &str = "ffplay.exe";
+
+/// The probe FFmpeg is recognized by, where the question is about the file rather than about
+/// playing it: a sound's card is drawn from this program's report, and it is on the machine
+/// whether or not the player beside it is (see [`ffprobe_available`]).
+const FFPROBE_NAME: &str = "ffprobe.exe";
 
 /// And the program a sound's loudness is measured by: the other name normalization asks for, since
 /// the install the player comes from is the install the meter comes from (see
@@ -494,6 +503,10 @@ pub fn refresh() {
         *cached = None;
     }
 
+    if let Ok(mut cached) = FFPROBE.lock() {
+        *cached = None;
+    }
+
     if let Ok(mut cached) = MPV.lock() {
         *cached = None;
     }
@@ -521,6 +534,29 @@ pub fn ffplay_available() -> bool {
     let answer = find_ffplay().is_some();
 
     if let Ok(mut cached) = FFPLAY.lock() {
+        *cached = Some(answer);
+    }
+
+    answer
+}
+
+/// Whether `ffprobe.exe` is on this machine, and so whether a sound this process cannot decode
+/// can still be read for what it holds.
+///
+/// It is asked apart from [`ffplay_available`] because they are two questions about two programs
+/// that do not always arrive together: gating the probe on the player took every fact off a FLAC's
+/// card and refused the file a preview for the whole run, on a machine that could read the file
+/// perfectly well. Kept between hovers and cleared by [`refresh`] the way the player's is.
+pub fn ffprobe_available() -> bool {
+    if let Ok(cached) = FFPROBE.lock() {
+        if let Some(answer) = *cached {
+            return answer;
+        }
+    }
+
+    let answer = find_program(FFPROBE_NAME).is_some();
+
+    if let Ok(mut cached) = FFPROBE.lock() {
         *cached = Some(answer);
     }
 
@@ -1120,6 +1156,9 @@ static MEDIA_FOUNDATION: OnceLock<bool> = OnceLock::new();
 
 /// Whether FFmpeg is installed, kept between hovers and cleared by [`refresh`].
 static FFPLAY: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether FFmpeg's probe is installed, kept and cleared the way the player's own answer is.
+static FFPROBE: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether mpv is installed, kept between hovers and cleared by [`refresh`].
 static MPV: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));

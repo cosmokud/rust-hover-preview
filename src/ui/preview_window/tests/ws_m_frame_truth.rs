@@ -890,14 +890,14 @@ fn a_maximize_a_card_steps_over_is_kept_for_the_file_after_the_card() {
         .expect("a written file");
     audio_track::remember(
         &song,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
     let scope = {
         let options = current_audio_options();

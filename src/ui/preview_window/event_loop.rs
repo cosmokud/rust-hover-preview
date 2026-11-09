@@ -171,6 +171,9 @@ pub fn run_preview_window() {
         // The name on screen, scrolled sideways while the card has no room for it, put up with
         // the card it belongs to so a hover that changes begins at the beginning again.
         let mut audio_name_scroll: Option<audio_preview::NameScroll> = None;
+        // And the facts line of the same card, scrolled the same way where the room the clock
+        // leaves has no place for it: put up with the card too (see `audio_preview::facts_scroll`).
+        let mut audio_facts_scroll: Option<audio_preview::NameScroll> = None;
         // The hover the preview came from, so a theme or Markdown switch can rebuild it without
         // waiting for the next hover.
         let mut current_show: Option<PreviewMessage> = None;
@@ -596,6 +599,8 @@ pub fn run_preview_window() {
             // `MODELS_BAND`).
             crate::app::seam::PIN_ZOOM_REGION.publish(pin_model::pin_zoom_keep_alive_try());
             crate::app::seam::MODELS_BAND.publish(pin_model::the_models_band());
+            crate::app::seam::PIN_PLAYLIST_BAND
+                .publish(pin_playlist::pin_playlist_keep_alive_try());
             // And the box the pin's window stands in, which the hook's own press reads are measured
             // against: a press inside it is the pin's own whatever is under the point, and a pin dragged
             // under a hand that did not move is noticed by the box moving rather than by asking the
@@ -1496,6 +1501,12 @@ pub fn run_preview_window() {
                 Some(chrome) => chrome.playing,
                 None => !pinned() && a_sound_is_playing(),
             };
+            // Whether the facts line of the card on screen is under a pointer, which is what its
+            // scroll is engaged by: asked here beside the pin's own answer and for the same reason,
+            // because the step the marquee is taken by runs with the media's lock held and a pin's
+            // lock asked from under it is the re-entrancy `toggle_pinned_playback` is written down
+            // for (see `audio_facts_line_engaged`).
+            let facts_line_engaged = audio_facts_line_engaged();
 
             let media_lock = need_media_check.then(|| CURRENT_MEDIA.lock());
             if let Some(Ok(mut media_guard)) = media_lock {
@@ -1658,8 +1669,17 @@ pub fn run_preview_window() {
                         // the fall until they are home, which is a second or so and then nothing
                         // (see `audio_meter::beat_fade`).
                         let falling = audio_beat > 0.0;
-                        let cadence = match &audio_name_scroll {
-                            Some(scroll) if scroll.moves() => AUDIO_NAME_REPAINT,
+                        // The facts line travels only under a pointer resting on it: a card whose
+                        // hand has left the line winds it back to its first fact and rests there,
+                        // which is what stops a card at rest repainting at the marquee's cadence for
+                        // as long as it stands (see `NameScroll::set_engaged` and
+                        // `audio_facts_line_engaged`).
+                        if let Some(facts) = audio_facts_scroll.as_mut() {
+                            facts.set_engaged(facts_line_engaged);
+                        }
+                        let cadence = match (&audio_name_scroll, &audio_facts_scroll) {
+                            (Some(name), _) if name.moves() => AUDIO_NAME_REPAINT,
+                            (_, Some(facts)) if facts.moves() => AUDIO_NAME_REPAINT,
                             _ if sound_playing || falling => AUDIO_NAME_REPAINT,
                             _ => AUDIO_CARD_REPAINT,
                         };
@@ -1673,13 +1693,8 @@ pub fn run_preview_window() {
                             let since_paint = audio_repaint_at.elapsed();
                             audio_repaint_at = Instant::now();
 
-                            let name_offset = match audio_name_scroll.as_mut() {
-                                Some(scroll) => {
-                                    scroll.advance(Instant::now(), cadence);
-                                    scroll.offset()
-                                }
-                                None => 0,
-                            };
+                            let name_offset = step_the_marquee(&mut audio_name_scroll, cadence);
+                            let facts_offset = step_the_marquee(&mut audio_facts_scroll, cadence);
 
                             if let Some(path) = current_show.as_ref().and_then(self::show_path) {
                                 let (elapsed, duration) = audio_clock(
@@ -1753,6 +1768,7 @@ pub fn run_preview_window() {
                                     duration,
                                     audio_card_dpi,
                                     name_offset,
+                                    facts_offset,
                                     audio_chrome,
                                     beat,
                                 ) {
@@ -1774,6 +1790,13 @@ pub fn run_preview_window() {
             // here rather than in that card's arm: one repaint a tick for the thumb the notch
             // stepped, whatever number of them landed in the tick (see `pin_chrome_owes_a_repaint`).
             if pin_chrome_owes_a_repaint() {
+                needs_repaint = true;
+            }
+            // And the playlist band under a pinned sound's card owes one for the whole of what it
+            // does on its own: the rows rebuilt where the walk has moved, the notch the hook left
+            // for it, and a name travelling across a row the hand is on (see
+            // `pin_playlist::the_tick_is_owed_a_repaint`).
+            if pin_playlist::the_tick_is_owed_a_repaint() {
                 needs_repaint = true;
             }
             // And a hand carrying the picture inside its window owes the loop the repaint that shows
@@ -2121,6 +2144,22 @@ pub fn run_preview_window() {
                                     audio_card_dpi,
                                     current_audio_options(),
                                 ));
+                                // And the facts line of that card, measured against the room the
+                                // clock in it leaves: a line the room has no place for is scrolled
+                                // rather than cut short (see `audio_preview::facts_scroll`).
+                                let (elapsed, duration) = audio_clock(
+                                    &result.path,
+                                    audio_started,
+                                    audio_start_offset,
+                                    audio_paused,
+                                );
+                                audio_facts_scroll = audio_facts_marquee(
+                                    &result.path,
+                                    elapsed,
+                                    duration,
+                                    media_data.current_width(),
+                                    audio_card_dpi,
+                                );
                             }
 
                             let mw = media_data.current_width() as i32;
@@ -2923,7 +2962,16 @@ pub fn run_preview_window() {
                                         // this order, so it steps the same playlist instead
                                         // of starting another (see `pin_walk_synced_its_playlist`).
                                         pin_walk_synced_its_playlist(&walk);
-                                        pin_walk = Some(walk);
+                                        // A walk that landed back on the file it was asked from is
+                                        // a walk asked for its order rather than for a step — the
+                                        // one the band asks when it turns over (see
+                                        // `ask_the_walk_again`). Its order is on the pin either
+                                        // way; as a pick it would be the file the pin is already
+                                        // showing, and the load that file may still be in would be
+                                        // dropped for nothing.
+                                        if !pin_navigation::same_file(walk.from(), &walk.at) {
+                                            pin_walk = Some(walk);
+                                        }
                                     }
                                     // The pin has left the file this walk was asked from: the
                                     // answer is dropped rather than carried onto the file that
@@ -2947,6 +2995,12 @@ pub fn run_preview_window() {
                             pin_walk_wait = None;
                         }
                     }
+                    // The band under a sound's card turned over, so the walk behind it is asked
+                    // again: what the band's rows are comes from that walk's order, and the mode
+                    // the order is built in changed with the band and nothing else re-reads it
+                    // (see `pin_navigation::nav_mode_for`). No step is taken, so the file the pin
+                    // is showing is the file it keeps.
+                    PreviewMessage::PinWalkAgain => ask_the_walk_again(),
                     PreviewMessage::MeasureProbed { path, size } => {
                         // The same pick again for a pin, where the measure answered with a box:
                         // that a reader has no box for the file at all is no box to lay anything
@@ -3674,6 +3728,7 @@ pub fn run_preview_window() {
                     &mut audio_repaint_at,
                     &mut audio_card_dpi,
                     &mut audio_name_scroll,
+                    &mut audio_facts_scroll,
                     &mut video_pos,
                     &mut current_video_path,
                     &mut current_show,
@@ -4379,11 +4434,34 @@ pub fn run_preview_window() {
                                     audio_paused,
                                 );
 
+                                // The row the card's facts line is drawn in, written down where
+                                // that card's clock is in hand: a pointer resting on the line
+                                // engages its scroll, and the hit test reads this rather than
+                                // laying a card out on every move (see
+                                // `note_audio_facts_rect`).
+                                let (elapsed, duration) = audio_clock(
+                                    &path,
+                                    audio_started,
+                                    audio_start_offset,
+                                    audio_paused,
+                                );
+                                note_audio_facts_rect(
+                                    &path,
+                                    elapsed,
+                                    duration,
+                                    (content.2 - content.0).max(1) as u32,
+                                    audio_card_dpi,
+                                );
+
                                 let card = AudioCardClock {
                                     started: audio_started,
                                     from: audio_start_offset,
                                     paused: audio_paused,
                                     name_offset: audio_name_scroll
+                                        .as_ref()
+                                        .map(|scroll| scroll.offset())
+                                        .unwrap_or(0),
+                                    facts_offset: audio_facts_scroll
                                         .as_ref()
                                         .map(|scroll| scroll.offset())
                                         .unwrap_or(0),
@@ -4482,6 +4560,10 @@ pub fn run_preview_window() {
                                 .as_ref()
                                 .map(|scroll| scroll.offset())
                                 .unwrap_or(0),
+                            facts_offset: audio_facts_scroll
+                                .as_ref()
+                                .map(|scroll| scroll.offset())
+                                .unwrap_or(0),
                             dpi: audio_card_dpi,
                             chrome: pinned_audio_chrome(audio_paused),
                         };
@@ -4544,6 +4626,9 @@ pub fn run_preview_window() {
                     // hand-off name rather than a hover — taken where a pin is acted on, not
                     // here (see `PreviewMessage::PinAnswered`).
                     PreviewMessage::PinAnswered(_) => {}
+                    // And the band's own turn over, which asks the pin's walk again rather than
+                    // laying anything out here (see `PreviewMessage::PinWalkAgain`).
+                    PreviewMessage::PinWalkAgain => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard
@@ -5175,5 +5260,22 @@ pub fn run_preview_window() {
         let (_, cvar) = &*load_request_slot;
         cvar.notify_all();
         let _ = load_worker.join();
+    }
+}
+
+/// Move one of a card's marquees on by one repaint, and answer where it has got to: nothing at all
+/// for a card with no marquee, and the text's own resting place for one that does not travel (see
+/// `audio_preview::NameScroll`).
+///
+/// The name and the facts line are two scrolls rather than one, and this is the step both of them
+/// are taken by: they travel at the same speed, hold at their ends for the same time, and differ only
+/// in what they are put up with and where the room they travel is measured from.
+fn step_the_marquee(scroll: &mut Option<audio_preview::NameScroll>, cadence: Duration) -> i32 {
+    match scroll {
+        Some(scroll) => {
+            scroll.advance(Instant::now(), cadence);
+            scroll.offset()
+        }
+        None => 0,
     }
 }

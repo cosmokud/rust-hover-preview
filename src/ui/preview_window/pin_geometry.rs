@@ -589,11 +589,19 @@ pub(super) fn centred_pin_box(
     transport: bool,
     overlay: bool,
     caption: i32,
+    playlist: i32,
     room: ScreenBounds,
 ) -> ScreenRegion {
     let size = ((window.2 - window.0).max(1), (window.3 - window.1).max(1));
 
-    content_box_of(centred_box(size, room), dpi, transport, overlay, caption)
+    content_box_of(
+        centred_box(size, room),
+        dpi,
+        transport,
+        overlay,
+        caption,
+        playlist,
+    )
 }
 
 /// The pin's own answers to the chrome, once a tick: its buttons, a key it was given, and whether
@@ -712,24 +720,25 @@ pub(super) unsafe fn pin_command_request(
             PinCommand::PreviousFile => step_pinned_file(-1, wait, anchor),
             PinCommand::NextFile => step_pinned_file(1, wait, anchor),
             // An up arrow and a down arrow are the same answer one line at a time: the page's caret where
-            // the pin holds one, and the walk where it does not.
+            // the pin holds one, the highlight of a band where one is up, and the walk where neither is.
             //
             // The caret's own moves are queued rather than made here for the same reason a find bar's
             // edits are: this is the tick that may take the page's lock, but a move styles a document
             // and paints a frame, and that is the work a tick of its own owns (see
             // `text_caret::settle`).
             command @ (PinCommand::CaretUp | PinCommand::CaretDown) => {
+                let direction = if matches!(command, PinCommand::CaretUp) {
+                    -1
+                } else {
+                    1
+                };
                 match text_caret::command_move(command) {
                     Some(()) => None,
-                    None => step_pinned_file(
-                        if matches!(command, PinCommand::CaretUp) {
-                            -1
-                        } else {
-                            1
-                        },
-                        wait,
-                        anchor,
-                    ),
+                    // A row a hand may be on without playing it is the band's own, and a step of the
+                    // walk under an open band is a band that cannot be arrowed through (see
+                    // `pin_playlist::step_the_pick`).
+                    None if pin_playlist::step_the_pick(direction) => None,
+                    None => step_pinned_file(direction, wait, anchor),
                 }
             }
             // And the two page keys, which are a screenful of the caret's where the pin holds a page and
@@ -786,6 +795,14 @@ pub(super) unsafe fn pin_command_request(
                 step_pinned_subtitle();
                 None
             }
+            // A `Return` in a card plays the row the band's highlight is on, which is the one key a list
+            // answers a hand already inside it with. Nothing at all to a window with no band up, or to a
+            // band with no row picked, so it is asked rather than assumed (see
+            // `pin_playlist::play_the_pick`).
+            PinCommand::PlayRow => {
+                pin_playlist::play_the_pick();
+                None
+            }
         };
 
         break;
@@ -836,7 +853,7 @@ pub(super) unsafe fn release_pin_capture(hwnd: HWND) {
 /// skipped costs nothing because the next one reads the pointer again — the positions in between are
 /// coalesced by Windows and never arrive as boxes of their own.
 pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
-    let (drag, dpi, transport, overlay, frame, caption) = {
+    let (drag, dpi, transport, overlay, frame, caption, playlist) = {
         let Some(pinned) = pin_state() else {
             return;
         };
@@ -854,6 +871,10 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             pin.overlay,
             pin.frame,
             pin.caption,
+            // The band a card grows under itself is window and not media: a move that read it back
+            // as content would hand the card the rows of its own playlist and then measure the
+            // window as that card plus a band again (see `content_box_of`).
+            pin_playlist::playlist_rows(pin),
         )
     };
 
@@ -935,10 +956,11 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
             overlay,
             frame,
             caption,
+            playlist,
         ),
     };
     let window = clamp_pinned_box(asked, dpi, &DESKTOPS);
-    let content = content_box_of(window, dpi, transport, overlay, caption);
+    let content = content_box_of(window, dpi, transport, overlay, caption, playlist);
 
     let was = {
         let Some(mut pinned) = pin_state() else {
@@ -1162,8 +1184,8 @@ pub(super) fn a_resize_step_grows(was: ScreenRegion, now: ScreenRegion) -> bool 
 /// drag does: a maximize is the button's own arrangement of the box, and this is another one (see
 /// `pin_restore_box`).
 pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
-    let Some((window, was, restore, dpi, transport, overlay, caption)) =
-        pin_state().and_then(|pinned| {
+    let Some((window, was, restore, dpi, transport, overlay, caption, playlist)) = pin_state()
+        .and_then(|pinned| {
             let pin = pinned.pin()?;
             Some((
                 pin.window_box(),
@@ -1173,15 +1195,18 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
                 pin.transport_bar,
                 pin.overlay,
                 pin.caption,
+                // The band a card grows under itself is carried rather than centred with the card:
+                // the card's own box is what the middle of the screen is a middle of, and the band
+                // hangs under whatever box that is (see `content_box_of`).
+                pin_playlist::playlist_rows(pin),
             ))
         })
     else {
         return;
     };
 
-    let size = ((window.2 - window.0).max(1), (window.3 - window.1).max(1));
     let room = work_area_at((window.0 + window.2) / 2, (window.1 + window.3) / 2);
-    let content = centred_pin_box(window, dpi, transport, overlay, caption, room);
+    let content = centred_pin_box(window, dpi, transport, overlay, caption, playlist, room);
 
     {
         let Some(mut pinned) = pin_state() else {
@@ -1196,6 +1221,11 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
     }
 
     let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);
+    // And the band under it, which the window carries wherever the card is put: the box the window is
+    // set to is the one it is drawn at, and a window placed at the card's box alone would be a band
+    // the paint had to give back a frame later (see `PinnedPreview::window_box`).
+    let placed = (placed.0, placed.1, placed.2, placed.3 + playlist);
+    let size = ((placed.2 - placed.0).max(1), (placed.3 - placed.1).max(1));
     // The insert-after argument is left empty rather than named: `SWP_NOZORDER` drops it, and a band
     // named beside it is a call that reads as a raise and is not one.
     let _ = SetWindowPos(
@@ -1223,8 +1253,9 @@ pub(super) fn resize_pinned_window(
     overlay: bool,
     frame: PinFrame,
     caption: i32,
+    playlist: i32,
 ) -> ScreenRegion {
-    let content = content_box_of(window, dpi, transport, overlay, caption);
+    let content = content_box_of(window, dpi, transport, overlay, caption, playlist);
     let bounds = work_area_at(
         content.0 + (content.2 - content.0) / 2,
         content.1 + (content.3 - content.1) / 2,

@@ -56,14 +56,14 @@ fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered()
     .expect("a written file");
     audio_track::remember(
         &playable,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
     hold_box(
         &playable,
@@ -119,18 +119,24 @@ fn a_sound_picked_into_a_pin_is_the_wait_for_its_probe_until_that_has_answered()
         "a maximized window is given a card's own box like any other"
     );
 
-    // A file the machine will not play is the other answer a probe leaves behind, and it is no
-    // preview at all: there is no card to swap in, so the pin keeps the file it is showing.
+    // A file nothing here can read is a file nothing has answered for, and that is no preview at
+    // all: there is no card to swap in, so the pin keeps the file it is showing. A read that found
+    // nothing is not held, so the hover after this one asks again rather than being told by an
+    // emptiness that the file can never be played (see `audio_track::remember`).
     let silent = folder.join("silence.mp3");
     std::fs::write(&silent, b"ID3\x04\x00\x00\x00\x00\x00\x00\x20\x00\x00\x00")
         .expect("a written file");
-    audio_track::remember(&silent, audio_track::Probed::Nothing);
     hold_box(&silent, &file_version(&silent), &scope, None);
 
     assert_eq!(
         pin_update_content(space, &silent, bounds, 96),
         None,
         "a file no engine here plays has no card"
+    );
+    assert_eq!(
+        audio_track::probed(&silent),
+        audio_track::Probed::NotAsked,
+        "and the read that found nothing left it a file nothing has answered for"
     );
 
     // And a sound nothing has looked at yet is the wait for the probe that would say which of
@@ -624,6 +630,8 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         audio_hovered: None,
         audio_pressed: None,
         audio_window_buttons: false,
+        audio_facts_hovered: false,
+        audio_facts_rect: None,
         menu: PinMenu::default(),
     };
     let (width, height) = pin.window_size();

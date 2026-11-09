@@ -16,12 +16,13 @@
 //! exception is GDI, which knows nothing of an alpha channel: what it draws leaves the alpha
 //! byte at zero, so a caption is closed by handing every pixel its coverage back.
 //!
-//! The chrome lives in seven files below: `transport` for the bar a playing file is driven and
+//! The chrome lives in eight files below: `transport` for the bar a playing file is driven and
 //! drawn from, `caption` for the strip above it, `bubble` for the two panels that float over
 //! the media rather than standing in it, `menu` for the panel a card's right-click opens,
-//! `find_bar` for the card a page's find bar floats in, `page_marks` for the two marks a page of
+//! `find_bar` for the card a page's find bar floats in, `playlist` for the band a pinned sound's
+//! card grows under it, `page_marks` for the two marks a page of
 //! text wears — the caret over its text and the **Read only** pill on its caption — and
-//! `primitives` for the palette and the shapes, marks and text runs the other six are drawn
+//! `primitives` for the palette and the shapes, marks and text runs the other seven are drawn
 //! from. What is left in this file is the way in: every
 //! name the rest of the tree reaches as `pin_chrome::`, and the imports the tests beside it read
 //! the five through.
@@ -31,6 +32,7 @@ mod caption;
 mod find_bar;
 mod menu;
 mod page_marks;
+mod playlist;
 mod primitives;
 mod transport;
 
@@ -51,6 +53,12 @@ pub(crate) use menu::{
     menu_row_at, paint_menu_popup, MenuArrow, MenuMark, MenuPopup, MenuRow, MENU_SHADOW_PIXELS,
 };
 pub(crate) use page_marks::paint_text_caret;
+pub(crate) use playlist::{
+    name_travel, paint_playlist, playlist_edge_at, playlist_layout, playlist_row, playlist_row_at,
+    playlist_row_height, playlist_scroll_at, playlist_scroll_max, playlist_step_pick,
+    playlist_thumb_grab, playlist_track_holds, PlaylistBand, PlaylistEdge, PlaylistLayout,
+    PlaylistRow, WHEEL_ROWS as PLAYLIST_WHEEL_ROWS,
+};
 pub(crate) use primitives::{fill_disc, fill_ring, stroke_segment, surface_pixels, ChromePalette};
 pub(crate) use transport::{
     paint_card_control, paint_transport, paint_volume_popup, transport_layout, transport_part_at,

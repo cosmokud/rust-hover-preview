@@ -180,13 +180,7 @@ fn find_bar_over(pin: &PinnedPreview) -> Option<FindBarPlacement> {
             return None;
         }
 
-        let height = pin.window_size().1;
-        let (top, _) = pinned_band_rows(
-            height,
-            pin.caption,
-            pinned_transport_height(pin.dpi, pin.transport_bar),
-            pin.overlay,
-        );
+        let (top, _) = pinned_media_band_rows(pin);
         (top, pin.dpi)
     };
 

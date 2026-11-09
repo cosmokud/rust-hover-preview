@@ -59,4 +59,5 @@ mod bubble;
 mod caption;
 mod find_bar;
 mod menu;
+mod playlist;
 mod transport;

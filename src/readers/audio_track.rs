@@ -33,6 +33,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+mod disk;
+
 /// Which of the two engines plays a file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Player {
@@ -65,26 +67,33 @@ pub struct Track {
     pub duration: Option<f64>,
 }
 
-/// What a probe has said about a file: nothing where it has not been asked, what the machine
-/// plays where it has, and nothing-to-play where it has that answer instead.
+/// What a probe has said about a file: nothing where it has not been asked, and what the machine
+/// plays where it has.
 ///
-/// It is three answers rather than two because a preview is waited for on one of them and
-/// dropped for the other: a hover on a file no probe has looked at is a wait, and a hover on
-/// one the machine cannot play is over (see `audio_box` and `Probed::Nothing`).
+/// There is no third answer, and the one that is missing is the whole point: a read that found
+/// nothing to play is *not held*, because it is a fact about one read rather than about the file —
+/// a player this machine does not have, a format its decoders do not reach, a prober that was not
+/// on the `PATH` when a folder was swept. Held, it was terminal: the file could not be previewed
+/// again for the rest of the run, and every row of the folder it sat in lost the facts it had just
+/// been given (see [`remember`]).
+///
+/// So `NotAsked` covers two answers that are one: nothing has looked at the file, and the read that
+/// did found nothing usable. Both mean ask again, and the gates that ask are where the asking is
+/// bounded — one ask per hover, one per pin attempt, one per sweep item, and never a retry inside
+/// one of them (see `audio_box`, `video_probe::probe_video_geometry` and
+/// `pin_playlist::start_the_prober`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Probed {
-    /// No probe has been run for the file, or the one that was has been given up to make room
-    /// for another file (see `make_room`).
+    /// No probe has been run for the file, the one that was found nothing a preview can use, or the
+    /// answer it gave has been given up to make room for another file (see `make_room`).
     ///
-    /// The two are one answer and have to be: a hover that finds this one measures the file
+    /// The three are one answer and have to be: a hover that finds this one measures the file
     /// again, and a card that finds it is a card with nothing to lay out at all — which is the
     /// whole of why what a full memo gives up is the file nothing is asking about, and never the
     /// one a card is on screen for.
     NotAsked,
     /// This machine plays the file, and this is what the file holds.
     Track(Track),
-    /// The file is not a sound this machine can play — or holds no sound at all.
-    Nothing,
 }
 
 /// An answer, and when it was last asked for: the two things both memos of this shape are for,
@@ -141,16 +150,15 @@ fn make_room<T>(held: &mut HashMap<head::Key, Held<T>>, bound: usize) {
     }
 }
 
-/// What every probe has said, held per file and version: a track where the machine plays one,
-/// and nothing where it does not — which is an answer too, and one worth holding (see
-/// [`Probed`]).
-static PROBED: Lazy<Mutex<HashMap<head::Key, Held<Option<Track>>>>> =
+/// What every probe has said, held per file and version: the track the machine plays the file with,
+/// and nothing at all for a file no read has answered for (see [`Probed`]).
+static PROBED: Lazy<Mutex<HashMap<head::Key, Held<Track>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// How many files are held. The same bound and the same reasoning as every other memo of this
-/// shape: a folder swept a file at a time. What the bound makes this memo give up is the file
-/// that sweep left behind longest ago, which is not the one a card is up for (see [`make_room`]).
-const TRACKS_MAX_ENTRIES: usize = 512;
+/// How many files are held: a large music folder swept whole, at a few hundred bytes a track and so
+/// a few hundred kilobytes of them, because a sweep that evicts its own answers is a sweep whose
+/// rows lose the facts they have just been given (see [`make_room`]).
+const TRACKS_MAX_ENTRIES: usize = 4096;
 
 /// What a probe has said about `path`, or that there is nothing to say yet.
 pub fn probed(path: &Path) -> Probed {
@@ -168,28 +176,62 @@ pub fn probed(path: &Path) -> Probed {
     };
     found.used = asked();
 
-    match found.answer.clone() {
-        Some(track) => Probed::Track(track),
-        None => Probed::Nothing,
-    }
+    Probed::Track(found.answer.clone())
 }
 
 /// The track a player would be started from, where there is one to start.
 pub fn playable(path: &Path) -> Option<Track> {
     match probed(path) {
         Probed::Track(track) => Some(track),
-        Probed::NotAsked | Probed::Nothing => None,
+        Probed::NotAsked => None,
     }
 }
 
-/// Hold what a probe found about `path`, the answer that there was nothing to find included.
-pub fn remember(path: &Path, probed: Probed) {
-    let answer = match probed {
-        Probed::Track(track) => Some(track),
-        Probed::Nothing => None,
-        Probed::NotAsked => return,
-    };
+/// What this file's answer is, asking for it only where neither memo has one: the memo of this run
+/// first, the disk a run before this one wrote second, and `read` last — which is the probe, the
+/// engine or the process, and the thing this exists to keep from being run again.
+///
+/// Every gate that would otherwise probe asks this rather than the probe (see `audio_box`,
+/// `video_probe::probe_video_geometry` and `pin_playlist::start_the_prober`), so one file read in
+/// an earlier run is one row filled here with nothing started at all.
+pub fn ask(path: &Path, read: impl FnOnce() -> Option<Track>) -> Option<Track> {
+    if let Probed::Track(track) = probed(path) {
+        return Some(track);
+    }
 
+    // A hit is held for this run as well, and not written again: it is already on the disk it was
+    // read from (see `disk::entry`).
+    if let Some(track) = disk::entry(path) {
+        hold(path, track.clone());
+        return Some(track);
+    }
+
+    // A read that found nothing writes nothing, here or on the disk (see [`remember`]).
+    let track = read()?;
+    remember(path, track.clone());
+
+    Some(track)
+}
+
+/// Hold what a probe found for `path`, and nothing for a probe that found nothing: a read that came
+/// back empty leaves the file unanswered rather than answered with an emptiness, so the next ask
+/// reads it again instead of being told for the rest of the run that the machine cannot play it.
+///
+/// Only a [`Track`] can be written, which is the same answer `audio_card` and the start of a pin's
+/// player both read to decide a file can be previewed (see `audio_engine::audio_card` and
+/// `start_audio_playback_at`) — so what is held is only ever what those two accept. Both levels are
+/// written: the memo of this run, and the entry the next run reads (see [`ask`] and `disk::store`).
+///
+/// The disk write is the caller's own thread — the hover's measure thread, the film's load worker,
+/// the playlist's prober — and never a tick's, which is the one thread that must not wait for a
+/// file to be written (see `pin_playlist::start_the_prober`).
+pub fn remember(path: &Path, track: Track) {
+    hold(path, track.clone());
+    disk::store(path, &track);
+}
+
+/// The first level on its own: what this run's memo holds, and nothing written anywhere.
+fn hold(path: &Path, track: Track) {
     let key = head::key(path);
 
     if let Ok(mut held) = PROBED.lock() {
@@ -200,13 +242,19 @@ pub fn remember(path: &Path, probed: Probed) {
         held.insert(
             key,
             Held {
-                answer,
+                answer: track,
                 used: asked(),
             },
         );
         make_room(&mut held, TRACKS_MAX_ENTRIES);
     }
 }
+
+/// The lock every test that writes either memo holds for its whole run: both are process-wide values
+/// shared with every other test in the binary, and two of these at once is one test's sweep giving up
+/// the file another test's card is asking for (see `pin_window::tests::ONE_AT_A_TIME`).
+#[cfg(test)]
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// The gain that brings a file's measured loudness to the level files are normalized to, where
 /// one has been measured for it: the number the tray's `Normalize` is played at, on top of the
@@ -262,12 +310,6 @@ pub fn remember_gain(path: &Path, gain: f64) {
 mod tests {
     use super::*;
 
-    /// The lock these tests take, so that one of them runs at a time: both memos are process-wide
-    /// values shared with every other test in the binary, and two of these at once is one test's
-    /// sweep giving up the file another test's card is asking for (see
-    /// `pin_window::tests::ONE_AT_A_TIME`).
-    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
-
     /// A file no probe has run for, named so that the tests here cannot be each other's.
     ///
     /// A name is all a file needs to be held under: a file that is not on the machine is keyed
@@ -306,10 +348,10 @@ mod tests {
         let _one = ONE_AT_A_TIME.lock();
         let on_screen = a_file("on-screen", 0);
 
-        remember(&on_screen, Probed::Track(a_track(180.0)));
+        remember(&on_screen, a_track(180.0));
 
         for nth in 0..=TRACKS_MAX_ENTRIES {
-            remember(&a_file("swept", nth), Probed::Nothing);
+            remember(&a_file("swept", nth), a_track(180.0));
 
             // What the preview loop does to the file it is showing, four times a second, between
             // every other pair of hovers.
@@ -326,6 +368,95 @@ mod tests {
             Probed::NotAsked,
             "and the file that sweep reached first is the one the bound gives up"
         );
+    }
+
+    /// What every gate that asks this memo does: one ask per event, and an ask again only where the
+    /// answer was nothing usable. Nothing here retries the read twice inside one ask, which is what
+    /// keeps a file nothing will ever play from being read on every frame (see `audio_box`,
+    /// `video_probe::probe_video_geometry` and `pin_playlist::start_the_prober`).
+    fn ask_once(
+        path: &Path,
+        read: impl FnOnce() -> Option<Track>,
+        reads: &mut usize,
+    ) -> Option<Track> {
+        if matches!(probed(path), Probed::NotAsked) {
+            *reads += 1;
+
+            if let Some(track) = read() {
+                remember(path, track);
+            }
+        }
+
+        playable(path)
+    }
+
+    /// A read that found nothing is not an answer, and a memo that held it as one was the end of the
+    /// file for the rest of the run: every gate above asks only what a `NotAsked` file has, so an
+    /// emptiness stored here was never read again — no card, no player, no facts in a row, until the
+    /// app was restarted (see [`remember`]).
+    #[test]
+    fn a_read_that_found_nothing_is_not_held_and_the_next_ask_reads_the_file_again() {
+        let _one = ONE_AT_A_TIME.lock();
+        let path = a_file("nothing-found", 0);
+        let mut reads = 0;
+
+        assert_eq!(ask_once(&path, || None, &mut reads), None);
+        assert_eq!(
+            probed(&path),
+            Probed::NotAsked,
+            "a file nothing could be read from is a file nothing has answered for"
+        );
+
+        // The same file asked about again — the next hover, the next sweep — is read again, and what
+        // this read finds is what is held.
+        assert_eq!(
+            ask_once(&path, || Some(a_track(240.0)), &mut reads),
+            Some(a_track(240.0))
+        );
+        assert_eq!(
+            reads, 2,
+            "the read that found nothing was not kept, so the file was read a second time"
+        );
+
+        // And a file with a track is a file that answers from the memo: one read, however many asks.
+        assert_eq!(
+            ask_once(
+                &path,
+                || panic!("a file with a track was read again"),
+                &mut reads
+            ),
+            Some(a_track(240.0))
+        );
+        assert_eq!(
+            reads, 2,
+            "a track is held, and every ask after it is answered from the memo"
+        );
+    }
+
+    /// A folder swept whole is a folder whose every row is a file this memo is asked about, and the
+    /// bound has to hold the sweep that fills it: an answer given up while its own folder is still
+    /// being read is a row that loses the facts it was just drawn with (see `playlist_row`).
+    #[test]
+    fn a_folder_swept_past_the_old_bound_keeps_every_answer_it_landed() {
+        let _one = ONE_AT_A_TIME.lock();
+        let swept = TRACKS_MAX_ENTRIES.min(1_500);
+
+        for nth in 0..swept {
+            remember(&a_file("wide-sweep", nth), a_track(200.0));
+        }
+
+        assert!(
+            swept > 512,
+            "this folder is wider than the bound this memo had: {swept}"
+        );
+
+        for nth in 0..swept {
+            assert_eq!(
+                probed(&a_file("wide-sweep", nth)),
+                Probed::Track(a_track(200.0)),
+                "row {nth} of a folder swept whole keeps its own answer"
+            );
+        }
     }
 
     /// The same for the gain beside the track, which is read where a player is started rather than
@@ -359,8 +490,8 @@ mod tests {
     fn a_memo_asked_to_hold_more_than_its_bound_holds_no_more_than_its_bound() {
         let _one = ONE_AT_A_TIME.lock();
 
-        for nth in 0..(TRACKS_MAX_ENTRIES * 2) {
-            remember(&a_file("overflow", nth), Probed::Track(a_track(10.0)));
+        for nth in 0..(TRACKS_MAX_ENTRIES + 8) {
+            remember(&a_file("overflow", nth), a_track(10.0));
             remember_gain(&a_file("overflow", nth), 1.0);
         }
 

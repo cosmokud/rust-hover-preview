@@ -650,6 +650,15 @@ impl<'a> RunPainter<'a> {
             paint_run(self.surface, text, origin, rect, foreground, background);
         }
     }
+
+    /// Forget which face this painter last put on the surface's DC.
+    ///
+    /// The DC is one object shared by every painter drawing the same surface, so a face another
+    /// painter selected is this one's cache gone: a painter that does not own the DC alone has to
+    /// say so rather than trust what it last selected.
+    pub(crate) fn forget_the_face(&mut self) {
+        self.selected = None;
+    }
 }
 
 impl Drop for RunPainter<'_> {

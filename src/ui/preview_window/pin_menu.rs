@@ -317,6 +317,12 @@ const SEEK_LABELS: [&str; 4] = ["Remember", "From the Start", "From the Middle",
 /// thing that says what the row does (see `PIN_MENU_ROWS`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum PinMenuRow {
+    /// Turn the playlist band under the card over: the rows of the pin's own walk, which the next
+    /// pin comes up with as this one left them (see `pin_playlist`).
+    ///
+    /// It stands above the rule rather than among the settings below it because it is not a setting
+    /// the pin plays by: it is a band of this window, opened and closed from here.
+    Playlist,
     /// Collapse the pin into the round bubble it leaves on the desktop.
     ToBubble,
     /// Hand this window to a process of its own, where the file in it is nobody's preview: no
@@ -358,15 +364,23 @@ pub(super) enum PinMenuRow {
     OpenWithList,
 }
 
-/// The rows the card's menu holds, from the top of the panel to the bottom: the two ways out
-/// of the pin, the rule, the playback of the file in it, the rule again, the four
-/// settings the pin plays by — the shuffle that answers on the spot, and the three doors the
-/// flyouts hang from — and, below the last of them, the rule and the two ways out to another
-/// program, which are the card's own buttons by another name (see `card_menu_press`).
+/// The rows the card's menu holds, from the top of the panel to the bottom: the band the card can
+/// grow under itself, the rule, the two ways out of the pin, the rule, the playback of the file in
+/// it, the rule again, the four settings the pin plays by — the shuffle that answers on the spot,
+/// and the three doors the flyouts hang from — and, below the last of them, the rule and the two
+/// ways out to another program, which are the card's own buttons by another name (see
+/// `card_menu_press`).
+///
+/// **The first row is a sound's alone**, and it is reachable on a sound's window because nothing
+/// else reads this table: a window of another kind holds a bubble's own rows (see
+/// `pinned_menu_paint`), and a band under a picture would be a second listing in a window that has
+/// no walk of its own.
 ///
 /// The same three doors are what the hover timers watch and what a press on any opens (see
 /// `refresh_pin_menu`).
-const PIN_MENU_ROWS: [PinMenuRow; 16] = [
+const PIN_MENU_ROWS: [PinMenuRow; 18] = [
+    PinMenuRow::Playlist,
+    PinMenuRow::Separator,
     PinMenuRow::Detach,
     PinMenuRow::ToBubble,
     PinMenuRow::ToTaskbar,
@@ -393,6 +407,7 @@ impl PinMenuRow {
     /// (see `a_sound_is_playing`).
     fn label(self, playing: bool) -> &'static str {
         match self {
+            PinMenuRow::Playlist => "Playlist",
             PinMenuRow::ToBubble => "To Bubble",
             PinMenuRow::Detach => "Detach Window",
             PinMenuRow::ToTaskbar => "To Taskbar",
@@ -420,6 +435,7 @@ impl PinMenuRow {
                 pin_chrome::MenuMark::Door
             }
             PinMenuRow::Shuffle => pin_chrome::MenuMark::Check(pin_audio_shuffle()),
+            PinMenuRow::Playlist => pin_chrome::MenuMark::Check(pin_playlist::the_band_is_open()),
             PinMenuRow::ToBubble
             | PinMenuRow::Detach
             | PinMenuRow::ToTaskbar
@@ -1094,6 +1110,16 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
         // put away, because there is nothing to choose from and the mark is the answer.
         Some(PinMenuRow::Shuffle) => {
             toggle_pin_audio_shuffle();
+            true
+        }
+        // The band under the card, turned over on the spot: the window it grows is the one the
+        // panel is standing over, and the panel stays up with the check it now carries — the same
+        // rule the shuffle row keeps, and for the same reason.
+        Some(PinMenuRow::Playlist) => {
+            with_pin(|pin| pin_playlist::toggle(pin));
+            // The rows are built here rather than inside the toggle, because the toggle is reached
+            // with the pin's own lock held and building them asks the pin's walk.
+            pin_playlist::refresh_the_rows();
             true
         }
         // The two ways out of the pin are collapses that take the card off the screen with

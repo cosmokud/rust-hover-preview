@@ -8,7 +8,7 @@
 
 use super::card::{
     clock, AudioPreviewOptions, Card, CardChrome, CardControl, Fact, FactKind, BAR_GAP_PIXELS,
-    BAR_PIXELS, BAR_REACH_PIXELS, CHASE_DIVISOR, CHASE_SECONDS, CLOCK_ADVANCES, CONTROL_GAP_PIXELS,
+    BAR_PIXELS, BAR_REACH_PIXELS, CHASE_DIVISOR, CHASE_SECONDS, CONTROL_GAP_PIXELS,
     CONTROL_SIDE_PIXELS, HEADER_LEVEL, MARK_CELL_ADVANCES, MIN_CONTENT_ADVANCES, RULE_GAP_PIXELS,
     RULE_PIXELS, TIME_GAP_ADVANCES, TRACK_PIXELS, WINDOW_BUTTON_CUSHION_PIXELS,
     WINDOW_BUTTON_GAP_PIXELS, WINDOW_BUTTON_REVEAL_PIXELS,
@@ -60,6 +60,10 @@ pub(super) struct Bar {
 /// The ripples a beat travels as: three, which is what the room a header line leaves a mark of
 /// this size can hold apart — and three is what the loader the ripples come from draws.
 const RIPPLE_COUNT: usize = 3;
+/// The parting marks of the facts line: the one between two facts, and the one between the played
+/// clock and the whole it is measured against — so a line of parts reads as one sentence.
+const FACT_SEPARATOR: &str = " · ";
+const CLOCK_SEPARATOR: &str = " / ";
 
 /// How much softer the ripple at the end of its travel is drawn than one still standing just off
 /// the dot, which is how that loader's own rings fade as they go: the beat as it arrives is the
@@ -106,6 +110,28 @@ pub(super) struct BarRow {
     pub(super) top: i32,
     pub(super) height: i32,
     pub(super) track_height: i32,
+}
+
+/// The row the facts line is drawn in: where it begins under the rule, and how tall it is.
+///
+/// These are the numbers the line is drawn from *and* the band a pointer engages its scroll on, for
+/// the reason [`BarRow`] is one set rather than two: a row laid out by one arithmetic and hit-tested
+/// by another answers a hand somewhere else on the card (see `audio_preview::facts_rect`).
+#[derive(Clone, Copy)]
+pub(super) struct FactsRow {
+    pub(super) top: i32,
+    pub(super) height: i32,
+}
+
+/// The facts line's row: the same walk down the page `build_page` makes, from the rule under the name
+/// to the line itself, whose height is the body line's.
+pub(super) fn facts_row(metrics: &TextMetrics) -> FactsRow {
+    let (_, rule_top) = header_line(metrics);
+
+    FactsRow {
+        top: rule_top + scaled(RULE_PIXELS, metrics.scale) + scaled(RULE_GAP_PIXELS, metrics.scale),
+        height: metrics.line_height[BODY_LEVEL as usize],
+    }
 }
 
 /// The bar's row: the bar's own height, whether or not buttons are standing in it. A button is
@@ -600,12 +626,11 @@ pub(super) fn build_page(
     let header_advance = metrics.advance[HEADER_LEVEL as usize].max(1);
     let body_advance = metrics.advance[BODY_LEVEL as usize].max(1);
     let header_height = metrics.line_height[HEADER_LEVEL as usize];
-    let body_height = metrics.line_height[BODY_LEVEL as usize];
     let padding = metrics.padding;
 
-    let rule_gap = scaled(RULE_GAP_PIXELS, metrics.scale);
     let rule_height = scaled(RULE_PIXELS, metrics.scale);
     let bar_row = bar_row(metrics);
+    let facts_row = facts_row(metrics);
 
     let page_color = rgb(theme.background());
     let foreground = rgb(theme.foreground());
@@ -665,16 +690,26 @@ pub(super) fn build_page(
     }];
 
     let (header_top, rule_top) = header_line(metrics);
-    let facts_top = rule_top + rule_height + rule_gap;
+    let facts_top = facts_row.top;
 
     let bar_width = content_right - content_left;
+    // The facts line ends where the clock's readout begins, less the gap kept off it: the room it is
+    // drawn in is the room the readout really takes rather than one reserved for the longest readout
+    // there is (see `facts_right`), and a line that runs past it ends on the last fact it holds whole
+    // (see `facts_edge`), so nothing of it is cut at rest.
     let mut facts = fact_runs(
         &card.facts,
         content_left,
-        bar_width - body_advance * (TIME_GAP_ADVANCES + CLOCK_ADVANCES),
+        facts_edge(
+            &card.facts,
+            content_left,
+            facts_right(card, content_right, body_advance),
+            body_advance,
+        ),
+        card.facts_offset,
         body_advance,
-        foreground,
         muted,
+        foreground,
         number,
     );
     facts.extend(clock_runs(card, content_right, body_advance, muted, accent));
@@ -692,7 +727,7 @@ pub(super) fn build_page(
         rule_height,
         facts,
         facts_top,
-        facts_height: body_height,
+        facts_height: facts_row.height,
         bar: Bar {
             left: bar_left,
             width: bar_span,
@@ -780,9 +815,9 @@ pub(super) fn fill_span(card: &Card, bar_width: i32, scale: f32) -> (i32, i32) {
     }
 }
 
-/// The readout at the right edge of the facts line: what has been played in the accent, and
-/// the whole it is measured against in the page's own muted gray. A card with no player behind
-/// it has only the whole to show, and one whose file does not say how long it is has only the
+/// What the readout at the right edge of the facts line says and what has been played in the
+/// accent, and the whole it is measured against in the page's own muted gray. A card with no player
+/// behind it has only the whole to show, and one whose file does not say how long it is has only the
 /// number that moves.
 pub(super) fn clock_runs(
     card: &Card,
@@ -791,27 +826,17 @@ pub(super) fn clock_runs(
     muted: [u8; 3],
     accent: [u8; 3],
 ) -> Vec<PageRun> {
-    let mut parts: Vec<(String, [u8; 3])> = Vec::new();
-    match (card.elapsed, card.duration) {
-        (Some(elapsed), Some(duration)) if duration > 0.0 => {
-            parts.push((clock(elapsed), accent));
-            parts.push((" / ".to_string(), muted));
-            parts.push((clock(duration), muted));
-        }
-        (Some(elapsed), _) => parts.push((clock(elapsed), accent)),
-        (None, Some(duration)) if duration > 0.0 => parts.push((clock(duration), muted)),
-        _ => {}
-    }
-
-    let total: i32 = parts
-        .iter()
-        .map(|(text, _)| text_width(text, advance))
-        .sum();
+    let parts = clock_parts(card);
+    let total: i32 = parts.iter().map(|text| text_width(text, advance)).sum();
     let mut x = right - total;
+    // The played number is the one part of the readout that moves, and it is drawn in the accent the
+    // bar's played part is drawn in; the whole beside it is the page's muted gray.
+    let played = card.elapsed.is_some();
 
     parts
         .into_iter()
-        .map(|(text, color)| {
+        .enumerate()
+        .map(|(index, text)| {
             let width = text_width(&text, advance);
             let run = PageRun {
                 text,
@@ -820,7 +845,7 @@ pub(super) fn clock_runs(
                 origin: x,
                 style: {
                     let mut style = plain_style(BODY_LEVEL);
-                    style.foreground = color;
+                    style.foreground = if index == 0 && played { accent } else { muted };
                     style
                 },
             };
@@ -830,72 +855,193 @@ pub(super) fn clock_runs(
         .collect()
 }
 
-/// The facts as runs, each in its own color, with the separators between them — cut to the
-/// room the clock leaves, so what gives way on a narrow card is the last fact rather than the
-/// clock or the names of the facts before it.
+/// The readout at the right edge of the facts line, part by part: what has been played, the whole it
+/// is measured against, and nothing at all where there is neither. Measured as well as drawn from
+/// these, so the room the facts give up for it is the room it takes (see `facts_right`).
+fn clock_parts(card: &Card) -> Vec<String> {
+    match (card.elapsed, card.duration) {
+        (Some(elapsed), Some(duration)) if duration > 0.0 => {
+            vec![clock(elapsed), CLOCK_SEPARATOR.to_string(), clock(duration)]
+        }
+        (Some(elapsed), _) => vec![clock(elapsed)],
+        (None, Some(duration)) if duration > 0.0 => vec![clock(duration)],
+        _ => Vec::new(),
+    }
+}
+
+/// How wide the readout is, which is the room the facts line gives up for it.
+fn clock_width(card: &Card, advance: i32) -> i32 {
+    clock_parts(card)
+        .iter()
+        .map(|text| text_width(text, advance))
+        .sum()
+}
+
+/// Where the facts line ends: one `TIME_GAP_ADVANCES` gap left of the readout the clock is drawn in,
+/// measured as it will be drawn rather than reserved for the longest readout there is — the room
+/// `1:02:03 / 1:02:03` needs is a file an hour long's, and every card under one was giving eighteen
+/// advances of its facts line away for a clock that never took them.
+///
+/// A card with no clock behind it ends the line at the content box's own edge: there is nothing to
+/// keep the room off.
+pub(super) fn facts_right(card: &Card, content_right: i32, advance: i32) -> i32 {
+    let clock = clock_width(card, advance);
+
+    if clock == 0 {
+        content_right
+    } else {
+        content_right - clock - advance * TIME_GAP_ADVANCES
+    }
+}
+
+/// The facts a line draws, in the order it draws them: a fact with nothing to say is left out whole
+/// rather than given a parting mark of its own — `channels` is empty for a sound that states none,
+/// and a mark with nothing behind it is a mark between nothing and nothing.
+fn laid_facts(facts: &[Fact]) -> impl Iterator<Item = &Fact> {
+    facts.iter().filter(|fact| !fact.text.is_empty())
+}
+
+/// How wide the whole facts line wants to be, its parting marks included — the marks it really draws,
+/// one between two facts rather than one before every fact but the first: the length a card the room
+/// has no place for scrolls across itself (see `Card::facts_offset`).
+pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
+    let mut width = 0;
+
+    for (index, fact) in laid_facts(facts).enumerate() {
+        if index > 0 {
+            width += text_width(FACT_SEPARATOR, advance);
+        }
+        width += text_width(&fact.text, advance);
+    }
+
+    width
+}
+
+/// The right edge of the box the facts line is drawn in: the room the clock leaves, drawn back to the
+/// end of the last whole fact that fits in it — so a box that cannot hold the line ends it on a fact
+/// rather than cutting the one that runs past it (see `fact_runs`).
+///
+/// A line the room holds whole keeps the room's own edge: there is nothing to draw back from. So does
+/// a room too narrow for even the first fact, which is that fact cut (see `fact_runs`).
+///
+/// Read of the line at rest, so the edge is one number per card: what the box clips as the line
+/// travels under it is the scroll's business, not the edge's.
+pub(super) fn facts_edge(facts: &[Fact], left: i32, right: i32, advance: i32) -> i32 {
+    let mut edge = left;
+
+    for (index, fact) in laid_facts(facts).enumerate() {
+        let mark = if index == 0 {
+            0
+        } else {
+            text_width(FACT_SEPARATOR, advance)
+        };
+        let next = edge + mark + text_width(&fact.text, advance);
+        if next > right {
+            break;
+        }
+        edge = next;
+    }
+
+    if edge == left || edge - left == facts_width(facts, advance) {
+        right
+    } else {
+        edge
+    }
+}
+
+/// The facts as runs, each in its own ink, laid from `left` into the room that ends at `right` — the
+/// room the clock leaves, drawn back to the last fact it holds whole (see [`facts_edge`]) — with a
+/// parting mark before every fact after the first.
+///
+/// A fact is drawn whole where the whole of it fits: the room is the room the readout really leaves,
+/// so a fact that fits is never the one dropped. A line the room has no space for is the card's second
+/// scroll rather than a cut line: `offset` is how far the whole line has been carried back under the
+/// box, and what the box cannot hold is out of sight for now (see `Card::facts_offset`).
+///
+/// A parting mark is laid only where the fact after it is: the line ends on a character at every
+/// offset of its travel, never on the mark of a fact that has not come into the room yet.
+// Eight: the line, the room it is drawn in, and the three inks a fact can be set in — the page
+// reads all of them in one place and hands them to the one walk that lays them out.
 #[allow(clippy::too_many_arguments)]
 fn fact_runs(
     facts: &[Fact],
     left: i32,
-    room: i32,
+    right: i32,
+    offset: i32,
     advance: i32,
-    foreground: [u8; 3],
     muted: [u8; 3],
+    foreground: [u8; 3],
     number: [u8; 3],
 ) -> Vec<PageRun> {
     let mut runs = Vec::new();
-    let mut x = left;
-    let right = left + room.max(0);
+    let mut x = left - offset.max(0);
+    let mut first = true;
 
-    for (index, fact) in facts.iter().enumerate() {
-        if x >= right {
-            break;
-        }
+    for fact in laid_facts(facts) {
+        let mark = if first {
+            0
+        } else {
+            text_width(FACT_SEPARATOR, advance)
+        };
+        let start = x + mark;
+        let width = text_width(&fact.text, advance);
+        let laid = (start + width).min(right) > start.max(left);
 
-        if index > 0 {
-            let separator = " · ";
-            let separator_width = text_width(separator, advance);
-            if x + separator_width > right {
-                break;
+        if laid {
+            if !first {
+                push_fact_run(&mut runs, FACT_SEPARATOR, x, left, right, advance, muted);
             }
-            runs.push(PageRun {
-                text: separator.to_string(),
-                x,
-                width: separator_width,
-                origin: x,
-                style: {
-                    let mut style = plain_style(BODY_LEVEL);
-                    style.foreground = muted;
-                    style
-                },
-            });
-            x += separator_width;
+
+            let ink = match fact.kind {
+                FactKind::Format => number,
+                FactKind::Reading => foreground,
+                FactKind::Note => muted,
+            };
+            push_fact_run(&mut runs, &fact.text, start, left, right, advance, ink);
         }
 
-        let text = cut_to_width(&fact.text, right - x, advance);
-        let width = text_width(&text, advance);
-        runs.push(PageRun {
-            text,
-            x,
-            width,
-            origin: x,
-            style: {
-                let mut style = plain_style(BODY_LEVEL);
-                style.foreground = match fact.kind {
-                    FactKind::Name => foreground,
-                    FactKind::Number => number,
-                    FactKind::Word => muted,
-                };
-                style
-            },
-        });
-        x += width;
-        if width == 0 {
-            break;
-        }
+        x = start + width;
+        first = false;
     }
 
     runs
+}
+
+/// One piece of the facts line laid at `x`, drawn into the part of it inside the box `left`–`right`
+/// and nowhere else — so nothing of the line is ever drawn over the clock — and the `x` the piece
+/// after it begins at.
+///
+/// The piece is clipped to that box rather than cut to it: a line the room cannot hold is a line
+/// scrolled across the card, and what is past the edge of the room is out of sight for now (see
+/// `Card::facts_offset`).
+fn push_fact_run(
+    runs: &mut Vec<PageRun>,
+    text: &str,
+    x: i32,
+    left: i32,
+    right: i32,
+    advance: i32,
+    ink: [u8; 3],
+) -> i32 {
+    let width = text_width(text, advance);
+    let box_left = x.max(left);
+    let box_right = (x + width).min(right);
+
+    if box_right > box_left {
+        runs.push(PageRun {
+            text: text.to_string(),
+            x: box_left,
+            width: box_right - box_left,
+            origin: x,
+            style: {
+                let mut style = plain_style(BODY_LEVEL);
+                style.foreground = ink;
+                style
+            },
+        });
+    }
+
+    x + width
 }
 
 // -------------------------------------------------------------------- drawing
@@ -1380,23 +1526,4 @@ fn paint_window_button(
 /// pitch, so a count of characters is the whole measurement.
 pub(super) fn text_width(text: &str, advance: i32) -> i32 {
     text.chars().count() as i32 * advance.max(1)
-}
-
-/// A name cut to the room it has, with an ellipsis where it was cut. A name that does not fit
-/// at all is dropped rather than drawn over the card.
-fn cut_to_width(text: &str, room: i32, advance: i32) -> String {
-    let advance = advance.max(1);
-    let room = (room / advance).max(0) as usize;
-    let characters = text.chars().count();
-    if characters <= room {
-        return text.to_string();
-    }
-    if room == 0 {
-        return String::new();
-    }
-
-    let mut cut: String = text.chars().take(room - 1).collect();
-    cut.push('…');
-
-    cut
 }

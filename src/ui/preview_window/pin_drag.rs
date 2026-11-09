@@ -96,6 +96,17 @@ pub(super) unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
         )
     };
 
+    // A pinned sound's playlist band is the one window of this app's whose height a hand can pull,
+    // and the card above it is never pulled: its two edges are the window's two edges and wear the
+    // shape a vertical edge wears everywhere else (see `pin_playlist::edge_at`).
+    if dragging.is_none() && pin_playlist::edge_at(point.0 - origin.0, point.1 - origin.1).is_some()
+    {
+        if let Ok(cursor) = LoadCursorW(None, IDC_SIZENS) {
+            SetCursor(cursor);
+        }
+        return true;
+    }
+
     // What a drag that is going says about the pointer stands until it lets go, whatever the
     // pointer has since been dragged over: a hand that is carrying a window is not asking where
     // the edges of it are, and a hand that is pulling one should keep the shape it began with.
@@ -825,6 +836,10 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
             pin.volume.held = None;
         }
     }
+
+    // And the playlist band's own height, which the pointer was taken for the way a drag takes it:
+    // a capture somebody else has taken is a band whose edge has stopped following the hand.
+    pin_playlist::the_capture_was_lost();
 
     // And the card's menu, which the pointer is held for exactly the way a drag is: a capture
     // somebody else took is a menu nothing can be answered in, and the panels are no longer

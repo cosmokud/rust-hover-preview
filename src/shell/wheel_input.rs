@@ -35,9 +35,9 @@
 //! behind another program is not (see `key_input::pin_owns_foreground`).
 
 use crate::app::seam::{
-    ask_the_pin_to_go_behind, MODELS_BAND, PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA,
-    PIN_VOLUME_REGION, PIN_ZOOM_DELTA, PIN_ZOOM_REGION, TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION,
-    TEXT_SIZE_REGION,
+    ask_the_pin_to_go_behind, MODELS_BAND, PIN_PLAYLIST_BAND, PIN_PLAYLIST_DELTA,
+    PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_VOLUME_REGION, PIN_ZOOM_DELTA, PIN_ZOOM_REGION,
+    TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION, TEXT_SIZE_REGION,
 };
 use crate::app::seam::{post_a_notch_to_the_model, wake_preview_loop};
 use crate::shell::explorer_hook::{
@@ -311,6 +311,21 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
                     }
                     return LRESULT(1);
                 }
+            }
+        }
+
+        // The playlist band under a pinned sound's card: a notch over it is the list being stepped
+        // rather than the card being zoomed, and it is asked before the pictures' own notch because
+        // a band stands inside the box that road claims whole (see `PIN_PLAYLIST_BAND`).
+        if let Some(block) = PIN_PLAYLIST_BAND.the_block_over((info.pt.x, info.pt.y)) {
+            if preview_takes_the_wheel(block) {
+                if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
+                    PIN_PLAYLIST_DELTA
+                        .in_block(block)
+                        .fetch_add(notches, Ordering::AcqRel);
+                    wake_preview_loop();
+                }
+                return LRESULT(1);
             }
         }
 

@@ -102,14 +102,21 @@ impl PinnedPreview {
     /// The box the window occupies: the media's own box with the caption above it and the transport
     /// bar below it — or the media's box itself, for a kind whose chrome is drawn over it, since a
     /// strip of chrome over a picture needs no room beside it.
+    ///
+    /// A pinned sound's card grows a playlist band under that box, and the band is the *window's*
+    /// rather than the media's: what it adds is rows of window below the card, and the card's own
+    /// box is what every one of its controls, its paint and its press are answered against (see
+    /// `pin_playlist::pin_playlist_band`).
     pub(super) fn window_box(&self) -> ScreenRegion {
-        pinned_window_box_of(
+        let (left, top, right, bottom) = pinned_window_box_of(
             self.content,
             self.dpi,
             self.transport_bar,
             self.overlay,
             self.caption,
-        )
+        );
+
+        (left, top, right, bottom + pin_playlist::playlist_rows(self))
     }
 
     /// The size of the window, as the renderer and the hit tests want it.
@@ -355,6 +362,14 @@ pub(crate) enum PinCommand {
     ///
     /// Nothing at all to a pin that holds no page, or that holds one with nothing selected.
     FindNext,
+    /// Play the row a sound's card has picked in its playlist band: what a `Return` in a pinned card
+    /// asks for, which is the key a hand already inside a list answers it with.
+    ///
+    /// It is the row the hand has *picked* and never the one it is merely on, and it is nothing at all
+    /// to a window with no band up or a band with no row picked — the file is named by a press or by
+    /// the arrows, so a `Return` names nothing a hand has not asked for (see
+    /// `pin_playlist::play_the_pick`).
+    PlayRow,
 }
 
 // The commands the window procedure has left for the preview loop are a field of the pin's own
@@ -1352,6 +1367,9 @@ pub(super) struct AudioCardClock {
     /// at in its place.
     pub(super) paused: Option<f64>,
     pub(super) name_offset: i32,
+    /// How far the card's facts line has been scrolled, which is the second line of it a card can
+    /// have no room for (see `audio_preview::Card::facts_offset`).
+    pub(super) facts_offset: i32,
     pub(super) dpi: u32,
     /// What the card's own row of buttons is saying, read in one look before the media's own lock
     /// is taken rather than from under it (see `pinned_audio_chrome`).
@@ -3212,7 +3230,7 @@ pub(super) fn pinned_audio_card_box(
         pressed: None,
         window_buttons: false,
     });
-    let Some(card) = audio_card(path, None, None, 0, chrome) else {
+    let Some(card) = audio_card(path, None, None, 0, 0, chrome) else {
         return rect;
     };
 
@@ -3259,13 +3277,7 @@ pub(super) fn pin_audio_control_at(pin: &PinnedPreview, x: i32, y: i32) -> Optio
         return None;
     }
 
-    let (_, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
+    let (top, _) = pinned_media_band_rows(pin);
 
     audio_preview::control_at(
         x,
@@ -3292,13 +3304,7 @@ pub(super) fn pin_audio_control_rects(
         return boxes;
     }
 
-    let (_, height) = pin.window_size();
-    let (band_top, _) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
+    let (band_top, _) = pinned_media_band_rows(pin);
     let (window_left, window_top, _, _) = pin.window_box();
     let width = (pin.content.2 - pin.content.0).max(1) as u32;
 
@@ -3318,6 +3324,58 @@ pub(super) fn pin_audio_control_rects(
     }
 
     boxes
+}
+
+/// Whether the pointer is on the facts line of the card a pin is showing, which is the whole of what
+/// engages that line's scroll (see `NameScroll::set_engaged`).
+///
+/// The row is stored in the card's own pixels, taken at the take-up where the card's clock is (see
+/// `note_audio_facts_rect`), so the point is taken to the card the way a press on it is: the media
+/// band's own top row is the one thing between the window and the card (see `pin_audio_control_at`).
+/// Nothing for a pin showing no sound's card — and no line, and no box.
+pub(super) fn pin_audio_facts_at(pin: &PinnedPreview, x: i32, y: i32) -> bool {
+    let Some((left, top, right, bottom)) = pin.audio_facts_rect else {
+        return false;
+    };
+
+    let (band_top, _) = pinned_media_band_rows(pin);
+    let y = y - band_top;
+
+    x >= left && x < right && y >= top && y < bottom
+}
+
+/// Write down the row of the facts line the card a pin is showing is drawn in, asked of the card's own
+/// arithmetic at the one moment its clock is in hand — the take-up every install ends on, and the
+/// take-up a pin comes up at (see `event_loop`'s own `PreviewMessage::Pin` arm).
+pub(super) fn note_audio_facts_rect(
+    path: &Path,
+    elapsed: Option<f64>,
+    duration: Option<f64>,
+    width: u32,
+    dpi: u32,
+) {
+    let row = audio_facts_rect(path, elapsed, duration, width, dpi)
+        .map(|rect| (rect.left, rect.top, rect.right, rect.bottom));
+
+    if let Some(mut state) = pin_state() {
+        if let Some(pin) = state.pin_mut() {
+            pin.audio_facts_rect = row;
+        }
+    }
+}
+
+/// Whether the facts line of the card on screen is to travel: a pin answers with the pointer resting
+/// on its line, which is asked on the move and on the tick (see `pin_audio_facts_at`), and a card with
+/// no pin behind it is a hover's, whose line travels as it always has — nobody's pointer is on a
+/// window nobody is in.
+pub(super) fn audio_facts_line_engaged() -> bool {
+    if !pinned() {
+        return true;
+    }
+
+    pin_state()
+        .and_then(|state| state.pin().map(|pin| pin.audio_facts_hovered))
+        .unwrap_or(true)
 }
 
 /// Whether the card's two window buttons are showing at the window's own point: the top band as
@@ -3359,13 +3417,7 @@ pub(super) fn pin_audio_command_bar_band(pin: &PinnedPreview) -> Option<(i32, i3
     let bar = audio_preview::control_box(CardControl::Seek, width, pin.dpi, options, true)?;
     let button = audio_preview::control_box(CardControl::Previous, width, pin.dpi, options, true)?;
 
-    let (_, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
+    let (top, _) = pinned_media_band_rows(pin);
     let margin = logical_px(pin.dpi, AUDIO_COMMAND_BAR_REVEAL_PIXELS);
 
     Some((
