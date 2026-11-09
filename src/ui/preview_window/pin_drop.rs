@@ -99,7 +99,7 @@ pub(super) unsafe fn take_drop(drop: HDROP) -> Option<PathBuf> {
 /// is opened and nothing is read: a `.ts` is answered by the name's own claim, which is what the walk
 /// scan behind a caption asks of every file in a folder for the same reason (see
 /// `routing::kind_of_name` and [`crate::formats::routing::Asked::Name`]).
-fn the_pin_can_show(path: &Path) -> bool {
+pub(super) fn the_pin_can_show(path: &Path) -> bool {
     if !path.is_file() {
         // A folder is the one entry a drop may name that a kind claims nothing about, and a folder is
         // not this window's to show: the listing is the answer to a drop of one, and it is not here.
