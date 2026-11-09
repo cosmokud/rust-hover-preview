@@ -1025,6 +1025,14 @@ pub(crate) enum PreviewMessage {
     /// that walk is depends on the band, and nothing else re-reads the mode now that it has changed
     /// (see `pin_playlist::toggle` and `pin_walk::ask_the_walk_again`).
     PinWalkAgain,
+    /// The tray's `Restore Pin Mode` row was clicked: the pin that is up is to be brought back over
+    /// everything, whatever state it is in — put away as its bubble, minimized into the taskbar, or
+    /// left standing behind the program the user moved on to (see `restore_pinned_preview`).
+    ///
+    /// It is a message rather than a call because the pin is the preview thread's: the window it
+    /// stands in, the rank it is owed and the caret it is given are all that thread's to ask, and a
+    /// tray answering a menu row is not on it.
+    PinRestore,
     /// The small subtitle files a film's own tracks were copied into are ready, sent the
     /// moment the extraction's one pass finishes (see `subtitle_files`).
     ///
@@ -2022,6 +2030,7 @@ impl SeamMessage {
     const KILL_STRAY_PLAYER: u8 = 28;
     const VIEWER_DETACHED: u8 = 29;
     const PIN_WALK_AGAIN: u8 = 30;
+    const PIN_RESTORE: u8 = 31;
 
     /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
     fn of(tag: u8, numbers: &[i64]) -> Self {
@@ -2186,6 +2195,7 @@ impl SeamMessage {
             }
             PreviewMessage::PinAnswered(_) => None,
             PreviewMessage::PinWalkAgain => Some(Self::of(Self::PIN_WALK_AGAIN, &[])),
+            PreviewMessage::PinRestore => Some(Self::of(Self::PIN_RESTORE, &[])),
             PreviewMessage::VideoSubtitlesReady(path) => {
                 Self::of(Self::VIDEO_SUBTITLES_READY, &[]).with_text(path.as_os_str().encode_wide())
             }
@@ -2270,6 +2280,7 @@ impl SeamMessage {
             },
             Self::PIN_CHANGED => PreviewMessage::PinChanged,
             Self::PIN_WALK_AGAIN => PreviewMessage::PinWalkAgain,
+            Self::PIN_RESTORE => PreviewMessage::PinRestore,
             Self::TRAY_VOLUME => PreviewMessage::TrayVolume {
                 audio: numbers[0] != 0,
             },
@@ -3279,6 +3290,7 @@ mod tests {
                 generation: 10,
                 ok: true,
             },
+            PreviewMessage::PinRestore,
         ]
     }
 
