@@ -9,9 +9,11 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Put a playlist in the order it is walked in: the files after the first shuffled, so the
-/// permutation is drawn once — when the playlist is spawned or respawned — and every step
-/// after it is the next file of the order rather than a fresh draw (see `PinStep::order`).
+/// Put the files an order is walked in after its head: one permutation of them, drawn once — when
+/// the playlist is spawned or respawned — so every step after it is the next file of the order
+/// rather than a fresh draw (see `PinStep::order`). What is never drawn is the head: the playlist
+/// is built around the file the pin is showing, and that file is the slot the walk stands on
+/// (see `around_the_showing_file`).
 fn shuffle_rest(rest: &mut [PathBuf]) {
     for i in (1..rest.len()).rev() {
         rest.swap(i, roll() % (i + 1));
@@ -23,6 +25,61 @@ fn shuffle_rest(rest: &mut [PathBuf]) {
 /// shuffle is a walk through one kind of file, whichever of the three it is.
 fn kind_of_the_list(list: &[PathBuf], claims: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     list.iter().filter(|path| claims(path)).cloned().collect()
+}
+
+/// Put the file the pin is showing on the playlist that walks it, once, so that a step from it is
+/// a step from where the user is looking rather than from a slot the playlist was never built
+/// around.
+///
+/// **A playlist is built *around* the file on the screen, and this is what says so.** The walk
+/// steps from that file by finding it on the order (`pin_navigation::step_to`), so a playlist the
+/// file is not on answers **Next** with its first file and **Previous** with its last — a step
+/// taken from a slot nobody is looking at, which is a **Previous** that lands on a file the user
+/// never came from. A file on it twice is the same fault the other way: two slots a step back can
+/// land on, and only one of them is where the user was.
+///
+/// What this does *not* do is move a file already on the order. A step already taken stays where
+/// the step put it, and the walk finds its own place on the playlist wherever that is; nothing here
+/// re-draws the permutation, because a draw is what a **Previous** must never be (see
+/// `PinStep::order`).
+fn around_the_showing_file(order: &mut Vec<PathBuf>, at: &Path, standing: Option<&Path>) {
+    if order.is_empty() {
+        // A playlist of nothing is a walk with nowhere to go, and the file on screen is not a
+        // step it could take: the pin keeps what it is showing (see `PinStep::advance`).
+        return;
+    }
+
+    if order.iter().any(|file| pin_navigation::same_file(file, at)) {
+        // A second entry of the same file goes, the first one stays: which of the two the walk
+        // stands on is the first one a step back can reach, and the user's file is that one.
+        let mut kept = false;
+        let mut walked: Vec<PathBuf> = Vec::with_capacity(order.len());
+        for file in std::mem::take(order) {
+            if pin_navigation::same_file(&file, at) {
+                if kept {
+                    continue;
+                }
+                kept = true;
+            }
+            walked.push(file);
+        }
+        *order = walked;
+        return;
+    }
+
+    // A file the order is not on is put where the walk is: the slot of the file the press was
+    // asked from, or the head where this is a playlist being spawned and the walk is standing on
+    // the file it is built around (see `answer_pin_job`).
+    let slot = standing
+        .and_then(|standing| {
+            order
+                .iter()
+                .position(|file| pin_navigation::same_file(file, standing))
+        })
+        .unwrap_or(0)
+        .min(order.len());
+
+    order.insert(slot, at.to_path_buf());
 }
 
 /// A roll for the playlist: a number drawn from the clock mixed
@@ -89,6 +146,17 @@ pub(crate) struct PinStep {
     /// walk anchored on a sound, the video one for a film, the image one for a picture — and
     /// the folder's own order everywhere else.
     pub(super) shuffle: bool,
+    /// How far forward this walk has got along `order` since the playlist was spawned: the one
+    /// measure of whether the permutation is spent.
+    ///
+    /// **A permutation is spent by being walked forward, not by where the walk happens to
+    /// stand.** The last file of the order is the same file whether the walk stepped forward
+    /// onto it or wrapped onto it with **Previous**, and a playlist read off the position alone
+    /// redrew its permutation the moment a back press had walked round to the end — which is a
+    /// **Next** that answers with a file the user had not come from. So a forward step counts
+    /// and a back step gives the count back, and only a walk that has walked the whole order
+    /// forward draws another (see `advance` and `answer_pin_job`).
+    pub(super) progress: usize,
     /// The category of the first file pinned, which is what `order` was filtered by and
     /// what the next press reuses instead of recomputing from the file the pin is
     /// standing on — or nothing where the walk was asked with no session behind it, in
@@ -148,8 +216,13 @@ impl PinStep {
         }
         // A shuffled walk stepping past its last file respawns the playlist rather than
         // wrapping it; a single-file shuffle has nowhere to respawn to.
+        // **And only where the walk got there by walking the order forward** (see `progress`).
+        // A step back from the head wraps onto the last file of the shuffle, and a **Next** from
+        // there is the order walked round to the head — the file the pin was taken up on —
+        // rather than a permutation a back press is read as having spent.
         if direction >= 0
             && self.shuffle
+            && self.progress >= self.order.len().saturating_sub(1)
             && self
                 .order
                 .last()
@@ -168,12 +241,27 @@ impl PinStep {
             shuffle_rest(&mut rest);
             self.order = std::iter::once(at).chain(rest).collect();
             self.at = self.order[1].clone();
+            // The new permutation has had its head and one file of its own walked: the count
+            // starts again for the order in hand rather than carrying the spent one's.
+            self.progress = 1;
             return Some(self.at.clone());
         }
         // Every other step is along the order — back the previous file, forward the next
         // one — which wraps at either end, and a file no longer on it steps onto the end it
         // points at.
-        self.at = pin_navigation::step_to(&self.at, &self.order, direction)?;
+        let next = pin_navigation::step_to(&self.at, &self.order, direction)?;
+        // A shuffled playlist of one file has nowhere to step to: the step onto itself is no step,
+        // and answering with the file already on screen would be a walk that goes round for ever
+        // (see `step_over`, which bounds itself on the same answer).
+        if self.shuffle && pin_navigation::same_file(&next, &self.at) {
+            return None;
+        }
+        self.at = next;
+        if direction >= 0 {
+            self.progress = (self.progress + 1).min(self.order.len());
+        } else {
+            self.progress = self.progress.saturating_sub(1);
+        }
         Some(self.at.clone())
     }
 }
@@ -626,6 +714,9 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             // permutation instead of waiting for the step after it.
             if shuffle
                 && *step > 0
+                && session
+                    .as_ref()
+                    .is_some_and(|session| session.progress >= order.len().saturating_sub(1))
                 && order
                     .last()
                     .is_some_and(|last| pin_navigation::same_file(last, at))
@@ -638,6 +729,17 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 shuffle_rest(&mut rest);
                 order = std::iter::once(at.clone()).chain(rest).collect();
             }
+            // Whatever road built the order, a playlist that shuffles is one the file on screen is
+            // on — otherwise **Previous** answers with the last file of an order the pin was never
+            // walking (see `around_the_showing_file`). A linear walk is the folder's own order and
+            // is left exactly as the folder is, a deleted file and all.
+            if shuffle {
+                around_the_showing_file(
+                    &mut order,
+                    at,
+                    session.as_deref().map(|session| session.at.as_path()),
+                );
+            }
             let mut walk = PinStep {
                 at: at.clone(),
                 // The walk is asked from the file the pin is standing on, and steps from it
@@ -647,6 +749,10 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 order,
                 missed: 0,
                 shuffle,
+                // Carried like the playlist itself: how far forward the walk has got says
+                // whether this press is the permutation spent or the order walked round (see
+                // `advance`).
+                progress: session.as_ref().map_or(0, |session| session.progress),
                 // Carried so the next press reuses it: the walk the pin lands on is kept
                 // as the walk of the file on screen, whose anchor this is (see
                 // `step_pinned_file`).

@@ -141,6 +141,7 @@ fn a_drop_of_several_files_leaves_one_pick_and_the_first_of_them() {
         order: vec![second.clone()],
         missed: 0,
         shuffle: false,
+        progress: 0,
         anchor: Some(crate::formats::routing::NavCategory::Images),
     });
     if let Some(drop) = pin_drop::take_dropped_on() {
@@ -328,6 +329,7 @@ fn a_drop_is_taken_with_the_update_setting_off() {
         order: vec![showing.clone()],
         missed: 0,
         shuffle: false,
+        progress: 0,
         anchor: Some(crate::formats::routing::NavCategory::Images),
     });
     let mut dropped_pick = false;
@@ -406,6 +408,7 @@ fn a_refused_drop_leaves_the_pick_the_walk_and_the_pins_file_alone() {
         order: vec![showing.clone(), folder.join("b.png")],
         missed: 0,
         shuffle: false,
+        progress: 0,
         anchor: Some(crate::formats::routing::NavCategory::Images),
     };
     stand_pin_walk(Some(held.clone()));
