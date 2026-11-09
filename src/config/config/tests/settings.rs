@@ -638,3 +638,54 @@ fn the_differences_are_named_by_the_keys_the_file_writes() {
         "the section the edit sits under, and only that one"
     );
 }
+
+/// A switch is a reason to offer a reset like any other setting, and it is named by the key
+/// the file writes it under: the update switches are on the `System` submenu, which is a menu
+/// item rather than a file, and a hand edit of one is a difference like any other.
+#[test]
+fn a_switch_of_the_updates_is_named_by_the_key_the_file_writes() {
+    let config = AppConfig {
+        silent_auto_update: true,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        config.settings_apart_from_recommended(),
+        vec![(
+            "silent_auto_update".to_string(),
+            "true".to_string(),
+            DEFAULT_SILENT_AUTO_UPDATE.to_string(),
+        )]
+    );
+}
+
+/// Whether an update found as the app starts is put on without asking is the user's to switch
+/// on: a fresh configuration checks for one and installs nothing, which is what a row above the
+/// `System` submenu is for.
+#[test]
+fn silent_auto_update_is_off_until_the_file_says_otherwise() {
+    let config = AppConfig::default();
+    assert_eq!(config.silent_auto_update, DEFAULT_SILENT_AUTO_UPDATE);
+    assert!(
+        !config.silent_auto_update,
+        "a fresh configuration installs nothing unasked"
+    );
+
+    let mut ini = written_file();
+    ini.set(
+        CONFIG_SECTION,
+        "silent_auto_update",
+        Some("true".to_string()),
+    );
+    assert!(read_file(&mut ini).silent_auto_update);
+
+    // A file written before the switch existed says nothing about it, and saying nothing is
+    // the switch left where it starts.
+    let mut ini = Ini::new();
+    ini.set(
+        CONFIG_SECTION,
+        "check_for_updates",
+        Some("true".to_string()),
+    );
+    assert!(!read_file(&mut ini).silent_auto_update);
+}

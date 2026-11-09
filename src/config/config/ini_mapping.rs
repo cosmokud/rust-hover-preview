@@ -46,6 +46,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "silent_auto_update",
+            Some(self.silent_auto_update.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "hover_delay_ms",
             Some(self.hover_delay_ms.to_string()),
         );
@@ -604,6 +609,12 @@ impl AppConfig {
         // and a file that says nothing about it is left where it starts.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "check_for_updates") {
             self.check_for_updates = value;
+        }
+        // Whether an update found as the app starts is put on without asking. A file written
+        // before the setting existed has no key for it, so a fresh installation checks and
+        // installs, and one that says nothing about it is left where it starts.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "silent_auto_update") {
+            self.silent_auto_update = value;
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "hover_delay_ms") {
             self.hover_delay_ms = value;

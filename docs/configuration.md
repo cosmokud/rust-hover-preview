@@ -29,6 +29,7 @@ pin_update_on_hover=false
 pin_update_move_to_top=true
 preview_enabled=true
 run_at_startup=true
+silent_auto_update=false
 theme=light
 toggle_key=f7
 
