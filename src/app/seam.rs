@@ -1235,26 +1235,44 @@ pub(crate) fn send_preview(message: PreviewMessage) {
             crate::app::viewer::make_sure_a_viewer_is_standing();
         }
 
-        // A message the ring has no room for is dropped rather than waited on, and a message a slot
-        // cannot carry is not sent at all (see `SeamRing` and `SeamMessage::of_preview`). The wake is
-        // signalled either way: an armed wait must never be left on a message that was not written.
+        // A message the ring has no room for is dropped rather than waited on (see `SeamRing`), and one
+        // a slot cannot carry at all falls through to the channel below rather than being dropped on the
+        // floor: see the note there.
         if let Some(slot) = SeamMessage::of_preview(&message) {
             the_run_facts().preview_ring.push(slot, "preview");
-        }
-        // One line per hover and notice put in the ring, on the trace a run asks for: a run whose previews
-        // are missing is told here whether the tray ever sent one (see `next_preview_message`). Hovers are a
-        // pointer's pace and not a tick's, which is what a line here costs.
-        if std::env::var_os("RHP_SEAM_TRACE").is_some() {
-            eprintln!("seam: the ring took a message from the tray");
+
+            // One line per hover and notice put in the ring, on the trace a run asks for: a run whose
+            // previews are missing is told here whether the tray ever sent one (see
+            // `next_preview_message`). Hovers are a pointer's pace and not a tick's, which is what a line
+            // here costs.
+            if std::env::var_os("RHP_SEAM_TRACE").is_some() {
+                eprintln!("seam: the ring took a message from the tray");
+            }
+
+            // Safety: an event of this run's own, signalled: nothing here is dereferenced.
+            unsafe {
+                let _ = SetEvent(preview_channel_event());
+            }
+            return;
         }
 
-        // Safety: an event of this run's own, signalled: nothing here is dereferenced.
-        unsafe {
-            let _ = SetEvent(preview_channel_event());
-        }
-        return;
+        // **A message no slot can carry is one only a process can act on, and it is this one.** The one
+        // such message is the pin planner's answer (`PreviewMessage::PinAnswered`): it names a playlist
+        // and the spawner behind it, which a fixed slot has no room for. The planner is a thread of the
+        // process whose pin it is, and the loop that acts on the answer is that same process's, so its own
+        // channel is the road — read beside the ring by `next_preview_message`. Dropped instead, every
+        // step the pin's own **Next**/**Previous** took would answer nothing: the arc would turn out
+        // `PIN_JOB_GIVEUP` and the pin would never be shown the file it stepped onto.
     }
 
+    send_preview_here(message);
+}
+
+/// Send a message to this process's own preview loop, on the channel its threads share, and wake it.
+///
+/// It is the whole of what a run that draws its own previews ever does with a message, and the one road
+/// a message no ring slot can carry has (see `send_preview` and `next_preview_message`).
+fn send_preview_here(message: PreviewMessage) {
     if let Ok(sender) = PREVIEW_SENDER.lock() {
         if let Some(tx) = sender.as_ref() {
             let _ = tx.send(message);
@@ -1271,7 +1289,8 @@ pub(crate) static PREVIEW_SENDER: Lazy<Mutex<Option<Sender<PreviewMessage>>>> =
     Lazy::new(|| Mutex::new(None));
 
 /// The next preview message waiting, or `None`: off the ring where the two sides are two processes, off
-/// this process's channel otherwise.
+/// this process's channel otherwise — and off that same channel where the ring holds nothing, which is
+/// where a message no slot can carry is sent (see `send_preview`).
 ///
 /// It is asked of the same `Receiver` on both roads, so a caller never learns which one answered it: the
 /// channel's own reader is the loop, and the three places that read it — the loop's drain, its wait, and
@@ -1292,7 +1311,16 @@ pub(crate) fn next_preview_message(rx: &Receiver<PreviewMessage>) -> Option<Prev
             eprintln!("seam: the loop took a message off the preview ring");
         }
 
-        return message;
+        if message.is_some() {
+            return message;
+        }
+
+        // And this process's own channel, which is where a message no slot can carry is sent (see
+        // `send_preview`): the pin's planner answers a press in this process and the loop that acts on
+        // that answer is this process's, so it is the one road the answer has. The ring is asked first,
+        // and a slot a reader could not make a message of is not one: what both roads carry is acted on
+        // in the order the loop drains them.
+        return rx.try_recv().ok();
     }
 
     rx.try_recv().ok()
@@ -3391,6 +3419,49 @@ mod tests {
             facts.preview_ring.pop().map(|message| message.numbers[0]),
             Some(7)
         );
+    }
+
+    /// The pin's own walk is answered on the channel of the process that asked, and it can be answered on
+    /// nothing else: a step names a playlist and the spawner behind it, and a fixed slot holds neither. Put
+    /// through the rings instead, every **Next**/**Previous** press would answer nothing — the arc would
+    /// turn out `PIN_JOB_GIVEUP` and the pin would never be shown the file it stepped onto (see
+    /// `send_preview` and `next_preview_message`).
+    #[test]
+    fn the_pin_planners_answer_has_a_road_a_slot_does_not() {
+        // The send below wakes this run's preview event, which is an event a second process of this binary
+        // is waiting on in the transport test: a wake it did not earn must not reach it (see
+        // `the_one_section`).
+        let _the_section_is_mine = the_one_section();
+
+        let answer = PreviewMessage::PinAnswered(PinPlanned::OpenWith {
+            path: PathBuf::from("listing/a note.txt"),
+            name: "Notepad".to_string(),
+        });
+
+        // A slot cannot carry it, which is the whole of why it must not be offered to the ring.
+        assert!(
+            SeamMessage::of_preview(&answer).is_none(),
+            "the pin's answer is not a slot's to carry"
+        );
+
+        // And the channel is, on the road a loop reads it by.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let previous = PREVIEW_SENDER
+            .lock()
+            .ok()
+            .and_then(|mut held| held.replace(tx));
+        send_preview_here(answer);
+        if let Ok(mut held) = PREVIEW_SENDER.lock() {
+            *held = previous;
+        }
+
+        let Some(PreviewMessage::PinAnswered(PinPlanned::OpenWith { path, name })) =
+            rx.try_recv().ok()
+        else {
+            panic!("the answer a process made is one that process can read");
+        };
+        assert_eq!(path, PathBuf::from("listing/a note.txt"), "the name, whole");
+        assert_eq!(name, "Notepad", "and the answer it carried");
     }
 
     #[test]
