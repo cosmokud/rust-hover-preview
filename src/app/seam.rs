@@ -3506,6 +3506,50 @@ mod tests {
         assert_eq!(name, "Notepad", "and the answer it carried");
     }
 
+    /// **A press the tray's hook answers is a press the process holding the pin hears**, which `pinned()`
+    /// cannot answer from the tray: the copy it reads is written by the process that installed the pin, and
+    /// in a run of two processes that is never this one. Asked of that copy alone, every press answered in
+    /// a listing was answered with nothing — no band held across the listing's own activation, and no pin
+    /// put back behind the window the press was made in (see `press_pinned_preview` and
+    /// `pin_press_was_not_a_pick`).
+    #[test]
+    fn a_press_in_the_listing_reaches_a_pin_the_other_process_is_holding() {
+        // It replaces the process's own preview sender and publishes a pin-up fact that the whole binary
+        // reads: the section's turn is what keeps it from doing both under another test (see
+        // `the_one_section`).
+        let _the_section_is_mine = the_one_section();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let previous = PREVIEW_SENDER
+            .lock()
+            .ok()
+            .and_then(|mut held| held.replace(tx));
+
+        // The published fact and nothing else: a pin is up for the run, and the copy this process draws
+        // by is untouched, which is the state the tray is in.
+        let was_up = PIN_UP.load(Ordering::Acquire);
+        PIN_UP.store(true, Ordering::Release);
+        assert!(the_pin_is_up(), "a pin the run publishes is a pin up");
+
+        crate::ui::preview_window::press_pinned_preview(7);
+        crate::ui::preview_window::pin_press_was_not_a_pick(9);
+
+        PIN_UP.store(was_up, Ordering::Release);
+        if let Ok(mut held) = PREVIEW_SENDER.lock() {
+            *held = previous;
+        }
+
+        let Some(PreviewMessage::PinPress { window }) = rx.try_recv().ok() else {
+            panic!("the pick's press is asked of the pin holding it");
+        };
+        assert_eq!(window, 7, "and it names the window the press was made in");
+
+        let Some(PreviewMessage::PinNoPick { window }) = rx.try_recv().ok() else {
+            panic!("and a press that named no file is asked of it too");
+        };
+        assert_eq!(window, 9, "naming the listing the pin is put behind");
+    }
+
     #[test]
     fn every_block_a_run_has_is_claimed_once_and_the_last_one_is_none() {
         let _the_section_is_mine = the_one_section();
