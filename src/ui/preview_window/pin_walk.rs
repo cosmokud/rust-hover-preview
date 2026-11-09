@@ -146,6 +146,15 @@ pub(crate) struct PinStep {
     /// walk anchored on a sound, the video one for a film, the image one for a picture — and
     /// the folder's own order everywhere else.
     pub(super) shuffle: bool,
+    /// Which way the last step this walk took went: forward along the order, or back against
+    /// it.
+    ///
+    /// It is what tells a file at the end of the order that was *walked to* from a file at the
+    /// end of the order that was *wrapped to*. A step back from the head lands on the last file
+    /// of the shuffle, and the next **Next** from there is the head again — the order walked
+    /// round — while a **Next** pressed on a last file the walk stepped forward onto is the
+    /// permutation spent, which is a fresh one (see `advance`).
+    pub(super) forward: bool,
     /// The category of the first file pinned, which is what `order` was filtered by and
     /// what the next press reuses instead of recomputing from the file the pin is
     /// standing on — or nothing where the walk was asked with no session behind it, in
@@ -205,8 +214,14 @@ impl PinStep {
         }
         // A shuffled walk stepping past its last file respawns the playlist rather than
         // wrapping it; a single-file shuffle has nowhere to respawn to.
+        // **And only where the walk got to that file by walking forward onto it.** A step back
+        // from the head of a shuffle wraps to its last file, and a **Next** from there is the
+        // order walked round to the head — the file the pin was taken up on — rather than a
+        // permutation the back press is read as having spent. Read off the last step's own
+        // direction, because the last file is the same file whichever way the walk arrived at it.
         if direction >= 0
             && self.shuffle
+            && self.forward
             && self
                 .order
                 .last()
@@ -225,12 +240,21 @@ impl PinStep {
             shuffle_rest(&mut rest);
             self.order = std::iter::once(at).chain(rest).collect();
             self.at = self.order[1].clone();
+            self.forward = true;
             return Some(self.at.clone());
         }
         // Every other step is along the order — back the previous file, forward the next
         // one — which wraps at either end, and a file no longer on it steps onto the end it
         // points at.
-        self.at = pin_navigation::step_to(&self.at, &self.order, direction)?;
+        let next = pin_navigation::step_to(&self.at, &self.order, direction)?;
+        // A shuffled playlist of one file has nowhere to step to: the step onto itself is no step,
+        // and answering with the file already on screen would be a walk that goes round for ever
+        // (see `step_over`, which bounds itself on the same answer).
+        if self.shuffle && pin_navigation::same_file(&next, &self.at) {
+            return None;
+        }
+        self.at = next;
+        self.forward = direction >= 0;
         Some(self.at.clone())
     }
 }
@@ -683,6 +707,7 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             // permutation instead of waiting for the step after it.
             if shuffle
                 && *step > 0
+                && session.as_ref().is_some_and(|session| session.forward)
                 && order
                     .last()
                     .is_some_and(|last| pin_navigation::same_file(last, at))
@@ -715,6 +740,11 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 order,
                 missed: 0,
                 shuffle,
+                // Carried like the playlist itself: the step this press is taken on is a step
+                // of a walk whose own last step went one way or the other, and which way says
+                // whether this press is the permutation spent or the order walked round (see
+                // `advance`).
+                forward: session.as_ref().is_some_and(|session| session.forward),
                 // Carried so the next press reuses it: the walk the pin lands on is kept
                 // as the walk of the file on screen, whose anchor this is (see
                 // `step_pinned_file`).

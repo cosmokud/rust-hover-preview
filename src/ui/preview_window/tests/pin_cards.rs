@@ -1597,6 +1597,7 @@ fn a_return_plays_the_row_a_sounds_band_has_picked() {
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
+        forward: false,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     }));
     assert!(
