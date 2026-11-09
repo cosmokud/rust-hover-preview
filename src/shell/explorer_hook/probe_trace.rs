@@ -208,7 +208,7 @@ pub(super) fn trace_name(path: &Path) -> String {
 
 /// The class of the window under the pointer, so that a click the shell never heard of
 /// says so rather than reading like a click that found nothing.
-pub(super) fn window_class_of(window: HWND) -> String {
+pub(crate) fn window_class_of(window: HWND) -> String {
     if window.is_invalid() {
         return "none".to_string();
     }

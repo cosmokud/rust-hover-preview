@@ -126,9 +126,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[cfg(test)]
 pub(crate) use main_loop::answer_what_the_preview_side_asked;
 pub use main_loop::run_explorer_hook;
+pub(crate) use probe_trace::window_class_of;
 pub use view_sort::note_explorer_restart;
 pub(crate) use view_sort::{view_sort_of, SortKey, ViewSort};
-pub(crate) use window_state::is_foreground_explorer;
+pub(crate) use window_state::{
+    a_press_puts_us_behind, a_window_of_ours_stands, is_foreground_explorer,
+    our_window_stands_over_everything, press_is_inside_ours,
+};
 
 // The parts, in one namespace (see the note above). The macro is named rather than globbed:
 // it is written from two parts and lives with the counter it is written beside.

@@ -34,17 +34,24 @@
 //! still in the listing behind it (see `publish_preview_under_the_pointer`), and a pin
 //! behind another program is not (see `key_input::pin_owns_foreground`).
 
-use crate::app::seam::{post_a_notch_to_the_model, wake_preview_loop};
 use crate::app::seam::{
-    MODELS_BAND, PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_VOLUME_REGION, PIN_ZOOM_DELTA,
-    PIN_ZOOM_REGION, TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION, TEXT_SIZE_REGION,
+    ask_the_pin_to_go_behind, MODELS_BAND, PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA,
+    PIN_VOLUME_REGION, PIN_ZOOM_DELTA, PIN_ZOOM_REGION, TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION,
+    TEXT_SIZE_REGION,
 };
+use crate::app::seam::{post_a_notch_to_the_model, wake_preview_loop};
+use crate::shell::explorer_hook::{
+    a_press_puts_us_behind, a_window_of_ours_stands, our_window_stands_over_everything,
+    press_is_inside_ours, window_class_of,
+};
+use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicU32, Ordering};
-use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MBUTTONDOWN, WM_MBUTTONUP,
-    WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    CallNextHookEx, WindowFromPoint, HC_ACTION, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
+    WM_XBUTTONUP,
 };
 
 /// Thread running the hook's message pump, published so shutdown can wake it.
@@ -83,12 +90,82 @@ fn control_is_down() -> bool {
 
 /// Starts the hook thread; `main` joins the returned handle after `request_stop`.
 pub fn spawn_wheel_watcher() -> std::thread::JoinHandle<()> {
+    // The press road's trace is read here rather than on a press: a low-level callback may not read the
+    // environment, which allocates, while every mouse message on the desktop waits for it (see
+    // `note_a_press`).
+    Lazy::force(&PRESS_TRACE);
+
     super::hook_thread::spawn(
         &WHEEL_THREAD_ID,
         WH_MOUSE_LL,
         Some(wheel_hook_proc),
         "mouse wheel",
     )
+}
+
+/// Whether the press road says what it decided, read once (see `RHP_SEAM_TRACE`).
+static PRESS_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_SEAM_TRACE").is_some());
+
+/// Put the standing window of ours behind the window a press landed in, or ask for nothing.
+///
+/// **It is the press and not a foreground transition**, which is the difference that took three attempts
+/// to find: a press inside the window that is already active — every press a listing is made of — moves
+/// no foreground, so the road that watched the foreground never saw one, and the pin stayed over the
+/// listing it was pressed in (see `lower_pinned_preview`, which carries the history).
+///
+/// Nothing here places a window. A placement is a call into the window manager and this callback runs
+/// inside the OS input path, so the ask is published and the preview loop makes it on its own tick: the
+/// same road a pick's press takes (see `ask_the_pin_to_go_behind`).
+///
+/// **Every process that draws a window of ours holds one of these hooks**, which is what makes the rule
+/// the same for a detached window as for a pin: each asks about the press, and each answers with the
+/// window it holds.
+fn note_a_press(point: POINT) {
+    // A press on a desktop with nothing of ours standing is no press of ours: one atomic, which is what
+    // every press costs on a run with no pin up.
+    if !a_window_of_ours_stands() {
+        return;
+    }
+
+    // Safety: asks the desktop for the window under a point it was given; dereferences nothing.
+    let window = unsafe { WindowFromPoint(point) };
+    let ours = press_is_inside_ours(window, point);
+    let always_on_top = our_window_stands_over_everything();
+
+    if !a_press_puts_us_behind(true, ours, true, always_on_top) {
+        if *PRESS_TRACE {
+            eprintln!(
+                "seam: press at {},{} on {} ({}), ours {} -> nothing asked (always on top {})",
+                point.x,
+                point.y,
+                window.0 as isize,
+                window_class_of(window),
+                ours as u8,
+                always_on_top as u8,
+            );
+        }
+        return;
+    }
+
+    // The frame and not the window: a press inside a listing is a press on one of its children, and a
+    // window put behind a child is a placement the desktop does nothing with (see `the_frame_of`).
+    let behind = crate::shell::window_classes::the_frame_of(window);
+    ask_the_pin_to_go_behind(behind.0 as isize);
+    // The ask is an atomic and nothing else, so the loop that reads it is woken for it: the press is a
+    // window being put over ours, and a lowering one tick late is the listing flashing over the pin.
+    wake_preview_loop();
+
+    if *PRESS_TRACE {
+        eprintln!(
+            "seam: press at {},{} on {} ({}) is not ours -> asked behind {} ({})",
+            point.x,
+            point.y,
+            window.0 as isize,
+            window_class_of(window),
+            behind.0 as isize,
+            window_class_of(behind),
+        );
+    }
 }
 
 /// Wakes the hook thread's message pump so `main` can join it.
@@ -112,6 +189,14 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
     // message is passed on like every other — the button is another window's as much as this app's.
     if code == HC_ACTION as i32 {
         match wparam.0 as u32 {
+            // A press, and not the pin key's button: the button a pin key names is a press that raises or
+            // lowers the pin, and a demotion on it would be the key answering twice (see `note_a_press`).
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
+                // Safety: the desktop passes the event's own `MSLLHOOKSTRUCT` in `lParam` of a
+                // `HC_ACTION` call, and it outlives this callback.
+                let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+                note_a_press(info.pt);
+            }
             WM_MBUTTONDOWN | WM_MBUTTONUP => {
                 crate::shell::key_input::note_mouse_button(
                     0x04, // VK_MBUTTON
