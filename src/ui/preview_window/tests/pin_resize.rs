@@ -1965,3 +1965,85 @@ fn a_released_playhead_is_carried_as_exactly_as_a_held_one() {
     }
     stand_pin(previous_pin);
 }
+
+/// **A Win+Shift arrow carries the window and never resizes it**, and the display it is carried to may
+/// refuse: a box wider or taller than the display it is going to is left where it is rather than pulled to
+/// fit, because the pin's media is drawn at the box it was laid out at and a box another display made it is
+/// a picture, a page or a card re-laid-out by a key that was asked to carry it.
+///
+/// Where it arrives is where it stood: the same offset from the middle of the display it came from, applied
+/// to the middle of the one it goes to — and an offset that puts the box past the target's own edges is slid
+/// along them, which is the only thing a move may do to a place.
+#[test]
+fn a_window_is_carried_to_the_display_beside_it_at_the_size_it_has() {
+    let desk = RecordedDisplays::desk_of(&[bounds(), right_of_bounds()], 96);
+
+    // A window 400 by 300 in the middle of the first display: the middle of the second is where it lands,
+    // at the size it had, which is the whole of what a carry is.
+    let centred = (300, 250, 700, 550);
+    assert_eq!(
+        carried_pin_box(&desk, centred, PinSide::Right),
+        Some((1300, 250, 1700, 550)),
+        "the same size, the same place relative to the display it stands on"
+    );
+    assert_eq!(
+        carried_pin_box(&desk, (1300, 250, 1700, 550), PinSide::Left),
+        Some(centred),
+        "and the same the other way round, which is what a carry that changed nothing could not say"
+    );
+
+    // An offset that does not fit the target's own room is slid along its edges rather than shrunk against
+    // them: a window against the first display's top-left corner arrives against the second's.
+    assert_eq!(
+        carried_pin_box(&desk, (0, 0, 400, 300), PinSide::Right),
+        Some((1000, 0, 1400, 300)),
+        "a window in the corner of one display arrives in the same corner of the next"
+    );
+
+    // A window the display it is carried to has no room for stays where it is.
+    let too_wide = (0, 0, 1200, 300);
+    assert_eq!(
+        carried_pin_box(&desk, too_wide, PinSide::Right),
+        None,
+        "a display narrower than the window refuses the move rather than fitting it"
+    );
+
+    // And a desk with no display on that side refuses it too.
+    let one_display = RecordedDisplays::one_display(bounds(), 96);
+    assert_eq!(
+        carried_pin_box(&one_display, centred, PinSide::Right),
+        None,
+        "there is no display on the right of the only one there is"
+    );
+}
+
+/// A maximize is given up by a carry exactly as it is by a hand's own move, and put back by neither: the
+/// window the button arranged is no longer the window that is standing there (see `pin_restore_box`).
+#[test]
+fn a_maximized_pin_carried_to_another_display_comes_out_unmaximized() {
+    let desk = RecordedDisplays::desk_of(&[bounds(), right_of_bounds()], 96);
+    let maximized = (0, 0, 920, 740);
+    let put_aside = Some((200, 100, 600, 700));
+
+    let carried = carried_pin_box(&desk, maximized, PinSide::Right)
+        .expect("the second display has room for the box the maximize arranged");
+
+    assert_eq!(
+        pin_restore_box(put_aside, maximized, carried),
+        None,
+        "a window carried to another display has had its maximize taken from the button that \
+         arranged it, so what is left to restore is nothing at all"
+    );
+}
+
+/// The second display of the two these tests stand on: the same room, to the right of the first.
+fn right_of_bounds() -> ScreenBounds {
+    let first = bounds();
+
+    ScreenBounds {
+        left: first.right,
+        top: first.top,
+        right: first.right + (first.right - first.left),
+        bottom: first.bottom,
+    }
+}

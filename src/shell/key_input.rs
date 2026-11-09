@@ -34,6 +34,7 @@
 
 #[cfg(test)]
 use crate::app::seam::PIN_KEY_COUNTED;
+use crate::shell::explorer_hook::{a_win_key_is_down, the_shift_key_is_down};
 use crate::CONFIG;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
@@ -106,6 +107,75 @@ static PIN_KEY_DOWN: AtomicBool = AtomicBool::new(false);
 /// a left press cleared out from under a Space that was still down.
 fn pin_key_press_is_a_command(command: u8, toggle_was_down: bool) -> bool {
     command as usize != PIN_COMMAND_TOGGLE_PLAYBACK || !toggle_was_down
+}
+
+/// What a Win chord makes of one of the pin's arrows, while a pin's window is the window the user is in.
+///
+/// **A Win chord is the Shell's and this pin's, and never the key table's.** `Win`+`Down` is the pin's own
+/// minimize, `Win`+`Shift`+`Left`/`Right` is the window carried whole to the display on that side — a move
+/// this app makes itself, because a repaint puts the window back at the box the pin remembers and a move
+/// the Shell made would be undone by the next frame (see `carried_pin_box`) — and every other arrow under
+/// `Win` is swallowed and counted by nothing: a `Win`+`Up` left to the Shell maximizes a window whose box
+/// the pin owns, and one passed on walks a listing behind a pin nobody is in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PinWinChord {
+    /// The pin's own minimize, into the place `Pin Mode → Minimize to` names (see `PinCommand::Minimize`).
+    Minimize,
+    /// The window carried to the display left of the one it stands on (see `PinCommand::MoveToDisplay`).
+    MoveLeft,
+    /// The same, to the right.
+    MoveRight,
+    /// Swallowed and counted by nothing: an arrangement of the Shell's that a pin has no answer to.
+    Swallowed,
+}
+
+impl PinWinChord {
+    /// The counter this chord is counted in, in the order `app::seam::PIN_WIN_CHORDS` lists them, or
+    /// `None` for one the loop has nothing to act on.
+    fn counted(self) -> Option<u8> {
+        match self {
+            Self::Minimize => Some(0),
+            Self::MoveLeft => Some(1),
+            Self::MoveRight => Some(2),
+            Self::Swallowed => None,
+        }
+    }
+}
+
+/// What a Win chord makes of one virtual key, from whether a Win key and a Shift key are held with it.
+///
+/// The four arrows and nothing else. Every other key of `PIN_KEY_COMMANDS` is a chord the Shell answers on
+/// its own and this app has no business taking: `Win`+`Space` is the keyboard layout's, `Win`+`T` the
+/// taskbar's, and `Win`+`Esc` the magnifier's.
+fn pin_win_chord(vk: i32, win_down: bool, shift_down: bool) -> Option<PinWinChord> {
+    const VK_LEFT_CODE: i32 = 0x25;
+    const VK_UP_CODE: i32 = 0x26;
+    const VK_RIGHT_CODE: i32 = 0x27;
+    const VK_DOWN_CODE: i32 = 0x28;
+
+    if !win_down || !matches!(vk, VK_LEFT_CODE | VK_UP_CODE | VK_RIGHT_CODE | VK_DOWN_CODE) {
+        return None;
+    }
+
+    Some(match (vk, shift_down) {
+        (VK_DOWN_CODE, false) => PinWinChord::Minimize,
+        (VK_LEFT_CODE, true) => PinWinChord::MoveLeft,
+        (VK_RIGHT_CODE, true) => PinWinChord::MoveRight,
+        // `Win`+`Up` maximizes and `Win`+`Left`/`Right` snaps, while `Win`+`Shift`+`Up`/`Down` stretches
+        // and restores a height: all four of them arrangements of a box the pin owns, and none of them a
+        // walk of the folder.
+        _ => PinWinChord::Swallowed,
+    })
+}
+
+/// Whether a Win chord takes this key away from the pin's own window too, given whether a Win key is held:
+/// the same four arrows `pin_win_chord` names, whichever way Shift is held with them.
+///
+/// Asked by the pin's own window procedure, which is the other side of the rule: the hook swallows these
+/// wherever it stands, and the window answers nothing for one where the hook stood down (see
+/// `pinned_key_message_command`).
+pub(crate) fn a_win_chord_takes(vk: i32, win_down: bool) -> bool {
+    pin_win_chord(vk, win_down, false).is_some()
 }
 
 /// What the hook does with one message about a key of `PIN_KEY_COMMANDS`, once the caret is known to
@@ -599,6 +669,29 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
         let caret = crate::app::seam::the_pin_of_the_window(GetForegroundWindow().0 as u64);
         let owns_caret = caret.is_some();
 
+        // **A Win chord is answered before the key table, and differently.** It is a chord the pin has an
+        // arrangement of its own for, or one the Shell would arrange a box the pin owns: nothing is counted
+        // for it in the table's counters, the toggle's flag is not touched, and both halves of it are
+        // swallowed — a release passed on is a key delivered to the window behind the pin (see
+        // `pin_win_chord`). A chord's press is counted once per message, repeats included, because a held
+        // `Win`+`Left` is as many displays over as a held arrow is a walk of the folder.
+        if let Some((caret, chord)) = caret.and_then(|caret| {
+            pin_win_chord(vk, a_win_key_is_down(), the_shift_key_is_down())
+                .map(|chord| (caret, chord))
+        }) {
+            // A Win chord arrives as a system key, and it is a press under both classes: the rule that
+            // keeps chords out of the count is the pin's window's, which never sees this one (see
+            // `pin_key_message_acts`).
+            if matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN) {
+                if let Some(counted) = chord.counted() {
+                    crate::app::seam::note_a_pin_win_chord(caret, counted);
+                    crate::app::seam::wake_preview_loop();
+                }
+            }
+
+            return LRESULT(1);
+        }
+
         // The toggle's flag is read and written once for the whole of this message, and it is the
         // flag and not the counter that needs the caret asked of first: a Space released over a
         // window that is not this pin's is a release this hook is never given (see
@@ -867,6 +960,112 @@ mod tests {
             !pin_key_message_acts(WM_SYSKEYUP),
             "nor is the release of a chord"
         );
+    }
+
+    /// **A Win chord is the Shell's and this pin's, and never the key table's.** `Win`+`Down` is the pin's
+    /// own minimize, `Win`+`Shift`+`Left`/`Right` is the window carried to the display on that side, and
+    /// every other arrow under `Win` is swallowed with nothing counted: a `Win`+`Up` passed on maximizes a
+    /// window whose box the pin owns, and one passed to Explorer walks a listing the user is not in.
+    #[test]
+    fn a_win_chord_is_answered_by_the_pin_rather_than_by_the_key_table() {
+        for (vk, shift_down, expected, name) in [
+            (
+                0x28,
+                false,
+                PinWinChord::Minimize,
+                "Win+Down is the pin's own minimize",
+            ),
+            (
+                0x25,
+                true,
+                PinWinChord::MoveLeft,
+                "Win+Shift+Left carries it left",
+            ),
+            (
+                0x27,
+                true,
+                PinWinChord::MoveRight,
+                "and Win+Shift+Right carries it right",
+            ),
+            (
+                0x25,
+                false,
+                PinWinChord::Swallowed,
+                "Win+Left snaps, so it is swallowed",
+            ),
+            (0x27, false, PinWinChord::Swallowed, "so is Win+Right"),
+            (0x26, false, PinWinChord::Swallowed, "and Win+Up maximizes"),
+            (0x26, true, PinWinChord::Swallowed, "so is Win+Shift+Up"),
+            (0x28, true, PinWinChord::Swallowed, "and Win+Shift+Down"),
+        ] {
+            assert_eq!(
+                pin_win_chord(vk, true, shift_down),
+                Some(expected),
+                "{name}"
+            );
+        }
+
+        // Counted by the loop are the three the pin acts on, and no other: a swallowed chord is a key no
+        // counter is woken for, and a chord counted into a number nothing names is swallowed for nothing.
+        assert_eq!(PinWinChord::Minimize.counted(), Some(0));
+        assert_eq!(PinWinChord::MoveLeft.counted(), Some(1));
+        assert_eq!(PinWinChord::MoveRight.counted(), Some(2));
+        assert_eq!(PinWinChord::Swallowed.counted(), None);
+
+        // And every counted chord is inside the counters the seam reserved for them, or it is a chord
+        // swallowed for a number nothing drains.
+        for chord in [
+            PinWinChord::Minimize,
+            PinWinChord::MoveLeft,
+            PinWinChord::MoveRight,
+        ] {
+            assert!(
+                (chord.counted().unwrap_or(u8::MAX) as usize)
+                    < crate::app::seam::PIN_WIN_CHORD_COUNT,
+                "{chord:?} is counted outside the counters reserved for the chords"
+            );
+        }
+
+        // **With no Win key held nothing changes at all**: the arrows walk the folder and the rest of the
+        // table is what it was, Shift or no Shift.
+        for vk in PIN_KEY_COMMANDS.iter().map(|(vk, _)| *vk) {
+            for shift_down in [false, true] {
+                assert_eq!(
+                    pin_win_chord(vk, false, shift_down),
+                    None,
+                    "0x{vk:x} under no Win key is the key this hook has always answered"
+                );
+            }
+        }
+
+        // And the keys a Win chord must not take, because the Shell answers them itself: `Win`+`Space` is
+        // the keyboard layout's and `Win`+`T` the taskbar's.
+        for vk in [0x20, 0x54, 0x1B, 0x21, 0x22, 0x24, 0x23, 0x72, 0x0D, 0x41] {
+            for shift_down in [false, true] {
+                assert_eq!(
+                    pin_win_chord(vk, true, shift_down),
+                    None,
+                    "0x{vk:x} is not an arrow"
+                );
+                assert!(
+                    !a_win_chord_takes(vk, true),
+                    "and the window is told the same"
+                );
+            }
+        }
+
+        // The window's own question takes the four arrows whichever way Shift is held, because it answers
+        // them with a swallow rather than with a chord of its own.
+        for vk in [0x25, 0x26, 0x27, 0x28] {
+            assert!(
+                a_win_chord_takes(vk, true),
+                "0x{vk:x} under Win is the Shell's"
+            );
+            assert!(
+                !a_win_chord_takes(vk, false),
+                "and with no Win key held it is the pin's"
+            );
+        }
     }
 
     /// **A find bar that is up takes every key the pin answers by passing it on.** A key swallowed

@@ -3,6 +3,8 @@
 
 use super::*;
 
+use super::displays::{display_at, the_display_beside};
+use super::pin_trace::note_pin_trace;
 use crate::formats::routing::NavCategory;
 
 /// How far a press on a pinned window may wander before it is a drag rather than a click.
@@ -700,6 +702,12 @@ pub(super) unsafe fn pin_command_request(
                 reset_pinned_size(request);
                 None
             }
+            // A window carried whole to the display beside this one: the same box, at the same place on
+            // another display, and refused where that display has no room for it (see `carried_pin_box`).
+            PinCommand::MoveToDisplay(side) => {
+                carry_pinned_window_to_the_display_beside(hwnd, side);
+                None
+            }
             PinCommand::Previous => {
                 // The page's caret where the pin holds one, and the walk the arrows have always been
                 // where it does not: which of the two a key is is the file in the window's answer, read
@@ -1237,6 +1245,113 @@ pub(super) unsafe fn centre_pinned_window(hwnd: HWND) {
         size.1,
         SWP_NOACTIVATE | SWP_NOZORDER,
     );
+    place_pinned_siblings();
+}
+
+/// The box a pinned window is carried to on the display beside its own, or `None` where the desk has no
+/// display there or the one it has has no room for it.
+///
+/// A move and never a resize. The window arrives at the size it went with — its media is drawn at the box it
+/// was laid out at, and a box pulled to fit another display would be a picture, a page or a card re-laid-out
+/// by a key that was asked to carry it — so a window wider or taller than the display it is carried to stays
+/// where it is, and the caller refuses rather than fits (see `carry_pinned_window_to_the_display_beside`).
+///
+/// Where it arrives is where it stood on the display it came from: the window's middle keeps its offset from
+/// the middle of that display, so a window in the middle of one arrives in the middle of the next and one
+/// against its top edge arrives against the next display's. An offset that puts the box past the target's own
+/// edges is slid along them rather than shrunk against them, which is the one thing a move may do to a place.
+pub(super) fn carried_pin_box(
+    displays: &dyn Displays,
+    window: ScreenRegion,
+    side: PinSide,
+) -> Option<ScreenRegion> {
+    let from = display_at(
+        displays,
+        (window.0 + window.2) / 2,
+        (window.1 + window.3) / 2,
+    )
+    .work_area;
+    let to = the_display_beside(displays, from, side)?;
+
+    let size = ((window.2 - window.0).max(1), (window.3 - window.1).max(1));
+    if size.0 > to.right - to.left || size.1 > to.bottom - to.top {
+        return None;
+    }
+
+    let offset = (
+        (window.0 + window.2) / 2 - (from.left + from.right) / 2,
+        (window.1 + window.3) / 2 - (from.top + from.bottom) / 2,
+    );
+    let left = ((to.left + to.right) / 2 + offset.0 - size.0 / 2).clamp(to.left, to.right - size.0);
+    let top = ((to.top + to.bottom) / 2 + offset.1 - size.1 / 2).clamp(to.top, to.bottom - size.1);
+
+    Some((left, top, left + size.0, top + size.1))
+}
+
+/// Carry a pinned window whole to the display beside the one it stands on: what a `Win`+`Shift`+an arrow asks
+/// for while the pin is the window the user is in (see `key_input::pin_win_chord`).
+///
+/// It is the road `centre_pinned_window` is and not the road a new box is: only the place changes, so nothing
+/// is laid out again, no player is begun again, and a picture travels with the surface the window already
+/// carries.
+///
+/// **The box the pin remembers is written before the window is moved**, because every repaint places the
+/// window from it: a window moved without that box being told is a window put back where it came from by the
+/// next frame. A maximize goes the way a hand's own move sends it (see `pin_restore_box`).
+///
+/// shortcut: the pin keeps the display scale it was taken up at, so a window carried to a display drawn at
+/// another scale arrives at the pixels of the one it left. Upgrade to re-boxing per display when a pin is asked
+/// to survive a scale change as well as a place one (see `WM_DPICHANGED`).
+pub(super) unsafe fn carry_pinned_window_to_the_display_beside(hwnd: HWND, side: PinSide) {
+    let Some((window, restore, dpi, transport, overlay, caption, playlist)) =
+        pin_state().and_then(|pinned| {
+            let pin = pinned.pin()?;
+            Some((
+                pin.window_box(),
+                pin.restore,
+                pin.dpi,
+                pin.transport_bar,
+                pin.overlay,
+                pin.caption,
+                pin_playlist::playlist_rows(pin),
+            ))
+        })
+    else {
+        return;
+    };
+
+    let Some(moved) = carried_pin_box(&DESKTOPS, window, side) else {
+        note_pin_trace!("carry: no room for the pin on the display {side:?}");
+        return;
+    };
+
+    let content = content_box_of(moved, dpi, transport, overlay, caption, playlist);
+    {
+        let Some(mut pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return;
+        };
+        pin.restore = pin_restore_box(restore, window, moved);
+        pin.content = content;
+        reset_pin_zoom(pin);
+    }
+
+    let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);
+    let placed = (placed.0, placed.1, placed.2, placed.3 + playlist);
+    let size = ((placed.2 - placed.0).max(1), (placed.3 - placed.1).max(1));
+    let _ = SetWindowPos(
+        hwnd,
+        HWND::default(),
+        placed.0,
+        placed.1,
+        size.0,
+        size.1,
+        SWP_NOACTIVATE | SWP_NOZORDER,
+    );
+    // And the film host and the chrome pair follow, as they do at the end of a centring: the band under the
+    // card is carried wherever the window is (see `place_pinned_siblings`).
     place_pinned_siblings();
 }
 

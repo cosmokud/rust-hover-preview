@@ -249,6 +249,16 @@ impl PinResize {
     }
 }
 
+/// Which side of a display the one beside it is: the direction a pin's window is carried in (see
+/// `PinCommand::MoveToDisplay`).
+///
+/// Two sides and no more, because the Shell's own chords are two: `Win`+`Shift`+`Left`/`Right`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PinSide {
+    Left,
+    Right,
+}
+
 /// A command the chrome has asked for: a button that was clicked, a window that was dragged,
 /// resized or double-clicked, or a collapse. The window procedure cannot do any of it — the media,
 /// the player and the browser are the preview loop's — so it is written here and drained by the
@@ -297,6 +307,16 @@ pub(crate) enum PinCommand {
     /// `collapse_pin_to_at`).
     MinimizeToAt(PinMinimizeTo, (i32, i32)),
     Maximize,
+    /// The window carried to the display beside the one it stands on, its own width and height kept to the
+    /// pixel: what `Win`+`Shift`+`Left`/`Right` asks for while the pin is the window the user is in (see
+    /// `key_input::pin_win_chord` and `carry_pinned_window_to_the_display_beside`).
+    ///
+    /// **It is a move and not a box.** A pinned window is placed from the box the pin remembers on every
+    /// repaint, so a move the Shell made would be undone by the next frame; and a display with no room for
+    /// the window refuses the move rather than pulling the window to fit, which is a size its media was
+    /// never laid out at. A window that was maximized gives up the maximize exactly as one the hand moved
+    /// does (see `pin_restore_box`).
+    MoveToDisplay(PinSide),
     /// Put the window back to the size the scaling settings ask for the kind it is showing, in the
     /// middle of the screen it stands on: what the second press of a double-click asks for where
     /// the configuration has the size reset on. It is a box rather than a place — a media has to be

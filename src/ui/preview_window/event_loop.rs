@@ -834,6 +834,15 @@ pub fn run_preview_window() {
                     }
                 }
 
+                // And a Win chord the hook took for the same reason, counted rather than acted on because
+                // the window it is about is this thread's: the pin's own minimize, and the window carried to
+                // the display beside the one it stands on (see `key_input::pin_win_chord`).
+                for chord in crate::app::seam::take_pin_win_chords() {
+                    if let Some(command) = hook_pin_win_chord(chord) {
+                        ask_pin(command);
+                    }
+                }
+
                 // Whether a file is already on its way into the pin, which is what says the media
                 // behind the window is not a window onto nothing (see `pin_media_is_alive`), and what
                 // says an end of file has already been answered (see `loop_ended_pinned_player`).
