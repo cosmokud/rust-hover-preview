@@ -2,7 +2,7 @@
 
 ## Features
 
-- **Detach mode:** detach the pin mode window individually, completely disconnected from hover preview, enabling multiple detached windows to be spawned.
+- **Detach mode:** the pin mode window handed to a process of its own is done (**Detach Window**, and a run's previews drawn in a viewer process); what is left is the `--detach` road nothing calls any more, and the pin's own menu inside a window of its own.
 - Add preview integration for voidtools Everything search.
 - Add preview integration for third-party file managers (e.g., Q-Dir)
 - **File Format Support:**

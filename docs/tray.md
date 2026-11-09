@@ -27,6 +27,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - `Space` holds a sound where it stood and sets it going again from there.
       - The mark beside the name is a dot the ripples of a beat travel out from: the bass under the sound sends them, and a pause brings them home. Which band they follow is `beat_hz` in `config.ini` — `off`, or a top of band between `20 Hz` and `16 kHz` (`250 Hz` by default). The dot is centred on the name line's own ink, and `audio_mark_offset_y` shifts it up or down from there in pixels (`0` by default, `-100` to `100`).
       - A click on a sound's bar takes the file to that second.
+      - A **Playlist** band grows under the card from the top row of the card's own menu: the rows of the folder's sounds, in the walk's order, each with its name, what the file says about itself and how long it plays. `Up`/`Down` step the highlight and `Return` plays the row it is on; a press picks a row and a double press shows it; the wheel steps three rows; both ends of the band set its height, and the state and the height are remembered for the rest of the run.
       - A right-click on the card opens the card's own menu in a panel of its own over the screen: the whole of what a pin does — the two ways out, the file's own playback, then **Shuffle**, **End of File**, **Hover Seek**, and **Pin Mode Seek**.
         - Below a rule after **Pin Mode Seek**, the card offers **Open in Default App** and **Open With...**, which hand the file over and end the pin the way the card's own two buttons do.
     - A pinned text preview comes up in full mode, so it scrolls and its text can be selected and copied.
@@ -38,6 +39,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
       - A page of code keeps a column of line numbers down its left.
     - A pinned video's transport bar carries a volume of its own, set on the pin; it does not change **Volume → Video** unless that half's **Remember Level** is on.
     - **Maximize** fits the window to the screen.
+    - **Detach** — **Detach Window** hands the pin to a process of its own, where no Explorer watch of this app's is running: the same file stays on screen and a click, a hover or a key in the listing never reaches it, while everything a pin does — its caption, its buttons, the menus, the bubble and the taskbar button — works there too, `Engine` timers aside. Its own **Detach Window** is drawn faded and answers nothing. As many can stand as you like, all under this app's one taskbar button; closing the app closes every one, and closing one leaves the rest alone.
     - A **double-click** puts the window back to the size its kind's scaling setting names and in the middle of the screen it stands on (both halves are switches in `config.ini`: `pin_double_click_reset_size` and `pin_double_click_center`, both on).
     - **Minimize** puts the window away, either into a round bubble on the desktop that can be dragged anywhere and clicked to bring the window back (a film's bubble keeps showing the film, and holds the frame it stopped on when it is paused; a right-click on the bubble opens its own menu: the same playback rows, then **Pause on Minimize** where the kind behind it plays something, then the ways out; **Play** there gives back a park the collapse made, without waiting for the window), or into the app's own taskbar button — see **Minimize** under **Pin Mode** below.
     - Clicking the window gives it the keyboard; then the arrow keys step it and `Escape` closes it.
@@ -179,7 +181,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **`Image (RAM)`** = decoded frames kept in memory.
     - **`Document (Disk)`** = engine-drawn pages kept as temp files.
     - **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
-    - **`General (Disk)`** = the subtitle tracks a film's embedded ones are copied into, kept as temp files; `0` draws a film without its subtitles.
+    - **`General (Disk)`** = the subtitle tracks a film's embedded ones are copied into, and the track facts a sound was read for, kept as temp files; `0` draws a film without its subtitles and reads every sound again.
   - **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
   - **Explorer Poll** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
     - Lower answers a move sooner; higher is lighter on CPU and Explorer.
