@@ -1,10 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.1] - 2026-11-09
 
 ### Added
 
 - **`System → Silent Auto-Update` installs a new release as the app starts, and asks nothing** — the switch sits under `Check for Updates`, off where the app starts, and is greyed while the checks are off. On, the one check a run makes as it starts installs what it finds: the same fetch, the same silent installer and the same `/S /R` hand-over the **Auto** answer of the dialog runs, and the app ends itself so the installer can replace it and start it again. Nothing is installed from a check the tray menu opened, so a preview or a pin on screen is never closed mid-session, and turning the switch on while a release is already on offer installs that one at once, on a thread of its own so the menu does not stall for the download. A silent install that fails — offline, a release carrying no installer, a program the machine will not start — says nothing at all and leaves `Update Available (vX.Y.Z)` in the menu for a hand click. It is `silent_auto_update` in `config.ini`.
+
+### Fixed
+
+- **A pin follows the listing's picks again** — showing a file in a pin asked whether *this process* had one, and the Explorer hook that offers the pick runs in the tray while the pin lives in a viewer, so every pick was dropped before it reached the ring. Both doors that show a pin a file — the listing's pick and the sound card's playlist row — now ask whether the run has a pin up.
 
 ## [0.5.0] - 2026-11-09
 
