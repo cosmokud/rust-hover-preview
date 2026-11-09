@@ -248,6 +248,9 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
         // Kept with the window rather than made once: a take-up that finds them gone — a test
         // that stood the window without them — stands them again (see `take_the_strips_up`).
         unsafe { super::pin_chrome_strips::take_the_strips_up(hwnd) };
+        // And so is the drop it answers for: a window made before this app asked is a window the
+        // Shell still refuses files at (see `pin_drop::take_files_dropped_on`).
+        unsafe { super::pin_drop::take_files_dropped_on(hwnd) };
         return Some(hwnd);
     }
 
@@ -288,6 +291,10 @@ pub(super) unsafe fn real_pin_window_at(window: ScreenRegion) -> Option<HWND> {
     // a hosted film, a park, a cover, FFmpeg's player, or this app's own picture — and kept for
     // the window's life (see `pin_chrome_strips`).
     unsafe { super::pin_chrome_strips::take_the_strips_up(hwnd) };
+    // A file dragged onto a pin is the pin's to show, which the Shell is told while the window is
+    // this frame's: a window that never said it takes files is one a drop is refused at, with no
+    // message to it at all (see `pin_drop::take_files_dropped_on`).
+    unsafe { super::pin_drop::take_files_dropped_on(hwnd) };
     Some(hwnd)
 }
 
