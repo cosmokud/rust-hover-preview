@@ -1,30 +1,25 @@
-//! Where a standing pin's front stands, as the pinned tick reads it: whether Explorer has just taken
-//! that front back from the pin, which is the one thing the demotion ask is for (see
-//! `app::seam::ask_the_pin_to_go_behind`).
+//! Where the front stands on a pinned tick, as the hook reads it: whether the foreground changed, which
+//! is what the item and view caches are dropped on.
 //!
-//! **A pin is in front of the listing it was raised over, and the listing keeps the keyboard.** A pin
-//! is `WS_EX_NOACTIVATE`, so the raise leaves Explorer the foreground window, and "Explorer is in front"
-//! is not the question: a raise is the pin in front of a listing that already had the foreground, and an
-//! ask made on that state is the pin taken down the tick it went up.
+//! **A foreground transition is not a demotion, and this file no longer pretends it is.** A press inside
+//! the window that is already active — the whole of what a listing is made of — moves no foreground at
+//! all: the frame stays the foreground window and only a child's focus moves, so a lowering wired to
+//! "Explorer has come to the front" waited for a transition that press cannot make. The pin is put behind
+//! the window a press landed in, by the press road itself (see `window_state::a_press_puts_us_behind`).
 //!
-//! What is asked instead is the pin's own history: a pin *held* the foreground (the user clicked into it,
-//! or it activated itself on its way up) and Explorer has it back now. Only that answer is a pin to put
-//! behind the listing, and it is the one a press in the listing cannot give — a click in the window that
-//! is already active reorders nothing, so nothing takes the pin down while Explorer is the window the
-//! user came back to.
+//! What is left is the one thing the reading was always good for. The caches the pick is answered from
+//! are frozen while a pin is up, and a pin that has just taken the focus or given it back is exactly when
+//! the user is about to pick — so they are dropped on the transition, which is the one tick it happens on.
 //!
 //! **Nothing reads the foreground while no pin is up**, so the reading a pin comes up on is its baseline
-//! rather than a transition: a baseline left over from the pin before is an answer about a window that
-//! has not been looked at for the whole of the hover between them, and read as a transition it is the
-//! raise demoted by the state it was raised over (see `PinFront::read`).
+//! rather than a transition: a baseline left over from the pin before is a drop made for a window that has
+//! not been looked at for the whole of the hover between them (see `PinFront::read`).
 
-/// Where the front stands: whether a pin has been read before, whether Explorer held the foreground on
-/// that reading, and whether the pin itself has held it since it came up.
+/// Where the front stands: whether a pin has been read before, and where Explorer stood on that reading.
 #[derive(Default)]
 pub(super) struct PinFront {
     up: bool,
     explorer_foreground: bool,
-    held: bool,
 }
 
 /// One pinned tick's reading of the foreground (see `PinFront::read`).
@@ -33,8 +28,6 @@ pub(super) struct FrontReading {
     /// The foreground is not the window it was on the last reading while a pin was up: what the item and
     /// view caches are dropped on, since the pin taking the focus and giving it back moves neither.
     pub(super) changed: bool,
-    /// Explorer has just taken the front back from the pin, which is the ask that puts the pin behind it.
-    pub(super) explorer_took_the_front_back: bool,
 }
 
 impl PinFront {
@@ -46,21 +39,11 @@ impl PinFront {
     /// One reading of the foreground, taken on a tick whose pin is up.
     pub(super) fn read(&mut self, explorer_foreground: bool) -> FrontReading {
         let changed = self.up && explorer_foreground != self.explorer_foreground;
-        // Only a pin that has held the foreground can have it taken back: a pin whose raise left the
-        // listing in front was in front of that listing already, and putting it behind the listing it
-        // was raised over is the fault this whole file is about.
-        let explorer_took_the_front_back = self.up && explorer_foreground && self.held;
 
         self.up = true;
         self.explorer_foreground = explorer_foreground;
-        // A pin that came up holding the foreground keeps the front it has to lose; one that came up over
-        // a listing only holds it once the user has clicked into it.
-        self.held = !explorer_foreground;
 
-        FrontReading {
-            changed,
-            explorer_took_the_front_back,
-        }
+        FrontReading { changed }
     }
 }
 
@@ -68,29 +51,27 @@ impl PinFront {
 mod tests {
     use super::*;
 
-    /// **A pin raised over a listing stays in front.** Explorer is the foreground window the whole time
-    /// — the pin is `WS_EX_NOACTIVATE` — so what the ask must not read as a transition is the state the
-    /// pin was raised over, on the tick it comes up and on every one after it.
+    /// **A pin raised over a listing is not a transition.** Explorer is the foreground window the whole
+    /// time — the pin is `WS_EX_NOACTIVATE` — so the reading the pin comes up on is its baseline and every
+    /// press a listing is made of leaves it exactly where it was: no drop, and nothing here for a lowering
+    /// to hang on.
     #[test]
-    fn a_pin_raised_over_a_listing_is_not_asked_to_go_behind() {
+    fn a_pin_raised_over_a_listing_reads_its_baseline() {
         let mut front = PinFront::default();
 
         let raised = front.read(true);
         assert!(!raised.changed, "a pin's first reading is its baseline");
-        assert!(!raised.explorer_took_the_front_back);
 
         for _ in 0..5 {
-            let later = front.read(true);
-            assert!(!later.changed);
-            assert!(!later.explorer_took_the_front_back);
+            assert!(!front.read(true).changed, "and a press in it moves it not");
         }
     }
 
-    /// **And the ask is still made for the case it was added for**: the pin had the front — the user
-    /// clicked into it — and Explorer has it back. This is the one edge that no press in the listing can
-    /// answer, since a click in the window that is already active reorders nothing.
+    /// The transition is still the one thing read here: the pin took the focus and gave it back, which is
+    /// when the caches below the pick are stale — the view the shell answers a click from has moved, and
+    /// the click that follows is answered out of it.
     #[test]
-    fn explorer_taking_the_front_back_from_the_pin_is_the_ask() {
+    fn the_pin_taking_the_focus_and_giving_it_back_is_the_drop() {
         let mut front = PinFront::default();
         front.read(true);
 
@@ -99,26 +80,9 @@ mod tests {
             pin_held_it.changed,
             "the caches go with the pin taking the focus"
         );
-        assert!(
-            !pin_held_it.explorer_took_the_front_back,
-            "the pin holding the foreground is the pin in front"
-        );
 
         let listing = front.read(true);
-        assert!(listing.changed);
-        assert!(listing.explorer_took_the_front_back);
-    }
-
-    /// A pin whose raise took the foreground itself is the same debt, read the other way round: it holds
-    /// the front from its first reading, and the click that gives it back asks for the lowering.
-    #[test]
-    fn a_pin_that_came_up_in_front_loses_it_to_explorer() {
-        let mut front = PinFront::default();
-        let raised = front.read(false);
-        assert!(!raised.changed);
-        assert!(!raised.explorer_took_the_front_back);
-
-        assert!(front.read(true).explorer_took_the_front_back);
+        assert!(listing.changed, "and with the listing taking it back");
     }
 
     /// The baseline is the reading of the pin that is up and of no other: a pin taken down with the
@@ -132,7 +96,7 @@ mod tests {
         front.pin_is_down();
         let raised = front.read(true);
         assert!(
-            !raised.changed && !raised.explorer_took_the_front_back,
+            !raised.changed,
             "a pin that has just come up is asked its baseline, not the pin before's"
         );
     }

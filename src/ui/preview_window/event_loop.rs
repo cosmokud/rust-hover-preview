@@ -674,20 +674,32 @@ pub fn run_preview_window() {
                 }
             }
 
-            // **The user is back in the listing the pin stands over, and the pin is the one that has to
-            // hear it.** The foreground is the hook's to watch and the window is this loop's, so the ask
-            // crosses and is answered here, on the tick it is read: the pin is put behind the window the
-            // user came back to, which is what a pin that is not Always On Top owes and what nothing but a
-            // press used to answer (see `app::seam::PIN_BEHIND_ASK` and `lower_pinned_preview`, which
-            // keeps every rule of pin mode: a collapsed pin, one that is Always On Top and one whose
-            // `Move To Top` row is off are left exactly where they are). A viewer holding no pin spends
-            // the ask and puts nothing anywhere.
+            // **A press outside every window of ours puts it behind the window the press landed in**, which
+            // is the ask the mouse hook makes and the whole of what `Always On Top` off means (see
+            // `window_state::a_press_puts_us_behind`). The ask crosses because the window is the viewer's and
+            // the hook is the process that holds it — the same process for a pin and for a window of its own,
+            // which is why a detached window answers this beside a pin. `lower_pinned_preview` keeps every
+            // rule of pin mode: a collapsed pin, one that is Always On Top and one whose `Move To Top` row is
+            // off are left exactly where they are, so an ask made while the setting holds the front is spent
+            // and nothing moves. A viewer holding no window spends it and puts nothing anywhere.
             if let Some(window) = crate::app::seam::take_the_pin_behind_ask() {
                 if pinned() {
-                    note_pin_trace!("behind: the user is back in the listing, lowering the pin");
+                    let window = HWND(window as *mut _);
+                    // **A press on the desktop names no place to go behind.** A pin put under `Progman` is a
+                    // pin behind the wallpaper, and no click can bring it back: what such a press owes is the
+                    // band given back and the place the pin stands in kept (see `foreground_is_the_desktop`).
+                    let place = if window.is_invalid() || foreground_is_the_desktop(window) {
+                        HWND(ptr::null_mut())
+                    } else {
+                        window
+                    };
+                    note_pin_trace!(
+                        "behind: a press outside our windows, going behind {:?}",
+                        place
+                    );
                     // The handle is the hook's, read off the desktop: a lowering places windows and
                     // dereferences nothing.
-                    lower_pinned_preview(pinned_window(), HWND(window as *mut _));
+                    lower_pinned_preview(pinned_window(), place);
                 }
             }
 
