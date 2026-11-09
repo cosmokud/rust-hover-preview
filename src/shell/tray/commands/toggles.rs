@@ -72,6 +72,26 @@ pub(in super::super) fn toggle_check_for_updates() {
     }
 }
 
+/// Whether an update the check finds as the app starts is put on without asking: the
+/// `System → Silent Auto-Update` row under the switch above it, off where the app starts.
+/// Turning it on while one is already on offer puts that one on at once, on a thread of its
+/// own, so the switch is not one that waits for the next restart to do anything; turning it
+/// off leaves an install already in flight alone, as a switch reading a file cannot take back a
+/// program that has been started.
+pub(in super::super) fn toggle_silent_auto_update() {
+    let enabled = if let Ok(mut config) = CONFIG.lock() {
+        config.silent_auto_update = !config.silent_auto_update;
+        config.save();
+        config.silent_auto_update
+    } else {
+        return;
+    };
+
+    if enabled {
+        crate::app::updates::install_silently_in_background();
+    }
+}
+
 /// Whether the pin key is watched is a setting rather than a view of one, and two
 /// things have to be told about a change to it: the hook procedure that watches the
 /// key reads a number rather than the configuration, and a preview that is pinned

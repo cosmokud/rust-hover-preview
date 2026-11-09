@@ -1375,6 +1375,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_RESET_SETTINGS,
             ID_TRAY_RESET_LISTS,
             ID_TRAY_CHECK_UPDATES,
+            ID_TRAY_SILENT_AUTO_UPDATE,
             ID_TRAY_NORMALIZE_VOLUME,
             ID_TRAY_NORMALIZE_VIDEO_VOLUME,
             ID_TRAY_REMEMBER_VOLUME,

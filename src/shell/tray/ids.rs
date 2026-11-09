@@ -26,6 +26,10 @@ pub(super) const WM_TRAYICON: u32 = WM_USER + 1;
 /// finished: the worker has already re-probed and recorded what it installed, and what is left for
 /// this thread is the slot that said one install was in flight (see `winget::settle`).
 pub(super) const WM_TRAY_INSTALL_FINISHED: u32 = WM_USER + 2;
+/// What the tray window is told when an update the app found as it started has been put on
+/// without asking: the installer is already running, and all that is left for this thread is to
+/// end the app it has to replace (see `updates::install_silently_in_background`).
+pub(super) const WM_TRAY_UPDATE_INSTALLED: u32 = WM_USER + 3;
 pub(super) const ID_TRAY_EXIT: u16 = 1001;
 pub(super) const ID_TRAY_STARTUP: u16 = 1002;
 pub(super) const ID_TRAY_ENABLE: u16 = 1003;
@@ -369,6 +373,15 @@ pub(super) const ID_TRAY_RESET_LISTS: u16 = 1521;
 /// id of its own — the one the reset rows beside it leave free, where a row of
 /// the same submenu belongs and no range the app hands out reaches.
 pub(super) const ID_TRAY_CHECK_UPDATES: u16 = 1522;
+/// The `System → Silent Auto-Update` row, under the switch above it: whether an update the
+/// check finds as the app starts is put on without asking (see `silent_auto_update`). Off where
+/// the app starts, and greyed where the checks are off, since it is a question about a check
+/// that is not being made.
+///
+/// It takes the id the volume switches leave free below 1524, which is the slack between it and
+/// the `Check for Updates` row above, and inside neither that row nor any range the submenus
+/// hand out.
+pub(super) const ID_TRAY_SILENT_AUTO_UPDATE: u16 = 1523;
 /// The rows of the `Components` submenu, numbered as one list across its three groups: only the
 /// rows this machine is missing and has a page for are given an id at all, and this is where
 /// those ids begin. The range is wider than the list is long, so that a row added to any of

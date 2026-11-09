@@ -30,9 +30,10 @@ use super::commands::{
     toggle_pin_shuffle, toggle_pin_update_enabled, toggle_pin_update_move_to_top,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
-    toggle_render_html, toggle_startup, toggle_text_dont_preview_secrets,
-    toggle_text_show_extensionless, toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled,
-    toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
+    toggle_render_html, toggle_silent_auto_update, toggle_startup,
+    toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
+    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
+    toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
@@ -64,19 +65,21 @@ use super::ids::{
     ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE,
     ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML,
     ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE,
-    ID_TRAY_STARTUP, ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE,
-    ID_TRAY_TEXT_SHOW_EXTENSIONLESS, ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK,
-    ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE,
-    ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO,
-    ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS,
-    ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_MODELS, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR,
-    ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
-    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
-    ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
+    ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP, ID_TRAY_TEXT_DONT_PREVIEW_SECRETS,
+    ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS, ID_TRAY_THEME_CUSTOM_BASE,
+    ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN,
+    ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED,
+    ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT,
+    ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_MODELS,
+    ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE,
+    ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE, ID_TRAY_VIDEO_ENGINE_BASE,
+    ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_LOOP,
+    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
     IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MPV_COMMANDS, PIN_END_OF_FILE_CHOICES,
     TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
-    VIDEO_ENGINE_CHOICES, WM_TRAYICON, WM_TRAY_INSTALL_FINISHED, ZOOM_BACKGROUND_CHOICES,
+    VIDEO_ENGINE_CHOICES, WM_TRAYICON, WM_TRAY_INSTALL_FINISHED, WM_TRAY_UPDATE_INSTALLED,
+    ZOOM_BACKGROUND_CHOICES,
 };
 use super::menus::show_context_menu;
 use super::submenus::{install_engine, open_codec_page};
@@ -90,6 +93,7 @@ use crate::shell::explorer_hook;
 use crate::{StartupTrace, RUNNING};
 use std::panic::catch_unwind;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -163,6 +167,14 @@ unsafe extern "system" fn tray_window_proc(
                 winget::settle();
                 LRESULT(0)
             }
+            // An update the app found as it started has been put on without asking: the
+            // installer is running and this app has to be gone before it can replace it, so
+            // what is left is the same ending `Exit` and the `Auto` answer are.
+            WM_TRAY_UPDATE_INSTALLED => {
+                RUNNING.store(false, Ordering::SeqCst);
+                PostQuitMessage(0);
+                LRESULT(0)
+            }
             WM_COMMAND => {
                 let cmd = (wparam.0 & 0xFFFF) as u16;
                 match cmd {
@@ -197,6 +209,13 @@ unsafe extern "system" fn tray_window_proc(
                     // nowhere at all where there is nothing to put on.
                     ID_TRAY_CHECK_UPDATES => {
                         toggle_check_for_updates();
+                    }
+                    // The `System → Silent Auto-Update` switch, under the one above it: whether
+                    // an update the check finds as the app starts is put on without asking.
+                    // Turning it on while one is already on offer puts that one on, on a thread
+                    // of its own — the download is megabytes and this is the menu's own thread.
+                    ID_TRAY_SILENT_AUTO_UPDATE => {
+                        toggle_silent_auto_update();
                     }
                     ID_TRAY_ENABLE => {
                         toggle_preview_enabled();
@@ -723,6 +742,33 @@ pub(crate) fn note_install_finished() {
 
     if !hwnd.is_invalid() {
         let _ = unsafe { PostMessageW(hwnd, WM_TRAY_INSTALL_FINISHED, WPARAM(0), LPARAM(0)) };
+    }
+}
+
+/// Tell the tray window that an update has been put on without asking, from the thread that
+/// started its installer — which is the ending the app owes an install: this thread is the one
+/// that owns the quit, and `PostQuitMessage` reaches only the calling thread's own queue.
+///
+/// The window is waited for rather than expected: the check a run makes as it starts can find,
+/// fetch and start an installer before the tray window exists, and a message posted to no window
+/// is an app that keeps running while the installer waits to replace it. A window that never
+/// comes up means the installer is left to end this app itself.
+pub(crate) fn note_update_installed() {
+    let deadline = Instant::now() + Duration::from_secs(20);
+
+    loop {
+        let hwnd = unsafe { TRAY_HWND };
+
+        if !hwnd.is_invalid() {
+            let _ = unsafe { PostMessageW(hwnd, WM_TRAY_UPDATE_INSTALLED, WPARAM(0), LPARAM(0)) };
+            return;
+        }
+
+        if Instant::now() >= deadline {
+            return;
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

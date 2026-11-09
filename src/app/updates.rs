@@ -14,6 +14,11 @@
 //! `System` submenu reports what the last one found. `System → Check for Updates`
 //! is the switch the checks answer to — on where the app starts, and nothing is
 //! asked at any moment where it is off (see `check_for_updates`).
+//! `System → Silent Auto-Update`, off where the app starts, is what the start's
+//! check does with its answer where the user has asked for it: the same fetch and
+//! the same silent installer the `Auto` answer runs, with nothing said at all — a
+//! menu's check never installs anything, because a session with windows on screen
+//! is a session an install would end (see `silent_auto_update`).
 //! Nothing here is on a hover's path, and a check that never happens costs a
 //! preview nothing.
 //!
@@ -117,16 +122,45 @@ static LAST_CHECK: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None))
 /// does not start two of them.
 static CHECKING: AtomicBool = AtomicBool::new(false);
 
-/// Ask for a check, without waiting for one. The app's own start is one caller:
-/// a run that has just started has asked nothing, and the answer is worth having
-/// before anyone opens the menu for it. The tray menu is the other: an opening
-/// is the one moment a user is looking for an update, and the one moment the
-/// answer is worth having again.
+/// When a check is asked for, which is the whole of what tells two of them apart: the one
+/// moment this app puts an update on without asking is its own start, and a check asked for by
+/// a menu opening runs while windows of this app's may be up, each one of which an install nobody
+/// asked for would close.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Moment {
+    /// The check a run makes as it starts, before anything is on screen.
+    Start,
+    /// The check an opening of the tray menu asks for.
+    Menu,
+}
+
+/// Whether a check made at `moment` puts on what it finds. The two halves are the whole of the
+/// rule: the start of a run is the one moment this app has no window of its own to close, and
+/// the switch is the user's answer to whether a start may do it (see `silent_auto_update`).
+fn installs_unasked(moment: Moment, silent_auto_update: bool) -> bool {
+    moment == Moment::Start && silent_auto_update
+}
+
+/// Ask for a check, without waiting for one, from an opening of the tray menu.
 ///
 /// Nothing is asked where the checks are switched off: the `System → Check for
 /// Updates` row is the switch (see `check_for_updates`), and a run that has been
 /// told not to ask does not start the thread at all.
 pub(crate) fn request_check() {
+    request_check_at(Moment::Menu);
+}
+
+/// Ask for a check, without waiting for one, from this run's own start. It is the one
+/// moment an update found may be put on without asking, and the one moment there are no
+/// windows of this app's to close (see `silent_auto_update`).
+pub(crate) fn request_startup_check() {
+    request_check_at(Moment::Start);
+}
+
+/// The check itself, asked for by one of the two moments above. The interval, the guard
+/// against a second one and the thread are the same whichever moment asked: a check is one
+/// question about one address, and what a moment changes is only what is done with the answer.
+fn request_check_at(moment: Moment) {
     let enabled = crate::CONFIG
         .lock()
         .map(|config| config.check_for_updates)
@@ -139,8 +173,8 @@ pub(crate) fn request_check() {
         return;
     }
 
-    std::thread::spawn(|| {
-        check();
+    std::thread::spawn(move || {
+        check(moment);
         CHECKING.store(false, Ordering::SeqCst);
     });
 }
@@ -165,8 +199,52 @@ pub(crate) fn install() -> bool {
         return false;
     };
 
-    let Some(installer) = fetch_installer(&version) else {
+    let installed = run_installer(&version);
+    if !installed {
         download_failed(&version);
+    }
+
+    installed
+}
+
+/// Put an update the app found as it started on without asking anybody: the same fetch and the
+/// same installer the `Auto` answer runs, and nothing said at all where any of it fails — a
+/// machine that is offline, a release carrying no installer, a program the machine will not
+/// start. What was found stays on offer, so the row above the `System` submenu is still there to
+/// be clicked by hand.
+///
+/// It runs on the thread that asked for it — the check's own, or the one the click that turned
+/// the switch on spawned — so nothing waits on the download, and the app ends itself through the
+/// tray window rather than from here (see `note_update_installed`).
+fn install_silently(version: &str) {
+    if run_installer(version) {
+        crate::shell::tray::note_update_installed();
+    }
+}
+
+/// Put the update already on offer on without asking, from the click that turns the switch on:
+/// the update a check has already found is one the switch was turned on for, and waiting for the
+/// next check to install it would be a switch that does nothing until a restart.
+///
+/// It is a thread of its own because the download is megabytes and the thread that answered the
+/// click is the one every menu of this app is built on: a menu that stalled for a download would
+/// be a tray icon that stopped answering.
+pub(crate) fn install_silently_in_background() {
+    std::thread::spawn(|| {
+        if let Some(version) = available() {
+            install_silently(&version);
+        }
+    });
+}
+
+/// Fetch one release's installer and start it, answering whether it was started. `/S` is the
+/// installer's own switch for running silently, and `/R`, which only a silent installer reads,
+/// is what starts the app again once the new version is in place.
+///
+/// The two callers differ in what they say about an answer of `false`: a click is told, and a
+/// silent install says nothing at all.
+fn run_installer(version: &str) -> bool {
+    let Some(installer) = fetch_installer(version) else {
         return false;
     };
 
@@ -291,17 +369,27 @@ fn download_failed(version: &str) {
 /// One check, whole: the version the release is published under, where that is
 /// newer than the one running, and the time the check is noted as having
 /// happened.
-fn check() {
+fn check(moment: Moment) {
     if !due_for_check() {
         return;
     }
 
     // What a check comes back with is a version and nothing else: the installer
     // for it is the click's business, so a row nobody has clicked costs the
-    // network nothing at all.
+    // network nothing at all. The one exception is the start of a run with
+    // `silent_auto_update` on, where the check installs what it found — and that
+    // is the start alone: a check the menu asked for runs while windows of this
+    // app's may be up, and an install ends every one of them.
     if let Some(version) = newer_release() {
         if let Ok(mut offer) = OFFER.lock() {
-            *offer = Some(version);
+            *offer = Some(version.clone());
+        }
+
+        let silently = crate::CONFIG
+            .lock()
+            .is_ok_and(|config| installs_unasked(moment, config.silent_auto_update));
+        if silently {
+            install_silently(&version);
         }
     }
 
@@ -678,6 +766,17 @@ mod tests {
         assert!(newer("1.0.0"));
         assert!(!newer("0.2.14"));
         assert!(!newer("0.2.13"));
+    }
+
+    /// Only one of the two moments an update can be found at puts it on without asking, and
+    /// only where the switch is on: a check the menu asked for runs while windows of this app's
+    /// may be on screen, and an install ends every one of them.
+    #[test]
+    fn only_a_start_at_the_switch_on_installs_what_it_finds() {
+        assert!(installs_unasked(Moment::Start, true));
+        assert!(!installs_unasked(Moment::Start, false));
+        assert!(!installs_unasked(Moment::Menu, true));
+        assert!(!installs_unasked(Moment::Menu, false));
     }
 
     /// A build made from a pre-release tag is older than the release its own
