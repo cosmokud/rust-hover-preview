@@ -314,6 +314,70 @@ pub(super) fn preview_window_is_at(window: HWND) -> bool {
     !window.is_invalid() && crate::app::seam::window_is_a_viewers(window.0 as isize)
 }
 
+/// Whether a press outside every window of ours puts the standing window of ours behind the one it
+/// landed in: the whole of what `Always On Top` off means.
+///
+/// **The press is the whole of the question, and nothing here asks whether Explorer is in front.** A
+/// press inside the window that is already active — the whole of what a listing is made of: its tree,
+/// its rows, the gap between them, its toolbar — moves no foreground at all. The frame stays the
+/// foreground window and only a child's focus moves, so a demotion wired to that transition never saw
+/// the press that made it (see `lower_pinned_preview`, which is where that history is written down).
+/// What a press does do is name the window the user is working in, and a window of ours owes that
+/// window its place whatever it is: Explorer, one of Explorer's children, another program, the
+/// desktop.
+///
+/// `ours` is the answer `press_is_inside_ours` gives for the window under the press. Handed in rather
+/// than read here because the same rule is answered for a point no window of ours can be made at (see
+/// `press_is_outside_the_pin_window`, which is handed its answer for the same reason).
+pub(crate) fn a_press_puts_us_behind(
+    pressed: bool,
+    ours: bool,
+    ours_stands: bool,
+    always_on_top: bool,
+) -> bool {
+    pressed && ours_stands && !always_on_top && !ours
+}
+
+/// Whether the point a press landed on is inside any window of ours: the broad answer, and the one the
+/// press road has to ask.
+///
+/// **`is_our_own_window` alone is not it, and that is the whole of what this adds.** That function
+/// answers the listing's question — a press on a window of ours is a press on the listing it stands
+/// over — so it answers for the windows of a viewer process and for the browser's page drawn inside the
+/// engine's window. A pin's film is neither: mpv draws it in a window of its own process, and a press on
+/// it read as somebody else's is a press that puts the pin behind its own picture (see
+/// `the_pin_of_the_window`, which is the second half).
+///
+/// **And the hit test cannot be the whole of the question either.** A film's host answers
+/// `HTTRANSPARENT` so the press reaches the pin's chrome, which means `WindowFromPoint` over the pin's own
+/// picture names the *listing the pin was fitted over* — so the box the pin stands in is asked as well,
+/// the same one the pick road asks (see `preview_window_rect` and `press_is_on_the_pin`).
+pub(crate) fn press_is_inside_ours(window: HWND, point: POINT) -> bool {
+    is_our_own_window(window)
+        || (!window.is_invalid()
+            && crate::app::seam::the_pin_of_the_window(window.0 as u64).is_some())
+        || crate::app::seam::preview_window_rect().is_some_and(|(left, top, right, bottom)| {
+            point.x >= left && point.x < right && point.y >= top && point.y < bottom
+        })
+}
+
+/// Whether a window of ours is standing to be put anywhere: a pin's own, or the window a pin detached
+/// into.
+///
+/// Asked of what the preview loop publishes every tick rather than of the pin's state, because the press
+/// hook asks it and may take no lock. And the published answer is the one a window of its own has: a
+/// detached window is no pin of the run's any more — `PIN_UP` is cleared with the detach — while it is
+/// still a window of ours that owes a press elsewhere its place (see `PIN_KEYS_OWNER`).
+pub(crate) fn a_window_of_ours_stands() -> bool {
+    crate::app::seam::PIN_KEYS_OWNER.load(Ordering::Acquire) != 0
+}
+
+/// Whether that window stands above every other one: the setting a press must not overrule (see
+/// `PIN_KEYS_TOPMOST`).
+pub(crate) fn our_window_stands_over_everything() -> bool {
+    crate::app::seam::PIN_KEYS_TOPMOST.load(Ordering::Acquire)
+}
+
 /// Whether a click where the pointer is can be read out of a listing behind it.
 ///
 /// One of Explorer's own windows, or one of this app's own standing over one. Anything else
