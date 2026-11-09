@@ -1820,7 +1820,11 @@ pub(super) fn showing_bubble_window() -> Option<HWND> {
 pub(super) unsafe fn pin_bubble_window() -> Option<HWND> {
     let existing = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
     if existing != 0 {
-        return Some(HWND(existing as *mut _));
+        let hwnd = HWND(existing as *mut _);
+        // Asked again on the road that finds it already made, so that a bubble this app had before it
+        // asked for files is not a bubble a drop is refused at (see `pin_drop::take_files_dropped_on`).
+        super::pin_drop::take_files_dropped_on(hwnd);
+        return Some(hwnd);
     }
 
     let hinstance = GetModuleHandleW(None).ok()?;
@@ -1841,6 +1845,11 @@ pub(super) unsafe fn pin_bubble_window() -> Option<HWND> {
     .ok()?;
 
     PIN_BUBBLE_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+    // A file dropped on the bubble is the pin being asked to come back on it, which is the one road
+    // no cursor feedback of the Shell's reaches — the bubble is a window nothing else of the Shell's
+    // answers for, and what makes a drop land here at all is this window saying it takes files
+    // (see `pin_drop`).
+    super::pin_drop::take_files_dropped_on(hwnd);
     Some(hwnd)
 }
 

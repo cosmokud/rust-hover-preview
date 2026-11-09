@@ -311,6 +311,37 @@ pub(super) unsafe extern "system" fn window_proc(
             release_pin_capture(hwnd);
             LRESULT(0)
         }
+        WM_DROPFILES => {
+            // **A file dragged onto this window is a file the pin is asked to show.** This procedure
+            // is the hover's, the pin's own window's and the bubble's, so the answer is the pin's or
+            // nobody's: a hover is not a window a file is dropped onto and nothing of a drop before
+            // there is a pin is anyone's to answer (see `pin_drop`).
+            //
+            // The list is read and given back here rather than kept, because the handle belongs to
+            // this thread and the tick that plans a pick is the loop's own: what crosses between the
+            // two is a path and nothing else (see `pin_drop::take_drop`).
+            //
+            // **A drop changes nothing here, and the loop is what changes it.** The window is the
+            // furthest this procedure may go: a pick is planned, loaded and installed off a tick that
+            // waits in `MsgWaitForMultipleObjectsEx`, so the loop is woken the way every other ask
+            // made from a message is (see `crate::app::seam::wake_preview_loop`).
+            //
+            // Nothing is passed on to the default procedure either: a `WM_DROPFILES` left to it is a
+            // drop nobody answers, and the list it carries is the Shell's to finish (see `DragFinish`).
+            if pinned() {
+                let path = pin_drop::take_drop(HDROP(wparam.0 as _));
+                if let Some(path) = path {
+                    if let Ok(mut slot) = pin_drop::PIN_DROP.lock() {
+                        *slot = Some(pin_drop::DroppedOn {
+                            path,
+                            put_away: pin_is_collapsed(),
+                        });
+                    }
+                    crate::app::seam::wake_preview_loop();
+                }
+            }
+            LRESULT(0)
+        }
         WM_ACTIVATE => {
             // **A press on the pair's taskbar button while the pin is in front is this pin going away**,
             // and on the road the Shell takes for it the click arrives at this window rather than at the
