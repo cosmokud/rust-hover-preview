@@ -12,25 +12,25 @@
 //! icon, and pumps messages until the window is destroyed.
 
 use super::commands::{
-    open_config_file, reset_lists_from_tray, reset_settings_from_tray, set_afk_timer,
-    set_animated_scale, set_audio_scale, set_audio_seek, set_audio_volume, set_avoid_mode,
-    set_dds_background, set_decode_budget_gb, set_design_background, set_design_scale,
-    set_document_cache_mb, set_document_scale, set_ebook_scale, set_f3d_idle, set_follow_cursor,
-    set_font_background, set_font_scale, set_general_disk_cache_mb, set_hover_delay,
-    set_html_background, set_image_background, set_image_cache_mb, set_image_disk_cache_mb,
-    set_libreoffice_idle, set_markdown_mode, set_model_scale, set_mpv_engine_idle, set_mpv_path,
-    set_office_engine, set_office_engine_idle, set_pin_end_of_file, set_pin_minimize_to,
-    set_pin_mode_audio_seek, set_pin_nav_audio, set_pin_nav_image, set_pin_nav_others,
-    set_pin_nav_video, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
-    set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
-    set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
-    set_video_scale, set_video_volume, set_webview_idle, set_zoom_background,
-    toggle_check_for_updates, toggle_loop, toggle_normalize_video_volume, toggle_normalize_volume,
-    toggle_pin_always_on_top, toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video,
-    toggle_pin_shuffle, toggle_pin_update_enabled, toggle_pin_update_move_to_top,
-    toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
-    toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
-    toggle_render_html, toggle_silent_auto_update, toggle_startup,
+    open_config_file, reset_lists_from_tray, reset_settings_from_tray, restore_pin_mode,
+    set_afk_timer, set_animated_scale, set_audio_scale, set_audio_seek, set_audio_volume,
+    set_avoid_mode, set_dds_background, set_decode_budget_gb, set_design_background,
+    set_design_scale, set_document_cache_mb, set_document_scale, set_ebook_scale, set_f3d_idle,
+    set_follow_cursor, set_font_background, set_font_scale, set_general_disk_cache_mb,
+    set_hover_delay, set_html_background, set_image_background, set_image_cache_mb,
+    set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode, set_model_scale,
+    set_mpv_engine_idle, set_mpv_path, set_office_engine, set_office_engine_idle,
+    set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek, set_pin_nav_audio,
+    set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_preview_scale,
+    set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
+    set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
+    set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
+    set_zoom_background, toggle_check_for_updates, toggle_loop, toggle_normalize_video_volume,
+    toggle_normalize_volume, toggle_pin_always_on_top, toggle_pin_enabled, toggle_pin_pause_audio,
+    toggle_pin_pause_video, toggle_pin_shuffle, toggle_pin_update_enabled,
+    toggle_pin_update_move_to_top, toggle_pin_update_on_hover, toggle_preview_enabled,
+    toggle_preview_type, toggle_prioritize_keyboard, toggle_remember_audio_volume,
+    toggle_remember_video_volume, toggle_render_html, toggle_silent_auto_update, toggle_startup,
     toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
     toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
     toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
@@ -61,20 +61,20 @@ use super::ids::{
     ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_IMAGE_ALL, ID_TRAY_PIN_NAV_IMAGE_CATEGORY,
     ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
     ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
-    ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
-    ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE,
-    ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML,
-    ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE,
-    ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP, ID_TRAY_TEXT_DONT_PREVIEW_SECRETS,
-    ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS, ID_TRAY_THEME_CUSTOM_BASE,
-    ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN,
-    ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED,
-    ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT,
-    ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_MODELS,
-    ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE,
-    ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE, ID_TRAY_VIDEO_ENGINE_BASE,
-    ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_LOOP,
-    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
+    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP,
+    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
+    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
+    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
+    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
+    ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
+    ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
+    ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN,
+    ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES,
+    ID_TRAY_TYPE_MODELS, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
+    ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
+    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
+    ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
     IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MPV_COMMANDS, PIN_END_OF_FILE_CHOICES,
     TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
@@ -219,6 +219,12 @@ unsafe extern "system" fn tray_window_proc(
                     }
                     ID_TRAY_ENABLE => {
                         toggle_preview_enabled();
+                    }
+                    // The `Restore Pin Mode` row between it and the `Pin Mode` submenu: a command
+                    // rather than a switch, and one that writes nothing — the pin that is up is put
+                    // back over everything and given the keyboard (see `restore_pin_mode`).
+                    ID_TRAY_PIN_RESTORE => {
+                        restore_pin_mode();
                     }
                     ID_TRAY_PIN => {
                         toggle_pin_enabled();

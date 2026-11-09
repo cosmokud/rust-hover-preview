@@ -2035,6 +2035,67 @@ pub(super) fn bring_a_put_away_pin_back(named: &Path) -> bool {
     !pin_is_collapsed()
 }
 
+/// The tray's `Restore Pin Mode` row was clicked: bring the pin that is up back over everything,
+/// whatever state it is in (see `PreviewMessage::PinRestore`).
+///
+/// **Two states, and the row answers both**, because the row says what it says — the pin is the
+/// window the user wants to see, so it is put in front of them and given the keyboard:
+///
+/// - **Away as its bubble or in the taskbar.** That is a collapse, and the road back from one is the
+///   road a press on the stand-in takes: the bubble goes, the window comes back at the box it went
+///   down in, the film and the page come back with it, and the front and the caret follow (see
+///   `restore_pin` and `PinRestore::Pressed`). A row is a press of this app's own, which is the one
+///   thing that says which window the user means — so it takes that road rather than the update's.
+/// - **Up and behind, or up and out of sight.** `Show Desktop` takes the pin's own window down with
+///   every other one, and a pin whose chrome is its film host's goes down with the host: a raise of
+///   a window that is not on the screen is a window that stays where it is, so it is shown first
+///   (see `the_pin_window_is_down` and `show_pinned_window`). What is left is the front and the
+///   keyboard, which is the pair every press on the pin itself asks for (see `pin_take_focus`).
+///
+/// **Nothing here ends a pin or changes what it shows.** The file, the playhead and the box are the
+/// ones the collapse or the Hide left, and a pin that was never away is not laid out again.
+pub(super) fn restore_the_pin_from_the_tray(window: &dyn PinWindow) {
+    if !pinned() {
+        return;
+    }
+
+    // Asked before anything is put back, because the restore is what takes the collapse away: a
+    // window this road put up itself is not one the collapse's own road is owed for.
+    if pin_is_collapsed() {
+        restore_pin(window, PinRestore::Pressed);
+        return;
+    }
+
+    let hwnd = pinned_window();
+    if hwnd.is_invalid() {
+        return;
+    }
+
+    // Safety: every handle below is one of a window of this app's own, and every call on one only
+    // asks it to be up, to be placed, or to hold the keyboard.
+    unsafe {
+        if the_pin_window_is_down(hwnd) {
+            show_pinned_window(hwnd);
+        }
+
+        // The film comes back live rather than as the still the Shell cached of it, whatever put
+        // the pair down (see `pin_film_host::bring_the_film_back`).
+        pin_film_host::bring_the_film_back();
+        place_pinned_siblings();
+
+        pin_take_focus(hwnd, window);
+
+        // And the front, where a window that holds the topmost band already needs nothing more: an
+        // ordinary window is brought forward by the activation above, and one the desktop refused
+        // that activation — this app's own menu held the input for too long, or the grant the row
+        // asked for was spent before the message landed — comes forward by the band, which no
+        // refusal reaches (see `take_the_band_and_give_it_back`).
+        if !pin_always_on_top() && GetForegroundWindow() != hwnd {
+            take_the_band_and_give_it_back(hwnd, "the tray's Restore Pin Mode row");
+            place_pinned_siblings();
+        }
+    }
+}
 /// Put a pinned window at the top of the band it is allowed to stand in, without taking the
 /// keyboard and without moving it: what a preview update owes the user when the pin was behind the
 /// listing they picked the file in (see `Pin Mode → Update Preview → Move To Top`).
