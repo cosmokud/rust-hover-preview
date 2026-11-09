@@ -21,14 +21,48 @@ fn a_press_outside_our_windows_puts_us_behind_them() {
         "a window that is neither a viewer's, the pin's menu's nor a page's is not one of ours"
     );
     assert!(
-        a_press_puts_us_behind(true, elsewhere, true, false),
+        a_press_puts_us_behind(true, elsewhere, true, false, false),
         "so the press that landed in it is the press the pin goes behind — a listing's tree, its rows, \
          the gap between them, another program and the desktop are all this one answer"
     );
     assert!(
-        !a_press_puts_us_behind(false, elsewhere, true, false),
+        !a_press_puts_us_behind(false, elsewhere, true, false, false),
         "and no press is the press that asks for anything"
     );
+    assert!(
+        !a_press_puts_us_behind(true, elsewhere, true, true, false),
+        "Always On Top is never put behind by a press: the setting keeps the band it holds"
+    );
+}
+
+/// **And a press the pick road is going to answer is no press of this road's.** The press that lands in
+/// the listing behind a pin following that listing is a pick, and the file it named is offered to the pin
+/// a tick later, with the raise that comes of it — so the pin must not be put behind the listing first,
+/// which is the Explorer window the user sees flash over the pin and back (see `a_press_puts_us_behind`).
+///
+/// The two halves of the answer are asked here as they are asked on the press road: the class of the
+/// window is `the_pick_road_answers`'s own question and is asserted beside it, and the setting's answer is
+/// the published fact rather than the configuration, which a hook callback may not lock.
+#[test]
+fn a_press_the_pick_road_answers_does_not_put_us_behind() {
+    let follows_before = crate::app::seam::the_pin_follows_the_listing();
+
+    crate::app::seam::publish_the_pin_follows_the_listing(true);
+    assert!(
+        crate::app::seam::the_pin_follows_the_listing(),
+        "a pin that follows the listing is the pin a pick is about"
+    );
+    assert!(
+        !a_press_puts_us_behind(true, false, true, false, true),
+        "so a press in its listing asks for nothing here: the pin is shown the file the press picked, \
+         and a pin put behind that listing first is the flash this is written against"
+    );
+    assert!(
+        a_press_puts_us_behind(true, false, true, false, false),
+        "and a press no pick road answers is the press the pin goes behind, exactly as it always has"
+    );
+
+    crate::app::seam::publish_the_pin_follows_the_listing(follows_before);
 }
 
 /// **A press on a window of ours is the pin being used**, not the listing behind it being worked in: the
@@ -36,11 +70,11 @@ fn a_press_outside_our_windows_puts_us_behind_them() {
 #[test]
 fn a_press_inside_our_own_windows_asks_for_nothing() {
     assert!(
-        !a_press_puts_us_behind(true, true, true, false),
+        !a_press_puts_us_behind(true, true, true, false, false),
         "the press that landed on us is not the press that goes behind anything"
     );
     assert!(
-        !a_press_puts_us_behind(true, true, true, true),
+        !a_press_puts_us_behind(true, true, true, true, false),
         "and Always On Top answers the same way, for the other of its two reasons"
     );
 }
@@ -106,7 +140,8 @@ fn the_press_road_reads_what_the_preview_loop_publishes() {
             true,
             press_is_inside_ours(HWND(0x3000 as *mut _), POINT { x: 4, y: 4 }),
             a_window_of_ours_stands(),
-            our_window_stands_over_everything()
+            our_window_stands_over_everything(),
+            false
         ),
         "Always On Top is never put behind by a press: the setting keeps the band it holds"
     );

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A pick with the mouse no longer flashes the listing over the pin** — a press in the listing behind a pin puts the pin behind that listing, which is what `Always On Top` off asks of a press anywhere else, and a *pick* is the same press: the pin went behind the listing the user had just clicked in, then came back to the front once the picked file resolved and was installed, and what the user saw between the two was the Explorer window. A press in a listing behind a pin that follows that listing is now left to the road that answers it — the file is offered to the pin and the raise that comes of it is the press's answer — while a press that names no file still puts the pin behind, exactly as before. A pick with the keyboard never had the fault because a key moves the focus and presses nothing.
+
 ## [0.5.1] - 2026-11-09
 
 ### Added
