@@ -695,11 +695,17 @@ pub(super) fn build_page(
     let bar_width = content_right - content_left;
     // The facts line ends where the clock's readout begins, less the gap kept off it: the room it is
     // drawn in is the room the readout really takes rather than one reserved for the longest readout
-    // there is (see `facts_right`).
+    // there is (see `facts_right`), and a line that runs past it ends on the last fact it holds whole
+    // (see `facts_edge`), so nothing of it is cut at rest.
     let mut facts = fact_runs(
         &card.facts,
         content_left,
-        facts_right(card, content_right, body_advance),
+        facts_edge(
+            &card.facts,
+            content_left,
+            facts_right(card, content_right, body_advance),
+            body_advance,
+        ),
         card.facts_offset,
         body_advance,
         muted,
@@ -911,17 +917,46 @@ pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
     width
 }
 
+/// The right edge of the box the facts line is drawn in: the room the clock leaves, drawn back to the
+/// end of the last whole fact that fits in it — so a box that cannot hold the line ends it on a fact
+/// rather than cutting the one that runs past it (see `fact_runs`).
+///
+/// A line the room holds whole keeps the room's own edge: there is nothing to draw back from. So does
+/// a room too narrow for even the first fact, which is that fact cut (see `fact_runs`).
+///
+/// Read of the line at rest, so the edge is one number per card: what the box clips as the line
+/// travels under it is the scroll's business, not the edge's.
+pub(super) fn facts_edge(facts: &[Fact], left: i32, right: i32, advance: i32) -> i32 {
+    let mut edge = left;
+
+    for (index, fact) in laid_facts(facts).enumerate() {
+        let mark = if index == 0 {
+            0
+        } else {
+            text_width(FACT_SEPARATOR, advance)
+        };
+        let next = edge + mark + text_width(&fact.text, advance);
+        if next > right {
+            break;
+        }
+        edge = next;
+    }
+
+    if edge == left || edge - left == facts_width(facts, advance) {
+        right
+    } else {
+        edge
+    }
+}
+
 /// The facts as runs, each in its own ink, laid from `left` into the room that ends at `right` — the
-/// room the clock leaves — with a parting mark before every fact after the first.
+/// room the clock leaves, drawn back to the last fact it holds whole (see [`facts_edge`]) — with a
+/// parting mark before every fact after the first.
 ///
 /// A fact is drawn whole where the whole of it fits: the room is the room the readout really leaves,
 /// so a fact that fits is never the one dropped. A line the room has no space for is the card's second
 /// scroll rather than a cut line: `offset` is how far the whole line has been carried back under the
 /// box, and what the box cannot hold is out of sight for now (see `Card::facts_offset`).
-///
-/// A line at rest (`offset == 0`) ends on a whole fact: the first fact the room does not hold whole is
-/// not laid, nor is the mark before it, and the rest of the line waits for the scroll to carry it in.
-/// The line a room cannot hold even its first fact of is that fact cut, rather than a line left empty.
 ///
 /// A parting mark is laid only where the fact after it is: the line ends on a character at every
 /// offset of its travel, never on the mark of a fact that has not come into the room yet.
@@ -941,7 +976,6 @@ fn fact_runs(
     let mut runs = Vec::new();
     let mut x = left - offset.max(0);
     let mut first = true;
-    let resting = offset <= 0;
 
     for fact in laid_facts(facts) {
         let mark = if first {
@@ -951,19 +985,7 @@ fn fact_runs(
         };
         let start = x + mark;
         let width = text_width(&fact.text, advance);
-
-        // At rest the line stops at the first fact it cannot draw whole — the rest are past it and wait
-        // for the scroll — while a section of the moving line in sight is drawn as it is (see
-        // `Card::facts_offset`). A resting line's first fact is drawn cut rather than left empty.
-        let laid = if resting {
-            start + width <= right || first
-        } else {
-            (start + width).min(right) > start.max(left)
-        };
-
-        if !laid && resting {
-            break;
-        }
+        let laid = (start + width).min(right) > start.max(left);
 
         if laid {
             if !first {

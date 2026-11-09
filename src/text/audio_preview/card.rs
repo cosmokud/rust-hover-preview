@@ -10,8 +10,8 @@
 //! page's own row rather than kept beside the card.
 
 use super::page::{
-    bar_band, bar_row, build_page, control_boxes, facts_right, facts_row, facts_width, holds,
-    paint, text_width,
+    bar_band, bar_row, build_page, control_boxes, facts_edge, facts_right, facts_row, facts_width,
+    holds, paint, text_width,
 };
 use crate::config::config::TextTheme;
 use crate::readers::audio_track::Track;
@@ -388,13 +388,15 @@ fn name_room(width: u32, dpi: u32, options: AudioPreviewOptions) -> Option<(i32,
     result
 }
 
-/// The scroll a card's facts line needs: how far the whole line runs past the room the clock leaves
-/// for it, at the font the line is drawn in — and nothing at all where the line fits, which is every
-/// card wide enough for its facts (see [`Card::facts_offset`]).
+/// The scroll a card's facts line needs: how far the whole line runs past the box that is drawn for
+/// it — the room the clock leaves, drawn back to the last fact it holds whole (see [`facts_edge`]) —
+/// at the font the line is drawn in, and nothing at all where the line fits, which is every card wide
+/// enough for its facts (see [`Card::facts_offset`]).
 ///
 /// Worked out here for the same reason `NameScroll::of` is: the preview loop owns the scroll and has
 /// none of the page's layout in hand, so the line it is measured from is measured with the page's own
-/// arithmetic rather than a second one beside it.
+/// arithmetic rather than a second one beside it. The travel is the page's own: the end of it leaves
+/// the last character of the line flush with the box the page draws (see `build_page`).
 ///
 /// shortcut: the room is read of the clock the card is put up with, so a clock that grows a digit while
 /// the line is scrolling leaves the last fact a few pixels out of sight until the next card; upgrade if
@@ -414,7 +416,12 @@ pub(crate) fn facts_scroll(
         .map(|metrics| {
             let advance = metrics.advance[BODY_LEVEL as usize].max(1);
             let left = metrics.padding;
-            let right = facts_right(card, width as i32 - metrics.padding, advance);
+            let right = facts_edge(
+                &card.facts,
+                left,
+                facts_right(card, width as i32 - metrics.padding, advance),
+                advance,
+            );
 
             NameScroll::fitted(
                 facts_width(&card.facts, advance),
@@ -434,9 +441,9 @@ pub(crate) fn facts_scroll(
 /// The row a card's facts line is drawn in, in the card's own pixels: the band a pointer resting on
 /// the line is on, which is where the line's scroll is engaged from (see `NameScroll::set_engaged`).
 ///
-/// From the content box's left edge to the room the clock leaves, which is the room the line is drawn
-/// into and the same band it is scrolled across — measured here of the same arithmetic `facts_scroll`
-/// measures the travel of, so a hand on the line and a line that travels are one row.
+/// From the content box's left edge to the room the clock leaves — the whole row the line stands in,
+/// and the band it is scrolled across, which is wider than the box a short line is drawn in by the
+/// facts that box has no room for (see `facts_edge`).
 pub(crate) fn facts_rect(
     card: &Card,
     width: u32,
