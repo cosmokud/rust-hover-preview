@@ -675,6 +675,10 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
         // swallowed — a release passed on is a key delivered to the window behind the pin (see
         // `pin_win_chord`). A chord's press is counted once per message, repeats included, because a held
         // `Win`+`Left` is as many displays over as a held arrow is a walk of the folder.
+        //
+        // A find bar does not stand this down, and it is the one gate the chord is answered before: a Win
+        // chord is nobody's text field's, and the bar's own table would read the arrow as a caret move in a
+        // query rather than as a window arrangement (see `the_pin_answers_key`).
         if let Some((caret, chord)) = caret.and_then(|caret| {
             pin_win_chord(vk, a_win_key_is_down(), the_shift_key_is_down())
                 .map(|chord| (caret, chord))
