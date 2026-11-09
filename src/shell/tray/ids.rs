@@ -417,6 +417,13 @@ pub(super) const ID_TRAY_PIN_NAV_OTHERS_CATEGORY: u16 = 1677;
 pub(super) const ID_TRAY_PIN_NAV_IMAGE_ALL: u16 = 1716;
 pub(super) const ID_TRAY_PIN_NAV_IMAGE_CATEGORY: u16 = 1717;
 pub(super) const ID_TRAY_PIN_ALWAYS_ON_TOP: u16 = 1678;
+/// The tray's own `Restore Pin Mode` row, which sits between `Enable Preview` and `Pin Mode` and is
+/// offered only while a pin is up (see `show_context_menu`).
+///
+/// It sits in the three ids the `… TTL` ranges and the `Components → Install` range leave free —
+/// 1727 to 1729 — so no click on it is read as another submenu's row, and one click on another's is
+/// never read as this.
+pub(super) const ID_TRAY_PIN_RESTORE: u16 = 1727;
 /// The `Pin Mode → Update Preview → Move To Top` row: whether an update also brings a pin that was
 /// behind in front of the window covering it. It sits past every id the app hands out, beside the
 /// pin's other rows, where no click on it is read as another submenu's item.

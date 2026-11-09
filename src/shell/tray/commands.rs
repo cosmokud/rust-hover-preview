@@ -21,8 +21,13 @@
 //! in `event_loop`, the submenu that opens a page, and the tests in `tray::tests` all reach
 //! the same paths they always did. The ids that name these are in `tray::ids`.
 
+mod restore;
 mod setters;
 mod toggles;
+
+// The one row that is a command rather than a setting: `Restore Pin Mode`, which asks the pin for
+// something and writes nothing (see `restore`).
+pub(super) use restore::restore_pin_mode;
 
 pub(super) use setters::{
     open_config_file, open_link, reset_lists_from_tray, reset_settings_from_tray, set_afk_timer,

@@ -3067,6 +3067,17 @@ pub fn run_preview_window() {
                     // (see `pin_navigation::nav_mode_for`). No step is taken, so the file the pin
                     // is showing is the file it keeps.
                     PreviewMessage::PinWalkAgain => ask_the_walk_again(),
+                    // The tray's `Restore Pin Mode` row, which is a press of this app's own: the pin
+                    // that is up comes back over everything in whichever state it was left in, and
+                    // takes the keyboard with it (see `restore_the_pin_from_the_tray`).
+                    PreviewMessage::PinRestore => {
+                        restore_the_pin_from_the_tray(&Win32PinWindow);
+                        // The window this road put up is painted here rather than at the repaint below:
+                        // a pin that was away comes back with the chrome its own state names, and one
+                        // that was up and behind is owed the frame the band change left it with.
+                        AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+                        render_layered_preview(hwnd);
+                    }
                     PreviewMessage::MeasureProbed { path, size } => {
                         // The same pick again for a pin, where the measure answered with a box:
                         // that a reader has no box for the file at all is no box to lay anything
@@ -4695,6 +4706,11 @@ pub fn run_preview_window() {
                     // And the band's own turn over, which asks the pin's walk again rather than
                     // laying anything out here (see `PreviewMessage::PinWalkAgain`).
                     PreviewMessage::PinWalkAgain => {}
+                    // And the tray's `Restore Pin Mode` row, which puts the pin that is up back on
+                    // the screen and in front of the user — answered above, where the pin's own
+                    // state and its window are, rather than as a hover to lay out (see
+                    // `PreviewMessage::PinRestore`).
+                    PreviewMessage::PinRestore => {}
                 }
 
                 // Shared load/display logic for Show and ShowKeyboard
