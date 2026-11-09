@@ -30,7 +30,7 @@ use super::ids::{
     ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW,
     ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
     ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_STARTUP,
+    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -74,11 +74,12 @@ use crate::config::config::{
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
     DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_PREVIEW_SCALE, DEFAULT_REMEMBER_AUDIO_VOLUME,
     DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
-    DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCALE, DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS,
-    DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP, DEFAULT_VIDEO_SCALE,
-    DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME, DEFAULT_ZOOM_BACKGROUND, VOLUME_CHOICES,
+    DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE, DEFAULT_TEXT_DONT_PREVIEW_SECRETS,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCALE, DEFAULT_TEXT_SHOW_EXTENSIONLESS,
+    DEFAULT_TICK_MS, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND,
+    DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP,
+    DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME, DEFAULT_ZOOM_BACKGROUND,
+    VOLUME_CHOICES,
 };
 use crate::config::theme_files;
 use crate::engines::libreoffice_render;
@@ -1886,10 +1887,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // said on the row above where there is something to put on the menu, and nowhere
     // at all where there is not — a check that found nothing is a menu that stays as
     // it was.
-    let check_for_updates = CONFIG
+    let (check_for_updates, silent_auto_update) = CONFIG
         .lock()
-        .map(|config| config.check_for_updates)
-        .unwrap_or(DEFAULT_CHECK_FOR_UPDATES);
+        .map(|config| (config.check_for_updates, config.silent_auto_update))
+        .unwrap_or((DEFAULT_CHECK_FOR_UPDATES, DEFAULT_SILENT_AUTO_UPDATE));
     let _ = AppendMenuW(
         system_menu,
         MF_STRING
@@ -1900,6 +1901,27 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             },
         ID_TRAY_CHECK_UPDATES as usize,
         w!("Check for Updates"),
+    );
+
+    // And whether an update one of those checks finds as the app starts is put on without
+    // asking. It is greyed while the checks are off rather than hidden: it is a question about
+    // a check that is not being made, and a switch that is there and does nothing says why.
+    let silent_flags = MF_STRING
+        | if silent_auto_update {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        }
+        | if check_for_updates {
+            MF_ENABLED
+        } else {
+            MF_GRAYED
+        };
+    let _ = AppendMenuW(
+        system_menu,
+        silent_flags,
+        ID_TRAY_SILENT_AUTO_UPDATE as usize,
+        w!("Silent Auto-Update"),
     );
 
     // Add "Run at Startup" with checkmark: what starts this app is the entry,

@@ -248,8 +248,10 @@ fn main() {
     // it may put in the menu should be there the first time the menu is opened
     // rather than only after an opening of its own asked for a check. It runs on a
     // thread of its own, so nothing here waits on GitHub — and nothing is asked
-    // at all where the checks are switched off (see `check_for_updates`).
-    app::updates::request_check();
+    // at all where the checks are switched off (see `check_for_updates`). This is
+    // also the one moment an update may be installed without asking, where
+    // `silent_auto_update` is on: a start has nothing on screen to close.
+    app::updates::request_startup_check();
     trace.step("update check");
 
     // Run the system tray (this blocks until exit), noting the two steps between the launch

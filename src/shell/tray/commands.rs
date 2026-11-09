@@ -47,9 +47,10 @@ pub(super) use toggles::{
     toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_update_enabled,
     toggle_pin_update_move_to_top, toggle_pin_update_on_hover, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_remember_audio_volume, toggle_remember_video_volume,
-    toggle_render_html, toggle_startup, toggle_text_dont_preview_secrets,
-    toggle_text_show_extensionless, toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled,
-    toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles,
+    toggle_render_html, toggle_silent_auto_update, toggle_startup,
+    toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
+    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
+    toggle_video_hw_accel, toggle_video_subtitles,
 };
 
 // The four that turn an id back into the choice it was listed for. No window proc asks for
