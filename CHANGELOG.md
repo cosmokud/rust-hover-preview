@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A shuffled playlist is built around the file the pin is showing** — the pinned file is the slot the walk stands on, and it is on the playlist once, so a **Next** steps from where the user is looking and a **Previous** comes back exactly to it. A playlist carried onto a file it did not hold — a session spawned on another file of the folder — took that file's slot for nothing: the walk could not find itself on the order, and **Previous** answered with the order's last file instead of the one the walk came from. A linear walk is untouched: it is the folder's own order.
+
 ## [0.5.0] - 2026-11-09
 
 ### Added
