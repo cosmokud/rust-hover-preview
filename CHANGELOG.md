@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A bubble follows the walk** — `Next File`/`Previous File` pressed on a bubble swapped the file in the pin but nothing told the circle to paint again, so it kept showing the file the walk came from until something else redrew it (a right click, which opens the menu and grows the window). The repaint now also compares the file the pin names against the one the bubble was drawn with, so every road that steps a collapsed pin — a menu row, a caption arrow, a taskbar button, a film's end of file — lands on the bubble.
+
 ## [0.5.2] - 2026-11-10
 
 ### Added
