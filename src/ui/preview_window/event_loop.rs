@@ -2617,8 +2617,8 @@ pub fn run_preview_window() {
             // And a file dragged onto the pin, if one landed since the last tick, which is the same
             // pick read from a different road: the window procedure reads the drop and leaves it
             // here, and what a pick is — planned, loaded, installed — is this loop's (see
-            // `pin_drop`). It is taken here, before the gate a match of a pick's own state, so that
-            // nothing of a dropped file is left standing across a tick.
+            // `pin_drop`). It is taken before the collapse gate below, so that nothing of a dropped
+            // file is left standing across a tick.
             //
             // **A drop takes the pin's walk away with it.** The walk a caption's next steps is
             // anchored on the file on screen and the folder it is in, so a pin left walking the
@@ -2627,14 +2627,19 @@ pub fn run_preview_window() {
             // dropped file and walks its own folder (see `pin_walk::ask_pin_walk` and
             // `pin_navigation::list_for`).
             //
-            // **A drop onto a bubble brings the pin back**, which is the road a listing's pick takes
-            // with `Pin Mode → Update Preview → Move To Top` on, and the pin is owed the same thing
-            // there: the file is not held for the key, because the hand that dropped it is asking to
-            // look at it now (see `pin_bubble_pick` and `bring_a_put_away_pin_back`).
+            // **A drop onto a bubble is the pin coming back on the file.** The bubble has no media band to
+            // show anything in, so the file a drop names is one the pin has to be taken up for, and the
+            // restore is the ordinary one a pick an update names takes, with the front and the keyboard left
+            // where the user's hand is (see `restore_pin` and `PinRestore::Update`). A restored pin is a pin
+            // the collapse gate below no longer holds the file for, so it is installed by the same pick
+            // road every other one takes, and the window is painted from the file the bubble was showing
+            // until the dropped one is read and put on it (see `pin_bubble_pick`).
             let dropped = pin_drop::take_dropped_on();
             if let Some(drop) = dropped {
                 pin_walk = None;
-                pin_swap_requested = drop.put_away.then(|| drop.path.clone());
+                if drop.put_away {
+                    restore_pin(&Win32PinWindow, PinRestore::Update);
+                }
                 pin_pick_dropped = true;
                 pin_pick = Some(drop.path);
             }
