@@ -565,49 +565,19 @@ pub fn run_explorer_hook() {
             // on the transition itself rather than on a timer. This drop cannot cover a click,
             // which is read a tick before the shell has caught up with it (see
             // `PinUpdateWatch::follow`).
+            //
+            // **The pin is not put behind from here any more, and it never could be.** A press inside the
+            // window that is already active — the tree, the rows, the gap between them, the toolbar, which
+            // is the whole of what a listing is made of — moves no foreground: the frame stays the
+            // foreground window and only a child's focus moves. So every road that lowered the pin on
+            // "Explorer has come to the front" was waiting for a transition that press cannot make, which
+            // is the three attempts this replaces. The lowering is asked for on the press itself, by the
+            // mouse hook of the process that holds the window (see `window_state::a_press_puts_us_behind`).
             let explorer_fg = is_foreground_explorer();
             let front = pin_front.read(explorer_fg);
             if front.changed {
                 resolver.forget_item();
                 resolver.forget_window_views();
-                // **The user has come back to a listing, and the pin is a window that cannot hear it.**
-                // A window being activated is raised over every window of the ordinary band — a pin with
-                // `Always On Top` off included — but only while the pin is in that band: a pin the
-                // take-up left holding the topmost one, or one the loop's own repair put back at the
-                // front of the ordinary band, is a window that activation cannot cover, and the listing
-                // stays behind it for the rest of the session. The window that holds the pin is a
-                // viewer's, so the ask crosses to it and the lowering is decided there (see
-                // `app::seam::PIN_BEHIND_ASK` and `pin_lifecycle::lower_pinned_preview`, which answers
-                // for `Always On Top`, a collapsed pin and `Move To Top` off exactly as a press does).
-                //
-                // **And only a pin that had the front can lose it back.** A pin raised over the listing
-                // the user is working in keeps the keyboard there, so Explorer is the foreground window
-                // at the moment of the raise and stays it — a state the ask must not read as a return to
-                // the listing, or the pin comes up behind the window it was raised over (see
-                // `pin_front::PinFront`).
-                if front.explorer_took_the_front_back {
-                    // Safety: asks the desktop which window is in front; dereferences nothing.
-                    let foreground = unsafe { GetForegroundWindow() };
-                    if std::env::var_os("RHP_SEAM_TRACE").is_some() {
-                        // What the pin goes behind, and the two windows the answer was read from: a
-                        // press inside a listing is the frame's child, and the frame is what the
-                        // pin is put behind (see `the_frame_of`).
-                        let frame = crate::shell::window_classes::the_frame_of(foreground);
-                        eprintln!(
-                            "seam: pin lower asked: Explorer took the foreground back from the pin, \
-                             behind {} ({}) in frame {} ({})",
-                            foreground.0 as isize,
-                            window_class_of(foreground),
-                            frame.0 as isize,
-                            window_class_of(frame),
-                        );
-                    }
-                    crate::app::seam::ask_the_pin_to_go_behind(foreground.0 as isize);
-                } else if explorer_fg && std::env::var_os("RHP_SEAM_TRACE").is_some() {
-                    eprintln!(
-                        "seam: pin lower skipped: no pin has held the foreground since this one came up"
-                    );
-                }
             }
 
             let (update, on_hover) = pin_update_settings();
