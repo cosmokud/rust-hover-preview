@@ -134,6 +134,12 @@ impl Key {
             len: metadata.len(),
         }
     }
+
+    /// The three things the key stands for, for a cache that writes them into its entry as the
+    /// stamp it was written for rather than hashing them into a name and keeping nothing else.
+    pub(crate) fn stamp(&self) -> (&Path, Option<SystemTime>, u64) {
+        (&self.path, self.modified, self.len)
+    }
 }
 
 /// What one reading of a file's directory entry settles: that it is there, what version it is

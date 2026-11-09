@@ -3,6 +3,8 @@
 
 use super::playback_trace::note_playback_trace;
 use super::*;
+use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::UI::WindowsAndMessaging::GetClientRect;
 
 /// The point the pointer is at, in screen coordinates: what a drag is measured in, since a
 /// window that is being resized moves its own origin out from under a client coordinate.
@@ -39,15 +41,42 @@ pub(super) fn client_to_screen(hwnd: HWND, x: i32, y: i32) -> (i32, i32) {
     }
 }
 
+/// A place on the screen as a point in a window's own coordinates, with how wide that window's client
+/// is: the rect a row of a band is counted in, and one no arithmetic over the box a pin is laid out
+/// in can stand in for, because a window is not obliged to be standing where that box says it is (see
+/// `pin_playlist::pin_playlist_hover_refresh`).
+///
+/// It is the inverse of `client_to_screen` and, unlike it, has no stand-in: a point a window cannot
+/// place is a window this app has not got, and a row there is a row of nothing.
+pub(super) fn the_point_in_the_window(hwnd: HWND, (x, y): (i32, i32)) -> Option<(i32, i32, i32)> {
+    let mut point = POINT { x, y };
+    let mut client = RECT::default();
+    unsafe {
+        GetClientRect(hwnd, &mut client).ok()?;
+        if !ScreenToClient(hwnd, &mut point).as_bool() {
+            return None;
+        }
+    }
+
+    Some((point.x, point.y, client.right))
+}
+
 /// The media box a window box implies: the window less the caption above it and the transport bar
 /// below it — or the window itself, for a kind whose chrome is drawn over its media and whose two
 /// boxes are therefore one box (see `pin_overlay_chrome`).
+///
+/// `playlist` is the band a pinned sound's card grows under it, which is rows of the *window* and
+/// none of the card: it is the inverse of `pinned_window_box_of` only together with that band, and a
+/// road that gave a card the rows of its own band would lay the card out down a window it had grown
+/// — and then measure the window as that card plus a band again, which is a card that stretches and a
+/// window that walks off the screen one move at a time (see `pin_playlist` and `pinned_band_rows`).
 pub(super) fn content_box_of(
     window: ScreenRegion,
     dpi: u32,
     transport: bool,
     overlay: bool,
     caption: i32,
+    playlist: i32,
 ) -> ScreenRegion {
     if overlay {
         return window;
@@ -57,7 +86,7 @@ pub(super) fn content_box_of(
         window.0,
         window.1 + caption,
         window.2,
-        window.3 - pinned_transport_height(dpi, transport),
+        window.3 - pinned_transport_height(dpi, transport) - playlist.max(0),
     )
 }
 
@@ -90,6 +119,13 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     // A drag along the transport bar, which is a seek being aimed rather than a window being
     // moved (see `pinned_transport_drag`).
     if pinned_transport_drag(hwnd, x) {
+        return;
+    }
+
+    // A drag of the playlist band's own height, which is the band being given its size rather than
+    // the window being carried: the window's top-left does not move for it (see
+    // `pin_playlist::drag`).
+    if pin_playlist::drag(hwnd, x, y) {
         return;
     }
 
@@ -159,9 +195,13 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
             let hovered = pin_audio_control_at(pin, x, y)
                 .filter(|control| pin_audio_control_revealed(pin, y, *control));
             let shown = pin_audio_window_buttons_at(pin, x, y);
-            let changed = pin.audio_hovered != hovered || pin.audio_window_buttons != shown;
+            let on_the_line = pin_audio_facts_at(pin, x, y);
+            let changed = pin.audio_hovered != hovered
+                || pin.audio_window_buttons != shown
+                || pin.audio_facts_hovered != on_the_line;
             pin.audio_hovered = hovered;
             pin.audio_window_buttons = shown;
+            pin.audio_facts_hovered = on_the_line;
 
             // The card's own paint is what shows the wash, and a card is a media frame rather than
             // chrome: repainting the window alone would redraw the *old* card with the old button
@@ -179,7 +219,17 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     // moved, because a repaint here is a band that copies the whole page frame (see `text_find::hover`).
     let find_changed = text_find::hover(x, y);
 
-    if hovered_changed || chrome_changed || transport_changed || audio_changed || find_changed {
+    // And the playlist band under a pinned sound's card, where a row a hand has come to is a name
+    // that starts travelling across it (see `pin_playlist::hover`).
+    let playlist_changed = pin_playlist::hover(y);
+
+    if hovered_changed
+        || chrome_changed
+        || transport_changed
+        || audio_changed
+        || find_changed
+        || playlist_changed
+    {
         render_layered_preview(hwnd);
     }
 
@@ -622,13 +672,7 @@ fn pinned_audio_volume_button(pin: &PinnedPreview) -> Option<RECT> {
         return None;
     }
 
-    let (_, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(
-        height,
-        pin.caption,
-        pinned_transport_height(pin.dpi, pin.transport_bar),
-        pin.overlay,
-    );
+    let (top, _) = pinned_media_band_rows(pin);
 
     // The button's own box, from the card's own arithmetic rather than from anything kept beside
     // it: a popup hung off a button that has moved is a popup that is not where its button is
@@ -1013,6 +1057,16 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         return true;
     }
 
+    // **And then the playlist band, before anything the card itself owns.** The band is the pin's own
+    // rows and none of it is the card's: a press on one picks it, a second press shows the file it is,
+    // and a press on either of the window's edges is the band's height being dragged. Asked after the
+    // card's arms instead, every one of those presses was a press on a card that has no rows down
+    // there — a band nothing could be clicked in, and nothing double-clicked either (see
+    // `pin_playlist::press`).
+    if pin_playlist::press(hwnd, x, y, double_click) {
+        return true;
+    }
+
     if framed {
         let edge = {
             let Some(pinned) = pin_state() else {
@@ -1293,6 +1347,12 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
     if pin_menu_hand_off_release(hwnd) {
         return true;
     }
+    // And a press the playlist band took: a drag of its height is over and the pointer given back,
+    // and a press on a row is over with nothing left to do (see `pin_playlist::release`).
+    if pin_playlist::release(hwnd) {
+        return true;
+    }
+
     // A drag of the volume knob first, which is a hand on the level rather than on anything else:
     // it is the one press on a pinned window that is let go of somewhere other than where it began
     // (see `pinned_volume_press`).

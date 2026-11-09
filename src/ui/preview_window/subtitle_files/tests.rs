@@ -610,3 +610,48 @@ fn with_the_switch_off_a_sidecar_beside_the_film_is_not_found() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Two kinds share the one budget under `general`, and the unit given up is one whole answer of
+/// either: a film's folder, because half its copies are not an answer, and a sound's entry, because
+/// one file is one sound (see `trim_folder`).
+#[test]
+fn the_trim_gives_up_the_oldest_unit_of_either_kind_and_a_sounds_entry_one_at_a_time() {
+    let folder = std::env::temp_dir().join("rust-hover-preview-trim-of-both-kinds");
+    let _ = std::fs::remove_dir_all(&folder);
+    let film = folder.join("a-film");
+    std::fs::create_dir_all(&film).expect("a test folder");
+    std::fs::write(film.join("sub0.ass"), vec![0u8; 1000]).expect("a film's extracted copy");
+
+    let first = folder.join("audio-track-0000000000000001");
+    std::fs::write(&first, vec![0u8; 100]).expect("a sound's entry");
+    let second = folder.join("audio-track-0000000000000002");
+    std::fs::write(&second, vec![0u8; 100]).expect("a sound's entry");
+
+    // 1200 bytes in the folder and 1100 allowed: the film was written before either sound was read,
+    // so its folder is the oldest unit there and the one that goes — and it goes whole.
+    trim_folder(&folder, 1100);
+
+    assert!(
+        !film.exists(),
+        "the oldest unit in the folder is the one given up, whichever kind it is"
+    );
+    assert!(
+        first.exists() && second.exists(),
+        "and the sounds' entries are counted against the same budget rather than passed over"
+    );
+
+    // 200 bytes left and 150 allowed: one entry goes, the older of the two — a trim of what a sound
+    // left behind is a trim of one answer at a time, never of everything of that kind.
+    trim_folder(&folder, 150);
+
+    assert!(
+        !first.exists(),
+        "the older of two entries is the one given up"
+    );
+    assert!(
+        second.exists(),
+        "and the folder's newest entry is left standing"
+    );
+
+    let _ = std::fs::remove_dir_all(&folder);
+}

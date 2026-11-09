@@ -228,9 +228,10 @@ pub(super) fn drawn_as_audio(path: &Path) -> bool {
 /// What a sound's card says, with the clock as it stands — or nothing for a file with no track
 /// behind it, which is a file no probe has answered for or one nothing here can play.
 ///
-/// `name_offset` is how far a name the card has no room for has been scrolled: it is nothing
-/// for the card a hover is measured with and for the first frame of one, and what the repaints
-/// of a moving card hand over (see `audio_preview::NameScroll`).
+/// `name_offset` is how far a name the card has no room for has been scrolled and `facts_offset`
+/// how far its facts line has been, in the same way: both are nothing for the card a hover is
+/// measured with and for the first frame of one, and both are what the repaints of a moving card
+/// hand over (see `audio_preview::NameScroll`).
 ///
 /// `chrome` is what the card's own controls are saying, and nothing at all for a card a hover
 /// shows — a hover's own window is a window nobody is in, so a click on one of its buttons would
@@ -242,6 +243,7 @@ pub(super) fn audio_card(
     elapsed: Option<f64>,
     duration: Option<f64>,
     name_offset: i32,
+    facts_offset: i32,
     chrome: Option<CardChrome>,
 ) -> Option<Card> {
     let Probed::Track(track) = audio_track::probed(path) else {
@@ -254,16 +256,58 @@ pub(super) fn audio_card(
         duration: duration.or(track.duration),
         elapsed,
         name_offset,
+        facts_offset,
         beat: 0.0,
         controls: chrome,
     })
+}
+
+/// The scroll a sound's facts line needs, if it needs one: the line the card is drawn with, measured
+/// against the room the clock in it leaves. Nothing for a file no probe answers for, which is a file
+/// with no card, and so no facts line above its bar either (see `audio_preview::facts_scroll`).
+///
+/// It is asked at the two moments a card is put up — a preview that has just arrived and a file
+/// swapped into a pin — for the same reason the name's own scroll is: a scroll is put up with the
+/// card rather than left over from the file before it.
+pub(super) fn audio_facts_marquee(
+    path: &Path,
+    elapsed: Option<f64>,
+    duration: Option<f64>,
+    width: u32,
+    dpi: u32,
+) -> Option<audio_preview::NameScroll> {
+    let card = audio_card(path, elapsed, duration, 0, 0, None)?;
+
+    Some(audio_preview::facts_scroll(
+        &card,
+        width,
+        dpi,
+        current_audio_options(),
+    ))
+}
+
+/// The row a sound's facts line is drawn in, in the card's own pixels: where a pointer resting on the
+/// line is, which is what engages the line's scroll (see `audio_preview::NameScroll::set_engaged`).
+///
+/// Nothing for a file no probe answers for, which is a file with no card and so no line either (see
+/// `audio_facts_marquee`).
+pub(super) fn audio_facts_rect(
+    path: &Path,
+    elapsed: Option<f64>,
+    duration: Option<f64>,
+    width: u32,
+    dpi: u32,
+) -> Option<RECT> {
+    let card = audio_card(path, elapsed, duration, 0, 0, None)?;
+
+    audio_preview::facts_rect(&card, width, dpi, current_audio_options())
 }
 
 /// The card a sound is previewed as, painted into the box the layout settled on.
 pub(super) fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) -> Option<MediaData> {
     // No controls: this is the card a *hover* shows, whose own window is a window nobody is in
     // (see `audio_card`).
-    let card = audio_card(path, None, None, 0, None)?;
+    let card = audio_card(path, None, None, 0, 0, None)?;
     // The share the frame is painted at is the frame's own from
     // here on: every repaint of it paints with the options that
     // share names rather than asking the configuration again (see
@@ -302,10 +346,7 @@ pub(super) fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) ->
 /// it: one read of one file, on the thread the hover is waiting on anyway, and the gain every
 /// hover after this one is played at (see `measure_audio_gain`).
 pub(super) fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
-    let track = match video_player::audio_probe(path) {
-        Some(track) => Some(track),
-        None => ffprobe_audio_track(path),
-    };
+    let track = probe_audio_track_briefly(path);
 
     let track = track.map(|track| counted_length(track, path));
 
@@ -314,6 +355,60 @@ pub(super) fn probe_audio_track(path: &Path) -> Option<audio_track::Track> {
     }
 
     track
+}
+
+/// What a file is, without what playing it costs: the same two roads `probe_audio_track` takes, less
+/// the length correction and the loudness measure — which are answers about *playing* the file, read
+/// by running over the whole of it, and are nothing a row of a list is asking.
+///
+/// It is the playlist's own probe (see `pin_playlist::start_the_prober`): a folder of songs is a
+/// folder's worth of files to read, and the measure a card waits for on its one file would be the
+/// whole of a list waiting a minute for its facts.
+pub(super) fn probe_audio_track_briefly(path: &Path) -> Option<audio_track::Track> {
+    video_player::audio_probe(path)
+        .or_else(|| ffprobe_audio_track(path))
+        .map(|track| with_a_bit_rate(track, path))
+}
+
+/// The track with a bit rate filled in where the probe that answered one left it out, since a
+/// card draws no `kbps` fact without one (see `audio_preview::facts_of`).
+///
+/// What a probe states is authoritative and kept as it is. Failing that, the file's own size over
+/// the length the probe stated is the average its container would have stated — the same number,
+/// read off the file rather than off the container. Only a file with no length either is asked
+/// FFmpeg, whose report states the container's average beside the stream's (see
+/// `ffprobe_audio_track`); that ask happens once per file, with the answer the memo holds.
+pub(super) fn with_a_bit_rate(track: audio_track::Track, path: &Path) -> audio_track::Track {
+    if track.bitrate.is_some() {
+        return track;
+    }
+
+    let bitrate = track
+        .duration
+        .and_then(|duration| average_bit_rate(path, duration))
+        .or_else(|| ffprobe_audio_track(path).and_then(|probed| probed.bitrate));
+
+    match bitrate {
+        Some(bitrate) => audio_track::Track {
+            bitrate: Some(bitrate),
+            ..track
+        },
+        None => track,
+    }
+}
+
+/// The rate a file of its own size over `duration` seconds averages, in bits a second — the unit
+/// `Track::bitrate` is stated in by both probes, and the one `bitrate_label` draws.
+///
+/// Nothing where the length is not a length (a probe can state `0`, and a division by it is no
+/// rate at all) and nothing where the file is smaller than a hundredth of a second's worth.
+fn average_bit_rate(path: &Path, duration: f64) -> Option<u32> {
+    let bytes = std::fs::metadata(path).ok()?.len();
+    let bitrate = (bytes as f64 * 8.0 / duration).round();
+
+    (duration > 0.0 && bitrate <= u32::MAX as f64)
+        .then_some(bitrate as u32)
+        .filter(|bitrate| *bitrate > 0)
 }
 
 /// The track a sound is held as, with the length its own frames answer for in place of the
@@ -348,7 +443,10 @@ pub(super) fn counted_length(track: audio_track::Track, path: &Path) -> audio_tr
 /// what the card beside it says. A machine without FFmpeg is answered by the engine above or
 /// not at all.
 pub(super) fn ffprobe_audio_track(path: &Path) -> Option<audio_track::Track> {
-    if !codecs::ffplay_available() {
+    // Asked of the probe's own presence rather than the player's: it is this program's report the
+    // card is drawn from, and a machine can hold it with no player beside it — which is the only
+    // backend a FLAC has here, the engine in this process decoding nothing for it.
+    if !codecs::ffprobe_available() {
         return None;
     }
 
@@ -364,7 +462,10 @@ pub(super) fn ffprobe_audio_track(path: &Path) -> Option<audio_track::Track> {
             "-fflags",
             "+genpts+discardcorrupt+igndts",
             "-show_entries",
-            "format=duration:stream=codec_type,codec_name,sample_rate,channels,bit_rate",
+            // The container's own average, which is the one rate a stream that states none leaves:
+            // it is written after the streams, once the length has been (see
+            // `audio_track_from_report`).
+            "format=duration,bit_rate:stream=codec_type,codec_name,sample_rate,channels,bit_rate",
             "-of",
             "default=noprint_wrappers=1",
         ])
@@ -400,7 +501,11 @@ pub(super) fn audio_track_from_report(report: &str) -> Option<audio_track::Track
     let mut rate: Option<u32> = None;
     let mut channels: Option<u16> = None;
     let mut bitrate: Option<u32> = None;
+    let mut overall: Option<u32> = None;
     let mut duration: Option<f64> = None;
+    // Set by the first line of the file's own entries, which arrive after every stream's: a bit
+    // rate read past this is the container's average and not a stream's.
+    let mut in_file = false;
 
     for line in report.lines() {
         let Some((key, value)) = line.split_once('=') else {
@@ -424,8 +529,12 @@ pub(super) fn audio_track_from_report(report: &str) -> Option<audio_track::Track
             "codec_name" => held_codec = Some(codec_label(value)),
             "sample_rate" if in_audio => rate = value.parse().ok(),
             "channels" if in_audio => channels = value.parse().ok(),
-            "bit_rate" if in_audio => bitrate = value.parse().ok(),
-            "duration" => duration = value.parse().ok(),
+            "bit_rate" if in_audio && !in_file => bitrate = value.parse().ok(),
+            "bit_rate" if in_file => overall = value.parse().ok(),
+            "duration" => {
+                duration = value.parse().ok();
+                in_file = true;
+            }
             _ => {}
         }
     }
@@ -435,7 +544,8 @@ pub(super) fn audio_track_from_report(report: &str) -> Option<audio_track::Track
         codec,
         rate: rate.filter(|rate| *rate > 0),
         channels: channels.filter(|channels| *channels > 0),
-        bitrate: bitrate.filter(|bitrate| *bitrate > 0),
+        // The sound's own stream where it states one, and the file's average where it does not.
+        bitrate: bitrate.or(overall).filter(|bitrate| *bitrate > 0),
         duration: duration.filter(|duration| *duration > 0.0),
     })
 }

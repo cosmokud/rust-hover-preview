@@ -2714,6 +2714,7 @@ fn a_hosted_band_with_no_film_in_it_is_opaque_never_a_hole() {
         pinned_caption_height(96, None),
         0,
         pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.overlay)) == Some(true),
+        0,
     );
     let row = (band_top.max(0) as usize + band_height as usize / 2).min(height as usize - 1);
     let pixel = &painted[row * width as usize * 4..row * width as usize * 4 + 4];
@@ -8180,12 +8181,7 @@ fn the_band_one_paint_left(film: &StandingFilm) -> (Vec<[u8; 4]>, usize, usize) 
         .and_then(|pinned| {
             pinned.pin().map(|pin| {
                 let (width, height) = pin.window_size();
-                let (top, rows) = pinned_band_rows(
-                    height,
-                    pin.caption,
-                    pinned_transport_height(pin.dpi, pin.transport_bar),
-                    pin.overlay,
-                );
+                let (top, rows) = pinned_media_band_rows(pin);
                 (
                     width as usize,
                     height as usize,

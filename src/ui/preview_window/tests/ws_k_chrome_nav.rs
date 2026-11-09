@@ -57,6 +57,8 @@ fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
         audio_hovered: None,
         audio_pressed: None,
         audio_window_buttons: false,
+        audio_facts_hovered: false,
+        audio_facts_rect: None,
         menu: PinMenu::default(),
     }
 }

@@ -9,10 +9,13 @@
 //! another answers a press in the middle of the facts line, so the boxes are rebuilt from the
 //! page's own row rather than kept beside the card.
 
-use super::page::{bar_band, bar_row, build_page, control_boxes, holds, paint, text_width};
+use super::page::{
+    bar_band, bar_row, build_page, control_boxes, facts_edge, facts_right, facts_row, facts_width,
+    holds, paint, text_width,
+};
 use crate::config::config::TextTheme;
 use crate::readers::audio_track::Track;
-use crate::text::text_paint::{DibSurface, TextMetrics};
+use crate::text::text_paint::{DibSurface, TextMetrics, BODY_LEVEL};
 use crate::text::text_theme;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -26,11 +29,6 @@ pub(super) const MARK_CELL_ADVANCES: i32 = 2;
 
 /// Room between the last fact and the clock at the right edge.
 pub(super) const TIME_GAP_ADVANCES: i32 = 3;
-
-/// The room the clock is given, in body advances: enough for `1:02:03 / 1:02:03`, which is the
-/// longest readout there is. What the clock takes is right-aligned inside it, so the facts are
-/// laid out against a fixed edge and the two do not move as the seconds do.
-pub(super) const CLOCK_ADVANCES: i32 = 17;
 
 /// The narrowest a card is worth drawing, in body advances — the width floor the
 /// card is laid out at, so a room of a few pixels answers with a card that looks
@@ -98,11 +96,14 @@ pub(super) const CHASE_SECONDS: f64 = 2.0;
 pub(super) const CHASE_DIVISOR: i32 = 5;
 
 /// How long a name rests at either end of its travel before it turns around.
-pub(super) const NAME_HOLD: Duration = Duration::from_millis(1000);
+pub(crate) const NAME_HOLD: Duration = Duration::from_millis(1000);
 
 /// The time one advance of a name's own font is worth: the speed a scroll is counted in, so
 /// that a card drawn at any scale is scrolled across at the same speed to the eye.
-const NAME_ADVANCE_MS: u128 = 100;
+pub(crate) const NAME_ADVANCE_MS: u128 = 100;
+
+/// The unit a file's room is counted in for its own fact line.
+const BYTES_IN_A_MEGABYTE: f64 = 1048576.0;
 
 /// The options a card is built with, passed in rather than read from the configuration here so
 /// a caller's intent cannot drift from what is drawn.
@@ -113,16 +114,19 @@ pub(crate) struct AudioPreviewOptions {
     pub(crate) mark_offset_y: f32,
 }
 
-/// How one fact is drawn: the codec's name is the one fact that is not a quantity or a plain
-/// word, so it is the one drawn in the page's own foreground.
+/// What ink one fact is set in, which is the whole of what a fact kind is: the line has two, and
+/// which one a fact takes is what it says rather than where it stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FactKind {
-    /// What the file is — `FLAC`, `MP3`, or the extension it carries where no engine named one.
-    Name,
-    /// A quantity: a sample rate, a bitrate.
-    Number,
-    /// A word: how many channels there are, as a person reads it.
-    Word,
+    /// What the file is — `FLAC`, `MP3`, or the extension it carries where no engine named one —
+    /// which is the one fact of the line drawn in the numbers' ink.
+    Format,
+    /// What the file says about the sound itself — a sample rate, a bitrate — drawn in the ordinary
+    /// ink the name is set in, so a reading of the sound stands between the format and the notes.
+    Reading,
+    /// Everything else the file says of itself: how many channels there are, the room it takes.
+    /// Drawn in the muted gray, so the format and the readings are what stand out.
+    Note,
 }
 
 /// One fact, ready to be drawn: what it says and which color it is set in.
@@ -149,6 +153,10 @@ pub(crate) struct Card {
     /// it: what a repaint of a card whose name moves hands over, and nothing at all for the
     /// card a hover is measured with or the first frame of one (see [`NameScroll`]).
     pub name_offset: i32,
+    /// How far the facts line is scrolled, in pixels, where the card has no room for the whole of
+    /// it — the same arrangement the name has, settled against the room the clock leaves rather than
+    /// the card's own box (see [`NameScroll`] and [`facts_scroll`]).
+    pub facts_offset: i32,
     /// The beat the mark beside the name is beating at, 0.0..=1.0: how loud the bass under the
     /// sound is now, which is how far the ripples around the mark have travelled out. Zero —
     /// the mark at rest, with the dot and nothing around it — is a card with no player behind
@@ -246,6 +254,10 @@ pub(crate) struct NameScroll {
     direction: i32,
     /// When the name may move again: the hold at the start, and the hold at either end.
     hold_until: Instant,
+    /// Whether anything is watching it travel. A name is engaged from the moment it is put up and
+    /// ping-pongs for as long as the card is; a facts line is engaged by a pointer resting on it,
+    /// and one released of its pointer winds back home and rests there (see `set_engaged`).
+    engaged: bool,
 }
 
 impl NameScroll {
@@ -254,29 +266,54 @@ impl NameScroll {
     /// the name fits — a card whose name is drawn once and held.
     pub(crate) fn of(name: &str, width: u32, dpi: u32, options: AudioPreviewOptions) -> Self {
         let Some((advance, room)) = name_room(width, dpi, options) else {
-            return Self {
-                offset: 0,
-                travel: 0,
-                advance: 1,
-                direction: 1,
-                hold_until: Instant::now(),
-            };
+            return Self::fitted(0, 0, 1);
         };
 
+        Self::fitted(text_width(name, advance), room, advance)
+    }
+
+    /// The scroll a run `want` pixels wide needs in `room` pixels of it, at the advance of the font it
+    /// is drawn in: how far it travels before its end is in sight, and nothing at all where it fits — a
+    /// run drawn once and held.
+    ///
+    /// It is the arithmetic a card's facts line is scrolled by as well as its name: the two things
+    /// about a card that move sideways are one motion, at one speed, ping-ponged one way (see
+    /// [`facts_scroll`]).
+    pub(super) fn fitted(want: i32, room: i32, advance: i32) -> Self {
         Self {
             offset: 0,
-            travel: (text_width(name, advance) - room).max(0),
-            advance,
+            travel: (want - room).max(0),
+            advance: advance.max(1),
             direction: 1,
             hold_until: Instant::now() + NAME_HOLD,
+            engaged: true,
         }
     }
 
-    /// Whether the name moves at all, which is what the cadence it is repainted at is read
-    /// from: a card that has to scroll cannot be redrawn at the rate the clock's own seconds
-    /// are worth watching at.
+    /// Whether the run moves at all, which is what the cadence it is repainted at is read from:
+    /// a card that has to scroll cannot be redrawn at the rate the clock's own seconds are worth
+    /// watching at.
+    ///
+    /// A run no longer engaged still moves until it is home: the card it was on is a card a pointer
+    /// has just left, and the line is on its way back to its first fact (see `advance`). One that
+    /// has arrived is a card at rest, which asks for no repaint of its own at all.
     pub(crate) fn moves(&self) -> bool {
-        self.travel > 0
+        self.travel > 0 && (self.engaged || self.offset > 0)
+    }
+
+    /// Engage the run — a pointer has come to rest on it — or let it go, which sends it home: one
+    /// that is let go travels back from wherever it stands and stops at its resting place until it
+    /// is engaged again, which is the whole of what a facts line nobody is reading is for.
+    pub(crate) fn set_engaged(&mut self, engaged: bool) {
+        if engaged == self.engaged {
+            return;
+        }
+        self.engaged = engaged;
+        if engaged {
+            // A run engaged at its resting place goes out again rather than standing where the last
+            // release left it pointing (see `advance`).
+            self.direction = 1;
+        }
     }
 
     /// How far the name is scrolled right now, in pixels.
@@ -286,15 +323,23 @@ impl NameScroll {
 
     /// Move the name on by one repaint, `cadence` after the last one: it rests at either end
     /// for `NAME_HOLD`, and between the holds it travels at about an advance a `NAME_ADVANCE_MS`
-    /// — ping-ponging for as long as the card is up, so the end of a long name is shown and the
+    /// — ping-ponging for as long as it is engaged, so the end of a long name is shown and the
     /// beginning comes back rather than the name being read once and left where it stopped.
     ///
     /// The run's own start is held for the same time as its ends: a name that has just appeared
     /// is a name a person is reading, and a card that started moving the moment it was put up
-    /// would begin at the one instant the reading starts.
+    /// would begin at the one instant the reading starts. A run let go of is not held anywhere: it
+    /// is on its way home and stays there (see `set_engaged`).
     pub(crate) fn advance(&mut self, now: Instant, cadence: Duration) {
-        if !self.moves() || now < self.hold_until {
+        if !self.moves() || (self.engaged && now < self.hold_until) {
             return;
+        }
+
+        // A run nobody is engaged with is on its way home rather than ping-ponging: it travels
+        // straight back from wherever it stands — no turn at the far end and no hold on the way —
+        // and stops at its resting place (see `set_engaged`).
+        if !self.engaged {
+            self.direction = -1;
         }
 
         // The advance is the font's own, so the speed is the same at every scale: at ten
@@ -341,6 +386,92 @@ fn name_room(width: u32, dpi: u32, options: AudioPreviewOptions) -> Option<(i32,
     }
 
     result
+}
+
+/// The scroll a card's facts line needs: how far the whole line runs past the box that is drawn for
+/// it — the room the clock leaves, drawn back to the last fact it holds whole (see [`facts_edge`]) —
+/// at the font the line is drawn in, and nothing at all where the line fits, which is every card wide
+/// enough for its facts (see [`Card::facts_offset`]).
+///
+/// Worked out here for the same reason `NameScroll::of` is: the preview loop owns the scroll and has
+/// none of the page's layout in hand, so the line it is measured from is measured with the page's own
+/// arithmetic rather than a second one beside it. The travel is the page's own: the end of it leaves
+/// the last character of the line flush with the box the page draws (see `build_page`).
+///
+/// shortcut: the room is read of the clock the card is put up with, so a clock that grows a digit while
+/// the line is scrolling leaves the last fact a few pixels out of sight until the next card; upgrade if
+/// a scrolling card is ever on screen across a minute an hour long.
+pub(crate) fn facts_scroll(
+    card: &Card,
+    width: u32,
+    dpi: u32,
+    options: AudioPreviewOptions,
+) -> NameScroll {
+    let dc = unsafe { CreateCompatibleDC(None) };
+    if dc.0.is_null() {
+        return NameScroll::fitted(0, 0, 1);
+    }
+
+    let scroll = TextMetrics::new(dc, dpi, options.font_scale_percent)
+        .map(|metrics| {
+            let advance = metrics.advance[BODY_LEVEL as usize].max(1);
+            let left = metrics.padding;
+            let right = facts_edge(
+                &card.facts,
+                left,
+                facts_right(card, width as i32 - metrics.padding, advance),
+                advance,
+            );
+
+            NameScroll::fitted(
+                facts_width(&card.facts, advance),
+                (right - left).max(0),
+                advance,
+            )
+        })
+        .unwrap_or_else(|| NameScroll::fitted(0, 0, 1));
+
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    scroll
+}
+
+/// The row a card's facts line is drawn in, in the card's own pixels: the band a pointer resting on
+/// the line is on, which is where the line's scroll is engaged from (see `NameScroll::set_engaged`).
+///
+/// From the content box's left edge to the room the clock leaves — the whole row the line stands in,
+/// and the band it is scrolled across, which is wider than the box a short line is drawn in by the
+/// facts that box has no room for (see `facts_edge`).
+pub(crate) fn facts_rect(
+    card: &Card,
+    width: u32,
+    dpi: u32,
+    options: AudioPreviewOptions,
+) -> Option<RECT> {
+    let dc = unsafe { CreateCompatibleDC(None) };
+    if dc.0.is_null() {
+        return None;
+    }
+
+    let rect = TextMetrics::new(dc, dpi, options.font_scale_percent).map(|metrics| {
+        let advance = metrics.advance[BODY_LEVEL as usize].max(1);
+        let row = facts_row(&metrics);
+
+        RECT {
+            left: metrics.padding,
+            top: row.top,
+            right: facts_right(card, width as i32 - metrics.padding, advance),
+            bottom: row.top + row.height,
+        }
+    });
+
+    unsafe {
+        let _ = DeleteDC(dc);
+    }
+
+    rect
 }
 
 /// The box the card wants, bounded by what the display can give it.
@@ -637,55 +768,77 @@ pub(crate) fn control_hit_boxes(
 }
 
 /// The facts line of a file: what it holds, in the order a person reads it — what the format
-/// is, how fast it was sampled, how many channels it has, and how much room a second of it takes.
+/// is, how fast it was sampled, how many channels it has, how much room a second of it takes, and
+/// the room the file itself takes.
 ///
-/// Every part is left out rather than guessed at, and a file no engine named a codec for is
-/// named by the extension it carries, which is what a card for it can honestly say.
+/// Every part is left out rather than guessed at except the room the file takes, which no probe
+/// answers for and which is always there: it is the one fact a person picking a file out of ten
+/// reads. A file no engine named a codec for is named by the extension it carries, which is what a
+/// card for it can honestly say.
 pub(crate) fn facts_of(track: &Track, path: &Path) -> Vec<Fact> {
     let mut facts = vec![Fact {
         text: track
             .codec
             .clone()
             .unwrap_or_else(|| extension_of(path).to_uppercase()),
-        kind: FactKind::Name,
+        kind: FactKind::Format,
     }];
 
     if let Some(rate) = track.rate {
         facts.push(Fact {
             text: rate_label(rate),
-            kind: FactKind::Number,
+            kind: FactKind::Reading,
         });
     }
     if let Some(channels) = track.channels {
         facts.push(Fact {
             text: channel_label(channels),
-            kind: FactKind::Word,
+            kind: FactKind::Note,
         });
     }
     if let Some(bitrate) = track.bitrate {
         facts.push(Fact {
             text: bitrate_label(bitrate),
-            kind: FactKind::Number,
+            kind: FactKind::Reading,
         });
     }
+    facts.push(Fact {
+        text: size_label(path),
+        kind: FactKind::Note,
+    });
 
     facts
 }
 
-/// The name a card is headed with: the file's own name, which is what a person looking at the
-/// card is identifying — the folder it is in is already said by the hover that put the card up,
-/// and a card is not wide enough for a whole path.
+/// The room a file takes, as a person reads it: `12.3 MB`, and nothing for a file nothing can be
+/// asked about — the same label a playlist row's facts line is ended by, drawn from the one place
+/// the two agree on it (see `super::page` and `pin_chrome::playlist`).
+pub(crate) fn size_label(path: &Path) -> String {
+    let bytes = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+
+    format!("{:.1} MB", bytes as f64 / BYTES_IN_A_MEGABYTE)
+}
+
+/// The name a card is headed with: the file's own name without the extension it is already known
+/// by — the format fact beside the name says what the file is in capitals, so the extension is the
+/// one part of the name the card repeats. The folder it is in is not in the name either: that is
+/// said by the hover that put the card up, and a card is not wide enough for a whole path.
 ///
 /// It is the card's business rather than a caller's because two of them need it and they have
 /// to agree: the card is drawn with it, and the scroll a card too narrow for it needs is
 /// measured from it (see [`NameScroll::of`]).
+///
+/// A name that is only an extension — a file called `.flac` — is kept whole rather than stripped:
+/// no extension is the whole of it.
 pub(crate) fn name_of(path: &Path) -> String {
-    path.file_name()
+    path.file_stem()
+        .filter(|stem| !stem.is_empty())
+        .or_else(|| path.file_name())
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_default()
 }
 
-fn extension_of(path: &Path) -> String {
+pub(crate) fn extension_of(path: &Path) -> String {
     path.extension()
         .map(|extension| extension.to_string_lossy().to_string())
         .unwrap_or_else(|| "audio".to_string())
@@ -693,7 +846,7 @@ fn extension_of(path: &Path) -> String {
 
 /// A sample rate as a person reads it: kHz to the decimal the fraction asks for, and the whole
 /// number where it asks for none — `44.1 kHz`, `48 kHz`, `22.05 kHz`.
-pub(super) fn rate_label(rate: u32) -> String {
+pub(crate) fn rate_label(rate: u32) -> String {
     let khz = rate as f64 / 1000.0;
     let rounded = (khz * 100.0).round() / 100.0;
 
@@ -708,7 +861,7 @@ pub(super) fn rate_label(rate: u32) -> String {
 
 /// How many channels, as a word where a word is what people say: `mono`, `stereo`, and the
 /// count for everything else.
-pub(super) fn channel_label(channels: u16) -> String {
+pub(crate) fn channel_label(channels: u16) -> String {
     match channels {
         0 => String::new(),
         1 => "mono".to_string(),
@@ -721,7 +874,7 @@ pub(super) fn channel_label(channels: u16) -> String {
 
 /// A bitrate as a person reads it, in the unit the number belongs in: kilobits for anything
 /// that came off a codec, bits for a stream that is only a few hundred a second.
-pub(super) fn bitrate_label(bitrate: u32) -> String {
+pub(crate) fn bitrate_label(bitrate: u32) -> String {
     if bitrate >= 1000 {
         format!("{} kbps", (bitrate as f64 / 1000.0).round() as u64)
     } else {
@@ -730,7 +883,7 @@ pub(super) fn bitrate_label(bitrate: u32) -> String {
 }
 
 /// A position as a clock: `9:22`, and `1:02:03` where the file runs past an hour.
-pub(super) fn clock(seconds: f64) -> String {
+pub(crate) fn clock(seconds: f64) -> String {
     let total = seconds.max(0.0) as u64;
     let (hours, minutes, seconds) = (total / 3600, (total % 3600) / 60, total % 60);
 

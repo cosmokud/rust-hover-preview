@@ -305,17 +305,39 @@ pub(super) fn pinned_window_box_of(
 /// otherwise. What the chrome is drawn *over* is what this answers — a caption over a picture, or
 /// a caption sharing the window's first rows with nothing else. A kind with no caption at all has
 /// no top band, so the media begins at the window's own first row (see `pinned_caption_height`).
+///
+/// `playlist` is the band a pinned sound's card grows under it, which is a band like the other two
+/// and is taken off the media's rows the same way: a card is the box it was taken up at however
+/// tall the window under it has become, and a media composed into a band that had grown for the
+/// playlist would be a card stretched down the window (see `pin_playlist`).
 pub(super) fn pinned_band_rows(
     height: i32,
     caption: i32,
     transport: i32,
     overlay: bool,
+    playlist: i32,
 ) -> (i32, i32) {
     if overlay {
         (0, height.max(1))
     } else {
-        (caption, (height - caption - transport).max(1))
+        (
+            caption,
+            (height - caption - transport - playlist.max(0)).max(1),
+        )
     }
+}
+
+/// The rows a pin's own media is drawn in, and how many of them there are: `pinned_band_rows`
+/// asked of one pin rather than of four numbers, so that the playlist band is taken off the media's
+/// rows in the one place a paint, a card's geometry and a press all read from.
+pub(super) fn pinned_media_band_rows(pin: &PinnedPreview) -> (i32, i32) {
+    pinned_band_rows(
+        pin.window_size().1,
+        pin.caption,
+        pinned_transport_height(pin.dpi, pin.transport_bar),
+        pin.overlay,
+        pin_playlist::playlist_rows(pin),
+    )
 }
 
 /// The box the media of a pinned preview takes when its window is given a room: the largest box
@@ -582,6 +604,15 @@ pub(super) struct PinnedPreview {
     /// across their columns, asked on every move and every tick (see
     /// `pinned_mouse_move` and `pin_audio_hover_refresh`).
     pub(super) audio_window_buttons: bool,
+    /// Whether the pointer is resting on the card's facts line, which is what engages that line's
+    /// scroll: asked on every move and every tick beside the window buttons (see
+    /// `pin_audio_facts_at`), and read by the loop's own step of the marquee.
+    pub(super) audio_facts_hovered: bool,
+    /// The row that facts line is drawn in, in the card's own pixels — the box the two questions
+    /// above are asked of, written down where the card's clock is (see `note_audio_facts_rect`) so
+    /// that a hit test reads it rather than laying a card out on every move. Nothing for a pin
+    /// showing no sound's card, which is the card with no facts line on it.
+    pub(super) audio_facts_rect: Option<(i32, i32, i32, i32)>,
     /// The card's own menu: whether its panel is up, and
     /// whether the Seek row's flyout is (see `PinMenu`).
     pub(super) menu: PinMenu,
@@ -623,6 +654,8 @@ impl PinnedPreview {
             audio_hovered: None,
             audio_pressed: None,
             audio_window_buttons: false,
+            audio_facts_hovered: false,
+            audio_facts_rect: None,
             menu: PinMenu::default(),
         }
     }

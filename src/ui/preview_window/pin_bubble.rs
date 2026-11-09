@@ -1245,8 +1245,17 @@ pub(super) fn restore_pin(window: &dyn PinWindow, asked_for: PinRestore) {
         // way this app places everything else (see `placed_pin_box`).
         if !from_taskbar && PIN_BUBBLE_CARRIED.load(Ordering::Acquire) {
             if let Some(window) = placed_pin_box(pin, &DESKTOPS) {
-                pin.content =
-                    content_box_of(window, pin.dpi, pin.transport_bar, pin.overlay, pin.caption);
+                pin.content = content_box_of(
+                    window,
+                    pin.dpi,
+                    pin.transport_bar,
+                    pin.overlay,
+                    pin.caption,
+                    // The band under a card is window the pin carries rather than media the bubble
+                    // was placed for: a restore that read it back as content would hand the card the
+                    // rows of its own playlist (see `content_box_of`).
+                    pin_playlist::playlist_rows(pin),
+                );
                 // The box has been placed beside a bubble the hand carried rather than chosen by the
                 // wheel, so the middle a notch on it would grow about is the middle of the box it has
                 // just been given: the box the pin went down in is not the box it came back to (see

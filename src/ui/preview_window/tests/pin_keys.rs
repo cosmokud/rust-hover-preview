@@ -165,22 +165,22 @@ fn a_pinned_windows_bands_are_the_caption_above_it_and_the_bar_below_it() {
     // carries the bar as well, which is a band the media gives up at the bottom.
     let window = (100, 100, 500, 600);
     assert_eq!(
-        content_box_of(window, 96, false, false, pinned_caption_height(96, None)),
+        content_box_of(window, 96, false, false, pinned_caption_height(96, None), 0),
         (100, 130, 500, 600)
     );
     assert_eq!(
-        content_box_of(window, 96, true, false, pinned_caption_height(96, None)),
+        content_box_of(window, 96, true, false, pinned_caption_height(96, None), 0),
         (100, 130, 500, 570)
     );
 
     // And a kind whose chrome is drawn over its media has no bands at all: its window is its
     // media, and the caption and the bar are strips *of* it rather than room beside it.
     assert_eq!(
-        content_box_of(window, 96, false, true, pinned_caption_height(96, None)),
+        content_box_of(window, 96, false, true, pinned_caption_height(96, None), 0),
         window
     );
     assert_eq!(
-        content_box_of(window, 96, true, true, pinned_caption_height(96, None)),
+        content_box_of(window, 96, true, true, pinned_caption_height(96, None), 0),
         window
     );
 }
@@ -209,6 +209,7 @@ fn a_key_reaches_a_pin_by_being_the_one_the_keyboard_is_in() {
         (VK_END.0 as i32, Some(PinCommand::PageBottom), "end"),
         (VK_ESCAPE.0 as i32, Some(PinCommand::Close), "escape"),
         (VK_SPACE.0 as i32, Some(PinCommand::TogglePlayback), "space"),
+        (VK_RETURN.0 as i32, Some(PinCommand::PlayRow), "return"),
     ] {
         assert_eq!(
             pinned_key_command(vk),
@@ -221,16 +222,7 @@ fn a_key_reaches_a_pin_by_being_the_one_the_keyboard_is_in() {
     // the user is typing into, and a modified one is a command of some other program: both
     // are keys this window was never asked about, and answering them would be a preview
     // acting on the keyboard it is merely standing in front of.
-    for vk in [
-        VK_A.0 as i32,
-        VK_C.0 as i32,
-        0x41,
-        0x0D,
-        0x09,
-        0x2E,
-        0x2D,
-        0x5B,
-    ] {
+    for vk in [VK_A.0 as i32, VK_C.0 as i32, 0x41, 0x09, 0x2E, 0x2D, 0x5B] {
         assert_eq!(
             pinned_key_command(vk),
             None,
@@ -645,14 +637,14 @@ fn a_sound_of_three_minutes() -> (PathBuf, PathBuf) {
         .expect("a written file");
     audio_track::remember(
         &path,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
 
     (folder, path)

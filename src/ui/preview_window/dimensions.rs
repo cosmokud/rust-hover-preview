@@ -397,23 +397,16 @@ pub(super) fn audio_box(path: &Path, bounds: ScreenBounds, dpi: u32) -> Option<(
         },
         (room.width, room.height),
         move || {
-            // What the machine has for the file, asked once per file and version and held for
-            // the hovers that follow — a file the engine will not play costs one probe rather
-            // than one per hover.
-            if matches!(audio_track::probed(&source), Probed::NotAsked) {
-                let probed = probe_audio_track(&source);
-                audio_track::remember(
-                    &source,
-                    match &probed {
-                        Some(track) => Probed::Track(track.clone()),
-                        None => Probed::Nothing,
-                    },
-                );
-            }
+            // What the machine has for the file, asked once per file and version and held for the
+            // hovers that follow — and answered by the disk a run before this one wrote, where it
+            // wrote one: a file nothing can be read from costs one probe per hover rather than one
+            // per frame, because an answer that found nothing is not an answer either level holds
+            // (see `audio_track::ask`).
+            audio_track::ask(&source, || probe_audio_track(&source));
 
             // Nothing: this is the card a *hover* is measured with, and a hover's own window is a window
             // nobody is in (see `audio_card`).
-            let card = audio_card(&source, None, None, 0, None)?;
+            let card = audio_card(&source, None, None, 0, 0, None)?;
             audio_preview::measure(&card, room.width, room.height, dpi, options)
         },
     )

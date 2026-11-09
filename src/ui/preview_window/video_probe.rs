@@ -699,21 +699,7 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
         // card it is rather than dropped as a video with no shape (see
         // `audio_formats::probed_audio_only`). What is left is a file nothing here can read,
         // which is the answer this arm always gave it.
-        let playable = match audio_track::probed(path) {
-            Probed::Track(_) => true,
-            Probed::Nothing => false,
-            Probed::NotAsked => {
-                let probed = probe_audio_track(path);
-                audio_track::remember(
-                    path,
-                    match &probed {
-                        Some(track) => Probed::Track(track.clone()),
-                        None => Probed::Nothing,
-                    },
-                );
-                probed.is_some()
-            }
-        };
+        let playable = audio_track::ask(path, || probe_audio_track(path)).is_some();
 
         if playable {
             audio_formats::remember_audio_only(path);

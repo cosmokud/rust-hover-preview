@@ -95,6 +95,7 @@ pub(crate) struct ViewerFacts {
     pin_zoom_delta: AtomicI32,
     pin_volume_delta: AtomicI32,
     pin_text_size_delta: AtomicI32,
+    pin_playlist_delta: AtomicI32,
     preview_under_pointer: AtomicU32,
     pin_keys_owner: AtomicU64,
     pin_keys_video: AtomicU64,
@@ -132,6 +133,7 @@ pub(crate) struct ViewerFacts {
     text_size_region: AtomicU64,
     pin_zoom_region: AtomicU64,
     models_band: AtomicU64,
+    pin_playlist_band: AtomicU64,
     /// The box the pinned window stands in (see `PIN_WINDOW_BOX`).
     pin_window_box: AtomicU64,
     models_notches: AtomicI32,
@@ -189,6 +191,7 @@ impl ViewerFacts {
             pin_zoom_delta: AtomicI32::new(0),
             pin_volume_delta: AtomicI32::new(0),
             pin_text_size_delta: AtomicI32::new(0),
+            pin_playlist_delta: AtomicI32::new(0),
             preview_under_pointer: AtomicU32::new(0),
             pin_keys_owner: AtomicU64::new(0),
             pin_keys_video: AtomicU64::new(0),
@@ -213,6 +216,7 @@ impl ViewerFacts {
             text_size_region: AtomicU64::new(NO_REGION),
             pin_zoom_region: AtomicU64::new(NO_REGION),
             models_band: AtomicU64::new(NO_REGION),
+            pin_playlist_band: AtomicU64::new(NO_REGION),
             pin_window_box: AtomicU64::new(NO_REGION),
             models_notches: AtomicI32::new(0),
             models_notch_point: AtomicU64::new(0),
@@ -1015,6 +1019,10 @@ pub(crate) enum PreviewMessage {
     /// with nothing in it to step onto are both answers, not the absence of one, so the pin's
     /// arc comes down when they land rather than waiting out a bound (see `answer_pin_job`).
     PinAnswered(PinPlanned),
+    /// The band under a pinned sound turned over, so the walk behind it is asked again: how wide
+    /// that walk is depends on the band, and nothing else re-reads the mode now that it has changed
+    /// (see `pin_playlist::toggle` and `pin_walk::ask_the_walk_again`).
+    PinWalkAgain,
     /// The small subtitle files a film's own tracks were copied into are ready, sent the
     /// moment the extraction's one pass finishes (see `subtitle_files`).
     ///
@@ -1444,6 +1452,10 @@ pub(crate) static PIN_VOLUME_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.pi
 pub(crate) static PIN_TEXT_SIZE_DELTA: Fact<AtomicI32> =
     Fact::of(|facts| &facts.pin_text_size_delta);
 
+/// Wheel notches handed to the playlist band under a pinned sound's card, on the same terms: signed
+/// (up is toward the first row), swapped to zero by the reader.
+pub(crate) static PIN_PLAYLIST_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.pin_playlist_delta);
+
 /// Whether the preview on screen is the surface the pointer is standing on, published by the
 /// preview thread once a tick.
 ///
@@ -1483,6 +1495,12 @@ pub(crate) fn take_text_size_delta() -> i32 {
 /// units (120 to a notch). Signed, up being positive — which is a zoom in.
 pub(crate) fn take_pin_zoom_delta() -> i32 {
     PIN_ZOOM_DELTA.swap(0, Ordering::AcqRel)
+}
+
+/// Wheel notches a pin's playlist band has been given since this was last called, in wheel units
+/// (120 to a notch). Signed, up being toward the band's first row.
+pub(crate) fn take_pin_playlist_delta() -> i32 {
+    PIN_PLAYLIST_DELTA.swap(0, Ordering::AcqRel)
 }
 
 /// Wheel notches a pin's volume control has been given since this was last called, in
@@ -1972,6 +1990,7 @@ impl SeamMessage {
     const TRIM_CACHES: u8 = 27;
     const KILL_STRAY_PLAYER: u8 = 28;
     const VIEWER_DETACHED: u8 = 29;
+    const PIN_WALK_AGAIN: u8 = 30;
 
     /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
     fn of(tag: u8, numbers: &[i64]) -> Self {
@@ -2135,6 +2154,7 @@ impl SeamMessage {
                 .with_text(path.as_os_str().encode_wide())
             }
             PreviewMessage::PinAnswered(_) => None,
+            PreviewMessage::PinWalkAgain => Some(Self::of(Self::PIN_WALK_AGAIN, &[])),
             PreviewMessage::VideoSubtitlesReady(path) => {
                 Self::of(Self::VIDEO_SUBTITLES_READY, &[]).with_text(path.as_os_str().encode_wide())
             }
@@ -2218,6 +2238,7 @@ impl SeamMessage {
                 window: numbers[0] as isize,
             },
             Self::PIN_CHANGED => PreviewMessage::PinChanged,
+            Self::PIN_WALK_AGAIN => PreviewMessage::PinWalkAgain,
             Self::TRAY_VOLUME => PreviewMessage::TrayVolume {
                 audio: numbers[0] != 0,
             },
@@ -2814,6 +2835,10 @@ pub(crate) static PIN_ZOOM_REGION: PublishedRegion =
 /// The band a pinned model is drawn in, which a notch is handed to the model's own camera for.
 pub(crate) static MODELS_BAND: PublishedRegion = PublishedRegion::of(|facts| &facts.models_band);
 
+/// The band a pinned sound's card grows under it, which a notch steps its rows by.
+pub(crate) static PIN_PLAYLIST_BAND: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.pin_playlist_band);
+
 /// The box the pin's window stands in, published once a tick and read by the hook's own press reads: a
 /// press inside it is the pin's own whatever is under the point, and a pin dragged under a hand that did
 /// not move is a box that changed (see `preview_window_rect`).
@@ -2953,7 +2978,7 @@ pub(crate) fn the_pin_key_is_down() -> bool {
 /// procedure reads it to answer the keys that reach it (see
 /// `preview_window::pinned_key_message_command`). A key listed on one side and not the other is a key one
 /// of them acts on and the other one throws away.
-pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
+pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 13] = [
     (0x25, 0),  // VK_LEFT   -> Previous
     (0x27, 1),  // VK_RIGHT  -> Next
     (0x1B, 2),  // VK_ESCAPE -> Close
@@ -2966,14 +2991,15 @@ pub(crate) const PIN_KEY_COMMANDS: [(i32, u8); 12] = [
     (0x24, 9),  // VK_HOME   -> PageTop
     (0x23, 10), // VK_END    -> PageBottom
     (0x72, 11), // VK_F3     -> FindNext
+    (0x0D, 12), // VK_RETURN -> PlayRow
 ];
 
 /// How many commands `PIN_KEY_COMMANDS` names, which is how many counters are kept for them.
 ///
-/// Named rather than written as the `12` of an array length so that a command added to the table above is
+/// Named rather than written as the `13` of an array length so that a command added to the table above is
 /// a command this count has to be told about, rather than one whose presses are counted into a counter
 /// that was never reserved for it.
-pub(crate) const PIN_COMMAND_COUNT: usize = 12;
+pub(crate) const PIN_COMMAND_COUNT: usize = 13;
 
 /// Which command of `PIN_KEY_COMMANDS` a virtual key is listed under, or `None` for a key this app does
 /// not answer.

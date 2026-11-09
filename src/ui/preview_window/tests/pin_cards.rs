@@ -98,14 +98,14 @@ fn a_remembered_sound(folder: &str) -> PathBuf {
     std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00").expect("a file");
     audio_track::remember(
         &path,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
 
     path
@@ -192,7 +192,8 @@ fn a_pinned_windows_box_is_its_media_plus_the_room_its_chrome_needs() {
             96,
             true,
             false,
-            pinned_caption_height(96, None)
+            pinned_caption_height(96, None),
+            0
         ),
         content
     );
@@ -206,8 +207,8 @@ fn a_pinned_windows_box_is_its_media_plus_the_room_its_chrome_needs() {
 
     // And where each part of the window is drawn: the media between the two bands, or under
     // the chrome the whole of the window down, with the strips over its first and last rows.
-    assert_eq!(pinned_band_rows(500, 30, 30, false), (30, 440));
-    assert_eq!(pinned_band_rows(500, 30, 30, true), (0, 500));
+    assert_eq!(pinned_band_rows(500, 30, 30, false, 0), (30, 440));
+    assert_eq!(pinned_band_rows(500, 30, 30, true, 0), (0, 500));
 
     // What the room of a display is follows from the same answer: a pin that keeps its chrome
     // inside its own box has the whole work area to be placed in.
@@ -264,13 +265,13 @@ fn a_sound_is_given_no_caption_above_its_card() {
     // card is drawn in is the whole of the window rather than the rows below a caption.
     let window = pinned_window_box_of((100, 100, 500, 600), 96, false, false, 0);
     assert_eq!(window, (100, 100, 500, 600));
-    assert_eq!(content_box_of(window, 96, false, false, 0), window);
-    assert_eq!(pinned_band_rows(600, 0, 0, false), (0, 600));
+    assert_eq!(content_box_of(window, 96, false, false, 0, 0), window);
+    assert_eq!(pinned_band_rows(600, 0, 0, false, 0), (0, 600));
 
     // A picture's band begins below the caption it has always had.
     let caption = pinned_caption_height(96, None);
     assert_eq!(
-        pinned_band_rows(600, caption, 0, false),
+        pinned_band_rows(600, caption, 0, false, 0),
         (caption, 600 - caption)
     );
 }
@@ -315,8 +316,7 @@ fn sound_pin_volume_button(pin: &PinnedPreview) -> (i32, i32) {
     )
     .expect("a box on a card that carries its controls");
     let window = pin.window_box();
-    let (_, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(height, pin.caption, 0, pin.overlay);
+    let (top, _) = pinned_media_band_rows(pin);
 
     (
         window.0 + (button.left + button.right) / 2,
@@ -379,6 +379,62 @@ fn a_hover_off_the_card_leaves_its_buttons_unlit() {
     stand_pin(previous_pin);
 }
 
+/// The facts line of a card travels only under a pointer resting on it: the row it is drawn in is
+/// the card's own — stored in the card's pixels, and taken to the card by the media band's top row,
+/// the same subtraction a press on one of its buttons is answered by (see `pin_audio_facts_at`).
+#[test]
+fn the_facts_line_is_engaged_by_a_pointer_on_its_own_row() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let mut pin = sound_pin();
+    // The row the take-up writes down, in the card's own pixels (see `note_audio_facts_rect`).
+    pin.audio_facts_rect = Some((8, 24, 380, 40));
+    let (top, _) = pinned_media_band_rows(&pin);
+    let window = pin.window_box();
+    let on_the_line = (window.0 + 100, window.1 + top + 30);
+
+    assert!(
+        pin_audio_facts_at(&pin, 100, top + 30),
+        "a point on the row is taken to the card through the media band's own top"
+    );
+    assert!(
+        !pin_audio_facts_at(&pin, 100, top + 60),
+        "and the bar's own row below it is not the facts line"
+    );
+
+    stand_pin(Some(pin));
+    AUDIO_CARD_DIRTY.store(false, Ordering::Release);
+
+    let now = Instant::now();
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, now, Some(on_the_line)))
+    });
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_facts_hovered)),
+        Some(true),
+        "a pointer on the line is what engages the line's scroll"
+    );
+    assert!(
+        AUDIO_CARD_DIRTY.swap(false, Ordering::AcqRel),
+        "and the card is asked to be painted again, as much as a lit button does"
+    );
+
+    // And off it, which lets the line go: what the loop's own step winds back to the first fact.
+    pin_state().and_then(|mut pinned| {
+        let pin = pinned.pin_mut()?;
+        Some(refresh_pin_chrome(pin, now, Some((-1000, -1000))))
+    });
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.audio_facts_hovered)),
+        Some(false),
+        "a pointer that has walked away leaves the line to wind home"
+    );
+
+    stand_pin(previous_pin);
+}
+
 /// A pin of a sound keeps the box its hover had: the card a hover is measured with and the card a
 /// pin shows are the same size, because the row of buttons on the pinned one is the bar's own row
 /// and the bar is what they are carved out of.
@@ -392,22 +448,23 @@ fn a_pin_of_a_sound_is_given_the_box_its_controls_fit_inside() {
     std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00").expect("a file");
     audio_track::remember(
         &path,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
 
     let options = current_audio_options();
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let pinned = audio_card(
         &path,
         None,
         None,
+        0,
         0,
         Some(CardChrome {
             detached: false,
@@ -494,18 +551,18 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
     std::fs::write(&path, b"ID3\x04\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00").expect("a file");
     audio_track::remember(
         &path,
-        audio_track::Probed::Track(audio_track::Track {
+        audio_track::Track {
             player: audio_track::Player::Ffmpeg,
             codec: Some("MP3".to_string()),
             rate: Some(44_100),
             channels: Some(2),
             bitrate: Some(192_000),
             duration: Some(180.0),
-        }),
+        },
     );
 
     // The card the hover drew, which is the card a pin inherits until it lays its own out.
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) = audio_preview::measure(&hover, 4096, 2160, 96, current_audio_options())
         .expect("a measured card");
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
@@ -543,6 +600,7 @@ fn a_taken_up_sound_lays_its_card_out_again_for_the_box_it_is_given() {
             from: 0.0,
             paused: None,
             name_offset: 0,
+            facts_offset: 0,
             dpi: 96,
             chrome: Some(CardChrome {
                 detached: false,
@@ -594,7 +652,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
     // frame's first painting, at the anchor's share.
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let painted_with = current_audio_scale();
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) =
         audio_preview::measure(&hover, 4096, 2160, 96, audio_options_of(painted_with))
             .expect("a measured card");
@@ -623,7 +681,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
         always_on_top: true,
     });
     assert!(
-        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome, 0.0),
+        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, 0, chrome, 0.0),
         "the card is repainted"
     );
 
@@ -640,7 +698,7 @@ fn a_repaint_keeps_the_frame_it_was_painted_at() {
         (width, height),
         "the repainted frame keeps the box it was painted at"
     );
-    let card = audio_card(&path, Some(67.0), Some(180.0), 0, chrome).expect("a card");
+    let card = audio_card(&path, Some(67.0), Some(180.0), 0, 0, chrome).expect("a card");
     let (pixels, ..) =
         audio_preview::render(&card, width, height, 96, audio_options_of(painted_with))
             .expect("a painted card");
@@ -676,7 +734,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
     // A card in the media slot at the anchor, which is what a
     // take-up of a sound takes its options from: the frame's
     // first painting, at the share the card is to be drawn at.
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) = audio_preview::measure(&hover, 4096, 2160, 96, current_audio_options())
         .expect("a measured card");
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
@@ -702,8 +760,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
         true,
     )
     .expect("a box on a card that carries its controls");
-    let (_, window_height) = pin.window_size();
-    let (top, _) = pinned_band_rows(window_height, pin.caption, 0, pin.overlay);
+    let (top, _) = pinned_media_band_rows(&pin);
     assert_eq!(
         pin_audio_control_at(
             &pin,
@@ -774,8 +831,7 @@ fn a_pin_answers_its_controls_at_the_share_it_was_taken_up_at() {
         true,
     )
     .expect("a box on a card that carries its controls");
-    let (_, walked_height) = walked.window_size();
-    let (walked_top, _) = pinned_band_rows(walked_height, walked.caption, 0, walked.overlay);
+    let (walked_top, _) = pinned_media_band_rows(&walked);
     assert_eq!(
         pin_audio_control_at(
             &walked,
@@ -810,7 +866,7 @@ fn a_repaint_still_follows_the_theme_setting() {
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let painted_with = current_audio_scale();
     let painted_theme = current_audio_theme();
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) =
         audio_preview::measure(&hover, 4096, 2160, 96, audio_options_of(painted_with))
             .expect("a measured card");
@@ -850,7 +906,7 @@ fn a_repaint_still_follows_the_theme_setting() {
         always_on_top: true,
     });
     assert!(
-        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, chrome, 0.0),
+        media.refresh_audio_card(&path, Some(67.0), Some(180.0), 96, 0, 0, chrome, 0.0),
         "the card is repainted"
     );
 
@@ -860,7 +916,7 @@ fn a_repaint_still_follows_the_theme_setting() {
     // is a different painting, so the equality is the assertion
     // that the repaint followed the theme and nothing else.
     let frame = media.frames.first().expect("a frame").clone();
-    let card = audio_card(&path, Some(67.0), Some(180.0), 0, chrome).expect("a card");
+    let card = audio_card(&path, Some(67.0), Some(180.0), 0, 0, chrome).expect("a card");
     let (pixels, ..) =
         audio_preview::render(&card, width, height, 96, audio_options_of(painted_with))
             .expect("a painted card");
@@ -896,7 +952,7 @@ fn a_pin_taken_up_after_a_change_keeps_the_hovers_size() {
     // The hover's card, loaded into the media slot at the
     // anchor, and the hover's box measured at the anchor: the
     // box the hover was given.
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let anchor = current_audio_scale();
     let room = audio_box_room(work_area_at(100, 100), anchor, 96);
     let (hover_width, hover_height) = audio_preview::measure(
@@ -967,8 +1023,7 @@ fn a_pin_taken_up_after_a_change_keeps_the_hovers_size() {
         true,
     )
     .expect("a box on a card that carries its controls");
-    let (_, window_height) = pin.window_size();
-    let (top, _) = pinned_band_rows(window_height, pin.caption, 0, pin.overlay);
+    let (top, _) = pinned_media_band_rows(&pin);
     assert_eq!(
         pin_audio_control_at(
             &pin,
@@ -1003,7 +1058,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
     // The frame's first painting, at the anchor's share.
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     let anchor = current_audio_scale();
-    let hover = audio_card(&path, None, None, 0, None).expect("a card");
+    let hover = audio_card(&path, None, None, 0, 0, None).expect("a card");
     let (width, height) = audio_preview::measure(&hover, 4096, 2160, 96, audio_options_of(anchor))
         .expect("a measured card");
     if let Ok(mut slot) = CURRENT_MEDIA.lock() {
@@ -1040,6 +1095,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
                 from: 0.0,
                 paused: None,
                 name_offset: 0,
+                facts_offset: 0,
                 dpi: 96,
                 chrome,
             },
@@ -1063,7 +1119,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
         size,
         "the relaid-out frame fills the box it was given"
     );
-    let card = audio_card(&path, Some(67.0), Some(180.0), 0, chrome).expect("a card");
+    let card = audio_card(&path, Some(67.0), Some(180.0), 0, 0, chrome).expect("a card");
     let (pixels, ..) = audio_preview::render(&card, size.0, size.1, 96, audio_options_of(anchor))
         .expect("a painted card");
     assert_eq!(
@@ -1075,6 +1131,798 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
         *slot = previous_media;
     }
     let _ = std::fs::remove_file(&path);
+}
+
+/// A band under a pinned sound's card grows the window downward and leaves the card exactly where
+/// it was: the same box, the same first row, and the same media band — the rows the band takes are
+/// window the card never had, not rows of the card given away.
+///
+/// The band is the session's rather than the pin's (it is remembered so that the next pin comes up
+/// with it), so the test puts it back down before it ends.
+#[test]
+fn a_band_under_a_card_grows_the_window_and_leaves_the_card_alone() {
+    let _room = the_room_to_itself();
+
+    let pin = sound_pin();
+    assert_eq!(
+        pin_playlist::playlist_rows(&pin),
+        0,
+        "a band is down until a hand opens one"
+    );
+    assert_eq!(pin.window_box(), pin.content);
+
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+
+    assert!(
+        pin_playlist::the_tick_is_owed_a_repaint(),
+        "a band opened is a box the window has to be given, so the tick owes the paint that gives it"
+    );
+
+    assert!(
+        band_height > 0,
+        "a band opened on a display is a band with a height"
+    );
+    assert_eq!(
+        band_top,
+        pin.content.3 - pin.content.1,
+        "it begins at the card's own bottom edge, counted in the window's own rows, so nothing of \
+         the card moves for it"
+    );
+    assert_eq!(
+        pin.window_box(),
+        (
+            pin.content.0,
+            pin.content.1,
+            pin.content.2,
+            pin.content.3 + band_height
+        ),
+        "the window is the card's box grown downward and no other way"
+    );
+    assert_eq!(
+        (pin.content.2 - pin.content.0, pin.content.3 - pin.content.1),
+        (400, 200),
+        "and the card's own box is the one it was taken up with"
+    );
+
+    // The media band is the card's rows and no more of them: what the band took is window the card
+    // was never drawn in, which is what keeps `compose_media_into_band` from stretching it.
+    let (top, rows) = pinned_media_band_rows(&pin);
+    assert_eq!(
+        top, 0,
+        "the card still begins at the window's own first row"
+    );
+    assert_eq!(rows, 200, "and it is still as tall as the card is");
+
+    pin_playlist::toggle(&pin);
+    assert_eq!(
+        pin.window_box(),
+        pin.content,
+        "and closing it puts the window back to the card's box"
+    );
+    assert!(
+        pin_playlist::the_tick_is_owed_a_repaint(),
+        "and a box given back is owed a paint as much as one given: the band is down, and the \
+         window it grew is the size it grew to until a paint says otherwise"
+    );
+}
+
+/// A window carried is a place and not a size, and the band under a card is the window's: the box a
+/// move reads back out of the window it left is the card's own.
+///
+/// A move that read the band back as content would hand the card the rows of its own playlist, and
+/// then measure the window as that taller card plus a band again — a card stretched down a window
+/// that walks off the screen one drag at a time (see `content_box_of`).
+#[test]
+fn a_move_over_a_band_leaves_the_card_the_box_it_had() {
+    let _room = the_room_to_itself();
+
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let (_, band) = pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+
+    // The window carried a hundred pixels right and two hundred down.
+    let window = pin.window_box();
+    let carried = (
+        window.0 + 100,
+        window.1 + 200,
+        window.2 + 100,
+        window.3 + 200,
+    );
+    let content = content_box_of(
+        carried,
+        pin.dpi,
+        pin.transport_bar,
+        pin.overlay,
+        pin.caption,
+        band,
+    );
+
+    assert_eq!(
+        (content.2 - content.0, content.3 - content.1),
+        (pin.content.2 - pin.content.0, pin.content.3 - pin.content.1),
+        "the card was given a size by a drag that only changed its place"
+    );
+    assert_eq!(
+        (content.0 - pin.content.0, content.1 - pin.content.1),
+        (100, 200),
+        "and it was carried where the hand carried it"
+    );
+
+    // And the two roads are one: the window that content stands in is the window the drag left.
+    let measured = pinned_window_box_of(
+        content,
+        pin.dpi,
+        pin.transport_bar,
+        pin.overlay,
+        pin.caption,
+    );
+    assert_eq!(
+        (measured.0, measured.1, measured.2, measured.3 + band),
+        carried,
+        "the window measured from the card it was read back from is not the window the drag left"
+    );
+
+    pin_playlist::toggle(&pin);
+}
+
+/// A press the band took is a press the band gives back, and only that one: the flag a release is
+/// answered by is spent where it is read.
+///
+/// A flag left standing is the release of every drag, every caption button and every seek the card
+/// begins afterwards, taken for a press the band is still holding — a window left carrying the
+/// pointer for the rest of the run, and a bar that never lets go of a seek.
+#[test]
+fn a_press_the_band_took_is_given_back_by_the_release_that_follows_it() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    stand_pin(Some(pin));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band owes a paint for the rows it just built"
+    );
+
+    // A row of the band, and a press on it: the band's own, and not the window's to carry. The row
+    // is taken past the band's own pad, which is the part of it a press picks nothing in.
+    let row = band_top + pin_chrome::playlist_row_height(1.0) / 2 + 12;
+    assert!(row < band_top + band_height, "a row inside the band");
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), 100, row, false) },
+        "a press on a row is the band's"
+    );
+
+    // The release that follows it is the band's too — once, and only once: the press it answers is
+    // spent by it, so the next release the window is sent is the window's again.
+    assert!(
+        unsafe { pin_playlist::release(HWND::default()) },
+        "the release of a press the band took is the band's"
+    );
+    assert!(
+        !unsafe { pin_playlist::release(HWND::default()) },
+        "and a release with no press behind it is the window's"
+    );
+
+    // And the band is put back down, so the next test does not come up with one.
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// A pointer in the band is the row of the band it is over, read off the screen row the tick reads
+/// the cursor at: the band begins at the window's own row `band_top`, and a row counted in the
+/// window's rows instead is one that far down the list — a band no hand is ever on, and a name
+/// nothing carries (see `pin_playlist::pin_playlist_hover_refresh`).
+#[test]
+fn a_pointer_in_the_band_is_a_row_of_the_band() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let mut pin = sound_pin();
+    // A name the band's column has no room for, so that the row the hand is on is a name that
+    // marquees rather than one drawn once and held.
+    pin.path = PathBuf::from(
+        "a mixdown of a very long name indeed, and one no column of a band holds.mp3",
+    );
+    pin_playlist::toggle(&pin);
+    let (band_top, _) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let window = pin.window_box();
+    let row = pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0) / 2;
+    // The window a pointer's own place is read against, standing where the pin's box says it does:
+    // a screen row is a row of a window only the window itself can answer (see
+    // `pin_input::the_point_in_the_window`).
+    let hwnd = unsafe {
+        a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, window)
+    };
+    stand_pin(Some(pin));
+    pin_playlist::refresh_the_rows();
+
+    // The pointer inside the band's own first row, as the screen row the tick reads it at.
+    let cursor = Some((window.0 + 40, window.1 + band_top + row));
+    let asked = |cursor| {
+        pin_state()
+            .and_then(|pinned| {
+                pinned
+                    .pin()
+                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, hwnd, cursor))
+            })
+            .expect("the pin the test stood up")
+    };
+
+    assert!(asked(cursor), "a row the pointer has come to is a change");
+    let (hovered, _, scroll) = pin_playlist::the_band_in_hand().expect("the band's own rows");
+    assert_eq!(
+        hovered,
+        Some(scroll),
+        "the pointer in the band's first row is on the row the band draws first"
+    );
+    let (marqueed, travel, _) =
+        pin_playlist::the_marquee_in_hand().expect("a name to carry across the row");
+    assert_eq!(
+        marqueed, scroll,
+        "and the name the hand is on is the one the tick has to carry"
+    );
+    assert!(travel > 0, "and it is wider than the column it is drawn in");
+    assert!(!asked(cursor), "the same row again is no change");
+
+    // SAFETY: the window is the suite's own, and this is the road one is put away down.
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **A row the hand is on is the row the tick is on**, whichever of the two roads reads the pointer:
+/// the move the window is sent carries its own rows, and the tick reads the cursor off the screen.
+/// Two readings of the band's geometry were two answers, and the tick's — counted from the window's
+/// own top rather than from the band's — cleared the row the move had just named, so a name
+/// travelling across a row the hand was merely *on* stopped while one on a row it had *picked* went
+/// on (see `pin_playlist::hover` and `pin_playlist::pin_playlist_hover_refresh`).
+#[test]
+fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let mut pin = sound_pin();
+    // A name the band's column has no room for, and one no other test of a band names: the row a
+    // hand is on is only a name that marquees for a row the band had to build afresh.
+    pin.path =
+        PathBuf::from("a mixdown long enough that no column of a band holds the whole of it.mp3");
+    pin_playlist::toggle(&pin);
+    let (band_top, _) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let window = pin.window_box();
+    let row = pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0) / 2;
+    let hwnd = unsafe {
+        a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, window)
+    };
+    stand_pin(Some(pin));
+    pin_playlist::refresh_the_rows();
+
+    assert!(
+        unsafe { pin_playlist::hover(band_top + row) },
+        "a row a hand has come to is a change"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(Some(0)),
+        "the move says the hand is on the band's own first row"
+    );
+    let (marqueed, travel, _) =
+        pin_playlist::the_marquee_in_hand().expect("a name to carry across the row");
+    assert_eq!(marqueed, 0, "and that is the row the name is set up for");
+    assert!(travel > 0, "and it is wider than the column it is drawn in");
+
+    // The tick that reads the same pointer off the screen: the row is the row, so there is
+    // nothing to change and the name is still the name.
+    let at = |at| {
+        pin_state()
+            .and_then(|pinned| {
+                pinned
+                    .pin()
+                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, hwnd, at))
+            })
+            .expect("the pin the test stood up")
+    };
+    assert!(
+        !at(Some(client_to_screen(hwnd, 40, band_top + row))),
+        "the tick's pointer is the row the move already named"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(Some(0)),
+        "so the row the hand is on is still the row it was"
+    );
+    assert_eq!(
+        pin_playlist::the_marquee_in_hand().map(|(row, _, _)| row),
+        Some(0),
+        "and the name the tick has to carry is still on it"
+    );
+
+    // And carried on: a tick past the row's hold moves the name along it, which is the whole of
+    // what a tick that cleared the hover would have stopped.
+    std::thread::sleep(audio_preview::NAME_HOLD + std::time::Duration::from_millis(60));
+    pin_playlist::the_tick_is_owed_a_repaint();
+    let (marqueed_again, _, offset) =
+        pin_playlist::the_marquee_in_hand().expect("the name still marqueed");
+    assert_eq!(marqueed_again, 0, "on the row the hand is on");
+    assert!(offset > 0, "and it has moved along it");
+
+    // A pointer that has left the window is on no row at all, so the name stops being carried.
+    assert!(
+        at(Some((window.0 - 10, window.1 + band_top + row))),
+        "a pointer beside the window is on nothing of it"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(None),
+        "the row the hand has left is no row at all"
+    );
+    assert_eq!(
+        pin_playlist::the_marquee_in_hand(),
+        None,
+        "and a row no hand is on carries no name"
+    );
+
+    // SAFETY: the window is the suite's own, and this is the road one is put away down.
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **A row is a row of the window, at the scale the window is drawn at**: a display at 144% is where
+/// the box the pin's content projects and the rect the window really rests in stop being the same
+/// numbers, and the tick that read the row off the box instead cleared the one the move had named —
+/// a name on a row the hand was merely *on* stopped, while one on a row it had *picked* went on (see
+/// `pin_playlist::pin_playlist_hover_refresh` and `pin_input::the_point_in_the_window`).
+#[test]
+fn a_row_the_hand_is_on_is_a_row_of_the_window_at_any_scale() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let mut pin = sound_pin();
+    pin.dpi = 144;
+    pin.caption = pinned_caption_height(144, Some(MediaType::Audio));
+    pin.path = PathBuf::from(
+        "a third mixdown, whose name no column of a band holds and no other test names.mp3",
+    );
+    pin_playlist::toggle(&pin);
+    let (band_top, _) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let row = pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0) / 2;
+
+    // The window stands a window's own distance away from the box the pin is laid out in, and is the
+    // size the pin asks its window to be: what the tick reads back is the window's rows, and a box
+    // it cannot be asked about.
+    let window = pin.window_box();
+    let (width, height) = pin.window_size();
+    let stands_at = (
+        window.0 + 213,
+        window.1 + 307,
+        window.0 + 213 + width,
+        window.1 + 307 + height,
+    );
+    assert_ne!(
+        stands_at.1, window.1,
+        "the window is not where the box says"
+    );
+    let hwnd = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            stands_at,
+        )
+    };
+    stand_pin(Some(pin));
+    pin_playlist::refresh_the_rows();
+
+    assert!(
+        unsafe { pin_playlist::hover(band_top + row) },
+        "a row a hand has come to is a change"
+    );
+    let (marqueed, travel, _) =
+        pin_playlist::the_marquee_in_hand().expect("a name to carry across the row");
+    assert_eq!(marqueed, 0, "the name is set up for the row the move named");
+    assert!(travel > 0, "and it is wider than the column it is drawn in");
+
+    // The same pointer read off the screen, the way the tick reads it: the window's own client point
+    // is that same row, so nothing of the band's changes and the name is still the name.
+    let at = |at| {
+        pin_state()
+            .and_then(|pinned| {
+                pinned
+                    .pin()
+                    .map(|pin| pin_playlist::pin_playlist_hover_refresh(pin, hwnd, at))
+            })
+            .expect("the pin the test stood up")
+    };
+    assert!(
+        !at(Some(client_to_screen(hwnd, 40, band_top + row))),
+        "the tick's pointer is the row the move already named"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(Some(0)),
+        "so the row the hand is on is still the row it was, at 144%"
+    );
+    assert_eq!(
+        pin_playlist::the_marquee_in_hand().map(|(row, _, _)| row),
+        Some(0),
+        "and the name the tick has to carry is still on it"
+    );
+
+    std::thread::sleep(audio_preview::NAME_HOLD + std::time::Duration::from_millis(60));
+    pin_playlist::the_tick_is_owed_a_repaint();
+    let (marqueed_again, _, offset) =
+        pin_playlist::the_marquee_in_hand().expect("the name still marqueed");
+    assert_eq!(marqueed_again, 0, "on the row the hand is on");
+    assert!(offset > 0, "and it has moved along it");
+
+    // SAFETY: the window is the suite's own, and this is the road one is put away down.
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// A `Return` in a pinned sound's card plays the row the band has picked, and asks for nothing at all
+/// where there is no band up or no row picked: the file is the hand's own pick, and a key that guessed
+/// one would start a file nobody asked for (see `pin_playlist::play_the_pick`).
+#[test]
+fn a_return_plays_the_row_a_sounds_band_has_picked() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of two sounds for the return key");
+    let sounds = [folder.join("a.mp3"), folder.join("b.mp3")];
+
+    // The pin's walk is two files of which it is showing the first, so the row a hand picks is one
+    // that names a file the pin is not already on: a pick of the file on screen has nothing to ask.
+    let pin = sound_pin();
+    let mut standing = sound_pin();
+    standing.path = sounds[0].clone();
+    stand_pin(Some(standing));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    // A pin is a window onto something, and what the drain below asks before it answers a key: the
+    // media slot is stood with a card so that the pin is not read as one that came apart.
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(40, 24);
+        media.media_type = MediaType::Audio;
+        *slot = Some(media);
+    }
+
+    // A channel of the preview's own, stood in the slot a pick is sent on, so that what the key asks
+    // for is what this test reads and a later test's channel is not read here (see
+    // `show_pinned_file`).
+    let (sender, answers) = channel();
+    let previous_sender = PREVIEW_SENDER
+        .lock()
+        .ok()
+        .and_then(|mut held| held.replace(sender));
+    note_the_pin_file_in_flight(None);
+
+    // One `Return`, through the loop's own drain, which is where a key is answered.
+    let a_return = || {
+        ask_pin(PinCommand::PlayRow);
+        let mut request = None;
+        unsafe {
+            pin_command_request(
+                HWND(0x1000 as *mut _),
+                &mut request,
+                &mut None,
+                &mut None,
+                &mut 0.0,
+                &mut None,
+                false,
+                None,
+            );
+        }
+        assert!(
+            request.is_none(),
+            "a row played is not a box asked for and not a pin taken down"
+        );
+        answers.try_recv()
+    };
+
+    // A band that is down is no list for a key to be in, whatever row it was left on.
+    assert!(
+        a_return().is_err(),
+        "a `Return` with no band up asks for no file"
+    );
+
+    // And a band that is up with nothing picked is a band no row of the hand's own.
+    pin_playlist::toggle(&pin);
+    // The band's own turn over asks the walk behind it again, and that is not the key's answer
+    // (see `PreviewMessage::PinWalkAgain`).
+    let _ = answers.try_recv();
+    assert!(
+        a_return().is_err(),
+        "and one with no row picked asks for none either"
+    );
+
+    // The row a `Down` arrow picks is the row the key plays, and it is the second of the walk.
+    assert!(
+        pin_playlist::step_the_pick(1),
+        "the band takes the arrow over it"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
+        Some(Some(1)),
+        "and the row it picked is the second of the walk"
+    );
+    let asked = a_return();
+
+    pin_playlist::toggle(&pin);
+    if let Ok(mut held) = PREVIEW_SENDER.lock() {
+        *held = previous_sender;
+    }
+    if let Ok(mut slot) = CURRENT_MEDIA.lock() {
+        *slot = previous_media;
+    }
+    stand_pin(previous_pin);
+
+    assert!(
+        matches!(asked, Ok(PreviewMessage::PinUpdate(ref path)) if *path == sounds[1]),
+        "the key asks the pin for the file of the row it has picked"
+    );
+}
+
+/// The band is the width of the walk behind it: opening it narrows a sound's playlist to the
+/// folder's sounds and closing it puts the setting's own order back, and neither is a press —
+/// the band turned over is the only thing that asks, and the file the pin is showing is the file
+/// it keeps (see `pin_walk::ask_the_walk_again` and `pin_navigation::nav_mode_for`).
+#[test]
+fn a_band_turned_over_asks_the_walk_behind_it_again() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    // A folder of a test's own, because a walk of one is read off the disk: a sound with a picture
+    // beside it is the whole question the band asks.
+    let folder = std::env::temp_dir().join("rust-hover-preview-band-asks-the-walk");
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).expect("a folder a test can write to");
+    for file in ["a.mp3", "b.mp3", "a.png"] {
+        std::fs::write(folder.join(file), vec![0u8; 8]).expect("a file a test can write");
+    }
+    let sound = folder.join("a.mp3");
+    let picture = folder.join("a.png");
+
+    // `Audio -> All`: the pin's own walk is the folder end to end, the picture with the sounds.
+    let was = {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = (
+            config.pin_nav_audio,
+            config.pin_nav_image,
+            config.pin_mode_audio_shuffle,
+        );
+        config.pin_nav_audio = PinNavFileTypes::All;
+        config.pin_nav_image = PinNavFileTypes::Category;
+        config.pin_mode_audio_shuffle = false;
+        was
+    };
+    let mut standing = sound_pin();
+    standing.path = sound.clone();
+    stand_pin(Some(standing));
+    let full = match answer_pin_job(&PinJob::Walk {
+        at: sound.clone(),
+        step: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+        config: Box::new(CONFIG.lock().expect("the configuration").clone()),
+        session: None,
+    }) {
+        Some(PinPlanned::Walk(walk)) => walk,
+        _ => panic!("a walk is always answered"),
+    };
+    assert!(
+        full.order.contains(&picture),
+        "under `All` the walk is the folder end to end: {:?}",
+        full.order
+    );
+    stand_pin_walk(Some(full.clone()));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows it has a walk for"
+    );
+
+    // A channel of the test's own, stood where the loop's is: what the band asks the loop for is
+    // what this test reads (see `show_pinned_file`).
+    let (sender, asked) = channel();
+    let previous_sender = PREVIEW_SENDER
+        .lock()
+        .ok()
+        .and_then(|mut held| held.replace(sender));
+
+    // The band up: the toggle asks the walk again, and the loop asks the planner for it.
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(
+        matches!(asked.try_recv(), Ok(PreviewMessage::PinWalkAgain)),
+        "a band opened is the walk behind it asked again, with no press to ask it"
+    );
+    ask_the_walk_again();
+    let job = PIN_JOBS
+        .0
+        .lock()
+        .expect("the pin's job slot")
+        .take()
+        .expect("the walk the band asked for");
+    assert!(
+        matches!(&job, PinJob::Walk { step, .. } if *step == 0),
+        "and it asks for the walk's order rather than for a step along it"
+    );
+    let Some(PinPlanned::Walk(audio_only)) = answer_pin_job(&job) else {
+        panic!("a walk is always answered")
+    };
+    assert_eq!(
+        audio_only.at, sound,
+        "a walk with no step asked for stands where it asked from, so nothing the pin shows moves"
+    );
+    assert!(
+        audio_only
+            .order
+            .iter()
+            .all(|path| path.extension().is_some_and(|ext| ext == "mp3")),
+        "the band's own walk is the folder's sounds: {:?}",
+        audio_only.order
+    );
+    // What the loop does with that answer: its order goes onto the pin's walk, which is what the
+    // rows are built from (see `PreviewMessage::PinAnswered`).
+    pin_walk_synced_its_playlist(&audio_only);
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "and the rows banded are the rows of a walk that moved"
+    );
+    assert_eq!(
+        pin_state().and_then(|state| state.walk().map(|walk| walk.order.clone())),
+        Some(audio_only.order.clone()),
+        "which is the audio-only walk the band asked for"
+    );
+
+    // And the band down: the order the setting asks for comes back, by the same road.
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(
+        matches!(asked.try_recv(), Ok(PreviewMessage::PinWalkAgain)),
+        "a band put down asks the walk again too"
+    );
+    ask_the_walk_again();
+    let job = PIN_JOBS
+        .0
+        .lock()
+        .expect("the pin's job slot")
+        .take()
+        .expect("the walk the band asked for");
+    let Some(PinPlanned::Walk(restored)) = answer_pin_job(&job) else {
+        panic!("a walk is always answered")
+    };
+    assert_eq!(
+        restored.order, full.order,
+        "a band put down gives back the order the setting asks for"
+    );
+    assert_eq!(
+        restored.at, sound,
+        "and the pin is still standing on the file it was showing"
+    );
+    pin_walk_synced_its_playlist(&restored);
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "and the rows the band is owed are the folder's again"
+    );
+
+    if let Ok(mut held) = PREVIEW_SENDER.lock() {
+        *held = previous_sender;
+    }
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_nav_audio = was.0;
+        config.pin_nav_image = was.1;
+        config.pin_mode_audio_shuffle = was.2;
+    }
+    let _ = std::fs::remove_dir_all(&folder);
+    stand_pin(previous_pin);
+}
+
+/// The band's two edges are the window's two edges, and a press on either is the height being
+/// dragged rather than a row being picked: the card is never resized, and the band is the only thing
+/// a pinned sound's window has to be resized by.
+///
+/// And the card's own window buttons keep the rows they stand on, because a border that answered for
+/// them would be a border that ate the close button.
+#[test]
+fn the_bands_edges_drag_the_height_and_the_cards_buttons_keep_their_rows() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let width = pin.window_size().0;
+    let card = pin.content;
+    stand_pin(Some(pin));
+    // The rows are the band's own and are built for whatever order the pin holds; a test that runs
+    // after another one of this pin's is a band whose rows are already there (see `THE_PLAYLIST`).
+    pin_playlist::refresh_the_rows();
+
+    // The bottom edge is the window's own last rows, and the top edge its first ones.
+    assert_eq!(
+        pin_playlist::edge_at(width / 2, band_top + band_height - 1),
+        Some(pin_chrome::PlaylistEdge::Bottom)
+    );
+    assert_eq!(
+        pin_playlist::edge_at(4, 1),
+        Some(pin_chrome::PlaylistEdge::Top),
+        "the window's first rows are its top edge, away from the card's own buttons"
+    );
+
+    // And where the card's window buttons stand the edge is not the band's at all: they are four
+    // buttons in the window's own first rows and they keep them.
+    let buttons = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            (0..width)
+                .find(|x| pin_audio_window_buttons_at(pin, *x, 1))
+                .map(|x| (x, pin_audio_window_buttons_at(pin, x, 1)))
+        })
+        .expect("the card's own window buttons, which a card always carries");
+    assert!(buttons.1, "the button column the test found");
+    assert_eq!(
+        pin_playlist::edge_at(buttons.0, 1),
+        None,
+        "the band's top edge took the rows the card's window buttons stand on"
+    );
+
+    // A press on the bottom edge is the height's, and dragging it down grows the band and leaves the
+    // card exactly where it was.
+    let edge = band_top + band_height - 1;
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), width / 2, edge, false) },
+        "a press on the band's bottom edge is the band's"
+    );
+    assert!(
+        unsafe { pin_playlist::drag(HWND::default(), width / 2, edge + 40) },
+        "and the drag that follows it is the band's too"
+    );
+    assert_eq!(
+        pin_playlist::pin_playlist_band(pin_state().expect("the pin").pin().expect("the pin"))
+            .expect("the band")
+            .1,
+        band_height + 40,
+        "dragging the bottom edge down did not grow the band by the travel"
+    );
+    assert_eq!(
+        pin_state()
+            .expect("the pin")
+            .pin()
+            .expect("the pin")
+            .content,
+        card,
+        "and the card moved for a drag of the band's bottom edge"
+    );
+    assert!(unsafe { pin_playlist::release(HWND::default()) });
+
+    // And the band is put back down, so the next test does not come up with one.
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
 }
 
 /// A pinned sound's window is the card's own box and the card is drawn from its first row, so
@@ -1104,7 +1952,7 @@ fn a_pinned_sounds_bar_is_answered_from_the_card_and_not_from_below_it() {
     // The window is the card's box: no caption above it, no transport strip below it.
     assert_eq!(pin.window_box(), pin.content);
     let (width, height) = pin.window_size();
-    let (top, _) = pinned_band_rows(height, pin.caption, 0, pin.overlay);
+    let (top, _) = pinned_media_band_rows(&pin);
     assert_eq!(
         top, 0,
         "and the card is drawn from the window's own first row"
@@ -1438,7 +2286,7 @@ fn a_pinned_page_floats_its_chrome_over_the_picture_unless_the_page_runs() {
     );
     let (_, height) = svg.window_size();
     assert_eq!(
-        pinned_band_rows(height, svg.caption, 0, svg.overlay),
+        pinned_media_band_rows(&svg),
         (0, height),
         "and the page it frames is drawn the whole window down"
     );

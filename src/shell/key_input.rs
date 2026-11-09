@@ -728,14 +728,19 @@ mod tests {
             Some(11),
             "VK_F3 takes the page to the next place its selection appears"
         );
+        assert_eq!(
+            pin_key_command(0x0D),
+            Some(12),
+            "VK_RETURN plays the row a sound's band has picked"
+        );
 
         // A key this app does not answer is passed on untouched, or the hook would eat a letter of a
         // file the user is renaming in the window behind the pin.
         assert_eq!(pin_key_command(0x41), None, "VK_A is not this app's key");
         assert_eq!(
             pin_key_command(0x0D),
-            None,
-            "VK_RETURN is left to the pin's own window, which ignores it"
+            Some(12),
+            "VK_RETURN plays the row a sound's band has picked"
         );
 
         // Every command the table names has a counter counted into it, because a command counted

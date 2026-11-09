@@ -214,13 +214,15 @@ const EXTRACTION_POLL_MS: u64 = 25;
 /// the switch was set for was going to cost.
 const EXTRACTION_HANDOVER_WAIT_SECS: u64 = 5;
 
-/// The folder every film's extracted files are kept in.
+/// The folder every film's extracted files are kept in, and the one folder every cache the
+/// `general_disk_cache_mb` budget pays for is kept in — the sounds' tracks beside the films'
+/// subtitles (see `audio_track::disk`), both trimmed against that one budget.
 ///
 /// The app's own folder under the temp folder, one folder for everything this kind keeps,
 /// exactly as the pages and the developed pictures each have (see `document_cache::temp_folder`).
 /// What it holds is derived data — a film whose files have gone is extracted again the next time
-/// it is hovered — so the temp folder is the place for it.
-fn folder() -> PathBuf {
+/// it is hovered, a sound's track read again — so the temp folder is the place for it.
+pub(crate) fn general_folder() -> PathBuf {
     // What a test writes is kept apart from what the app writes, and the folder is one folder
     // for the whole test process: a probe whose extraction runs on a thread of its own has to
     // see the files the thread that asked for them wrote. What a test gives up it gives up in a
@@ -259,7 +261,7 @@ fn key(source: &Path) -> String {
 
 /// The folder one film's extracted files are kept in: `<key>/sub<i>.<ext>` and `<key>/fonts/`.
 pub(super) fn film_folder(path: &Path) -> PathBuf {
-    folder().join(key(path))
+    general_folder().join(key(path))
 }
 
 /// The budget the folder is kept within, read from the configuration each time rather than
@@ -796,56 +798,71 @@ fn discard(path: &Path) {
 /// size is chosen: what is over the new budget goes at the moment it is set rather than at the
 /// next extraction that happens to pass through here.
 pub(crate) fn trim_now() {
-    trim_folder(&folder(), limit_bytes());
+    trim_folder(&general_folder(), limit_bytes());
 }
 
-/// Drop films' folders, oldest first, until the folder fits inside `limit`.
+/// Drop films' folders and sounds' entries, oldest first, until the folder fits inside `limit`.
 ///
-/// The unit given up is one film's whole folder rather than one file of it. What a folder holds
-/// is a handful of subtitle files and the fonts beside them, all written by the same pass, so a
-/// film is the smallest thing that can be given up without splitting an answer across two
-/// states; a file-grain trim is what `document_cache` does, because each of its files is a
-/// whole page of a whole document, which one of these is not.
+/// Two units are given up here, and both of them are the smallest thing that is one whole answer.
+/// A film's folder is one: what it holds is a handful of subtitle files and the fonts beside them,
+/// all written by the same pass, so a file-grain trim of it would split an answer across two states
+/// — which is what `document_cache` does instead, because each of its files is a whole page of a
+/// whole document and one of these is not. A sound's track entry is one file and one answer, and is
+/// given up one at a time (see `audio_track::disk`).
 ///
-/// The order is the modified time each folder carries, which is when its files were last
-/// written — the same reading of a folder `document_cache` trims on, and the one that costs a
-/// stat per film rather than a clock kept anywhere. A folder that cannot be given up stays
-/// counted, so the next trim tries it again.
+/// Both kinds are trimmed against the one budget and in the one order, by the modified time each
+/// carries — when its files were last written, the same reading of a folder `document_cache` trims
+/// on, and one that costs a stat rather than a clock kept anywhere. That is what keeps a folder of
+/// sounds from displacing every film at once, or the other way round: what goes is the oldest unit,
+/// whichever kind it is. A unit that cannot be given up stays counted, so the next trim tries it
+/// again.
 pub(super) fn trim_folder(folder: &Path, limit: u64) {
     let Ok(read) = std::fs::read_dir(folder) else {
         return;
     };
 
-    let mut films: Vec<(SystemTime, PathBuf, u64)> = Vec::new();
+    let mut units: Vec<(SystemTime, PathBuf, u64, bool)> = Vec::new();
     let mut total = 0u64;
 
     for entry in read.flatten() {
-        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+        let Ok(kind) = entry.file_type() else {
             continue;
-        }
+        };
 
-        let bytes = folder_bytes(&entry.path());
+        let bytes = if kind.is_dir() {
+            folder_bytes(&entry.path())
+        } else if kind.is_file() {
+            entry.metadata().map(|metadata| metadata.len()).unwrap_or(0)
+        } else {
+            continue;
+        };
         total += bytes;
 
         let left = entry
             .metadata()
             .and_then(|metadata| metadata.modified())
             .unwrap_or_else(|_| SystemTime::now());
-        films.push((left, entry.path(), bytes));
+        units.push((left, entry.path(), bytes, kind.is_dir()));
     }
 
     if total <= limit {
         return;
     }
 
-    films.sort_by_key(|(left, _, _)| *left);
+    units.sort_by_key(|(left, _, _, _)| *left);
 
-    for (_, path, bytes) in films {
+    for (_, path, bytes, whole_folder) in units {
         if total <= limit {
             break;
         }
 
-        if std::fs::remove_dir_all(&path).is_ok() {
+        let gone = if whole_folder {
+            std::fs::remove_dir_all(&path).is_ok()
+        } else {
+            std::fs::remove_file(&path).is_ok()
+        };
+
+        if gone {
             total = total.saturating_sub(bytes);
         }
     }

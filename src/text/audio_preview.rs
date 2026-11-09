@@ -13,9 +13,10 @@
 //! probe, and a second hover of the file is a layout rather than a probe as well.
 //!
 //! Two things change while the card is on screen, and both are the preview loop's: the clock,
-//! with the bar under it, which is drawn from a player that is running, and a name the card
-//! has no room for, which is scrolled across the card sideways rather than being cut short
-//! (see [`NameScroll`] and `Card::name_offset`). A painted preview of this app's is otherwise
+//! with the bar under it, which is drawn from a player that is running, and the two lines that are
+//! scrolled across the card sideways rather than being cut short where the card has no room for
+//! them — the name under the mark, and the facts line over the bar (see [`NameScroll`],
+//! `Card::name_offset` and `Card::facts_offset`). A painted preview of this app's is otherwise
 //! drawn once and held, so the preview loop is what asks for the card again while a sound is
 //! playing (see `repaint_audio_card`).
 //!
@@ -47,8 +48,10 @@ mod card;
 mod page;
 
 pub(crate) use card::{
-    bar_share_at, control_at, control_box, control_hit_boxes, facts_of, measure, name_of, render,
-    AudioPreviewOptions, Card, CardChrome, CardControl, NameScroll, CARD_CONTROL_BOXES,
+    bar_share_at, clock, control_at, control_box, control_hit_boxes, extension_of, facts_of,
+    facts_rect, facts_scroll, measure, name_of, render, size_label, AudioPreviewOptions, Card,
+    CardChrome, CardControl, Fact, FactKind, NameScroll, CARD_CONTROL_BOXES, NAME_ADVANCE_MS,
+    NAME_HOLD,
 };
 pub(crate) use page::{window_button_band, window_button_span};
 
@@ -57,17 +60,20 @@ use crate::config::config::TextTheme;
 #[cfg(test)]
 use crate::readers::audio_track::Track;
 #[cfg(test)]
-use crate::text::text_paint::{readable, rgb, scaled, TextMetrics, BODY_LEVEL};
+use crate::text::text_paint::{blend, readable, rgb, scaled, TextMetrics, BODY_LEVEL};
 #[cfg(test)]
 use crate::text::text_theme;
 #[cfg(test)]
 use card::{
-    bitrate_label, channel_label, clock, rate_label, Fact, FactKind, BAR_GAP_PIXELS, BAR_PIXELS,
-    BAR_REACH_PIXELS, CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, MIN_CONTENT_ADVANCES,
-    NAME_HOLD, WINDOW_BUTTON_GAP_PIXELS,
+    bitrate_label, channel_label, rate_label, BAR_GAP_PIXELS, BAR_PIXELS, BAR_REACH_PIXELS,
+    CONTROL_GAP_PIXELS, CONTROL_SIDE_PIXELS, HEADER_LEVEL, MIN_CONTENT_ADVANCES, TIME_GAP_ADVANCES,
+    WINDOW_BUTTON_GAP_PIXELS,
 };
 #[cfg(test)]
-use page::{bar_band, bar_row, build_page, clock_runs, fill_span, CardBoxes, Page};
+use page::{
+    bar_band, bar_row, build_page, clock_runs, facts_edge, facts_right, facts_width, fill_span,
+    text_width, CardBoxes, Page,
+};
 #[cfg(test)]
 use std::path::Path;
 #[cfg(test)]
