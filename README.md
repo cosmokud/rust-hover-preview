@@ -29,16 +29,6 @@ Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. 
 | [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick)                                                                        | `[magick]`   | aai, art, ase, aseprite, bayer, bayera, bgr, bgra, bgro, c2pa, cal, cals, cmyk, cmyka, cube, cut, dcm, dcx, dpx, dxt1, dxt5, fax, fit, fits, fl32, fts, ftxt, g3, g4, gray, graya, group4, hrz, icb, ipl, j2c, j2k, jng, jnx, jp2, jpc, jpm, jpt, mac, map, mat, mdc, miff, mng, mono, mpc, mtv, otb, pal, palm, pango, pcds, pes, pfm, pgx, phm, picon, pict, pix, pwp, rgb, rgb565, rgba, rgbo, rgf, rla, rmf, scr, sct, sf3, sfw, sgi, six, sixel, stegano, sun, tim, tm2, uyvy, vda, vicar, viff, vips, vst, wbinfo, wbmp, xbm, xcf, xpm, xv, ycbcr, ycbcra, yuv |
 
 
-`[image]` is the master list for pictures, and it holds everything Windows decodes that *is* a
-picture: the ones this app decodes itself and the ones a codec Windows ships decodes — `heic`,
-`heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, a still `webp`, the icon and cursor resources
-`ico`/`icon`/`cur`, the bitmap shapes `dib`/`rle`/`exif`, and every camera raw from `3fr` to
-`x3f`.  Everything an extension provides has to be installed once — the ones a codec Windows ships (`heic`, `heif`, `avif`, `avci`, `jxl`, `jxr`, `wdp`, `webp`) come from the [Store
-extensions](#optional-enable-heic-avif-jpeg-xl-webp-camera-raws-preview-windows-codecs), and the camera
-raws from the **Raw Image Extension** beside them — and every other entry of `[image]` needs
-nothing installed. Where a codec is missing, a [ImageMagick](#optional-enable-camera-raw-and-more-pictures-imagemagick)
-install develops the picture instead of Windows.
-
 ### Videos
 
 For video, **mpv is recommended** for performance, hardware acceleration, reliability,  and subtitles (embedded tracks and sidecar `.srt`) that just work.
@@ -52,11 +42,6 @@ For video, **mpv is recommended** for performance, hardware acceleration, reliab
 | [mpv](#optional-enable-video-preview-with-mpv)                                                                                                                   | — (no list of its own) | union of `[video]` + `[ffmpeg]` above (23 + 84 = 107 names)                                                                                                                                                                                                                                                                                                                                                                                      |
 
 
-The codec inside a file is what asks for an extension, not the container that holds it: an `mp4`,
-`mkv` or `ts` carrying HEVC, VP9, AV1 or MPEG-2 shows nothing until its extension is installed,
-while the same name carrying H.264 plays as it is. Windows 11 usually has HEVC, VP9 and AV1
-already. Both rows are the same `[video]` list, so nothing needs configuring either way.
-
 ### Audio
 
 
@@ -66,17 +51,6 @@ already. Both rows are the same `[video]` list, so nothing needs configuring eit
 | The media engine with the [Store's media extension](#optional-enable-ogg-vorbis-and-opus-preview-windows-media-extension) — the Ogg demuxer and Vorbis, which Windows 11 does not always ship | `[audio]`    | oga, ogg, opus                                                                                               |
 | [FFmpeg](#optional-enable-video-preview-and-advanced-audio-processing-with-ffmpeg)'s player — nothing Windows ships decodes these                                                             | `[audio]`    | ac3, ape, au, awb, caf, dff, dsf, dts, dtshd, eac3, mka, mpc, ofr, ofs, ra, shn, snd, spx, tak, tta, voc, wv |
 
-
-`[audio]` is the master list for sounds: it names every file the app treats as audio, and the
-engine is the machine's answer rather than a setting — the media engine Windows ships is asked
-first, and only what it cannot open is handed to
-[FFmpeg](#optional-enable-video-preview-and-advanced-audio-processing-with-ffmpeg)'s player. The
-first row above is what Windows 11 decodes on its own. The second needs the [Store's media
-extension](#optional-enable-ogg-vorbis-and-opus-preview-windows-media-extension) installed, or an
-FFmpeg install where it is not. Nothing in the third row has a Windows decoder at all: AC-3,
-E-AC-3 and DTS are shipped as IEC-61937 *passthrough* converters rather than decoders, so they
-reach a speaker only through a receiver — to hear one inside this app, FFmpeg's player is what
-opens it.
 
 ### Text
 
