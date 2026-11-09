@@ -198,6 +198,11 @@ pub fn run_preview_window() {
         // sends this loop nothing — so the answer is compared against the one the bubble was drawn
         // with rather than waited for (see `bubble_is_playing`).
         let mut last_bubble_playing: Option<bool> = None;
+        // The file a collapsed pin's bubble was last painted for. A walk step behind a bubble puts
+        // another file in the pin without touching the playback, the frame slot or the bars, so the
+        // file is the fourth thing a bubble is made of and the one the comparison below it is missing
+        // would leave a circle showing the file the walk came from (see the bubble repaint below).
+        let mut last_bubble_path: Option<PathBuf> = None;
         let mut last_bubble_repaint = Instant::now();
 
         // Background loading support
@@ -947,8 +952,11 @@ pub fn run_preview_window() {
                 // grabbed for it out of a film FFmpeg plays, and the clock, while the bars it is
                 // drawn with are being read from sound that is moving — a sound's own bands, or the
                 // soundtrack of a film that is playing above a level of nothing (see
-                // `bubble_bars_are_moving`). Nothing else asks for a bubble repaint: a bubble over a
-                // picture is painted once, at the collapse, and a bubble that is not up is never
+                // `bubble_bars_are_moving`). **And a walk that lands on another file behind the
+                // bubble is the fourth**: the picture inside the circle is made of that very file's
+                // media, so a bubble left on the one before it is a circle showing a file the pin is
+                // no longer holding until something else paints it — a right click, which opens the
+                // menu and grows the window (see `open_bubble_menu`). A bubble that is not up is never
                 // painted at all (see `BUBBLE_REPAINT`).
                 //
                 // The playback is asked of the file's own player rather than of anything this loop
@@ -959,7 +967,13 @@ pub fn run_preview_window() {
                     let playing = bubble_is_playing();
                     let animating = playing && bubble_bars_are_moving();
                     let frame_ready = BUBBLE_FRAME_READY.swap(false, Ordering::AcqRel);
-                    let changed = last_bubble_playing != Some(playing);
+                    // The file is asked of the pin the same way the playback is, and for the same
+                    // reason: a step is answered by a walk on another thread and installed here, so
+                    // the file the pin names differing from the one the bubble was drawn with *is*
+                    // the answer that the picture inside the circle is out of date.
+                    let showing = pinned_path();
+                    let changed =
+                        last_bubble_playing != Some(playing) || last_bubble_path != showing;
                     let due = animating && last_bubble_repaint.elapsed() >= BUBBLE_REPAINT;
 
                     // And the frames a film is being drawn by are read beside its player, which is
@@ -972,6 +986,7 @@ pub fn run_preview_window() {
 
                     if changed || due || frame_ready {
                         last_bubble_playing = Some(playing);
+                        last_bubble_path = showing;
                         if due {
                             last_bubble_repaint = Instant::now();
                         }
@@ -988,6 +1003,7 @@ pub fn run_preview_window() {
                     // later starts on its own file's frame rather than on the one before it (see
                     // `BUBBLE_FRAME` and `bubble_stream`).
                     last_bubble_playing = None;
+                    last_bubble_path = None;
                     BUBBLE_FRAME_READY.store(false, Ordering::Release);
                     bubble_stream::settle(false, None);
                     if let Ok(mut frame) = BUBBLE_FRAME.lock() {
