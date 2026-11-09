@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.3] - 2026-11-10
+
+### Added
+- **Files dropped on a pin are shown by it** — the pin's window and its bubble both take files, and the file the hand dragged first is the file shown, walked from *its* folder rather than the one the pin was taken up in. It is not a pick behind the window, so `Pin Mode → Update Preview` never gates it, and a drop of a folder or of a kind nothing previews does nothing and says nothing. A file dropped on a bubble is the pin asked to come back up on it.
+- **The tray's `Restore Pin Mode` row brings a pin back over everything** — one row between `Enable Preview` and `Pin Mode`, there only while a pin is alive, so a detached window counts. It takes the pin out of its bubble or off the taskbar, up from wherever the Shell left it, and in front with the keyboard; it writes no setting.
 
 ### Fixed
 
