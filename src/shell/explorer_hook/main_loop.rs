@@ -42,6 +42,9 @@ pub fn run_explorer_hook() {
     // Keyboard hover state
     let mut keyboard_file: Option<PathBuf> = None;
     let mut last_focused_key: Option<FocusedItemKey> = None;
+    // The listing the item above was observed in, as `frame_of_focused_item` names it: what says
+    // whether the baseline describes this listing at all (see `the_focus_baseline_is_new`).
+    let mut last_focused_frame: Option<isize> = None;
     let mut is_keyboard_hover = false;
     let mut suppress_preview_until_cursor_leaves_preview = false;
     let mut stationary_search_miss_started_at: Option<Instant> = None;
@@ -249,6 +252,7 @@ pub fn run_explorer_hook() {
             keyboard_file = None;
             is_keyboard_hover = false;
             last_focused_key = None;
+            last_focused_frame = None;
             suppressed.clear();
             pointer_pause.clear();
             stationary_search_miss_started_at = None;
@@ -469,6 +473,7 @@ pub fn run_explorer_hook() {
             keyboard_file = None;
             last_file = None;
             last_focused_key = None;
+            last_focused_frame = None;
             is_keyboard_hover = false;
             keyboard_screen_owner = false;
             video_hover_guard_until = None;
@@ -499,6 +504,7 @@ pub fn run_explorer_hook() {
             last_file = None;
             keyboard_file = None;
             last_focused_key = None;
+            last_focused_frame = None;
             hover_start = None;
             suppressed.clear();
             pointer_pause.clear();
@@ -677,6 +683,7 @@ pub fn run_explorer_hook() {
                     hover_start = None;
                     keyboard_file = None;
                     last_focused_key = None;
+                    last_focused_frame = None;
                     is_keyboard_hover = false;
                     video_hover_guard_until = None;
                     pointer_pause.clear();
@@ -710,6 +717,7 @@ pub fn run_explorer_hook() {
                         hover_start = None;
                         keyboard_file = None;
                         last_focused_key = None;
+                        last_focused_frame = None;
                         is_keyboard_hover = false;
                         video_hover_guard_until = None;
                         pointer_pause.clear();
@@ -865,6 +873,7 @@ pub fn run_explorer_hook() {
                     pointer_pause.clear();
                     keyboard_screen_owner = false;
                     last_focused_key = None;
+                    last_focused_frame = None;
                     allow_keyboard_preview_on_first_observation = true;
                     last_keyboard_navigation_input_at = None;
                 } else if prioritize_keyboard && keyboard_screen_owner {
@@ -899,6 +908,7 @@ pub fn run_explorer_hook() {
                 // must not be swallowed as a fresh baseline, even while no
                 // baseline is stored (folder change, mouse move, startup).
                 allow_keyboard_preview_on_first_observation = true;
+                last_focused_frame = None;
                 // The press is also the keyboard taking the screen: the pointer
                 // stays parked, and nothing it sits on previews, until it takes
                 // its turn back with a move or the wheel.
@@ -940,6 +950,7 @@ pub fn run_explorer_hook() {
                 resolver.forget_item();
                 hover_start = None;
                 last_focused_key = None;
+                last_focused_frame = None;
                 video_hover_guard_until = None;
             }
 
@@ -976,6 +987,7 @@ pub fn run_explorer_hook() {
                 resolver.forget_item();
                 hover_start = None;
                 last_focused_key = None;
+                last_focused_frame = None;
                 video_hover_guard_until = None;
                 suspend_preview_until_user_input = true;
                 allow_keyboard_preview_on_first_observation = false;
@@ -1136,6 +1148,7 @@ pub fn run_explorer_hook() {
                     resolver.forget_probe();
                     hover_start = None;
                     last_focused_key = None;
+                    last_focused_frame = None;
                     // Reset cursor baseline so we don't mistake stale delta for movement.
                     last_cursor_pos = cursor_pos;
                     stationary_hover_probe_done = false;
@@ -1320,6 +1333,7 @@ pub fn run_explorer_hook() {
                 // acts immediately. Recording it as a fresh baseline instead would
                 // swallow the first key press and keep the mouse preview on screen.
                 last_focused_key = None;
+                last_focused_frame = None;
                 allow_keyboard_preview_on_first_observation = true;
 
                 if let Some(suppressed_file) = suppressed.file.clone() {
@@ -1413,11 +1427,28 @@ pub fn run_explorer_hook() {
                 if let Some(focused_info) = get_focused_explorer_item(&resolver) {
                     // The name alone cannot tell two observations apart: a search
                     // can hold the same name in more than one folder, and the box is
-                    // what says which of them the keyboard is on.
+                    // what says which of them the keyboard is on. The frame is taken
+                    // beside them and is what says the *listing* is another one (see
+                    // `the_focus_baseline_is_new`).
                     let focused_key = FocusedItemKey::new(
                         focused_info.item.name.clone(),
                         &focused_info.item.bounds,
                     );
+                    let focused_frame = frame_of_focused_item(&focused_info);
+
+                    // **A listing the keyboard has just come into has no baseline yet**: the item it
+                    // opens with — a dialog's first row, the folder the user was just in — is the one a
+                    // key pressed there moves away from, and comparing it against an item of another
+                    // window's is comparing two listings. Read as no change, the first `↓` pressed in a
+                    // dialog put nothing up at all (see `the_focus_baseline_is_new`).
+                    if last_focused_key.is_some()
+                        && the_focus_baseline_is_new(last_focused_frame, focused_frame)
+                    {
+                        last_focused_key = None;
+                        allow_keyboard_preview_on_first_observation = true;
+                        suspended_initial_focus = None;
+                    }
+                    last_focused_frame = focused_frame;
 
                     if last_focused_key.is_none() {
                         if allow_keyboard_preview_on_first_observation {
@@ -1811,7 +1842,7 @@ fn note_the_window_that_hides_the_shell() {
         (pid, String::from_utf16_lossy(&name[..len.min(name.len())]))
     };
 
-    let cover = match foreground_cover_rect() {
+    let cover = match foreground_cover_rect(foreground) {
         Some(cover) => format!(
             "cover {}, {}, {}, {}",
             cover.left, cover.top, cover.right, cover.bottom

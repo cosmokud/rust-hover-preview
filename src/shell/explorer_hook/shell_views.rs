@@ -33,6 +33,7 @@ pub(super) fn item_window_of(window: HWND) -> Option<ItemWindow> {
         Some(ItemWindow {
             frame: frame.0 as isize,
             drawn_in: window.0 as isize,
+            dialog: crate::shell::window_classes::file_dialog_class_matches(frame),
         })
     }
 }
@@ -260,11 +261,25 @@ pub(super) fn frame_views(
 /// to agree: two tabs showing the same folder are one answer, while tabs that disagree —
 /// about the file, or about whether there is one at all — are a question the item cannot
 /// settle, and no answer is better than the wrong tab's file.
+///
+/// **A Common Item Dialog is not a frame with views at all**, so it is answered before
+/// any of this: it registers no Shell window, reports no position for its items, and the
+/// file they stand for is read from the folder it is showing (see
+/// `file_dialog::dialog_item_path`).
 pub(super) fn item_file_path(
     resolver: &mut ItemResolver,
     window: &ItemWindow,
     item: &HoveredItem,
 ) -> Option<PathBuf> {
+    // **A dialog answers before the position is asked for, because it has none to report.**
+    // Its items are the shell's own rows in a `#32770` that registers no Shell window, so
+    // neither an `ItemIndex` nor a position in a view describes any of them — what the dialog
+    // shows is a display name, and the folder it is showing is what turns that name into a
+    // file (see `file_dialog::dialog_item_path`).
+    if window.dialog {
+        return dialog_item_path(resolver, window, item);
+    }
+
     let index = item.index? - 1;
     let registrations = shell_window_count(resolver);
 
