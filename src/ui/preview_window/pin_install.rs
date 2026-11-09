@@ -1429,25 +1429,12 @@ pub(super) fn relayout_pinned_media(
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
 
-    // What the box is a box *of*, which is the one thing the road decides besides the kind: a window
-    // given another box is laid out in that box, and a picture the wheel has taken past its window is
-    // laid out for its own pixels instead.
-    //
-    // A zoom past the size the file holds has nothing left to decode — the pixels are one for one
-    // already, and every one past them would be an invention — and a zoom *under* that size is a picture
-    // that would be decoded larger than the file it came from if the room were the whole of the
-    // question. `Percent(100)` is exactly that pair: the fit of the file into the box, and never a scale
-    // above one (see `scale_in_room`).
-    let scale = match road {
-        PinRelayoutRoad::Zoom => PreviewScale::Percent(100),
-        PinRelayoutRoad::TakeUp | PinRelayoutRoad::BoxChange => PreviewScale::FitToScreen,
-    };
-
     // What is on screen, read in one look: what it is decides which arm answers below, how big its
     // frame is decides whether this box owes it anything at all (see `box_is_covered`), and the place
     // its playhead is at is where a decode asked for here begins — read once, at the ask, because a
     // decode that lands is the place the *next* ask carries from the media installed by it (see
-    // `pin_media_load`).
+    // `pin_media_load`). It is read before the scale because the scale is a question about the kind
+    // as well as the road.
     let (kind, held, place) = CURRENT_MEDIA
         .lock()
         .ok()
@@ -1461,6 +1448,10 @@ pub(super) fn relayout_pinned_media(
             })
         })
         .unwrap_or((None, None, 0));
+
+    // What the box is a box *of*, which the road and the kind decide between them (see
+    // `the_scale_a_road_lays_out_at`).
+    let scale = the_scale_a_road_lays_out_at(road, kind);
 
     // Only a box change carries the place: a take-up is a file this window has not stood on, and a
     // zoom is the one road a picture that plays takes without a decode at all (see `PinRelayoutRoad`).
@@ -1650,6 +1641,37 @@ fn box_is_covered(
         )
         && held
             .is_some_and(|(held_width, held_height)| held_width >= width && held_height >= height)
+}
+
+/// The scale a relayout decodes at, read off the road that asked for it and the kind it is asked of.
+///
+/// **An animation's frames are paid for per frame**, so a decode past the file's own pixels is
+/// pixels it does not have bought at a price the file's authored delay cannot cover: the decoder
+/// streams a frame at a time through a queue with a bound on it (`ANIMATION_QUEUE_FRAMES`,
+/// `ANIMATION_RETAINED_BYTES`), and a window maximized on a large display asks it to invent
+/// millions per frame, so the playhead advances at the rate the decode keeps rather than at the
+/// delay the file wrote — an animation in slow motion, half speed above all on a high-DPI display.
+/// A box a frame is stretched into costs nothing: the band stretches the frame the pin already
+/// holds into whatever box the window is (see `compose_media_into_band`), which is the answer a
+/// still picture is drawn from while its decode is in flight. And it is the same sentence
+/// `PinRelayoutRoad::Zoom` already says, for the same reason.
+///
+/// `Percent(100)` is that pair for both roads: the fit, capped at a factor of one, so a box smaller
+/// than the file still shrinks it and a bigger one never enlarges it (see `scale_in_room`). Every
+/// other kind keeps the room the road gives it: a take-up is a file laid out for the display, and a
+/// box change of a page, a still picture, a listing, a card, a film or a sound is one laid out for
+/// the box its window is at.
+pub(super) fn the_scale_a_road_lays_out_at(
+    road: PinRelayoutRoad,
+    kind: Option<MediaType>,
+) -> PreviewScale {
+    match road {
+        PinRelayoutRoad::Zoom => PreviewScale::Percent(100),
+        PinRelayoutRoad::BoxChange if kind.is_some_and(|kind| kind.is_animation()) => {
+            PreviewScale::Percent(100)
+        }
+        PinRelayoutRoad::TakeUp | PinRelayoutRoad::BoxChange => PreviewScale::FitToScreen,
+    }
 }
 
 /// Which of the roads asked for a relayout, for the kinds of media whose answer differs and for the one
