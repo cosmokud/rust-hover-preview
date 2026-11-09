@@ -342,6 +342,7 @@ pub(crate) use pin_lifecycle::pin_always_on_top;
 pub(crate) use pin_lifecycle::pin_enabled as pin_mode_is_enabled;
 pub(crate) use pin_lifecycle::pin_holds_the_front;
 pub(crate) use pin_lifecycle::PinCommand;
+pub(crate) use pin_lifecycle::PinSide;
 pub(crate) use pin_model::pin_is_focused;
 pub(crate) use pin_walk::PinPlanned;
 pub(crate) use pin_walk::PinStep;
