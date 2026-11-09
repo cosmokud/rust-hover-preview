@@ -178,7 +178,7 @@ spinner_delay_ms=250
 - `image_cache_mb`: memory for decoded image frames — one pool shared with pinned windows, so a hover sweep does not evict the frame a pin is drawn from. Default `128`, max `16384`; `0` holds nothing.
 - `document_cache_mb`: disk cache for rendered document pages. Default `256`, max `131072`; `0` keeps nothing between hovers but still draws the current one. Pages live under `%TEMP%\rust-hover-preview\document`; the least recently read page is removed first.
 - `image_disk_cache_mb`: disk cache for the pictures ImageMagick developed. Default `512`, max `131072`; `0` keeps nothing between hovers but still develops the current one. Pictures live under `%TEMP%\rust-hover-preview\image`; the least recently read one is removed first, and they survive a restart.
-- `general_disk_cache_mb`: disk cache for the subtitle tracks a film's embedded ones are copied into. Default `128`, max `131072`; `0` extracts nothing, and a film whose subtitles are embedded is drawn without them. Files live under `%TEMP%\rust-hover-preview\general`, least recently used first.
+- `general_disk_cache_mb`: disk cache for the subtitle tracks a film's embedded ones are copied into, and for the track facts a sound was read for — a card and every row of a pinned sound's playlist band are filled from them without opening the file again. Default `128`, max `131072`; `0` extracts nothing, and a film whose subtitles are embedded is drawn without them. Files live under `%TEMP%\rust-hover-preview\general`, least recently used first.
 - `decode_budget_gb`: most memory one hover may use. Default `1`, range `0.25`–`64`. A file over the limit shows no preview.
 
 ### Performance
