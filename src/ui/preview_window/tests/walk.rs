@@ -71,6 +71,7 @@ fn a_walk_steps_through_the_playlist_and_round_again() {
         order: list.clone(),
         missed: 0,
         shuffle: false,
+        forward: false,
         anchor: None,
     };
 
@@ -114,6 +115,7 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
         order: vec![folder.join("a.png"), folder.join("b.png")],
         missed: 0,
         shuffle: false,
+        forward: false,
         anchor: None,
     };
 
@@ -405,6 +407,7 @@ fn a_playlist_of_only_the_pinned_file_has_nowhere_to_shuffle() {
         order: vec![only.clone()],
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: None,
     };
     assert!(
@@ -751,6 +754,7 @@ fn a_walk_the_planner_answers_carries_the_list_it_walked() {
         order: list.clone(),
         missed: 0,
         shuffle: false,
+        forward: false,
         anchor: None,
     };
 
@@ -1012,6 +1016,7 @@ fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
         order: vec![at.clone(), folder.join("a.mp3"), folder.join("c.mp3")],
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: None,
     };
 
@@ -1361,6 +1366,7 @@ fn a_file_that_could_not_be_shown_is_stepped_over_onto_the_next_file() {
         order: sounds.clone(),
         missed: 0,
         shuffle: false,
+        forward: false,
         anchor: None,
     };
 
@@ -1419,6 +1425,7 @@ fn a_press_asks_with_the_walk_the_pin_is_standing_on() {
         order: vec![folder.join("a.mp3"), folder.join("b.mp3")],
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     };
     stand_pin_walk(Some(held.clone()));
@@ -1492,6 +1499,7 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
         order: sounds.clone(),
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     }));
 
@@ -1504,6 +1512,7 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
         order: vec![sounds[0].clone(), sounds[1].clone(), sounds[2].clone()],
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     });
 
@@ -1764,6 +1773,7 @@ fn a_pick_retried_after_its_box_lands_carries_the_parked_walk() {
             order: order.clone(),
             missed: 0,
             shuffle: true,
+            forward: false,
             anchor: None,
         })
     };
@@ -1857,6 +1867,7 @@ fn installing_a_pick_in_the_walks_folder_keeps_the_playlist() {
             order: order.clone(),
             missed: 0,
             shuffle: true,
+            forward: false,
             anchor: None,
         })
     };
@@ -2054,6 +2065,7 @@ fn a_pin_taken_up_again_on_its_own_file_keeps_the_walk() {
         order: order.clone(),
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     };
 
@@ -2359,6 +2371,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
         order: vec![showing.clone(), stepped_to.clone(), folder.join("b.mp3")],
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     };
     let answer = answer_pin_job(&PinJob::Walk {
@@ -2396,6 +2409,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
         order: vec![elsewhere.clone(), folder.join("c.mp3")],
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     };
     let answer = answer_pin_job(&PinJob::Walk {
@@ -2408,19 +2422,14 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
     let Some(PinPlanned::Walk(first)) = answer else {
         panic!("a walk is always answered");
     };
-    assert_eq!(
-        first.order.first(),
-        Some(&showing),
-        "the file on screen is the playlist's head, not an addition on the end of it"
-    );
-    assert_eq!(
+    assert!(
         first
             .order
             .iter()
             .filter(|file| pin_navigation::same_file(file, &showing))
-            .count(),
-        1,
-        "and it is on the playlist once"
+            .count()
+            == 1,
+        "the file on screen is on the carried playlist once, so one step back reaches it"
     );
     let landed = first.at.clone();
     let answer = answer_pin_job(&PinJob::Walk {
@@ -2447,6 +2456,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
         order: vec![stepped_to.clone(), folder.join("b.mp3"), showing.clone()],
         missed: 0,
         shuffle: true,
+        forward: false,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     };
     let answer = answer_pin_job(&PinJob::Walk {
@@ -2466,4 +2476,86 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
          not one it is stepped from"
     );
     assert_eq!(held.at, stepped_to, "and the walk has not moved");
+}
+
+/// A shuffle walked **back** first is the same playlist as one walked forward first: which button
+/// is pressed first is a direction, not a different permutation. `Previous` from the file the pin
+/// was taken up on wraps to the last file of the order, and the `Next` after it is the order walked
+/// round — back onto that very file — rather than a permutation read as spent.
+#[test]
+fn a_previous_pressed_first_walks_the_same_playlist_as_a_next() {
+    let _every_file = WalkEveryFile::set();
+    let folder = sounded_folder("shuffle-back-first");
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_nav_audio = PinNavFileTypes::Category;
+    config.pin_mode_audio_shuffle = true;
+    let showing = folder.join("b.mp3");
+    let sounds = [
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+
+    for first_step in [-1, 1] {
+        // The playlist the trigger spawns, and the first press upon it.
+        let answer = answer_pin_job(&PinJob::Walk {
+            at: showing.clone(),
+            step: first_step,
+            anchor: None,
+            config: Box::new(config.clone()),
+            session: None,
+        });
+        let Some(PinPlanned::Walk(first)) = answer else {
+            panic!("a walk is always answered");
+        };
+        assert!(
+            first.shuffle,
+            "{first_step}: the walk shuffles with the pin's shuffle on"
+        );
+        assert_eq!(
+            first.order.first(),
+            Some(&showing),
+            "{first_step}: the playlist starts on the file the pin is showing"
+        );
+        let mut rest = first.order[1..].to_vec();
+        rest.sort();
+        assert_eq!(
+            rest,
+            sounds
+                .iter()
+                .filter(|sound| **sound != showing)
+                .cloned()
+                .collect::<Vec<PathBuf>>(),
+            "{first_step}: and holds every other sound after it, whichever way the first press \
+             goes: {:?}",
+            first.order
+        );
+
+        // And a press the other way is the same playlist walked round: the file the pin was
+        // taken up on, never a file the permutation never held.
+        let landed = first.at.clone();
+        let answer = answer_pin_job(&PinJob::Walk {
+            at: landed.clone(),
+            step: -first_step,
+            anchor: first.anchor,
+            config: Box::new(config.clone()),
+            session: Some(Box::new(first.clone())),
+        });
+        let Some(PinPlanned::Walk(back)) = answer else {
+            panic!("a walk is always answered");
+        };
+        assert_eq!(
+            back.at, showing,
+            "{first_step}: a press the other way lands on the file the walk came from"
+        );
+        assert_eq!(
+            back.order, first.order,
+            "{first_step}: along the playlist the trigger spawned, and not a second one"
+        );
+        assert_eq!(
+            back.order.len(),
+            sounds.len(),
+            "{first_step}: every sound is on it once"
+        );
+    }
 }
