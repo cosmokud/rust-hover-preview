@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.2] - 2026-11-10
+
+### Added
+
+- **`Win` chords arrange a pinned window while it is the window you are in** - `Win`+`Down` runs the pin's own minimize, into the place `Pin Mode → Minimize to` names, and `Win`+`Shift`+`Left`/`Right` carries the window to the display on that side at the same size and the same place on it, refused rather than squeezed where that display has no room. `Win`+`Left`/`Right`/`Up` and `Win`+`Shift`+`Up`/`Down` are swallowed: left to the Shell they would snap, maximize or stretch a box the pin owns. The chords are read by the low-level hook while the pin holds the focus, and the pin's own window answers them the same where the hook stands down.
 
 ### Fixed
 
