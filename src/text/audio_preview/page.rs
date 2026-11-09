@@ -919,6 +919,10 @@ pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
 /// scroll rather than a cut line: `offset` is how far the whole line has been carried back under the
 /// box, and what the box cannot hold is out of sight for now (see `Card::facts_offset`).
 ///
+/// A line at rest (`offset == 0`) ends on a whole fact: the first fact the room does not hold whole is
+/// not laid, nor is the mark before it, and the rest of the line waits for the scroll to carry it in.
+/// The line a room cannot hold even its first fact of is that fact cut, rather than a line left empty.
+///
 /// A parting mark is laid only where the fact after it is: the line ends on a character at every
 /// offset of its travel, never on the mark of a fact that has not come into the room yet.
 // Eight: the line, the room it is drawn in, and the three inks a fact can be set in — the page
@@ -937,6 +941,7 @@ fn fact_runs(
     let mut runs = Vec::new();
     let mut x = left - offset.max(0);
     let mut first = true;
+    let resting = offset <= 0;
 
     for fact in laid_facts(facts) {
         let mark = if first {
@@ -947,7 +952,20 @@ fn fact_runs(
         let start = x + mark;
         let width = text_width(&fact.text, advance);
 
-        if (start + width).min(right) > start.max(left) {
+        // At rest the line stops at the first fact it cannot draw whole — the rest are past it and wait
+        // for the scroll — while a section of the moving line in sight is drawn as it is (see
+        // `Card::facts_offset`). A resting line's first fact is drawn cut rather than left empty.
+        let laid = if resting {
+            start + width <= right || first
+        } else {
+            (start + width).min(right) > start.max(left)
+        };
+
+        if !laid && resting {
+            break;
+        }
+
+        if laid {
             if !first {
                 push_fact_run(&mut runs, FACT_SEPARATOR, x, left, right, advance, muted);
             }
