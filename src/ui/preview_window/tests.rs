@@ -973,6 +973,7 @@ fn a_window_of_the_suite_is_on_the_desktop_and_drawn_as_nothing() {
 
 mod audio_bands;
 mod cache;
+mod dropped_files;
 mod engine_probes;
 mod find_field;
 mod hover;

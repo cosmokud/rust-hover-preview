@@ -68,6 +68,7 @@
 //! - `pin_bubble` - the bubble that stands beside a collapsed pin.
 //! - `pin_input` - a hand on a pinned window.
 //! - `pin_drag` - carrying a pinned window with the pointer.
+//! - `pin_drop` - files dragged onto a pinned window, and the one pick a drop becomes.
 //! - `video_probe` - what a film is asked of FFprobe.
 //! - `subtitle_files` - a film's own subtitle tracks copied out once, into the small files a
 //!   hover draws them from.
@@ -123,6 +124,9 @@ mod pin_chrome_layout;
 mod pin_chrome_strips;
 mod pin_detach;
 mod pin_drag;
+// Files dragged onto a pinned window: what a drop of them is, and the one message it becomes (see
+// `pin_drop`).
+mod pin_drop;
 mod pin_film_host;
 mod pin_film_thumbnail;
 mod pin_geometry;
@@ -281,8 +285,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_X, VK_Y, VK_Z,
 };
 use windows::Win32::UI::Shell::{
-    AssocQueryStringW, ShellExecuteExW, ASSOCF_NONE, ASSOCSTR, ASSOCSTR_FRIENDLYAPPNAME,
-    SEE_MASK_ASYNCOK, SEE_MASK_HMONITOR, SHELLEXECUTEINFOW, SHELLEXECUTEINFOW_0,
+    AssocQueryStringW, DragAcceptFiles, DragFinish, DragQueryFileW, ShellExecuteExW, ASSOCF_NONE,
+    ASSOCSTR, ASSOCSTR_FRIENDLYAPPNAME, HDROP, SEE_MASK_ASYNCOK, SEE_MASK_HMONITOR,
+    SHELLEXECUTEINFOW, SHELLEXECUTEINFOW_0,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
@@ -300,11 +305,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
     SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, TPM_LEFTALIGN, TPM_NONOTIFY, TPM_RETURNCMD,
     TPM_TOPALIGN, ULW_ALPHA, WA_ACTIVE, WA_CLICKACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CHAR,
-    WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOVE, WM_POWERBROADCAST, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_WINDOWPOSCHANGED,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOVE, WM_POWERBROADCAST,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SIZE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
+    WM_WINDOWPOSCHANGED, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 #[cfg(test)]
