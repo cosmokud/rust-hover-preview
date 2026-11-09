@@ -98,6 +98,19 @@ pub fn pinned_path() -> Option<PathBuf> {
     pin_state().and_then(|state| state.pin().map(|pin| pin.path.clone()))
 }
 
+/// Whether there is a pin for a message from this side to be about, asked of the copy this process draws
+/// by **and** of the run's published one.
+///
+/// **The two are not the same question in a run of two processes.** `pinned()` is the copy the process
+/// that installed the pin writes, and the tray never installs one: read off it alone, every press the
+/// Explorer hook answered in a listing was answered with nothing — no band held across the listing's own
+/// activation and no pin put back behind the window the press was made in (see `press_pinned_preview` and
+/// `pin_press_was_not_a_pick`). A window that has become one of its own publishes no pin for the run,
+/// which is what keeps these asks away from it (see `app::detach` and `app::seam::the_pin_is_up`).
+fn a_pin_is_up_anywhere() -> bool {
+    pinned() || crate::app::seam::the_pin_is_up()
+}
+
 /// Ask for the pinned window to be shown another file, from any thread: the Explorer hook's
 /// answer to the user clicking a file, selecting one with the keyboard, or — where
 /// `Pin Mode → Update Preview → On Hover` asks for it — settling on one.
@@ -119,7 +132,7 @@ pub fn pinned_path() -> Option<PathBuf> {
 /// them for the run that draws its own previews, where the two are the same window (see
 /// `app::seam::the_pin_is_up`, `the_pin_block` and `pin_is_on_its_way_to`).
 pub fn update_pinned_preview(path: &Path) {
-    if !pinned() && !crate::app::seam::the_pin_is_up() {
+    if !a_pin_is_up_anywhere() {
         return;
     }
 
@@ -161,7 +174,7 @@ pub fn update_pinned_preview(path: &Path) {
 /// put back behind the listing by [`pin_press_was_not_a_pick`] instead, and a pick that lands
 /// raises the pin again.
 pub fn press_pinned_preview(window: isize) {
-    if !pinned() {
+    if !a_pin_is_up_anywhere() {
         return;
     }
 
@@ -176,7 +189,7 @@ pub fn press_pinned_preview(window: isize) {
 /// window the pin is already behind (see `PinUpdateWatch::press_frame`). A pick that lands after
 /// this one still raises the pin again.
 pub fn pin_press_was_not_a_pick(window: isize) {
-    if !pinned() {
+    if !a_pin_is_up_anywhere() {
         return;
     }
 
