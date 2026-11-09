@@ -40,12 +40,14 @@ use std::os::windows::ffi::OsStringExt;
 pub(super) static PIN_DROP: Lazy<Mutex<Option<DroppedOn>>> = Lazy::new(|| Mutex::new(None));
 
 /// **A dropped file is one the user named**, which is what the pick behind it reads for the one setting
-/// an update is gated by, and what the window answers with once it is shown.
+/// an update is gated by, and what the window answers with once it is shown. It is not gated by that
+/// setting at all: the row is about a file another hand chose behind the window, and a drop is a file
+/// handed to the window itself (see the loop's gate beside `take_pin_pick`).
 pub(super) struct DroppedOn {
     pub(super) path: PathBuf,
     /// Whether the window the file was dropped on was put away when it was dropped — a collapsed pin is
     /// a bubble, and a file dropped on it is the pin being asked to come back on that file (see
-    /// `pin_was_put_away`).
+    /// `restore_pin`).
     pub(super) put_away: bool,
 }
 
