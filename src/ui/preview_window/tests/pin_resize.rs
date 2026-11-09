@@ -2047,3 +2047,101 @@ fn right_of_bounds() -> ScreenBounds {
         bottom: first.bottom,
     }
 }
+
+/// **A box change no longer decodes a playing frame above the file's own pixels**, which is what an
+/// animation maximized on a large display showed as slow motion: a `.webp` pinned on one display,
+/// dragged to a bigger one, maximized — the decoder asked for millions of invented pixels a frame
+/// could not keep up with its own authored delay, and the playhead advanced at the decode's rate.
+/// A zoom is the other road that reads its own pixels, and the answer there was already this one.
+///
+/// The kinds are the ones a box gives another *size* to and a frame of which is not composited by
+/// somebody else: a film is a player's window whatever its box, so no scale here reaches it.
+#[test]
+fn a_road_lays_an_animation_out_at_its_own_pixels_and_a_page_out_at_its_box() {
+    let animations = [
+        MediaType::AnimatedGif,
+        MediaType::AnimatedApng,
+        MediaType::AnimatedWebP,
+        MediaType::AnimatedHeif,
+        MediaType::AnimatedJxl,
+    ];
+    let laid_out_for_the_box = [
+        MediaType::StaticImage,
+        MediaType::Dds,
+        MediaType::Pdf,
+        MediaType::Office,
+        MediaType::Text,
+        MediaType::Archive,
+        MediaType::Peazip,
+        MediaType::Design,
+        MediaType::Magick,
+        MediaType::Libre,
+        MediaType::Calibre,
+        MediaType::Comic,
+        MediaType::NativeVideo,
+        MediaType::Audio,
+    ];
+
+    for kind in animations {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::Zoom, Some(kind)),
+            PreviewScale::Percent(100),
+            "a wheel turned past the window is the picture laid out for its own pixels, whatever it \
+             is — and a frame that plays is not even decoded for it"
+        );
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::BoxChange, Some(kind)),
+            PreviewScale::Percent(100),
+            "a box change of a frame that plays is its own pixels too, so a window maximized on a \
+             display bigger than the file stretches the frame it holds rather than decoding one \
+             larger than anything the file has"
+        );
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::TakeUp, Some(kind)),
+            PreviewScale::FitToScreen,
+            "a take-up is a file laid out for the display it arrives on, as every kind's is"
+        );
+    }
+
+    for kind in laid_out_for_the_box {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::BoxChange, Some(kind)),
+            PreviewScale::FitToScreen,
+            "a still picture, a page, a listing, a card or a film is laid out for the box its \
+             window is at, exactly as it was"
+        );
+    }
+
+    // And a film is placed by its player rather than decoded here at all, so the scale is never asked
+    // of it — the two kinds the browser draws answer the same for the same reason.
+    for kind in [
+        MediaType::Video,
+        MediaType::EngineSvg,
+        MediaType::EngineFont,
+    ] {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::BoxChange, Some(kind)),
+            PreviewScale::FitToScreen,
+            "{kind:?} is drawn in a window of its own, and a box change moves that window"
+        );
+    }
+
+    // A zoom reads its own pixels whatever the road is asked of, which is the rule a box change has
+    // now been brought into line with for the one kind a decode is paid per frame for.
+    for kind in laid_out_for_the_box {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::Zoom, Some(kind)),
+            PreviewScale::Percent(100),
+            "a wheel past the window lays {kind:?} out for its own pixels"
+        );
+    }
+
+    // No media at all is a pin that has nothing on screen yet: the room is the only answer there is.
+    for road in [PinRelayoutRoad::TakeUp, PinRelayoutRoad::BoxChange] {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(road, None),
+            PreviewScale::FitToScreen,
+            "a pin with no media yet is laid out for the room rather than for pixels nothing has"
+        );
+    }
+}
