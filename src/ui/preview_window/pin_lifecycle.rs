@@ -504,7 +504,7 @@ pub(super) unsafe fn settle_the_pin_after_the_setting_moved() {
 
     let front = unsafe { GetForegroundWindow() };
     let the_front_is_where_the_pin_stands = front == hwnd
-        || crate::shell::window_classes::explorer_class_matches(front)
+        || crate::shell::window_classes::listing_class_matches(front)
         || unsafe { foreground_is_the_desktop(front) };
     let stands_over_the_front = unsafe { pin_stands_over(hwnd, front) };
     note_pin_trace!(
@@ -1765,7 +1765,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // that was off the screen only (see `take_the_band_and_give_it_back`).
     let the_front_is_the_pin_or_a_listing = {
         let front = unsafe { GetForegroundWindow() };
-        front == hwnd || crate::shell::window_classes::explorer_class_matches(front)
+        front == hwnd || crate::shell::window_classes::listing_class_matches(front)
     };
     if !pin_always_on_top() && (!on_the_screen || the_front_is_the_pin_or_a_listing) {
         // **A pin that is a window is put in front the one way Windows lets a process without the
@@ -2611,7 +2611,7 @@ fn where_the_band_goes_back(foreground: HWND, listing: HWND) -> HWND {
     let nowhere_else_to_go = listing.is_invalid()
         || foreground == listing
         || foreground == pinned_window()
-        || crate::shell::window_classes::explorer_class_matches(foreground);
+        || crate::shell::window_classes::listing_class_matches(foreground);
 
     if nowhere_else_to_go {
         HWND::default()

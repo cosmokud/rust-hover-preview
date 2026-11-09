@@ -9,7 +9,9 @@
 use super::*;
 use crate::shell::window_classes;
 
-/// Quick check if foreground window is Explorer (cheap, no COM)
+/// Whether the window in front is a listing this hook answers for — Explorer's folder window or a
+/// Common Item Dialog (see `is_explorer_window`) — asked of the cached class lookup rather than of
+/// COM, which is what makes it the cheap half of the state machine.
 ///
 /// The pin key asks it as well, because a key pressed while another program is in front is a press
 /// about that program and not about the pin. A pin the user has pressed is not that case: it is
@@ -361,10 +363,13 @@ pub(crate) fn a_press_puts_us_behind(
 ///
 /// Asked of the class of the frame the press landed in rather than of the process behind it, and with no
 /// lock and no allocation, because this is a low-level callback and every press on the machine waits for
-/// it (see `window_classes::explorer_class_matches`).
+/// it (see `window_classes::listing_class_matches`). A Common Item Dialog is a listing a pick can be made
+/// in exactly as a folder window is — the pin is standing beside the file the user is choosing in a
+/// program's Open dialog, and the press that chooses it is the press that hands it over (see
+/// `explorer_hook::file_dialog`).
 pub(crate) fn the_pick_road_answers(window: HWND) -> bool {
     crate::app::seam::the_pin_follows_the_listing()
-        && crate::shell::window_classes::explorer_class_matches(window)
+        && crate::shell::window_classes::listing_class_matches(window)
 }
 
 /// Whether the point a press landed on is inside any window of ours: the broad answer, and the one the
