@@ -6,6 +6,8 @@
 //!
 //! - `views` — the shapes a look comes back in: the view that answered, the item the
 //!   pointer is over, the file that item names.
+//! - `file_dialog` — the same two questions asked of a Common Item Dialog, which has no
+//!   Shell view to ask: the folder it is showing, and the file an item of it stands for.
 //! - `resolver` — the UI Automation client, the Shell window collection, and the view that
 //!   answered last. What holds a COM object for the rest of this.
 //! - `view_sort` — how long the hook waits between looks, and the order a folder is listed
@@ -35,6 +37,7 @@
 //! items rather than naming them through their own — so that moving one question across a
 //! boundary is not a change to it.
 
+mod file_dialog;
 mod focus_items;
 mod hover_location;
 mod input;
@@ -92,12 +95,12 @@ use windows::Win32::UI::Accessibility::{
     CUIAutomation, CUIAutomation8, CUIAutomationRegistrar, IUIAutomation, IUIAutomation2,
     IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationLegacyIAccessiblePattern,
     IUIAutomationRegistrar, IUIAutomationSelectionPattern, IUIAutomationTreeWalker,
-    TreeScope_Children, TreeScope_Element, UIA_BoundingRectanglePropertyId,
-    UIA_ControlTypePropertyId, UIA_DataItemControlTypeId, UIA_EditControlTypeId,
-    UIA_GroupControlTypeId, UIA_LegacyIAccessiblePatternId, UIA_ListItemControlTypeId,
-    UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId, UIA_SelectionPatternId,
-    UIA_TextControlTypeId, UIAutomationPropertyInfo, UIAutomationType_Int, UIA_CONTROLTYPE_ID,
-    UIA_PROPERTY_ID,
+    TreeScope_Children, TreeScope_Element, TreeScope_Subtree, UIA_AutomationIdPropertyId,
+    UIA_BoundingRectanglePropertyId, UIA_ControlTypePropertyId, UIA_DataItemControlTypeId,
+    UIA_EditControlTypeId, UIA_GroupControlTypeId, UIA_LegacyIAccessiblePatternId,
+    UIA_ListItemControlTypeId, UIA_NamePropertyId, UIA_NativeWindowHandlePropertyId,
+    UIA_SelectionPatternId, UIA_TextControlTypeId, UIAutomationPropertyInfo, UIAutomationType_Int,
+    UIA_CONTROLTYPE_ID, UIA_PROPERTY_ID,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForSystem, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -131,7 +134,8 @@ pub use view_sort::note_explorer_restart;
 pub(crate) use view_sort::{view_sort_of, SortKey, ViewSort};
 pub(crate) use window_state::{
     a_press_puts_us_behind, a_window_of_ours_stands, is_foreground_explorer,
-    our_window_stands_over_everything, press_is_inside_ours, the_pick_road_answers,
+    our_window_stands_over_everything, press_is_inside_ours, the_front_is_a_listing,
+    the_pick_road_answers,
 };
 
 /// Whether one of the two Win keys is held, and whether either Shift is: the two modifiers a Win chord
@@ -147,6 +151,7 @@ pub(crate) fn the_shift_key_is_down() -> bool {
 
 // The parts, in one namespace (see the note above). The macro is named rather than globbed:
 // it is written from two parts and lives with the counter it is written beside.
+use file_dialog::*;
 use focus_items::*;
 use hover_location::*;
 use input::*;

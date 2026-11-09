@@ -97,7 +97,8 @@ pub(super) fn is_cursor_over_explorer_full(window: HWND) -> bool {
     false
 }
 
-/// Whether a window is one of Explorer's folder windows.
+/// Whether a window is a listing this hook answers for: one of Explorer's folder windows, or a Common
+/// Item Dialog — and never a window of the rest of the shell.
 ///
 /// The class is the whole of the test, and only the class: a folder view is drawn in the
 /// browser frame, and this is the same answer the walk over Explorer's windows is made
@@ -110,11 +111,14 @@ pub(super) fn is_cursor_over_explorer_full(window: HWND) -> bool {
 /// was minimized were never asked for, and a preview that was already up was never taken
 /// down.
 ///
-/// The ask is one class lookup, kept for the window (see `EXPLORER_WINDOW_CACHE`). The
-/// process behind the window used to be read as well, for any window that was not one of
-/// the two classes — an `OpenProcess` and an image name for every window the pointer
-/// walked over — and it answered yes for every piece of the shell that is explorer.exe,
-/// which is the answer this test must never give.
+/// The ask is one class lookup plus, for a `#32770`, the two child lookups that say it is a file dialog
+/// rather than a message box, kept for the window (see `EXPLORER_WINDOW_CACHE`). A dialog is a listing
+/// here and never an Explorer window: the keyboard it holds is on an item the shell draws for its own
+/// list (see `file_dialog`), and a pin taken in a `Ctrl`+`O` is followed the same way a pin taken in a
+/// folder view is. The process behind the window used to be read as well, for any window that was not
+/// one of the two classes — an `OpenProcess` and an image name for every window the pointer walked
+/// over — and it answered yes for every piece of the shell that is explorer.exe, which is the answer
+/// this test must never give.
 pub(super) fn is_explorer_window(hwnd: HWND) -> bool {
     let hwnd_key = hwnd.0 as isize;
     if hwnd_key == 0 {
@@ -129,7 +133,7 @@ pub(super) fn is_explorer_window(hwnd: HWND) -> bool {
         }
     }
 
-    let is_explorer = crate::shell::window_classes::explorer_class_matches(hwnd);
+    let is_explorer = crate::shell::window_classes::listing_class_matches(hwnd);
 
     if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
         if cache.len() >= 512 {
@@ -162,10 +166,61 @@ impl FocusedItemInfo {
     /// by what they answer, which is how the keyboard path resolved its item before the
     /// window the item is drawn in was read at all.
     fn item_window(&self) -> Option<ItemWindow> {
+        let frame = self.root_window?;
         Some(ItemWindow {
-            frame: self.root_window?,
+            frame,
             drawn_in: self.item.native_window,
+            dialog: crate::shell::window_classes::file_dialog_class_matches(HWND(
+                frame as *mut core::ffi::c_void,
+            )),
         })
+    }
+}
+
+/// The frame of the listing an observation of the keyboard focus was made in: the frame whose views
+/// hold the item, or nothing where nothing named one.
+///
+/// It is the frame rather than the item because what the keyboard being in a *new* listing means is a
+/// new baseline, and the item alone cannot say that: a dialog opened on a folder the user was just in
+/// shows the same first row, with the same name, in the same place, as the folder window it was opened
+/// from — so an observation of it is no change to compare against and the first ↓ pressed in it was
+/// swallowed as a baseline (see `the_focus_baseline_is_new`).
+pub(super) fn frame_of_focused_item(focused: &FocusedItemInfo) -> Option<isize> {
+    focused.root_window
+}
+
+/// Whether the item the keyboard was last observed on belongs to another listing than the listing the
+/// keyboard is in now — the dialog that has just opened, or a window switched to with `Alt`+`Tab` — and
+/// whether that means the focus baseline has to be taken again before a key pressed in it previews.
+///
+/// **The baseline is an item, and the item is a fact about one listing.** The loop records the focused
+/// item and previews the next one only where it differs, so a listing whose selection is the same item
+/// in the same place is one whose first ↓ moves that selection to an item the baseline already names —
+/// which reads as no key pressed at all. That is what a dialog opened on the last folder shows: the
+/// shell opens it with the first item selected, which in a folder the user just left is often exactly
+/// the row the folder window had focused, and `Ctrl`+`O` in a program whose own window has no item at
+/// all is the same case with no item to fall back on.
+///
+/// So the frame is tracked beside the item, and an observation made in another frame is the answer
+/// that the last baseline describes a listing the keyboard has left: the caller clears it and lets the
+/// observation act, which is the same thing it does after the mouse moves. It is deliberately about a
+/// **listing**, not about the item — a key pressed onto another row of the same listing is the change
+/// the baseline exists to catch, and an arrow that ends on a new frame is the keyboard having gone
+/// somewhere with no row under it yet.
+///
+/// Nothing is asked of the Explorer folder-change gate, of `keyboard_screen_owner`, or of
+/// `Prioritize Keyboard`: this only says the next observation should act rather than be recorded, and
+/// every one of those stays the answer it was.
+pub(super) fn the_focus_baseline_is_new(
+    baseline_frame: Option<isize>,
+    listing_frame: Option<isize>,
+) -> bool {
+    // A frame nobody could read is no news at all, on either side: the loop cannot tell a listing that
+    // moved from a read that came back with nothing, and a baseline recorded in no frame is one that
+    // describes no listing to have left.
+    match (baseline_frame, listing_frame) {
+        (Some(baseline), Some(listing)) => baseline != listing,
+        _ => false,
     }
 }
 

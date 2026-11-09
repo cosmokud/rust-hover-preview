@@ -95,6 +95,25 @@ pub(super) struct ItemResolver {
     /// pointer stays inside that item — see `AnsweredItem`.
     pub(super) item: Option<AnsweredItem>,
     pub(super) probe: Option<ProbeMemo>,
+    /// The folder a Common Item Dialog was last read as showing, against the frame it was
+    /// read from — see `file_dialog::dialog_folder`.
+    pub(super) dialog_folder: Option<DialogFolderMemo>,
+}
+
+/// The folder one Common Item Dialog is showing, kept while it still describes it.
+///
+/// It is kept against the frame rather than against a view, because a dialog has no view
+/// to keep anything against: the two facts that make a cached folder wrong for an Explorer
+/// window — a place the shell has left and a set of views read while it was between them —
+/// are `forget_window_views` and this TTL for a dialog, since navigating inside one changes
+/// no window and the folder it names is the whole of what moved.
+pub(super) struct DialogFolderMemo {
+    pub(super) frame: isize,
+    /// `None` where the dialog answered no folder at all, which is an answer as well: the
+    /// read is a walk into another process's automation tree and a dialog that will not
+    /// name its folder is not asked about it again on every tick.
+    pub(super) answer: Option<PathBuf>,
+    pub(super) read_at: Instant,
 }
 
 /// One view of a window, as the Shell hands it over.
@@ -211,6 +230,16 @@ pub(super) struct ItemWindow {
     /// item, the window the item's own provider reports for the keyboard's — or nothing
     /// where neither is known.
     pub(super) drawn_in: isize,
+    /// Whether the frame is a Common Item Dialog rather than an Explorer folder window —
+    /// see `file_dialog_class_matches`.
+    ///
+    /// **It is the one thing about a dialog that everything else here cannot read off the
+    /// frame**, because the dialog reports nothing the routes are built on: its items carry
+    /// no `ItemIndex`, its folder is not reachable through `CDM_*` or `ShellWindows`, and
+    /// no Shell view is registered for the frame at all. So the item path branches on this
+    /// before it takes a position (see `item_file_path`), and the place is read from the
+    /// breadcrumb rather than from a view (see `anchored_view_context`).
+    pub(super) dialog: bool,
 }
 
 impl ItemWindow {

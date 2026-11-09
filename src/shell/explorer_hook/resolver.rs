@@ -24,6 +24,7 @@ impl ItemResolver {
             window_views: None,
             item: None,
             probe: None,
+            dialog_folder: None,
         };
         resolver.rebuild_automation_parts();
         resolver.rebuild_shell();
@@ -114,6 +115,7 @@ impl ItemResolver {
             unsafe { CoCreateInstance::<_, IShellWindows>(&ShellWindows, None, CLSCTX_ALL).ok() };
         self.window_views = None;
         self.item = None;
+        self.dialog_folder = None;
     }
 
     /// Drop a window's views, for a caller that has just seen the place they describe
@@ -122,6 +124,15 @@ impl ItemResolver {
     /// about the set can be read against, and what it costs is one walk.
     pub(super) fn forget_window_views(&mut self) {
         self.window_views = None;
+        self.forget_dialog_folder();
+    }
+
+    /// Drop the folder a Common Item Dialog is said to be showing. It goes with the views
+    /// for the same reason those do: what a place change invalidates is every answer read
+    /// against the place that has been left, and the folder a dialog showed is one of them
+    /// (see `file_dialog::dialog_folder`).
+    pub(super) fn forget_dialog_folder(&mut self) {
+        self.dialog_folder = None;
     }
 
     /// The view of `frame` the pointer was last inside, out of the set kept for that frame.

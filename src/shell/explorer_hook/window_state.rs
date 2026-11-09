@@ -9,7 +9,9 @@
 use super::*;
 use crate::shell::window_classes;
 
-/// Quick check if foreground window is Explorer (cheap, no COM)
+/// Whether the window in front is a listing this hook answers for — Explorer's folder window or a
+/// Common Item Dialog (see `is_explorer_window`) — asked of the cached class lookup rather than of
+/// COM, which is what makes it the cheap half of the state machine.
 ///
 /// The pin key asks it as well, because a key pressed while another program is in front is a press
 /// about that program and not about the pin. A pin the user has pressed is not that case: it is
@@ -22,6 +24,26 @@ pub(crate) fn is_foreground_explorer() -> bool {
             return false;
         }
         is_explorer_window(foreground)
+    }
+}
+
+/// Whether the window in front is a listing this hook answers for — Explorer's folder window or a
+/// Common Item Dialog — asked of the class alone: one `GetForegroundWindow` and the class compares of
+/// `listing_class_matches`, with no lock and no allocation.
+///
+/// The question the pin's own placement asks, and the one `is_foreground_explorer` is not: a pin is
+/// owed the front of its band where the window it was picked over is *either* kind, and a file picked
+/// in a program's own `Ctrl`+`O` must leave the pin in the front of that dialog exactly as a file picked
+/// in a folder view leaves it in the front of the folder — the press recorded the frame it was made in,
+/// and a dialog is no less a listing for being somebody else's window (see `file_dialog`).
+///
+/// Not the cached form, either: the class of a window does not change under the answer, but a dialog is
+/// a frame that appears and goes with one keystroke, and a memo read before it appeared would answer for
+/// the window it replaced.
+pub(crate) fn the_front_is_a_listing() -> bool {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        !foreground.is_invalid() && crate::shell::window_classes::listing_class_matches(foreground)
     }
 }
 
@@ -120,7 +142,13 @@ pub(super) fn is_window_fullscreen(hwnd: HWND) -> bool {
 /// The region the window in front hides what is behind, where that window is one
 /// that hides anything at all: a maximized or fullscreen window that is not
 /// Explorer's. `None` is a foreground window nothing is hidden behind — an ordinary
-/// one, Explorer itself, the desktop, or no window at all.
+/// one, a listing itself (a folder window or a Common Item Dialog, which is what
+/// `is_explorer_window` answers for both), the desktop, or no window at all.
+///
+/// **A listing never covers anything, whichever kind it is.** The class is asked before the
+/// rectangle, so a maximized dialog cannot reach `window_is_behind_cover` either: a dialog is the
+/// user working in a listing, and answering it as a window that hides what is behind would sleep the
+/// loop out of the very state its own items are read in.
 ///
 /// What it is for is asking whether an Explorer window is behind it. Taking the
 /// foreground window alone for the answer — a maximized window, so Explorer must be
@@ -131,9 +159,12 @@ pub(super) fn is_window_fullscreen(hwnd: HWND) -> bool {
 /// to the Explorer window on the second display showed nothing at all until the
 /// click that made Explorer the foreground window. What a window hides is what its
 /// own rectangle holds, which is what the walk over Explorer's windows is asked.
-pub(super) fn foreground_cover_rect() -> Option<RECT> {
+///
+/// The window in front is handed in rather than read here, because the caller reads it once and asks
+/// it both this and whether it is a listing: two reads of `GetForegroundWindow` on one tick are two
+/// windows as far as an activation landing between them goes.
+pub(super) fn foreground_cover_rect(foreground: HWND) -> Option<RECT> {
     unsafe {
-        let foreground = GetForegroundWindow();
         if foreground.is_invalid() || is_explorer_window(foreground) {
             return None;
         }
@@ -263,15 +294,34 @@ pub(super) enum ExplorerState {
 
 /// Determine the current state of Explorer for CPU optimization
 pub(super) fn get_explorer_state() -> ExplorerState {
-    // Quick check: is foreground Explorer? (cheapest check)
-    if is_foreground_explorer() {
+    // The window in front, read once for both questions the state asks of it: whether it is a listing
+    // (answered before the walk, which is the cheap half), and the region it hides what is behind
+    // where it hides anything at all.
+    let foreground = unsafe { GetForegroundWindow() };
+
+    // Cheapest answer there is, and the one most hovers are read on: Explorer's own frame in front is
+    // the active arrangement, and the walk over its windows is not made for it.
+    if !foreground.is_invalid() && crate::shell::window_classes::explorer_class_matches(foreground)
+    {
         return ExplorerState::ActiveFocus;
     }
 
+    // **A Common Item Dialog is a listing and is nobody's Explorer window**, so it falls through to the
+    // counts rather than to the answer above: the walk does not count it — counting it would move the
+    // pace and the covered-window rule, which are Explorer's own — and a run with no folder window open
+    // would read `NoExplorerWindows` and stop asking where the pointer is while the user picks a file in
+    // Chrome's `Ctrl`+`O`. So the fact is handed to the rule, which is where the row it answers for is
+    // decided (see `listing_class_matches` and `explorer_state_from_counts`).
+    let foreground_is_a_listing = !foreground.is_invalid() && is_explorer_window(foreground);
+
     // Everything past here is about the Explorer windows themselves: how many there
     // are, and whether the window in front leaves any of them out from behind itself.
-    let counts = get_explorer_window_counts(foreground_cover_rect());
-    explorer_state_from_counts(&counts, crate::app::seam::the_pin_is_up())
+    let counts = get_explorer_window_counts(foreground_cover_rect(foreground));
+    explorer_state_from_counts(
+        &counts,
+        crate::app::seam::the_pin_is_up(),
+        foreground_is_a_listing,
+    )
 }
 
 /// Whether `window` is one of this app's own rather than Explorer's: the preview window
@@ -361,10 +411,13 @@ pub(crate) fn a_press_puts_us_behind(
 ///
 /// Asked of the class of the frame the press landed in rather than of the process behind it, and with no
 /// lock and no allocation, because this is a low-level callback and every press on the machine waits for
-/// it (see `window_classes::explorer_class_matches`).
+/// it (see `window_classes::listing_class_matches`). A Common Item Dialog is a listing a pick can be made
+/// in exactly as a folder window is — the pin is standing beside the file the user is choosing in a
+/// program's Open dialog, and the press that chooses it is the press that hands it over (see
+/// `explorer_hook::file_dialog`).
 pub(crate) fn the_pick_road_answers(window: HWND) -> bool {
     crate::app::seam::the_pin_follows_the_listing()
-        && crate::shell::window_classes::explorer_class_matches(window)
+        && crate::shell::window_classes::listing_class_matches(window)
 }
 
 /// Whether the point a press landed on is inside any window of ours: the broad answer, and the one the
@@ -680,11 +733,29 @@ pub(super) fn window_is_gone(window: Option<HWND>) -> bool {
 /// `pin_up` is handed in rather than read here so that the one answer a pin changes is
 /// a decision this function makes rather than a fact it goes and looks up — it is the whole
 /// of what `PinUpdateWatch` depends on, and a rule that can only be tested by putting a window
-/// on somebody's screen is a rule that goes untested.
+/// on somebody's screen is a rule that goes untested. `foreground_is_a_listing` is handed in for the
+/// same reason: it is read once, beside the walk that fills `counts`.
+///
+/// **A listing in front is answered before the counts at all**, and it is the row the pointer is read
+/// on: Explorer's folder window, or a Common Item Dialog some other program put up. Neither number
+/// describes that arrangement — a dialog is no Explorer window, and a run with none open is one whose
+/// counts would say there is nothing to look at while the user is picking a file (see
+/// `listing_class_matches` and `get_explorer_state`).
+///
+/// A foreground that is no listing leaves the rows it had, because what it is instead is not something
+/// this loop can act on: where Explorer is reachable beside it the pointer may still cross to that
+/// window, so the row stays `VisibleNotFocused`, and `HiddenByForeground` is already the row that asks
+/// nothing of the pointer — a modal dialog of another program's covers nothing (see
+/// `foreground_cover_rect`), so the state it reaches is the one the pointer can still be right in.
 pub(super) fn explorer_state_from_counts(
     counts: &ExplorerWindowCounts,
     pin_up: bool,
+    foreground_is_a_listing: bool,
 ) -> ExplorerState {
+    if foreground_is_a_listing {
+        return ExplorerState::ActiveFocus;
+    }
+
     if counts.total == 0 {
         return ExplorerState::NoExplorerWindows;
     }
@@ -738,7 +809,6 @@ pub(super) fn explorer_pace(state: ExplorerState, tick_ms: u64) -> (u64, u64) {
 /// not been told about, and the engines keep reading the last thing it was told.
 pub(super) fn read_explorer_state() -> ExplorerState {
     let state = get_explorer_state();
-
     crate::app::afk::note_explorer_reachable(matches!(
         state,
         ExplorerState::VisibleNotFocused | ExplorerState::ActiveFocus
