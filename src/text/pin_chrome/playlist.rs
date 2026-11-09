@@ -75,12 +75,13 @@ pub(crate) struct PlaylistBand<'a> {
     pub(crate) total: usize,
     /// The row the pin is showing, which carries the accent stripe at its left edge.
     pub(crate) showing: Option<usize>,
-    /// The row the hand is on, and the row the hand has picked: either one marquees a name the
-    /// band has no room for (see `pin_playlist`).
-    pub(crate) hovered: Option<usize>,
+    /// The row the hand has picked, which is the row the band washes (see `pin_playlist`).
     pub(crate) picked: Option<usize>,
-    /// How far the marqueed name has been scrolled, in pixels to the left.
-    pub(crate) name_offset: i32,
+    /// The rows whose names are travelling, and how far each has been carried, in pixels to the
+    /// left: the row the hand is on, the row it has picked and the row the pin is showing, any of
+    /// which can be a name the column has no room for. A name on its way back to its resting place
+    /// is still one of them (see `pin_playlist::set_the_marquee`).
+    pub(crate) scrolled: &'a [(usize, i32)],
 }
 
 /// How tall a row is, in the display's own pixels: two lines of text and the pad above and below
@@ -449,25 +450,25 @@ pub(crate) fn paint_playlist(
         let (name_box, facts_box) = line_boxes(&layout, top, scale);
 
         // A name the left column has room for is drawn once, cut with an ellipsis where it has
-        // none — while the row the hand is on travels instead, which is the whole of what picking
-        // one buys a name too long to read.
-        let marqueed = band.hovered == Some(index) || picked;
-        let shown_name = if marqueed {
-            row.name.clone()
-        } else {
-            fit_title(
+        // none — while a name the band is travelling is drawn whole and moved under the column
+        // instead, which is the whole of what a row the hand is on, one it has picked or the one the
+        // pin is showing buys a name too long to read (see `pin_playlist::set_the_marquee`).
+        let scrolled = band
+            .scrolled
+            .iter()
+            .find(|(row, _)| *row == index)
+            .map(|(_, offset)| *offset);
+        let shown_name = match scrolled {
+            Some(_) => row.name.clone(),
+            None => fit_title(
                 surface,
                 &name_style,
                 &row.name,
                 name_box.right - name_box.left,
                 scale,
-            )
+            ),
         };
-        let origin = if marqueed {
-            name_box.left - band.name_offset
-        } else {
-            name_box.left
-        };
+        let origin = name_box.left - scrolled.unwrap_or(0);
 
         painter.draw(
             &shown_name,

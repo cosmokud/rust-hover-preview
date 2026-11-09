@@ -279,7 +279,7 @@ impl NameScroll {
     /// It is the arithmetic a card's facts line is scrolled by as well as its name: the two things
     /// about a card that move sideways are one motion, at one speed, ping-ponged one way (see
     /// [`facts_scroll`]).
-    pub(super) fn fitted(want: i32, room: i32, advance: i32) -> Self {
+    pub(crate) fn fitted(want: i32, room: i32, advance: i32) -> Self {
         Self {
             offset: 0,
             travel: (want - room).max(0),

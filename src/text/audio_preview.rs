@@ -47,11 +47,14 @@
 mod card;
 mod page;
 
+/// The hold a scroll keeps at either end, read by the tests that wait one out rather than by anything
+/// the app runs (see `card::NAME_HOLD`).
+#[cfg(test)]
+pub(crate) use card::NAME_HOLD;
 pub(crate) use card::{
     bar_share_at, clock, control_at, control_box, control_hit_boxes, extension_of, facts_of,
     facts_rect, facts_scroll, measure, name_of, render, size_label, AudioPreviewOptions, Card,
-    CardChrome, CardControl, Fact, FactKind, NameScroll, CARD_CONTROL_BOXES, NAME_ADVANCE_MS,
-    NAME_HOLD,
+    CardChrome, CardControl, Fact, FactKind, NameScroll, CARD_CONTROL_BOXES,
 };
 pub(crate) use page::{window_button_band, window_button_span};
 

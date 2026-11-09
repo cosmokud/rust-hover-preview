@@ -1362,13 +1362,15 @@ fn a_pointer_in_the_band_is_a_row_of_the_band() {
         Some(scroll),
         "the pointer in the band's first row is on the row the band draws first"
     );
-    let (marqueed, travel, _) =
-        pin_playlist::the_marquee_in_hand().expect("a name to carry across the row");
-    assert_eq!(
-        marqueed, scroll,
-        "and the name the hand is on is the one the tick has to carry"
+    // The name the hand is on is one the band carries: a marquee is only ever set up for a name the
+    // column has no room for, so a row that has one is a row wider than the band (see
+    // `pin_playlist::set_the_marquee`).
+    assert!(
+        pin_playlist::the_marquees_in_hand()
+            .iter()
+            .any(|(row, _)| *row == scroll),
+        "and the name the hand is on is one of the names the band carries"
     );
-    assert!(travel > 0, "and it is wider than the column it is drawn in");
     assert!(!asked(cursor), "the same row again is no change");
 
     // SAFETY: the window is the suite's own, and this is the road one is put away down.
@@ -1414,10 +1416,12 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
         Some(Some(0)),
         "the move says the hand is on the band's own first row"
     );
-    let (marqueed, travel, _) =
-        pin_playlist::the_marquee_in_hand().expect("a name to carry across the row");
-    assert_eq!(marqueed, 0, "and that is the row the name is set up for");
-    assert!(travel > 0, "and it is wider than the column it is drawn in");
+    assert!(
+        pin_playlist::the_marquees_in_hand()
+            .iter()
+            .any(|(row, offset)| *row == 0 && *offset == 0),
+        "and that is the row the name is set up for, held at its resting place"
+    );
 
     // The tick that reads the same pointer off the screen: the row is the row, so there is
     // nothing to change and the name is still the name.
@@ -1439,9 +1443,10 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
         Some(Some(0)),
         "so the row the hand is on is still the row it was"
     );
-    assert_eq!(
-        pin_playlist::the_marquee_in_hand().map(|(row, _, _)| row),
-        Some(0),
+    assert!(
+        pin_playlist::the_marquees_in_hand()
+            .iter()
+            .any(|(row, _)| *row == 0),
         "and the name the tick has to carry is still on it"
     );
 
@@ -1449,12 +1454,17 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
     // what a tick that cleared the hover would have stopped.
     std::thread::sleep(audio_preview::NAME_HOLD + std::time::Duration::from_millis(60));
     pin_playlist::the_tick_is_owed_a_repaint();
-    let (marqueed_again, _, offset) =
-        pin_playlist::the_marquee_in_hand().expect("the name still marqueed");
-    assert_eq!(marqueed_again, 0, "on the row the hand is on");
+    let offset = pin_playlist::the_marquees_in_hand()
+        .into_iter()
+        .find(|(row, _)| *row == 0)
+        .map(|(_, offset)| offset)
+        .expect("the name still marqueed on the row the hand is on");
     assert!(offset > 0, "and it has moved along it");
 
-    // A pointer that has left the window is on no row at all, so the name stops being carried.
+    // A pointer that has left the window is on no row at all — and the name it was carrying is not
+    // stopped where it stands, nor given up: it is on its way back to its resting place, and the row
+    // the pin is showing is one the band carries whatever the hand does (see
+    // `pin_playlist::set_the_marquee`).
     assert!(
         at(Some((window.0 - 10, window.1 + band_top + row))),
         "a pointer beside the window is on nothing of it"
@@ -1464,10 +1474,11 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
         Some(None),
         "the row the hand has left is no row at all"
     );
-    assert_eq!(
-        pin_playlist::the_marquee_in_hand(),
-        None,
-        "and a row no hand is on carries no name"
+    assert!(
+        pin_playlist::the_marquees_in_hand()
+            .iter()
+            .any(|(row, _)| *row == 0),
+        "and the name it left behind is still the band's to carry"
     );
 
     // SAFETY: the window is the suite's own, and this is the road one is put away down.
@@ -1528,10 +1539,12 @@ fn a_row_the_hand_is_on_is_a_row_of_the_window_at_any_scale() {
         unsafe { pin_playlist::hover(band_top + row) },
         "a row a hand has come to is a change"
     );
-    let (marqueed, travel, _) =
-        pin_playlist::the_marquee_in_hand().expect("a name to carry across the row");
-    assert_eq!(marqueed, 0, "the name is set up for the row the move named");
-    assert!(travel > 0, "and it is wider than the column it is drawn in");
+    let carried = pin_playlist::the_marquees_in_hand();
+    assert_eq!(
+        carried.iter().map(|(row, _)| *row).collect::<Vec<_>>(),
+        vec![0],
+        "the name is set up for the row the move named, at 144%"
+    );
 
     // The same pointer read off the screen, the way the tick reads it: the window's own client point
     // is that same row, so nothing of the band's changes and the name is still the name.
@@ -1554,20 +1567,130 @@ fn a_row_the_hand_is_on_is_a_row_of_the_window_at_any_scale() {
         "so the row the hand is on is still the row it was, at 144%"
     );
     assert_eq!(
-        pin_playlist::the_marquee_in_hand().map(|(row, _, _)| row),
-        Some(0),
+        pin_playlist::the_marquees_in_hand()
+            .iter()
+            .map(|(row, _)| *row)
+            .collect::<Vec<_>>(),
+        vec![0],
         "and the name the tick has to carry is still on it"
     );
 
     std::thread::sleep(audio_preview::NAME_HOLD + std::time::Duration::from_millis(60));
     pin_playlist::the_tick_is_owed_a_repaint();
-    let (marqueed_again, _, offset) =
-        pin_playlist::the_marquee_in_hand().expect("the name still marqueed");
-    assert_eq!(marqueed_again, 0, "on the row the hand is on");
+    let offset = pin_playlist::the_marquees_in_hand()
+        .into_iter()
+        .find(|(row, _)| *row == 0)
+        .map(|(_, offset)| offset)
+        .expect("the name still marqueed on the row the hand is on");
     assert!(offset > 0, "and it has moved along it");
 
     // SAFETY: the window is the suite's own, and this is the road one is put away down.
     unsafe { put_away_a_window_of_the_suite(hwnd) };
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **A name the band lets go of parks rather than snapping home.** A row the hand has left is a name
+/// on its way back to its resting place — the card's own rule for the line beside its name — so what
+/// the eye sees is the name walking back under its column rather than jumping to the front of it (see
+/// `pin_playlist::set_the_marquee` and `audio_preview::NameScroll::set_engaged`).
+///
+/// The row travelled here is one the pin is **not** showing, because a highlighted row and a playing
+/// one travel whatever the hand does: only a row the hand alone was carrying is ever let go of.
+#[test]
+fn a_name_the_band_lets_go_of_parks_before_it_stops() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of three sounds for a name that parks");
+    let sounds = [
+        folder.join("a first mixdown.mp3"),
+        folder.join("a second mixdown of a name so long that no column of any band in this suite holds the whole of it.mp3"),
+        folder.join("a third mixdown.mp3"),
+    ];
+
+    // The pin stands on the first of the three, so the row a hand comes to is neither the row the pin
+    // is showing nor one any pick has made its own.
+    let mut pin = sound_pin();
+    pin.path = sounds[0].clone();
+    pin_playlist::toggle(&pin);
+    let (band_top, _) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let row_height = pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0);
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    // The band's second row: the one name of the three the column has no room for.
+    assert!(
+        unsafe { pin_playlist::hover(band_top + row_height + row_height / 2) },
+        "a row a hand has come to is a change"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(Some(1)),
+        "the hand is on the band's second row"
+    );
+    assert_eq!(
+        pin_playlist::the_marquees_in_hand()
+            .iter()
+            .map(|(row, _)| *row)
+            .collect::<Vec<_>>(),
+        vec![1],
+        "and its name is the one name the band carries"
+    );
+
+    // A tick past the row's hold carries the name along it, so that there is somewhere to park from.
+    std::thread::sleep(audio_preview::NAME_HOLD + std::time::Duration::from_millis(60));
+    pin_playlist::the_tick_is_owed_a_repaint();
+    let carried = pin_playlist::the_marquees_in_hand()
+        .into_iter()
+        .find(|(row, _)| *row == 1)
+        .map(|(_, offset)| offset)
+        .expect("the name still carried on the row the hand is on");
+    assert!(carried > 0, "and it has moved along the row");
+
+    // The hand leaves the band, and the name it was carrying is not stopped where it stands: it is
+    // still the band's to carry, and it is on its way back to its resting place.
+    assert!(
+        unsafe { pin_playlist::hover(band_top - 1) },
+        "a hand above the band is on no row of it"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(None),
+        "so the band has no row the hand is on"
+    );
+    assert_eq!(
+        pin_playlist::the_marquees_in_hand(),
+        vec![(1, carried)],
+        "and the name it left behind is still where it stood"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    pin_playlist::the_tick_is_owed_a_repaint();
+    let homeward = pin_playlist::the_marquees_in_hand()
+        .into_iter()
+        .find(|(row, _)| *row == 1)
+        .map(|(_, offset)| offset)
+        .expect("the name is on its way home rather than given up where it stood");
+    assert!(homeward < carried, "and it has walked back towards home");
+    assert!(homeward > 0, "and it is not home yet");
+
+    // And the band is put back down, so the next test does not come up with one.
     let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
     assert!(opened.is_some(), "the pin the test stood up");
     stand_pin(previous_pin);
