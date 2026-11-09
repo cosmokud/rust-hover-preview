@@ -337,13 +337,13 @@ fn the_picked_mpv_path_round_trips_through_the_file() {
 /// build's own path is the folder of the test's rather than the machine's — a run of the app
 /// watches the machine's file every second and takes what it finds there, so a test that
 /// wrote it would change what that run had (see `ConfigFolderOfItsOwn`).
-struct ConfigFileAsItWas {
+pub(super) struct ConfigFileAsItWas {
     _folder: ConfigFolderOfItsOwn,
-    path: std::path::PathBuf,
+    pub(super) path: std::path::PathBuf,
 }
 
 impl ConfigFileAsItWas {
-    fn take() -> Self {
+    pub(super) fn take() -> Self {
         let folder = ConfigFolderOfItsOwn::take();
         let path = folder.config_file();
         Self {
@@ -810,6 +810,12 @@ fn every_key_the_file_writes_is_a_key_the_file_reads() {
             let Some(value) = value else {
                 panic!("`{key}` is written with no value at all")
             };
+
+            // A number the file carries about itself is not a setting: nothing reads it into a
+            // field, and what reads it is `migrate` on the way past (see `KEYS_NOTHING_READS`).
+            if KEYS_NOTHING_READS.contains(&key.as_str()) {
+                continue;
+            }
 
             // The keys one of these moves are the ones a word of their own vocabulary answers.
             let others = match ANOTHER_VALUE
