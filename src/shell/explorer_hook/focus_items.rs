@@ -177,6 +177,53 @@ impl FocusedItemInfo {
     }
 }
 
+/// The frame of the listing an observation of the keyboard focus was made in: the frame whose views
+/// hold the item, or nothing where nothing named one.
+///
+/// It is the frame rather than the item because what the keyboard being in a *new* listing means is a
+/// new baseline, and the item alone cannot say that: a dialog opened on a folder the user was just in
+/// shows the same first row, with the same name, in the same place, as the folder window it was opened
+/// from — so an observation of it is no change to compare against and the first ↓ pressed in it was
+/// swallowed as a baseline (see `the_focus_baseline_is_new`).
+pub(super) fn frame_of_focused_item(focused: &FocusedItemInfo) -> Option<isize> {
+    focused.root_window
+}
+
+/// Whether the item the keyboard was last observed on belongs to another listing than the listing the
+/// keyboard is in now — the dialog that has just opened, or a window switched to with `Alt`+`Tab` — and
+/// whether that means the focus baseline has to be taken again before a key pressed in it previews.
+///
+/// **The baseline is an item, and the item is a fact about one listing.** The loop records the focused
+/// item and previews the next one only where it differs, so a listing whose selection is the same item
+/// in the same place is one whose first ↓ moves that selection to an item the baseline already names —
+/// which reads as no key pressed at all. That is what a dialog opened on the last folder shows: the
+/// shell opens it with the first item selected, which in a folder the user just left is often exactly
+/// the row the folder window had focused, and `Ctrl`+`O` in a program whose own window has no item at
+/// all is the same case with no item to fall back on.
+///
+/// So the frame is tracked beside the item, and an observation made in another frame is the answer
+/// that the last baseline describes a listing the keyboard has left: the caller clears it and lets the
+/// observation act, which is the same thing it does after the mouse moves. It is deliberately about a
+/// **listing**, not about the item — a key pressed onto another row of the same listing is the change
+/// the baseline exists to catch, and an arrow that ends on a new frame is the keyboard having gone
+/// somewhere with no row under it yet.
+///
+/// Nothing is asked of the Explorer folder-change gate, of `keyboard_screen_owner`, or of
+/// `Prioritize Keyboard`: this only says the next observation should act rather than be recorded, and
+/// every one of those stays the answer it was.
+pub(super) fn the_focus_baseline_is_new(
+    baseline_frame: Option<isize>,
+    listing_frame: Option<isize>,
+) -> bool {
+    // A frame nobody could read is no news at all, on either side: the loop cannot tell a listing that
+    // moved from a read that came back with nothing, and a baseline recorded in no frame is one that
+    // describes no listing to have left.
+    match (baseline_frame, listing_frame) {
+        (Some(baseline), Some(listing)) => baseline != listing,
+        _ => false,
+    }
+}
+
 /// What tells one keyboard focus observation from the next.
 ///
 /// The name alone does not. A search whose results come from several folders can

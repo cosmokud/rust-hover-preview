@@ -385,3 +385,30 @@ fn one_place_spelled_two_ways_is_one_place() {
         location_fact_key("search-ms:query=foo")
     );
 }
+
+/// **The frame a focus observation was made in is what says the baseline is stale**, and not the item
+/// it names: a `Ctrl`+`O` opens a dialog on the folder the user was just in, with the first row
+/// selected — the same name, in the same place, as the row the folder window had focused — so the
+/// first `↓` pressed in it moved the selection to an item the baseline had already recorded, read as
+/// no key at all, and put no preview up (see `the_focus_baseline_is_new`).
+#[test]
+fn a_focus_baseline_belongs_to_the_listing_it_was_read_in() {
+    assert!(
+        the_focus_baseline_is_new(Some(10), Some(20)),
+        "a dialog opened over the folder the baseline was read in is another listing"
+    );
+    assert!(
+        !the_focus_baseline_is_new(Some(10), Some(10)),
+        "and the same frame is the same listing, which is the case the baseline exists for"
+    );
+
+    // A frame nobody could read is no news on either side: the loop cannot tell a listing that moved
+    // from a read that came back with nothing, and a baseline recorded in no frame describes no
+    // listing to have left.
+    for (baseline, listing) in [(None, Some(20)), (Some(10), None), (None, None)] {
+        assert!(
+            !the_focus_baseline_is_new(baseline, listing),
+            "{baseline:?} -> {listing:?} is not a listing left"
+        );
+    }
+}

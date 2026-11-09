@@ -119,7 +119,7 @@ fn primary_display() -> Option<RECT> {
 #[test]
 fn a_window_beside_the_one_in_front_leaves_explorer_reachable() {
     assert_eq!(
-        explorer_state_from_counts(&counts(1, 1, 1, primary_display()), false),
+        explorer_state_from_counts(&counts(1, 1, 1, primary_display()), false, false),
         ExplorerState::VisibleNotFocused
     );
 }
@@ -130,7 +130,7 @@ fn a_window_beside_the_one_in_front_leaves_explorer_reachable() {
 #[test]
 fn a_pin_over_a_reachable_listening_is_the_active_arrangement() {
     assert_eq!(
-        explorer_state_from_counts(&counts(1, 1, 1, None), true),
+        explorer_state_from_counts(&counts(1, 1, 1, None), true, false),
         ExplorerState::ActiveFocus,
         "a pin in front of a listing is that listing in use"
     );
@@ -140,7 +140,10 @@ fn a_pin_over_a_reachable_listening_is_the_active_arrangement() {
     // are the same with and without one.
     let active = explorer_pace(ExplorerState::ActiveFocus, 15);
     assert_eq!(
-        explorer_pace(explorer_state_from_counts(&counts(1, 1, 1, None), true), 15),
+        explorer_pace(
+            explorer_state_from_counts(&counts(1, 1, 1, None), true, false),
+            15
+        ),
         active,
         "a pinned tick is asked on the tick's own clock"
     );
@@ -151,11 +154,93 @@ fn a_pin_over_a_reachable_listening_is_the_active_arrangement() {
         counts(2, 2, 0, primary_display()),
     ] {
         assert_eq!(
-            explorer_state_from_counts(&counts, true),
-            explorer_state_from_counts(&counts, false),
+            explorer_state_from_counts(&counts, true, false),
+            explorer_state_from_counts(&counts, false, false),
             "minimized, or behind a window that covers it, a pin changes nothing"
         );
     }
+}
+
+/// **The table a Common Item Dialog walks**, which is the whole of what the third argument of
+/// `explorer_state_from_counts` is: a dialog in front is a listing in use whichever of the two holds
+/// the keyboard, and every other arrangement is the one it was.
+///
+/// The dialog answers `ActiveFocus` with no folder window open at all, which is the row the fix is for:
+/// a `#32770` is no Explorer window, so the counts read `NoExplorerWindows` and the loop hid the
+/// preview and never asked where the pointer was — a hover of a file in Chrome's or Notepad's `Ctrl`+`O`
+/// could not happen at all, and the file the user was looking at was one no preview was ever put up for.
+///
+/// A foreground that is neither — Chrome's own window, a message box, a program's settings page —
+/// keeps the rows it had, and there is nothing to add here: it is not a window this loop can read a
+/// file in, and where an Explorer window is reachable beside it the pointer may still cross to that
+/// window, so the row stays the one that asks where the pointer is rather than dropping to the deep
+/// pace. What cannot happen is a dialog reaching `HiddenByForeground`: a listing covers nothing, so
+/// `foreground_cover_rect` answers `None` for one (see `a_foreground_of_this_class_covers_what_is_behind`).
+#[test]
+fn a_dialog_in_front_is_the_active_arrangement() {
+    // A dialog in front, no pin, no folder window open: the row the pointer has to be read on, and the
+    // case the `#32770` was invisible to.
+    assert_eq!(
+        explorer_state_from_counts(&counts(0, 0, 0, None), false, true),
+        ExplorerState::ActiveFocus,
+        "a dialog is a listing with or without a folder window behind it"
+    );
+
+    // And with a pin up, which is the arrangement a pick in the dialog leaves: the pin is over a listing
+    // the user is working in, exactly as it is over a folder view.
+    assert_eq!(
+        explorer_state_from_counts(&counts(0, 0, 0, None), true, true),
+        ExplorerState::ActiveFocus,
+        "a pin over a dialog is the pin over a listing it followed"
+    );
+
+    // A dialog in front of a folder window which a maximized window would otherwise have been read as
+    // covered: the dialog is what the user is in, and that is the row, not the covered one.
+    assert_eq!(
+        explorer_state_from_counts(&counts(2, 2, 0, None), false, true),
+        ExplorerState::ActiveFocus,
+        "no window covers anything while the listing itself is in front"
+    );
+
+    // Every row a foreground that is no listing can reach is unchanged: the two answered before the
+    // counts, the hidden row, and the two that ask where the pointer is.
+    for (counts, expected) in [
+        (counts(0, 0, 0, None), ExplorerState::NoExplorerWindows),
+        (
+            counts(2, 0, 0, primary_display()),
+            ExplorerState::AllMinimized,
+        ),
+        (
+            counts(2, 2, 0, primary_display()),
+            ExplorerState::HiddenByForeground,
+        ),
+        (
+            counts(1, 1, 1, primary_display()),
+            ExplorerState::VisibleNotFocused,
+        ),
+        (
+            counts(1, 1, 0, the_desktop_in_front()),
+            ExplorerState::HiddenByForeground,
+        ),
+    ] {
+        assert_eq!(
+            explorer_state_from_counts(&counts, false, false),
+            expected,
+            "a window that is no listing leaves the rows as they were"
+        );
+    }
+
+    // And the pace each row is answered with, read through the same table: a dialog's row is the tick's
+    // own, which is what makes the hover machinery run at all while one is in front.
+    let active = explorer_pace(ExplorerState::ActiveFocus, 15);
+    assert_eq!(
+        explorer_pace(
+            explorer_state_from_counts(&counts(0, 0, 0, None), false, true),
+            15
+        ),
+        active,
+        "a dialog is paced like a folder window, and not like a program nobody is in"
+    );
 }
 
 /// Every window Explorer has showing behind the window in front is the one case
@@ -163,7 +248,7 @@ fn a_pin_over_a_reachable_listening_is_the_active_arrangement() {
 #[test]
 fn every_window_behind_the_one_in_front_is_hidden() {
     assert_eq!(
-        explorer_state_from_counts(&counts(2, 2, 0, primary_display()), false),
+        explorer_state_from_counts(&counts(2, 2, 0, primary_display()), false, false),
         ExplorerState::HiddenByForeground
     );
 }
@@ -205,7 +290,7 @@ fn the_desktop_in_front_hides_no_listing() {
     // And what the gate does with the region: the desktop's own rectangle, read as a window's, is the
     // answer the state went hidden on.
     assert_eq!(
-        explorer_state_from_counts(&counts(1, 1, 0, the_desktop_in_front()), false),
+        explorer_state_from_counts(&counts(1, 1, 0, the_desktop_in_front()), false, false),
         ExplorerState::HiddenByForeground,
         "a region over every listing is hidden, which is what the desktop's box must never be read as"
     );
@@ -216,7 +301,7 @@ fn the_desktop_in_front_hides_no_listing() {
 #[test]
 fn a_window_that_hides_nothing_leaves_explorer_visible() {
     assert_eq!(
-        explorer_state_from_counts(&counts(1, 1, 1, None), false),
+        explorer_state_from_counts(&counts(1, 1, 1, None), false, false),
         ExplorerState::VisibleNotFocused
     );
 }
@@ -226,7 +311,7 @@ fn a_window_that_hides_nothing_leaves_explorer_visible() {
 #[test]
 fn no_window_is_answered_before_the_window_in_front() {
     assert_eq!(
-        explorer_state_from_counts(&counts(0, 0, 0, primary_display()), false),
+        explorer_state_from_counts(&counts(0, 0, 0, primary_display()), false, false),
         ExplorerState::NoExplorerWindows
     );
 }
@@ -235,7 +320,7 @@ fn no_window_is_answered_before_the_window_in_front() {
 #[test]
 fn every_window_minimized_is_answered_as_minimized() {
     assert_eq!(
-        explorer_state_from_counts(&counts(2, 0, 0, primary_display()), false),
+        explorer_state_from_counts(&counts(2, 0, 0, primary_display()), false, false),
         ExplorerState::AllMinimized
     );
 }

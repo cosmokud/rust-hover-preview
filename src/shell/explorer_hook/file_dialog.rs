@@ -82,7 +82,21 @@ pub(super) fn dialog_folder(resolver: &mut ItemResolver, frame: isize) -> Option
 
 /// The folder one dialog is showing, read the way `dialog_folder` describes.
 fn read_dialog_folder(resolver: &ItemResolver, frame: HWND) -> Option<PathBuf> {
-    folder_from_the_name_edit(frame).or_else(|| breadcrumb_folder(resolver, frame))
+    let answer = folder_from_the_name_edit(frame)
+        .map(|folder| ("the name field", folder))
+        .or_else(|| breadcrumb_folder(resolver, frame).map(|folder| ("the breadcrumb", folder)));
+
+    // Which witness answered, because the two are one question asked of two places and a dialog
+    // whose folder came from the wrong one resolves a hover of a name nobody pointed at.
+    note_pin_click!(
+        "dialog folder  witness {}",
+        answer
+            .as_ref()
+            .map(|(witness, folder)| format!("{witness}  in {}", folder.display()))
+            .unwrap_or_else(|| "none".to_string()),
+    );
+
+    answer.map(|(_, folder)| folder)
 }
 
 /// The folder the dialog's name field names, where it names one.
@@ -223,7 +237,22 @@ pub(super) fn dialog_item_path(
         return None;
     }
 
-    item_path_in_folder(&dialog_folder(resolver, window.frame)?, name)
+    let folder = dialog_folder(resolver, window.frame)?;
+    let answer = item_path_in_folder(&folder, name);
+
+    // The name the dialog shows against the file it was vouched for as: an unanswered row is the
+    // ordinary case (a folder, a name with no extension that belongs to no file) and reads here as
+    // `-`, so a run that hovers nothing says which row it was asked about.
+    note_pin_click!(
+        "dialog item  {}  in {}  -> {}",
+        name,
+        folder.display(),
+        answer
+            .as_deref()
+            .map_or_else(|| "-".to_string(), |path| path.display().to_string()),
+    );
+
+    answer
 }
 
 /// The file a name the dialog shows stands for in the folder it is showing.

@@ -504,7 +504,7 @@ pub(super) unsafe fn settle_the_pin_after_the_setting_moved() {
 
     let front = unsafe { GetForegroundWindow() };
     let the_front_is_where_the_pin_stands = front == hwnd
-        || crate::shell::window_classes::listing_class_matches(front)
+        || crate::shell::explorer_hook::the_front_is_a_listing()
         || unsafe { foreground_is_the_desktop(front) };
     let stands_over_the_front = unsafe { pin_stands_over(hwnd, front) };
     note_pin_trace!(
@@ -1765,7 +1765,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // that was off the screen only (see `take_the_band_and_give_it_back`).
     let the_front_is_the_pin_or_a_listing = {
         let front = unsafe { GetForegroundWindow() };
-        front == hwnd || crate::shell::window_classes::listing_class_matches(front)
+        front == hwnd || crate::shell::explorer_hook::the_front_is_a_listing()
     };
     if !pin_always_on_top() && (!on_the_screen || the_front_is_the_pin_or_a_listing) {
         // **A pin that is a window is put in front the one way Windows lets a process without the
@@ -2608,6 +2608,9 @@ fn where_the_band_goes_back(foreground: HWND, listing: HWND) -> HWND {
     // road has no press at all and so never lowered the pin; the mouse road must land in the same
     // place, which is the front of the band, wherever the user is still in a listing or in the pin
     // (see `keep_pin_at_the_front`).
+    // Asked of the class rather than of `the_front_is_a_listing` on purpose: what this needs is the
+    // foreground as a *place*, and a dialog the user is in is that place — it is no Explorer window and
+    // no window of the pin's, and the band has nowhere else to go either way.
     let nowhere_else_to_go = listing.is_invalid()
         || foreground == listing
         || foreground == pinned_window()
