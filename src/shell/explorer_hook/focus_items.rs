@@ -97,7 +97,8 @@ pub(super) fn is_cursor_over_explorer_full(window: HWND) -> bool {
     false
 }
 
-/// Whether a window is one of Explorer's folder windows.
+/// Whether a window is a listing this hook answers for: one of Explorer's folder windows, or a Common
+/// Item Dialog — and never a window of the rest of the shell.
 ///
 /// The class is the whole of the test, and only the class: a folder view is drawn in the
 /// browser frame, and this is the same answer the walk over Explorer's windows is made
@@ -110,11 +111,14 @@ pub(super) fn is_cursor_over_explorer_full(window: HWND) -> bool {
 /// was minimized were never asked for, and a preview that was already up was never taken
 /// down.
 ///
-/// The ask is one class lookup, kept for the window (see `EXPLORER_WINDOW_CACHE`). The
-/// process behind the window used to be read as well, for any window that was not one of
-/// the two classes — an `OpenProcess` and an image name for every window the pointer
-/// walked over — and it answered yes for every piece of the shell that is explorer.exe,
-/// which is the answer this test must never give.
+/// The ask is one class lookup plus, for a `#32770`, the two child lookups that say it is a file dialog
+/// rather than a message box, kept for the window (see `EXPLORER_WINDOW_CACHE`). A dialog is a listing
+/// here and never an Explorer window: the keyboard it holds is on an item the shell draws for its own
+/// list (see `file_dialog`), and a pin taken in a `Ctrl`+`O` is followed the same way a pin taken in a
+/// folder view is. The process behind the window used to be read as well, for any window that was not
+/// one of the two classes — an `OpenProcess` and an image name for every window the pointer walked
+/// over — and it answered yes for every piece of the shell that is explorer.exe, which is the answer
+/// this test must never give.
 pub(super) fn is_explorer_window(hwnd: HWND) -> bool {
     let hwnd_key = hwnd.0 as isize;
     if hwnd_key == 0 {
@@ -129,7 +133,7 @@ pub(super) fn is_explorer_window(hwnd: HWND) -> bool {
         }
     }
 
-    let is_explorer = crate::shell::window_classes::explorer_class_matches(hwnd);
+    let is_explorer = crate::shell::window_classes::listing_class_matches(hwnd);
 
     if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
         if cache.len() >= 512 {
@@ -162,9 +166,13 @@ impl FocusedItemInfo {
     /// by what they answer, which is how the keyboard path resolved its item before the
     /// window the item is drawn in was read at all.
     fn item_window(&self) -> Option<ItemWindow> {
+        let frame = self.root_window?;
         Some(ItemWindow {
-            frame: self.root_window?,
+            frame,
             drawn_in: self.item.native_window,
+            dialog: crate::shell::window_classes::file_dialog_class_matches(HWND(
+                frame as *mut core::ffi::c_void,
+            )),
         })
     }
 }

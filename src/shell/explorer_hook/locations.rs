@@ -316,6 +316,29 @@ pub(super) fn anchored_view_context(
     // Read before the frame's views are, because reading them borrows the resolver: what
     // the item was last read inside of this frame is what a probe that is inside none of them
     // is answered by, and it belongs to the set the borrow is about to be taken of.
+    //
+    // **A dialog is answered before the views are made, because it has none.** It registers
+    // no Shell window, so the walk below finds nothing for it and would answer nothing about
+    // a place the dialog goes on showing — and the place is what arms the folder-change gate, so
+    // a folder picked inside the dialog would never be read as one (see `file_dialog::dialog_folder`).
+    if window.dialog {
+        return Some(ActiveShellViewContext {
+            // No view drew it: a dialog is not a Shell view, and answering with a handle here
+            // would name a place the tick could keep after the dialog had moved on.
+            shell_view_hwnd: 0,
+            location_url: None,
+            // **The folder is read whether or not the caller asked for it**, and a dialog is the
+            // one place that is true of: an Explorer view is described by its URL and pays five
+            // crossings for its folder, while a dialog answers no URL and no view, so the folder
+            // is the only fact it has — and a place that answers no fact is never a change, which
+            // would leave a folder picked inside the dialog unseen (see `HoverLocation`). What
+            // it costs on the look that does not ask is the memo, which is already being read for
+            // the item path the same tick asks for (see `file_dialog::dialog_folder`).
+            folder_path: dialog_folder(resolver, window.frame)
+                .map(|folder| folder.to_string_lossy().to_string()),
+        });
+    }
+
     let remembered = resolver.remembered_view(window.frame);
     let registrations = shell_window_count(resolver);
 
