@@ -14,6 +14,8 @@ use directories::BaseDirs;
 use crate::config::theme_files;
 use crate::formats::lists;
 
+use super::migrate;
+
 use super::app_config::AppConfig;
 use super::defaults::{sanitize_volume, CONFIG_SECTION, DEFAULT_VIDEO_ENGINE};
 
@@ -24,11 +26,40 @@ use super::defaults::{sanitize_volume, CONFIG_SECTION, DEFAULT_VIDEO_ENGINE};
 /// (see `AppConfig::reload_from_disk_keeping_our_own_levels`).
 static LAST_WRITTEN_LEVELS: std::sync::Mutex<Option<(u32, u32)>> = std::sync::Mutex::new(None);
 
-/// The levels of the last successful `AppConfig::save`, or `None` before one.
+/// The levels the last successful `AppConfig::save` put there, or `None` before one.
 pub(crate) fn last_written_levels() -> Option<(u32, u32)> {
     *LAST_WRITTEN_LEVELS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Whether the file on disk is one a build newer than this one wrote, and so one this process may
+/// read and must not write.
+///
+/// It is asked of the file rather than remembered from the read that read it, and that is the whole
+/// of why it is a function read here: a flag kept from the start is a flag that a later read of a
+/// different file cannot clear, and the file is one file that somebody's other build may have
+/// written over between this process's first read and its next write. One question, asked at the
+/// one door every write goes through, is the answer that cannot go stale.
+///
+/// The question costs a read of the file's own text, which is the expensive half of what `save` is
+/// about to do anyway — and `save` is not a thing that happens a hundred times a second: it is a
+/// tray row, a reset, a first run and a start. A process that has to ask whether it may write is
+/// not one that needs the read to be cheap.
+pub(crate) fn file_is_ahead_of_us() -> bool {
+    let Some(path) = AppConfig::config_path() else {
+        return false;
+    };
+    let Ok(text) = fs::read_to_string(&path) else {
+        // A file that cannot be read is one nothing is learned from here, and it is `read_ini`
+        // that decides what such a file means. What it is not is a file a newer build wrote.
+        return false;
+    };
+    let Some(ini) = read_ini(&text) else {
+        return false;
+    };
+
+    migrate::Stated::of(&ini).is_ahead_of_this_build()
 }
 
 /// The headings the settings section is written under, in the order the tray lists its
@@ -204,6 +235,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "Advanced",
         &[
             "audio_mark_offset_y",
+            "config_version",
             "beat_hz",
             "hdr_exposure",
             "hdr_tone_map",
@@ -215,6 +247,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "text_scroll_far_edge_grace_pixels",
             "ttc_face",
             "webp_playback_fps",
+            "min_reader",
         ],
     ),
 ];
@@ -566,7 +599,38 @@ impl AppConfig {
                 if let Some(mut ini) = read_ini(&text) {
                     let old_headings = headings_are_old(&text);
 
-                    let repaired = lists::repair_older_lists(&mut ini) || old_headings;
+                    // The file's own numbers first: a shape older than this build's is read
+                    // through the steps between the two, and one below the cut is given the
+                    // recommended settings whole rather than a key at a time (see `migrate`).
+                    let stated = migrate::Stated::of(&ini);
+                    let mut repaired = old_headings;
+                    let mut ahead_of_us = false;
+
+                    match migrate::apply_pending(&mut ini, stated) {
+                        Ok(bumped) => {
+                            // What the steps did is said rather than left to be noticed: a setting
+                            // that moves between one start and the next with nothing said about it
+                            // reads as the app forgetting what a person chose.
+                            if let Some(says) = bumped.says_itself() {
+                                eprintln!("config.ini: {says}");
+                            }
+                            repaired |=
+                                bumped.touched_anything() || lists::repair_older_lists(&mut ini);
+                        }
+                        Err(ahead) => {
+                            // A shape newer than this build is one whose steps this build has not
+                            // got, so none of them is run and no repair is applied: half of a file
+                            // read as a configuration of this build is a configuration that
+                            // disagrees with the file. What is *not* refused is reading it — the
+                            // file says what the app uses for as long as this process lives, and a
+                            // process that used the defaults instead is one where every setting
+                            // silently reverted. What it does not do is write, which is the half
+                            // that cannot be taken back (see `file_is_ahead_of_us`).
+                            eprintln!("config.ini: {}", ahead.says_itself());
+                            ahead_of_us = stated.is_ahead_of_this_build();
+                        }
+                    }
+
                     config.apply_ini(&ini);
 
                     // An engine this machine has not got is put back to `Best` at a start: the
@@ -582,7 +646,10 @@ impl AppConfig {
                     // reads it back as — which is every value the app could not read at all —
                     // and any key that is not one the app writes, which is where a name this
                     // app no longer uses goes.
-                    if repaired || config.differs(&ini) {
+                    // A file a newer build wrote is not written, whatever else the read found: the
+                    // settings this build holds are its own reading of a shape it has no name for,
+                    // and `save` answers that itself (see `file_is_ahead_of_us`).
+                    if !ahead_of_us && (repaired || config.differs(&ini)) {
                         config.save();
                     }
                 }
@@ -634,11 +701,30 @@ impl AppConfig {
         if let Some(path) = Self::config_path() {
             if let Ok(text) = fs::read_to_string(&path) {
                 if let Some(mut ini) = read_ini(&text) {
+                    // The numbers are the same question here as at a start, and the answer is
+                    // taken the same way: what a shape older than this one says is brought up in
+                    // what the app uses, and a file newer than this build is not read at all — the
+                    // file is the user's, and it is theirs in a shape this build does not write.
+                    let stated = migrate::Stated::of(&ini);
+                    let ahead_of_us = match migrate::apply_pending(&mut ini, stated) {
+                        Ok(_) => false,
+                        Err(ahead) => {
+                            // The same answer a start gives, and for the same reason: the file is
+                            // read, nothing is repaired, nothing is written, and what it says is
+                            // what the app uses until the process ends (see `file_is_ahead_of_us`).
+                            eprintln!("config.ini: {}", ahead.says_itself());
+                            stated.is_ahead_of_this_build()
+                        }
+                    };
+
                     // Read through the repairs rather than writing them back: a list of this
-                    // app's own from before it grew, or a file an older build grouped the way
-                    // it grouped them, is what the app uses from here on, and the file keeps
-                    // what it had until a start writes it.
-                    lists::repair_older_lists(&mut ini);
+                    // app's own from before it grew, a setting a build before this one named
+                    // differently, or a file an older build grouped the way it grouped them, is
+                    // what the app uses from here on, and the file keeps what it had until a start
+                    // writes it.
+                    if !ahead_of_us {
+                        lists::repair_older_lists(&mut ini);
+                    }
                     self.apply_ini(&ini);
 
                     // The engine repair a start puts the file through, for the same reason an edit
@@ -685,6 +771,16 @@ impl AppConfig {
     /// setting it does not find in it is a setting it writes the default back over (see
     /// `read_ini`).
     pub fn save(&self) {
+        // A file a newer build wrote is not written by this one, whatever asked for it: the settings
+        // this process holds are its own reading of a shape it has no name for, and a write here
+        // would put them over what the newer build left, with nothing said about it. The guard is at
+        // this door rather than at each caller because `save` is the one door every write goes
+        // through — a tray row, a reset, a first run and a start all end here (see
+        // `file_is_ahead_of_us`).
+        if file_is_ahead_of_us() {
+            return;
+        }
+
         if let Some(path) = Self::config_path() {
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);

@@ -3,6 +3,9 @@ use super::*;
 /// A file as the app reads one: what it has wrong or missing is put right first, and then
 /// what the configuration reads is what the file says.
 fn read_file(ini: &mut Ini) -> AppConfig {
+    let stated = migrate::Stated::of(ini);
+    let _ = migrate::apply_pending(ini, stated);
+
     lists::repair_older_lists(ini);
 
     let mut config = AppConfig::default();
@@ -43,6 +46,7 @@ fn written_file_before_this_build(new_sections: &[&str]) -> Ini {
 }
 
 mod extension_lists;
+mod migration;
 mod persistence;
 mod scales;
 mod settings;

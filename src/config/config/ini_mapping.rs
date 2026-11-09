@@ -18,6 +18,7 @@ use super::defaults::{
     sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
     sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
 };
+use super::migrate;
 use super::setting_types::{
     sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background,
     sanitize_zoom_background, AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine,
@@ -34,6 +35,24 @@ impl AppConfig {
     /// why it is a method of its own rather than the body of `save`.
     pub(super) fn to_ini(&self) -> Ini {
         let mut ini = Ini::new();
+        // The two numbers the file carries about itself, before the settings they are about: the
+        // shape it is in, and the oldest build that may write it (see `migrate`). A file of this
+        // build's own says the newest shape and the reader of now, which is what tells a build
+        // older than this one to read the file and leave it alone.
+        //
+        // Neither is a setting, and `apply_ini` reads no value of either into a field: what they
+        // say is a fact about the file rather than something the app holds (`KEYS_NOTHING_READS`
+        // is where the test that holds every written key to a setting it moves is told so).
+        ini.set(
+            CONFIG_SECTION,
+            migrate::CURRENT_VERSION_KEY,
+            Some(migrate::CURRENT_VERSION.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            migrate::MIN_READER_KEY,
+            Some(migrate::SELF_MIN_READER.to_string()),
+        );
         ini.set(
             CONFIG_SECTION,
             "run_at_startup",
@@ -1288,6 +1307,16 @@ impl AppConfig {
         lists::read_all(ini, self);
     }
 }
+
+/// The keys this app writes into the file that no setting is read out of.
+///
+/// Each is a fact about the file itself rather than something the app holds: the shape it is in
+/// and the oldest build that may write it (see `migrate`). `to_ini` writes them, `save` puts them
+/// on disk, and what reads them is `migrate` on the way past — never `apply_ini`, which is the read
+/// a test holds every other written key to.
+#[cfg(test)]
+pub(crate) const KEYS_NOTHING_READS: &[&str] =
+    &[migrate::CURRENT_VERSION_KEY, migrate::MIN_READER_KEY];
 
 /// The idle time an engine is read as, from the two keys a build before this one wrote for it.
 ///
