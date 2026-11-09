@@ -4,14 +4,14 @@
 ![Windows](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or press`Space`to open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`.
+Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. Hover over a file in File Explorer for an instant preview, or press `Space` to open a pinned preview window. Works with keyboard navigation, and customizes easily via the tray icon or a simple `config.ini`.
 
 [Showcase.webm](https://github.com/user-attachments/assets/33ee1f35-d399-4226-8847-5bd50f867ebb)
 
 ## Highlights
 
 - Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
-- Press the middle mouse button or `Space` (or your own `pin_key`) and a preview becomes a window of its own — captioned, movable, resizable, and there until you close it, always on top unless `Pin Mode → Always On Top` is turned off. While a pin holds the focus, `Win`+`Down` minimizes it and `Win`+`Shift`+`Left`/`Right` carries it to the display on that side.
+- Press the middle mouse button or `Space` (customizable) and a preview becomes a window of its own — captioned, movable, resizable, and there until you close it, always on top by default.
 - Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
 - Granular display scaling: Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.
 - Tray menu and hand-editable `config.ini`; DPI aware, single-instance, sleep/resume resilient, and light on idle CPU.
