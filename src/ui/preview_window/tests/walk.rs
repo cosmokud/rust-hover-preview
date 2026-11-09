@@ -71,6 +71,7 @@ fn a_walk_steps_through_the_playlist_and_round_again() {
         order: list.clone(),
         missed: 0,
         shuffle: false,
+        progress: 0,
         anchor: None,
     };
 
@@ -114,6 +115,7 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
         order: vec![folder.join("a.png"), folder.join("b.png")],
         missed: 0,
         shuffle: false,
+        progress: 0,
         anchor: None,
     };
 
@@ -405,6 +407,7 @@ fn a_playlist_of_only_the_pinned_file_has_nowhere_to_shuffle() {
         order: vec![only.clone()],
         missed: 0,
         shuffle: true,
+        progress: 0,
         anchor: None,
     };
     assert!(
@@ -751,6 +754,7 @@ fn a_walk_the_planner_answers_carries_the_list_it_walked() {
         order: list.clone(),
         missed: 0,
         shuffle: false,
+        progress: 0,
         anchor: None,
     };
 
@@ -1012,6 +1016,7 @@ fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
         order: vec![at.clone(), folder.join("a.mp3"), folder.join("c.mp3")],
         missed: 0,
         shuffle: true,
+        progress: 0,
         anchor: None,
     };
 
@@ -1361,6 +1366,7 @@ fn a_file_that_could_not_be_shown_is_stepped_over_onto_the_next_file() {
         order: sounds.clone(),
         missed: 0,
         shuffle: false,
+        progress: 0,
         anchor: None,
     };
 
@@ -1419,6 +1425,7 @@ fn a_press_asks_with_the_walk_the_pin_is_standing_on() {
         order: vec![folder.join("a.mp3"), folder.join("b.mp3")],
         missed: 0,
         shuffle: true,
+        progress: 0,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     };
     stand_pin_walk(Some(held.clone()));
@@ -1492,6 +1499,7 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
         order: sounds.clone(),
         missed: 0,
         shuffle: true,
+        progress: 0,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     }));
 
@@ -1504,6 +1512,7 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
         order: vec![sounds[0].clone(), sounds[1].clone(), sounds[2].clone()],
         missed: 0,
         shuffle: true,
+        progress: 0,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     });
 
@@ -1764,6 +1773,7 @@ fn a_pick_retried_after_its_box_lands_carries_the_parked_walk() {
             order: order.clone(),
             missed: 0,
             shuffle: true,
+            progress: 0,
             anchor: None,
         })
     };
@@ -1857,6 +1867,7 @@ fn installing_a_pick_in_the_walks_folder_keeps_the_playlist() {
             order: order.clone(),
             missed: 0,
             shuffle: true,
+            progress: 0,
             anchor: None,
         })
     };
@@ -2054,6 +2065,7 @@ fn a_pin_taken_up_again_on_its_own_file_keeps_the_walk() {
         order: order.clone(),
         missed: 0,
         shuffle: true,
+        progress: 0,
         anchor: Some(crate::formats::routing::NavCategory::Audio),
     };
 
@@ -2254,4 +2266,364 @@ fn a_shuffled_playlist_takes_new_files_on_the_end_and_drops_deleted_ones() {
          deletions gone: {:?}",
         linear.order
     );
+}
+
+/// A playlist is built around the file on the screen: that file is on it, once, on the slot the
+/// walk stands on — so **Next** steps from it and **Previous** comes back to it, rather than
+/// stepping from the top of the folder because the file is not on its own playlist at all.
+///
+/// It holds for the three kinds that can shuffle, on both roads a playlist is made by: the one
+/// spawned when the pin is triggered, and the one a press carries on across a session whose own
+/// `at` has moved on to a file the pin has not been shown yet.
+#[test]
+fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
+    let _every_file = WalkEveryFile::set();
+    let folder = sounded_folder("shuffle-around");
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_nav_audio = PinNavFileTypes::Category;
+    config.pin_nav_image = PinNavFileTypes::Category;
+    config.pin_nav_video = PinNavFileTypes::Category;
+    config.pin_mode_audio_shuffle = true;
+    config.pin_mode_image_shuffle = true;
+    config.pin_mode_video_shuffle = true;
+    std::fs::write(folder.join("a.mp4"), vec![0u8; 8]).expect("a file a test can write");
+    std::fs::write(folder.join("b.mp4"), vec![0u8; 8]).expect("a file a test can write");
+
+    let pool_of = |anchor: crate::formats::routing::NavCategory, config: &AppConfig| {
+        let claims: &crate::formats::lists::List = match anchor {
+            crate::formats::routing::NavCategory::Audio => &crate::formats::lists::AUDIO,
+            crate::formats::routing::NavCategory::Video => &crate::formats::lists::VIDEO,
+            _ => &crate::formats::lists::IMAGE,
+        };
+        pin_navigation::list_for(&folder.join("a.png"), Some(anchor), config, false)
+            .expect("a folder a test can read")
+            .into_iter()
+            .filter(|path| claims.claims(path, config))
+            .collect::<Vec<PathBuf>>()
+    };
+
+    for (anchor, showing) in [
+        (crate::formats::routing::NavCategory::Audio, "b.mp3"),
+        (crate::formats::routing::NavCategory::Images, "b.png"),
+        (crate::formats::routing::NavCategory::Video, "a.mp4"),
+    ] {
+        let at = folder.join(showing);
+        let pool = pool_of(anchor, &config);
+        assert!(pool.len() >= 2, "a pool of {showing} and one beside it");
+
+        // The playlist the trigger spawns, and the step the first **Next** takes on it.
+        let answer = answer_pin_job(&PinJob::Walk {
+            at: at.clone(),
+            step: 1,
+            anchor: Some(anchor),
+            config: Box::new(config.clone()),
+            session: None,
+        });
+        let Some(PinPlanned::Walk(first)) = answer else {
+            panic!("a walk is always answered");
+        };
+        assert!(first.shuffle, "{showing}: the pin's shuffle is on");
+        assert_eq!(
+            first.order.first(),
+            Some(&at),
+            "{showing}: the spawned playlist starts on the file the pin is showing"
+        );
+        assert_eq!(
+            first
+                .order
+                .iter()
+                .filter(|file| pin_navigation::same_file(file, &at))
+                .count(),
+            1,
+            "{showing}: and holds it once, so only one slot is where the user was"
+        );
+        let landed = first.at.clone();
+        assert!(!pin_navigation::same_file(&landed, &at));
+
+        // And **Previous** from the file it landed on comes back to the file the pin was
+        // triggered on — a step back is the previous file of the order, and that file is on it.
+        let answer = answer_pin_job(&PinJob::Walk {
+            at: landed.clone(),
+            step: -1,
+            anchor: first.anchor,
+            config: Box::new(config.clone()),
+            session: Some(Box::new(first.clone())),
+        });
+        let Some(PinPlanned::Walk(back)) = answer else {
+            panic!("a walk is always answered");
+        };
+        assert_eq!(
+            back.at, at,
+            "{showing}: a step back lands on the file the walk came from"
+        );
+    }
+
+    // The other road: a session whose `at` has moved on — the step the last press took, still
+    // being read, while the pin is asked about the file it is showing now. The playlist it is
+    // carried on is one the file on screen can be found on, and the file that was stepped to is
+    // still on it where the step put it.
+    let showing = folder.join("a.mp3");
+    let stepped_to = folder.join("c.mp3");
+    let session = PinStep {
+        at: stepped_to.clone(),
+        from: showing.clone(),
+        step: 1,
+        order: vec![showing.clone(), stepped_to.clone(), folder.join("b.mp3")],
+        missed: 0,
+        shuffle: true,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    };
+    let answer = answer_pin_job(&PinJob::Walk {
+        at: showing.clone(),
+        step: -1,
+        anchor: session.anchor,
+        config: Box::new(config.clone()),
+        session: Some(Box::new(session)),
+    });
+    let Some(PinPlanned::Walk(back)) = answer else {
+        panic!("a walk is always answered");
+    };
+    assert_eq!(
+        back.order,
+        vec![showing.clone(), stepped_to.clone(), folder.join("b.mp3")],
+        "a playlist whose own head is the file on screen is carried on as it is"
+    );
+    assert_eq!(
+        back.at,
+        folder.join("b.mp3"),
+        "and a step back from the file the pin is showing is the file before it on the ring"
+    );
+
+    // And the road the report is about: a playlist carried onto a file it does not hold at all —
+    // a head spawned on another file of the folder, which is what a session the pin was carrying
+    // is when the pin was taken up on a file the earlier playlist was never built around. The file
+    // on screen is put on it where the walk stands, so **Previous** from the file the next press
+    // lands on comes back to it rather than to the last file of an order it was never walking.
+    let showing = folder.join("a.mp3");
+    let elsewhere = folder.join("b.mp3");
+    let session = PinStep {
+        at: showing.clone(),
+        from: showing.clone(),
+        step: 1,
+        order: vec![elsewhere.clone(), folder.join("c.mp3")],
+        missed: 0,
+        shuffle: true,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    };
+    let answer = answer_pin_job(&PinJob::Walk {
+        at: showing.clone(),
+        step: 1,
+        anchor: session.anchor,
+        config: Box::new(config.clone()),
+        session: Some(Box::new(session)),
+    });
+    let Some(PinPlanned::Walk(first)) = answer else {
+        panic!("a walk is always answered");
+    };
+    assert!(
+        first
+            .order
+            .iter()
+            .filter(|file| pin_navigation::same_file(file, &showing))
+            .count()
+            == 1,
+        "the file on screen is on the carried playlist once, so one step back reaches it"
+    );
+    let landed = first.at.clone();
+    let answer = answer_pin_job(&PinJob::Walk {
+        at: landed.clone(),
+        step: -1,
+        anchor: first.anchor,
+        config: Box::new(config.clone()),
+        session: Some(Box::new(first)),
+    });
+    let Some(PinPlanned::Walk(back)) = answer else {
+        panic!("a walk is always answered");
+    };
+    assert_eq!(
+        back.at, showing,
+        "so a step back lands on the file the walk came from"
+    );
+
+    // And one whose head is the file that was stepped to: the file on screen takes the slot the
+    // walk stands on, and every other file stays where a step already taken put it.
+    let session = PinStep {
+        at: stepped_to.clone(),
+        from: showing.clone(),
+        step: 1,
+        order: vec![stepped_to.clone(), folder.join("b.mp3"), showing.clone()],
+        missed: 0,
+        shuffle: true,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    };
+    let answer = answer_pin_job(&PinJob::Walk {
+        at: stepped_to.clone(),
+        step: 0,
+        anchor: session.anchor,
+        config: Box::new(config),
+        session: Some(Box::new(session)),
+    });
+    let Some(PinPlanned::Walk(held)) = answer else {
+        panic!("a walk is always answered");
+    };
+    assert_eq!(
+        held.order,
+        vec![stepped_to.clone(), folder.join("b.mp3"), showing.clone()],
+        "the slot the walk stands on is the file on screen, and the order it was never on is \
+         not one it is stepped from"
+    );
+    assert_eq!(held.at, stepped_to, "and the walk has not moved");
+}
+
+/// The shuffle is anchored on the file the pin was taken up on, however the walk is pressed: a
+/// playlist that shuffles is one permutation spawned once at the trigger, and no number of steps
+/// either way draws another — so a walk that goes back `n` and forward `n` comes back to that file
+/// exactly, and the order is the same one throughout.
+#[test]
+fn a_shuffled_walk_comes_back_to_the_pinned_file_however_far_it_went_either_way() {
+    let _every_file = WalkEveryFile::set();
+    let folder = sounded_folder("shuffle-anchored");
+    std::fs::write(folder.join("d.mp3"), vec![0u8; 8]).expect("a file a test can write");
+    std::fs::write(folder.join("e.mp3"), vec![0u8; 8]).expect("a file a test can write");
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_nav_audio = PinNavFileTypes::Category;
+    config.pin_mode_audio_shuffle = true;
+    let pinned = folder.join("b.mp3");
+
+    for presses in [
+        vec![-1, 1],
+        vec![-1, -1, 1, 1],
+        vec![-1, -1, -1, 1, 1, 1],
+        vec![1, 1, 1, -1, -1, -1],
+        vec![-1, 1, -1, 1, 1, -1],
+    ] {
+        // The trigger, and every press of the walk carried on from the one before it: the same
+        // road the loop takes, a press at a time (see `answer_pin_job`).
+        let mut held: Option<PinStep> = None;
+        let mut at = pinned.clone();
+        let mut order: Option<Vec<PathBuf>> = None;
+        for press in &presses {
+            let answer = answer_pin_job(&PinJob::Walk {
+                at: at.clone(),
+                step: *press,
+                anchor: held.as_ref().and_then(|walk| walk.anchor),
+                config: Box::new(config.clone()),
+                session: held.clone().map(Box::new),
+            });
+            let Some(PinPlanned::Walk(walk)) = answer else {
+                panic!("a walk is always answered");
+            };
+            assert!(walk.shuffle, "{presses:?}: the pin's shuffle is on");
+            if let Some(order) = order.as_ref() {
+                assert_eq!(
+                    &walk.order, order,
+                    "{presses:?}: a press does not draw a second permutation, whatever way it                      goes"
+                );
+            } else {
+                order = Some(walk.order.clone());
+                assert_eq!(
+                    walk.order.first(),
+                    Some(&pinned),
+                    "{presses:?}: the playlist starts on the file the pin is showing"
+                );
+            }
+            at = walk.at.clone();
+            held = Some(walk);
+        }
+
+        assert_eq!(
+            at, pinned,
+            "{presses:?}: a walk that goes back as far as it went forward is back on the file the              pin was taken up on"
+        );
+        assert_eq!(
+            held.as_ref().map(|walk| walk.order.clone()),
+            order,
+            "{presses:?}: and it walked the one playlist all the way"
+        );
+    }
+}
+
+/// A shuffle walked **back** first is the same playlist as one walked forward first: which button
+/// is pressed first is a direction, not a different permutation. `Previous` from the file the pin
+/// was taken up on wraps to the last file of the order, and the `Next` after it is the order walked
+/// round — back onto that very file — rather than a permutation read as spent.
+#[test]
+fn a_previous_pressed_first_walks_the_same_playlist_as_a_next() {
+    let _every_file = WalkEveryFile::set();
+    let folder = sounded_folder("shuffle-back-first");
+    let mut config = CONFIG.lock().expect("the configuration").clone();
+    config.pin_nav_audio = PinNavFileTypes::Category;
+    config.pin_mode_audio_shuffle = true;
+    let showing = folder.join("b.mp3");
+    let sounds = [
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+
+    for first_step in [-1, 1] {
+        // The playlist the trigger spawns, and the first press upon it.
+        let answer = answer_pin_job(&PinJob::Walk {
+            at: showing.clone(),
+            step: first_step,
+            anchor: None,
+            config: Box::new(config.clone()),
+            session: None,
+        });
+        let Some(PinPlanned::Walk(first)) = answer else {
+            panic!("a walk is always answered");
+        };
+        assert!(
+            first.shuffle,
+            "{first_step}: the walk shuffles with the pin's shuffle on"
+        );
+        assert_eq!(
+            first.order.first(),
+            Some(&showing),
+            "{first_step}: the playlist starts on the file the pin is showing"
+        );
+        let mut rest = first.order[1..].to_vec();
+        rest.sort();
+        assert_eq!(
+            rest,
+            sounds
+                .iter()
+                .filter(|sound| **sound != showing)
+                .cloned()
+                .collect::<Vec<PathBuf>>(),
+            "{first_step}: and holds every other sound after it, whichever way the first press \
+             goes: {:?}",
+            first.order
+        );
+
+        // And a press the other way is the same playlist walked round: the file the pin was
+        // taken up on, never a file the permutation never held.
+        let landed = first.at.clone();
+        let answer = answer_pin_job(&PinJob::Walk {
+            at: landed.clone(),
+            step: -first_step,
+            anchor: first.anchor,
+            config: Box::new(config.clone()),
+            session: Some(Box::new(first.clone())),
+        });
+        let Some(PinPlanned::Walk(back)) = answer else {
+            panic!("a walk is always answered");
+        };
+        assert_eq!(
+            back.at, showing,
+            "{first_step}: a press the other way lands on the file the walk came from"
+        );
+        assert_eq!(
+            back.order, first.order,
+            "{first_step}: along the playlist the trigger spawned, and not a second one"
+        );
+        assert_eq!(
+            back.order.len(),
+            sounds.len(),
+            "{first_step}: every sound is on it once"
+        );
+    }
 }
