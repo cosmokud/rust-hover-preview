@@ -329,13 +329,42 @@ pub(super) fn preview_window_is_at(window: HWND) -> bool {
 /// `ours` is the answer `press_is_inside_ours` gives for the window under the press. Handed in rather
 /// than read here because the same rule is answered for a point no window of ours can be made at (see
 /// `press_is_outside_the_pin_window`, which is handed its answer for the same reason).
+///
+/// **`the_listing_answers` is what keeps a pick from flashing the listing over the pin.** A press in
+/// the listing behind a pin that follows that listing is the press of a pick: the hook reads the file it
+/// landed on and asks for the pin to be shown it, and the raise that comes of that ask is the answer the
+/// press gets. Putting the pin behind the listing first is the same press answered twice, and what the
+/// user sees between the two is the Explorer window over the pin for as long as the pick takes to
+/// resolve — the flash a pick with the mouse has and a pick with the keyboard does not, because a key
+/// moves the focus and presses nothing (see `note_a_press` and `app::seam::PIN_FOLLOWS_THE_LISTING`).
+///
+/// A press that names no file is answered all the same, and the pin still goes behind for it: the
+/// hook's own `pin_press_was_not_a_pick` is the answer that press is owed, and it is made where the
+/// file under the point is known to be one the pin cannot show.
 pub(crate) fn a_press_puts_us_behind(
     pressed: bool,
     ours: bool,
     ours_stands: bool,
     always_on_top: bool,
+    the_listing_answers: bool,
 ) -> bool {
-    pressed && ours_stands && !always_on_top && !ours
+    pressed && ours_stands && !always_on_top && !ours && !the_listing_answers
+}
+
+/// Whether the press just read is one the pick road is going to answer: a press in a listing, behind a
+/// pin that follows the listing (see `a_press_puts_us_behind` and `app::seam::PIN_FOLLOWS_THE_LISTING`).
+///
+/// **Both halves are asked, and each is the half it is.** The listing is what makes a press a pick at
+/// all — a press on another program, on the desktop, on the taskbar or on one of Explorer's own menus is
+/// nobody's pick — and the switch is what makes the pick the pin's business. A pin that follows nothing
+/// is a pin a press in the listing *is* the answer for, and it goes behind as it always has.
+///
+/// Asked of the class of the frame the press landed in rather than of the process behind it, and with no
+/// lock and no allocation, because this is a low-level callback and every press on the machine waits for
+/// it (see `window_classes::explorer_class_matches`).
+pub(crate) fn the_pick_road_answers(window: HWND) -> bool {
+    crate::app::seam::the_pin_follows_the_listing()
+        && crate::shell::window_classes::explorer_class_matches(window)
 }
 
 /// Whether the point a press landed on is inside any window of ours: the broad answer, and the one the
