@@ -101,6 +101,15 @@ pub(super) struct MediaData {
     /// The pace this picture plays at, for one that plays: its own, and the one a hand asked for
     /// at the pin's FPS control (see `AnimationPlayback`).
     pub(super) animation: AnimationPlayback,
+    /// Whether this picture is held on its own frame rather than playing, for one a hand paused at
+    /// the pin's own button: the loop that walks the frames leaves one that is held where it is
+    /// until the button is pressed again (see `MediaData::holds_its_frame`).
+    ///
+    /// It is a field of the media rather than of the pin because a decode begun at a frame lands a
+    /// media of its own, exactly as the drag's own hold is an atomic rather than a flag on the
+    /// media (see `PICTURE_HELD_ON_ITS_FRAME`) — and because the loop's walk is a question about
+    /// the media alone.
+    pub(super) paused: bool,
 }
 
 /// Paint a band of a layered window one flat opaque colour, for a window whose media is not there.
@@ -318,6 +327,7 @@ impl MediaData {
             text_state: None,
             audio_scale: self.audio_scale,
             animation: self.animation,
+            paused: self.paused,
         }
     }
 
@@ -579,6 +589,15 @@ impl MediaData {
     pub(super) fn advance_frame(&mut self) -> bool {
         // Pull in any new frames from streaming decode
         self.sync_shared_frames();
+
+        // **A picture a hand paused stands on the frame it was paused on.** The button at the start
+        // of its bar holds it here rather than anywhere a player could be told, so the walk below is
+        // not asked to move it at all (see `hold_the_picture_itself`). The frames a held picture
+        // takes in above are taken all the same — the decode is the file's own and stops on its own
+        // queue — so letting go plays on from the frames already in hand.
+        if self.paused {
+            return false;
+        }
 
         let frame_count = self.frames.len();
         if frame_count <= 1 {
@@ -843,6 +862,7 @@ pub(super) fn engine_svg_media() -> MediaData {
         text_state: None,
         audio_scale: None,
         animation: AnimationPlayback::default(),
+        paused: false,
     }
 }
 
@@ -895,5 +915,6 @@ pub(super) fn static_image_media(frame: Arc<ImageFrame>, kind: MediaType) -> Med
         text_state: None,
         audio_scale: None,
         animation: AnimationPlayback::default(),
+        paused: false,
     }
 }

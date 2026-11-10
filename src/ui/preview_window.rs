@@ -130,6 +130,7 @@ mod pin_drop;
 mod pin_film_host;
 mod pin_film_thumbnail;
 mod pin_geometry;
+mod pin_index;
 mod pin_input;
 mod pin_install;
 mod pin_lifecycle;

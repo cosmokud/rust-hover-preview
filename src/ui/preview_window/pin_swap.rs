@@ -846,8 +846,10 @@ pub(super) struct PinInstallable {
 /// is known.
 pub(super) fn take_down_pinned_media() {
     // The frames a drag was served from go with the file they were decoded out of: what is held is
-    // a run of one picture, at one size, and the next take-up holds its own (see `pin_scrub`).
+    // a run of one picture, at one size, and the next take-up holds its own (see `pin_scrub` and
+    // `pin_index`).
     pin_scrub::forget();
+    pin_index::forget();
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(ref mut existing) = *current {
             existing.cancel_background_work();

@@ -595,6 +595,11 @@ pub(super) struct PinnedPreview {
     /// taken up: its seek is the file's frames and its FPS button is the first of the bar's two
     /// own controls (see `is_played_picture`).
     pub(super) transport_animated: bool,
+    /// Whether the button at the bar's start is this app's own hold rather than a player's pause,
+    /// decided when the pin was taken up: a picture that plays is held on its frame and let go of
+    /// again by this app, with no player behind the bar to be told anything (see
+    /// `hold_the_picture_on_its_frame`).
+    pub(super) transport_controllable: bool,
     /// The pace this pin plays at, for a pin that is a picture that plays (see `PinFps`).
     pub(super) fps: PinFps,
     /// The level this pin plays at, which belongs to this window rather than to the setting it was
@@ -657,6 +662,7 @@ impl PinnedPreview {
             dragging: None,
             transport: PinTransport::default(),
             transport_animated: false,
+            transport_controllable: false,
             fps: PinFps::default(),
             volume: PinVolume::default(),
             audio_hovered: None,

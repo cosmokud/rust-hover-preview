@@ -785,6 +785,20 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     if media.media_type.is_animation() {
         pin_scrub::remember(&path, &media.frames);
     }
+    // And a picture whose every frame costs a walk to reach — a GIF's and an animated WebP's — is
+    // read once in the background, at the size this pin draws it, so that a hand on its track is
+    // shown whatever frame it names at once (see `pin_index`).
+    if let (Some(total), Some(kind)) = (
+        crate::formats::animation_frames::timeline(&path).map(|run| run.frames()),
+        Some(media.media_type),
+    ) {
+        pin_index::start(
+            &path,
+            kind,
+            total,
+            (media.current_width(), media.current_height()),
+        );
+    }
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(media);
     }
@@ -1298,6 +1312,10 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         // and FFmpeg's player answers the two that are keys.
         transport_live: pin_transport_live(kind),
         transport_animated: is_played_picture(kind),
+        // A picture that plays is paused by this app's own loop rather than by a player: its bar
+        // carries a button even though nothing behind it can be told anything (see
+        // `PinnedPreview::transport_controllable`).
+        transport_controllable: is_played_picture(kind),
         frame: pin_frame(kind),
         overlay,
         hides_chrome,
@@ -1918,9 +1936,28 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     if media.media_type.is_animation() {
         pin_scrub::remember(&pending.path, &media.frames);
     }
+    // And the run the index read is the run of the box the window has *now*: a box change is a
+    // picture drawn at another size, and a run of the size it was is a run to read again (see
+    // `pin_index`).
+    if let Some(total) =
+        crate::formats::animation_frames::timeline(&pending.path).map(|run| run.frames())
+    {
+        pin_index::start(
+            &pending.path,
+            media.media_type,
+            total,
+            (media.current_width(), media.current_height()),
+        );
+    }
     let Ok(mut current) = CURRENT_MEDIA.lock() else {
         return false;
     };
+    // A picture a hand paused stays paused across the decode a seek asked for: the answer is a new
+    // media, and the button at the bar's start is a state of the file rather than of the run the
+    // decode happened to land (see `hold_the_picture_itself`).
+    let paused = current.as_ref().is_some_and(|existing| existing.paused);
+    let mut media = media;
+    media.paused = paused;
     if let Some(ref mut existing) = *current {
         existing.cancel_background_work();
     }

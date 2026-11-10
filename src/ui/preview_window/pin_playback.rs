@@ -80,6 +80,11 @@ pub(super) fn pin_is_playing(transport: &PinTransport) -> bool {
         Some(MediaType::Video) => {
             transport_playing(transport, VIDEO_PID.load(Ordering::Acquire) != 0)
         }
+        // A picture that plays is this app's own loop walking its frames, and it is not walking
+        // them while the button at the start of its bar holds it (see `the_picture_is_paused`). A
+        // hand on the track holds it too, and that is a gesture rather than a pause: the button's
+        // own mark says what it would do if pressed, and a drag is not its answer.
+        kind if kind.is_some_and(|kind| kind.is_animation()) => !the_picture_is_paused(),
         _ => false,
     }
 }
@@ -111,6 +116,49 @@ pub(super) fn pinned_playback_state() -> Option<(PathBuf, ScreenRegion, PinTrans
     let pinned = pin_state()?;
     let pin = pinned.pin()?;
     Some((pin.path.clone(), pin.content, pin.transport, pin.volume))
+}
+
+/// Whether the picture on screen is held by a pause of this app's own — the button at the start of
+/// a picture's bar — rather than playing on.
+///
+/// It is asked with the media's lock and never inside the pin's: the tick that walks the frames
+/// already holds only the media's, and a pin's lock asked from under it is the re-entrancy
+/// `toggle_pinned_playback` is written down for.
+pub(super) fn the_picture_is_paused() -> bool {
+    CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.paused))
+        .unwrap_or(false)
+}
+
+/// Hold a pinned picture that plays on the frame it is on, or let it play on from it: what the
+/// button at the start of its bar does.
+///
+/// A picture has no player to be told anything, so the hold is this app's own: the loop that walks
+/// the frames is told to leave the picture where it is (see `advance_frame`), and letting go starts
+/// the frame it was held on now rather than where its own clock had got to — the catch-up a late
+/// playhead is given would otherwise run on through a stretch of frames the moment the hold is
+/// taken back.
+pub(super) fn hold_the_picture_itself(paused: bool) {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return;
+    };
+    let Some(media) = media.as_mut() else {
+        return;
+    };
+
+    media.paused = paused;
+    if !paused {
+        media.last_frame_time = Instant::now();
+    }
+}
+
+/// Press the button at the start of a picture's bar: a click holds the picture where it is, and a
+/// click on a held one lets it play on from the frame it was left on (see
+/// `PinnedPreview::transport_controllable`).
+pub(super) fn toggle_the_picture_playback() {
+    hold_the_picture_itself(!the_picture_is_paused());
 }
 
 /// How many players `restart_pinned_player` has begun.
@@ -1805,8 +1853,10 @@ pub(super) fn reconcile_swap_take_up() {
     // file that is up now: the take-up builds the pin whole and the drag went with it, and a hold
     // left standing is a picture that never plays again (see `hold_the_picture_on_its_frame`).
     hold_the_picture_on_its_frame(false);
-    // The frames a drag was served from belonged to the file that was up (see `pin_scrub`).
+    // The frames a drag was served from belonged to the file that was up (see `pin_scrub` and
+    // `pin_index`).
     pin_scrub::forget();
+    pin_index::forget();
 
     if pending_pinned_relaunch().is_some() {
         let _ = reap_superseded_relaunch();
@@ -1958,32 +2008,37 @@ pub(super) fn show_the_frame_of(path: &Path, frame: usize) -> bool {
         return false;
     };
 
-    if media.show_the_frame(frame) {
+    // **A frame of a run the media holds whole is a playhead put down on it.** Every frame of the
+    // file is in hand, so the picture plays on from where the hand left it through the rest of the
+    // file, and nothing is decoded again for it (see `MediaData::show_the_frame`).
+    if media.is_fully_loaded() && media.show_the_frame(frame) {
         return true;
     }
 
-    if let Some(held) = pin_scrub::at(path, frame) {
+    // A frame of the run this pin read once in the background is the frame the hand named, whatever
+    // the file has to do to reach it (see `pin_index`): that is the answer a seek of a picture that
+    // plays costs, and it costs it once per pin rather than once per press. A frame the scrub kept
+    // is the next cheapest, and it is what a picture answers with while the index is being read.
+    if let Some(held) = pin_index::at(path, frame).or_else(|| pin_scrub::at(path, frame)) {
         media.cancel_background_work();
         let shown = media.showing_only(held);
         *media = shown;
         return true;
     }
 
-    // The nearest frame that is in hand, of the two places one can be: this media's own run, and the
-    // run this pin has decoded before. A frame of the media's own run is a playhead put down on it,
-    // which keeps the run — the stream it came from is still the picture, and replacing it for a
-    // place it already holds would throw away the frames beside it.
-    let run = media.nearest_frame_to(frame);
-    let scrubbed = pin_scrub::nearest(path, frame);
+    // The nearest frame that is in hand, of the three places one can be: this media's own run, the
+    // run the index read (see `pin_index`), and the run this pin has decoded before. The media's own
+    // run is the cheapest answer and the first of the three, because a frame of it is a playhead put
+    // down where it already is — the stream it came from is still the picture, and replacing it for
+    // a place it holds would throw away the frames beside it.
+    let run = media.nearest_frame_to(frame).map(|(at, _)| (at, None));
+    let indexed = pin_index::nearest(path, frame).map(|(at, frame)| (at, Some(frame)));
+    let scrubbed = pin_scrub::nearest(path, frame).map(|(at, frame)| (at, Some(frame)));
 
-    let nearest = match (run, scrubbed) {
-        (Some((at, _)), Some((held, _))) if at.abs_diff(frame) <= held.abs_diff(frame) => {
-            Some((at, None))
-        }
-        (_, Some((at, held))) => Some((at, Some(held))),
-        (Some((at, _)), None) => Some((at, None)),
-        (None, None) => None,
-    };
+    let nearest = [run, indexed, scrubbed]
+        .into_iter()
+        .flatten()
+        .min_by_key(|(at, _)| at.abs_diff(frame));
     let Some((at, shown_from_the_scrub)) = nearest else {
         return false;
     };
@@ -2026,6 +2081,11 @@ pub(super) fn take_the_picture_to_frame(frame: usize) {
 /// Let go of a picture a hand has been dragging: the frame it was left on is the frame it plays on
 /// from, which means the file's own run installed again where the drag showed a single frame of its
 /// own (see `MediaData::a_frame_shown_from_the_scrub`).
+///
+/// **A frame of the index or of the scrub is not the file's run**, even where it is the pin's own
+/// size (see `pin_index`): it is one frame, so a picture left standing on it would never play again
+/// — and what the file is asked for here is the run that begins at the frame the hand named, which
+/// is installed with its playhead on that frame (see `land_the_picture_on`).
 pub(super) fn settle_the_picture_on(frame: usize) {
     let shown_from_the_scrub = CURRENT_MEDIA
         .lock()

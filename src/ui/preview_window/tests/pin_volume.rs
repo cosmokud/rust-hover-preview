@@ -183,6 +183,7 @@ fn a_film_stepped_onto_from_a_sound_is_played_at_the_films_own_level() {
     // The pin is up on a sound, which the tray has at 100%.
     stand_pin(Some(PinnedPreview {
         transport_animated: false,
+        transport_controllable: false,
         fps: PinFps::default(),
         volume: PinVolume {
             audio: true,

@@ -274,3 +274,56 @@ fn a_frame_the_scrub_holds_is_shown_and_a_frame_it_does_not_is_shown_the_nearest
         *current = previous;
     }
 }
+
+/// **A picture the button at the start of its bar holds stands on the frame it was held on**, and
+/// letting go plays on from that frame rather than from where its own clock had got to: the walk
+/// is not asked to move a held picture at all, and the catch-up a late playhead is given is not
+/// run on through the frames a hold lasted (see `hold_the_picture_itself` and `advance_frame`).
+#[test]
+fn a_picture_held_by_its_button_stands_on_its_frame_and_plays_on_from_it() {
+    let frames = |delays: &[u32]| {
+        let media = MediaData {
+            frames: delays
+                .iter()
+                .map(|delay| Arc::new(ImageFrame::new(vec![0u8; 4], 1, 1, *delay)))
+                .collect(),
+            shared_frames: None,
+            all_frames_loaded: Some(Arc::new(AtomicBool::new(true))),
+            current_frame: 0,
+            last_frame_time: Instant::now(),
+            media_type: MediaType::AnimatedGif,
+            stream_cancel: None,
+            video_process: None,
+            loading_start: None,
+            text_state: None,
+            audio_scale: None,
+            animation: AnimationPlayback {
+                detected: 60.0,
+                wanted: None,
+            },
+            paused: false,
+        };
+        media
+    };
+
+    let mut media = frames(&[16, 16, 16, 16]);
+
+    // Held: the walk leaves it where it is, however long the hold lasts.
+    media.paused = true;
+    media.last_frame_time = Instant::now() - Duration::from_secs(5);
+    assert!(
+        !media.advance_frame(),
+        "a picture a hand paused does not move"
+    );
+    assert_eq!(media.current_frame, 0, "and stands where it was held");
+
+    // Let go: it plays on from that frame rather than running through the ones a hold would have
+    // played, which is what re-basing the clock on the release is for.
+    media.paused = false;
+    media.last_frame_time = Instant::now() - Duration::from_millis(20);
+    assert!(media.advance_frame(), "and one nobody holds plays on");
+    assert_eq!(
+        media.current_frame, 1,
+        "one frame past the one it was held on rather than the whole run"
+    );
+}

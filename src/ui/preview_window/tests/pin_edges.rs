@@ -628,6 +628,7 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         transport: PinTransport::default(),
         volume: PinVolume::default(),
         transport_animated: false,
+        transport_controllable: false,
         fps: PinFps::default(),
         audio_hovered: None,
         audio_pressed: None,

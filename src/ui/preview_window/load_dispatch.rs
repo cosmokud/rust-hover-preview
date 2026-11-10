@@ -292,6 +292,7 @@ pub(super) fn load_model_preview(
         text_state: None,
         audio_scale: None,
         animation: AnimationPlayback::default(),
+        paused: false,
     })
 }
 

@@ -11,6 +11,7 @@ fn a_bar(width: i32, height: i32, dpi: u32, interactive: bool, animated: bool) -
         dpi,
         interactive,
         animated,
+        controllable: false,
         clock: clock_width(None, dpi),
     }
 }
@@ -23,6 +24,20 @@ fn transport_layout(
     animated: bool,
 ) -> crate::text::pin_chrome::transport::TransportLayout {
     a_bar(width, height, dpi, interactive, animated).layout()
+}
+
+/// The same bar, with the button this app's own hold is on it: what a picture that plays carries
+/// (see `BarShape::controllable`).
+fn picture_bar(width: i32, height: i32, dpi: u32) -> BarShape {
+    BarShape {
+        width,
+        height,
+        dpi,
+        interactive: false,
+        animated: true,
+        controllable: true,
+        clock: clock_width(None, dpi),
+    }
 }
 
 fn transport_part_at(
@@ -665,6 +680,7 @@ fn a_clock_is_given_the_room_of_its_own_digits() {
                 dpi,
                 interactive: false,
                 animated: true,
+                controllable: false,
                 clock,
             }
             .layout();
@@ -983,6 +999,7 @@ fn the_frames_under_a_hand_are_written_over_the_track_until_the_hand_lets_go() {
             volume: 0,
             volume_open: false,
             animated: true,
+            controllable: false,
             fps_open: false,
             frames,
         };
@@ -999,6 +1016,7 @@ fn the_frames_under_a_hand_are_written_over_the_track_until_the_hand_lets_go() {
         dpi,
         interactive: false,
         animated: true,
+        controllable: false,
         clock: clock_width(Some(21.0), dpi),
     }
     .layout();
@@ -1062,4 +1080,41 @@ fn the_pace_popup_is_inside_the_window_and_floats_above_its_button() {
             assert!(popup.track.bottom > popup.track.top, "a groove to drag");
         }
     }
+}
+
+/// **A picture that plays carries a button at the start of its bar, and it is this app's own hold.**
+///
+/// The button is the one a film's bar has, in the same place and the same size, and the mark it
+/// shows is the pause while the frames are being walked — a picture nobody has paused is a picture
+/// that is playing, and there is no player behind it to say either way (see
+/// `BarShape::controllable` and `the_picture_is_paused`).
+#[test]
+fn a_picture_that_plays_carries_a_button_at_the_start_of_its_bar() {
+    let picture = picture_bar(600, 30, 96).layout();
+    let film = transport_layout(600, 30, 96, true, false);
+
+    assert_eq!(
+        picture.play, film.play,
+        "the button a picture carries is where a film's button is"
+    );
+    let centre = (picture.play.left + picture.play.right) / 2;
+    assert_eq!(
+        super::transport_part_at(picture_bar(600, 30, 96), centre, 15),
+        Some(TransportPart::Play),
+        "and it is the button a press on it finds"
+    );
+
+    // The clock and the track begin after it, exactly as they do on a film's bar: a strip whose
+    // controls were laid out two ways would be a track that moves when the file changes kind.
+    assert_eq!(picture.elapsed, film.elapsed);
+    assert_eq!(picture.bar, film.bar);
+
+    // And a bar nobody can press anything on — no player and no hold — carries no button at all,
+    // which is the read-out every other kind is drawn as.
+    let read_only = a_bar(600, 30, 96, false, false).layout();
+    assert_eq!(read_only.elapsed.left, text_paint::scaled(10, 0.96 + 0.04));
+    assert_eq!(
+        super::transport_part_at(a_bar(600, 30, 96, false, false), centre, 15),
+        None
+    );
 }

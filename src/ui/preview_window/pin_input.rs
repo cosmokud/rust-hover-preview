@@ -303,6 +303,9 @@ pub(super) struct PinnedTransportBar {
     /// Whether the player behind the bar can be told anything, which is whether its parts are the
     /// pointer's to press at all (see `PinnedPreview::transport_live`).
     pub(super) live: bool,
+    /// Whether the button at the bar's start is this app's own hold rather than a player's pause
+    /// (see `PinnedPreview::transport_controllable`).
+    pub(super) controllable: bool,
     /// Whether the bar belongs to a picture that plays rather than a film: its seek is the file's
     /// frames, and its FPS button is the first of the bar's two own controls (see `PinFps`).
     pub(super) animated: bool,
@@ -324,6 +327,7 @@ impl PinnedTransportBar {
             dpi: self.dpi,
             interactive: self.live,
             animated: self.animated,
+            controllable: self.controllable,
             clock: self.clock,
         }
     }
@@ -351,6 +355,7 @@ pub(super) fn pinned_transport_bar_of(pin: &PinnedPreview) -> Option<PinnedTrans
         height: band,
         dpi: pin.dpi,
         live: pin.transport_live,
+        controllable: pin.transport_controllable,
         animated: pin.transport_animated,
         wanted: pin.chrome.bar,
         clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
@@ -377,6 +382,9 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
 
     match part {
         pin_chrome::TransportPart::Play => {
+            // A picture that plays is paused where it is pressed or resumed where it was stopped,
+            // the way a film's button is: the press is the button lit, and the release is what it
+            // does (see `pinned_transport_release`).
             update_pin_transport(|transport| transport.pressed = Some(part));
         }
         pin_chrome::TransportPart::Seek => {
@@ -571,9 +579,17 @@ pub(super) unsafe fn pinned_transport_release(
             .unwrap_or(false);
 
         if still_on_it {
+            // Whether that button is this app's own hold, which is a question about the bar and
+            // not about the part: a picture that plays carries the hold, and a film the player's
+            // pause (see `PinnedPreview::transport_controllable`).
+            let controllable = pinned_transport_geometry()
+                .map(|bar| bar.controllable)
+                .unwrap_or(false);
             match part {
                 pin_chrome::TransportPart::Play => {
-                    if let Some((path, content, _, _)) = pinned_playback_state() {
+                    if controllable {
+                        toggle_the_picture_playback();
+                    } else if let Some((path, content, _, _)) = pinned_playback_state() {
                         toggle_pinned_playback(&path, content, transport);
                     }
                 }
@@ -709,6 +725,7 @@ pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
             dpi: pin.dpi,
             interactive: true,
             animated: false,
+            controllable: false,
             clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
         }
         .layout()
@@ -953,8 +970,11 @@ pub(super) fn pinned_fps_button(pin: &PinnedPreview) -> Option<RECT> {
         width,
         height: band,
         dpi: pin.dpi,
-        interactive: true,
+        interactive: false,
         animated: true,
+        // The pace's button is the bar's far end, which a picture that plays carries beside its
+        // own hold — neither of them the player's (see `BarShape::controllable`).
+        controllable: pin.transport_controllable,
         clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
     }
     .layout()

@@ -55,6 +55,7 @@ fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
         },
         volume: PinVolume::default(),
         transport_animated: false,
+        transport_controllable: false,
         fps: PinFps::default(),
         audio_hovered: None,
         audio_pressed: None,
