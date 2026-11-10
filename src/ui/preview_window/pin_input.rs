@@ -504,7 +504,13 @@ pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
         // file, which is a decode asked for nothing.
         if previous != frame {
             if let Some(frame) = frame {
-                take_the_picture_to_frame(frame);
+                // **The picture is taken to the frame at once where it can be**, and shown the
+                // nearest frame that is where it cannot: a hand on the track is shown where the file
+                // is going while the decode it asked for catches up, rather than a picture left
+                // standing on the frame the drag began on (see `show_the_frame_of_the_file`).
+                if !show_the_frame_of_the_file(frame) {
+                    ask_for_the_frame(frame);
+                }
             }
         }
         render_layered_preview(hwnd);
@@ -603,7 +609,10 @@ pub(super) unsafe fn pinned_transport_release(
         });
         hold_the_picture_on_its_frame(false);
         if let Some(frame) = aim {
-            take_the_picture_to_frame(frame);
+            // The file's own run is installed again where the drag was served from a single frame
+            // of the scrub's own, so that the picture plays on from the frame it was left on
+            // (see `settle_the_picture_on`).
+            settle_the_picture_on(frame);
         }
         render_layered_preview(hwnd);
         return true;

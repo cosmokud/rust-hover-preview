@@ -779,6 +779,12 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     // the user closed (see `pin_media_failed_before_a_frame`).
     *install.player_started = (media.media_type == MediaType::Video).then(Instant::now);
 
+    // The frames a picture that plays was taken up with are frames this pin can show again without
+    // walking the file: a drag that comes back to the part of the file that has been on screen is
+    // served from them (see `pin_scrub`).
+    if media.media_type.is_animation() {
+        pin_scrub::remember(&path, &media.frames);
+    }
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(media);
     }
@@ -1906,6 +1912,12 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
         Some(place) => land_the_picture_on(media, place),
         None => media,
     };
+    // The frames this answer carries are frames of the file that can be shown again without walking
+    // it: a hand that comes back to a place it has already been is not walked there twice (see
+    // `pin_scrub`).
+    if media.media_type.is_animation() {
+        pin_scrub::remember(&pending.path, &media.frames);
+    }
     let Ok(mut current) = CURRENT_MEDIA.lock() else {
         return false;
     };

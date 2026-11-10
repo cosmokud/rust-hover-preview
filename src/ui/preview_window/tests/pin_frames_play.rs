@@ -188,3 +188,89 @@ fn a_seek_lands_the_picture_on_the_frame_a_hand_chose() {
     );
     assert!(!land_the_picture_on(still, 7).media_type.is_animation());
 }
+
+/// **A frame the scrub holds is shown without walking the file again**, and a frame nothing holds is
+/// answered by taking the picture to the nearest one that is: a hand on a track is shown where the
+/// file is going while the decode it asked for catches up (see `show_the_frame_of`).
+#[test]
+fn a_frame_the_scrub_holds_is_shown_and_a_frame_it_does_not_is_shown_the_nearest() {
+    let folder = std::env::temp_dir().join("pin-scrub-shown-tests");
+    std::fs::create_dir_all(&folder).expect("a fixture folder");
+    let path = folder.join("run.gif");
+    std::fs::write(&path, b"GIF89a").expect("a fixture file");
+
+    let a_run = |indices: &[usize]| {
+        let frame = |file_index: usize| {
+            let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 100);
+            frame.file_index = file_index;
+            Arc::new(frame)
+        };
+        let mut media = static_image_media(frame(indices[0]), MediaType::AnimatedGif);
+        media.frames = indices.iter().copied().map(frame).collect();
+        media
+    };
+    let stand = |media: MediaData| {
+        *CURRENT_MEDIA.lock().expect("the media's lock") = Some(media);
+    };
+    let held = || {
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .and_then(|media| media.current_frame_of_file())
+        })
+    };
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    pin_scrub::forget();
+
+    // A frame the media holds is a playhead put down on it, which is the cheapest answer there is.
+    stand(a_run(&[40, 41, 42]));
+    assert!(show_the_frame_of(&path, 41), "a frame of the run in hand");
+    assert_eq!(held(), Some(41));
+
+    // A frame this pin decoded before is that frame *shown*, without the media holding it at all:
+    // the run of the file is not walked again for a place this pin has already been.
+    pin_scrub::remember(&path, &a_run(&[10, 11, 12]).frames);
+    stand(a_run(&[40, 41, 42]));
+    assert!(
+        show_the_frame_of(&path, 11),
+        "a frame the scrub holds is a frame shown"
+    );
+    assert_eq!(held(), Some(11), "and the picture is on it");
+    assert!(
+        CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| media.as_ref().map(MediaData::a_frame_shown_from_the_scrub))
+            .unwrap_or(false),
+        "as a frame of the scrubs own making, which a release installs the file again for"
+    );
+
+    // And a frame nobody holds is the nearest one that is: the picture moves toward the hand rather
+    // than standing on the frame the drag began on, and the caller is told the exact frame is not
+    // there yet so that it asks the file for it.
+    pin_scrub::forget();
+    stand(a_run(&[40, 41, 42]));
+    assert!(
+        !show_the_frame_of(&path, 300),
+        "a frame neither the run nor the scrub holds is not shown"
+    );
+    assert_eq!(
+        held(),
+        Some(42),
+        "the picture is taken to the nearest frame that is here instead"
+    );
+    assert!(
+        !show_the_frame_of(&path, 5),
+        "and a place nothing holds is answered the same way"
+    );
+    assert_eq!(
+        held(),
+        Some(40),
+        "the picture is the nearest frame of the run, and the caller asks the file for the rest"
+    );
+
+    pin_scrub::forget();
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous;
+    }
+}
