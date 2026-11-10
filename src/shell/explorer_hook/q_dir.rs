@@ -20,7 +20,7 @@
 
 use windows::core::PCWSTR;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, FindWindowExW, GetParent, GetWindowTextW,
+    EnumChildWindows, FindWindowExW, GetParent, SendMessageTimeoutW, SMTO_ABORTIFHUNG, SMTO_BLOCK,
 };
 
 use super::*;
@@ -89,10 +89,33 @@ fn the_pane_folder(list: HWND) -> Option<PathBuf> {
             return BOOL(1);
         }
 
+        // **`WM_GETTEXT`, and not `GetWindowTextW`.** The address bar is another process's control
+        // and Q-Dir keeps its text in the control rather than in the window's own title, which is
+        // what `GetWindowTextW` answers for a window of somebody else's process: it reads the
+        // desktop's copy of the title and not the control's, and it answers nothing here. A message
+        // is what crosses processes, and it is bounded so that a pane busy painting answers nothing
+        // rather than holding the tick.
         let mut text = [0u16; 1024];
-        // Safety: as above, into this callback's own buffer.
-        let len = GetWindowTextW(hwnd, &mut text).max(0) as usize;
-        let text = String::from_utf16_lossy(&text[..len.min(text.len())]);
+        let mut answer = 0usize;
+        // `wParam` is how many characters may be copied, and a message that copies none answers
+        // empty whatever the bar says.
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                0x000D,
+                windows::Win32::Foundation::WPARAM(text.len()),
+                LPARAM(text.as_mut_ptr() as isize),
+                SMTO_BLOCK | SMTO_ABORTIFHUNG,
+                THE_ADDRESS_BAR_MS,
+                Some(&mut answer),
+            )
+        };
+        if sent.0 == 0 {
+            return BOOL(1);
+        }
+
+        let len = answer.min(text.len());
+        let text = String::from_utf16_lossy(&text[..len]);
         let Some(folder) = pane_folder_from_edit_text(&text) else {
             return BOOL(1);
         };
@@ -115,6 +138,14 @@ fn the_pane_folder(list: HWND) -> Option<PathBuf> {
 
     search.found
 }
+
+/// How long the address bar has to answer before its pane is left for the next tick.
+///
+/// Its own number rather than the row reader's (`list_view::ANSWER_MS`), because the two failures are
+/// not the same failure: a list that will not answer is a listing that cannot be read at all, while a
+/// bar that will not answer is a pane whose folder is not known yet — the rows are still there, and
+/// the next tick asks again.
+const THE_ADDRESS_BAR_MS: u32 = 250;
 
 /// The folder an address bar's text names, or nothing where it names none.
 ///
@@ -233,7 +264,13 @@ pub(super) fn item_path(
 /// one whose list is above that point, and each ancestor of it is asked for its own
 /// `SHELLDLL_DefView`/`SysListView32` until the frame is reached.
 pub(super) fn the_q_dir_list_of(window: HWND) -> Option<HWND> {
-    if window.is_invalid() || !crate::shell::window_classes::q_dir_class_matches(window) {
+    // Asked in the setting's own form rather than of the class alone, so that a Q-Dir pane is read no
+    // further the moment `Enable in Q-Dir` is off (see `app::seam::a_q_dir_is_previewed`).
+    if window.is_invalid()
+        || !crate::app::seam::a_q_dir_is_previewed(crate::shell::window_classes::the_frame_of(
+            window,
+        ))
+    {
         return None;
     }
 
