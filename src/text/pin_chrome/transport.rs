@@ -3,9 +3,15 @@
 //!
 //! It is a strip of the window rather than part of the media (see the module documentation): the
 //! button that pauses and resumes, the bar with the part of the file that has been played filled
-//! in, the two clocks beside them, and the volume button at the far end - which is this app's own
-//! control rather than the player's, so it is answered on a bar whose player cannot be told
-//! anything at all, and so the panel it opens is placed and drawn here too.
+//! in, the two clocks beside them, and one control at the far end - which is this app's own rather
+//! than the player's, so it is answered on a bar whose player cannot be told anything at all, and
+//! so the panel it opens is placed and drawn here too.
+//!
+//! **The far end is one control and not two.** A film's is its level, which this app keeps because
+//! FFmpeg's player cannot be told one; a picture that plays has no level at all - a file of frames
+//! has no sound to hand a player and no player to hand it to - so its own control there is the pace
+//! those frames move at, and a count of the frames a hand on its track is standing at is written
+//! beside the clock.
 //!
 //! The marks are named rather than left to each caller to draw (`ControlGlyph`), because a sound's
 //! card draws the same three in a row of its own (see `paint_card_control`), and two sets of
@@ -26,6 +32,10 @@ use windows::Win32::Foundation::RECT;
 /// to be: the thumb and its collar, and a couple of pixels of panel either side of them.
 pub(super) const VOLUME_PANEL_WIDTH: i32 = 24;
 const VOLUME_PANEL_HEIGHT: i32 = 98;
+/// The room a pace's panel takes at a display's scale: the volume panel widened by the figures it
+/// has to hold, because what a pace's panel says is a number written across the top of it and a
+/// number in a level's own narrow panel is a figure read out of a slot (see `paint_fps_popup_text`).
+const FPS_PANEL_WIDTH: i32 = 46;
 /// How far the groove is held off each end of the panel, which is the room the thumb takes at
 /// either end of it: a thumb that was clipped by the panel at 100% would be a level drawn short,
 /// and anything beyond that room is panel being drawn over a picture it is covering.
@@ -52,7 +62,8 @@ pub(crate) enum TransportPart {
     /// The bar itself, which is dragged to seek.
     Seek,
     /// The button that opens the volume popup, which is the pin's own control rather than the
-    /// player's.
+    /// player's - and one a bar of a picture that plays does not carry, since a file of frames has
+    /// no sound for a level to be a level of (see `transport_layout`).
     Volume,
     /// The button that opens the FPS popup, which is the pin's own control the same way the
     /// volume button is — and one only a picture that plays carries, since a film's pace is its
@@ -65,12 +76,27 @@ pub(crate) enum TransportPart {
 pub(crate) struct TransportLayout {
     pub(crate) play: RECT,
     pub(crate) bar: RECT,
+    /// The clock before the bar, held against it: what is written beside the track is that far
+    /// from it and no further, so a strip does not open a gap between a clock and the bar it
+    /// belongs to.
     pub(crate) elapsed: RECT,
     pub(crate) total: RECT,
+    /// The level's button at the far end of the bar, and a box of no width on a bar that has none
+    /// (see `TransportPart::Volume`).
     pub(crate) volume: RECT,
-    /// The FPS button, left of the volume button: a bar of a picture that plays carries
-    /// one, and every other bar gives the room to the clock beside it.
+    /// The FPS button at the far end of a bar a picture that plays carries, and a box of no width
+    /// on every other bar: the same square as the level's, because it is the same button a hand
+    /// reaches for, saying the one thing its own slider changes.
     pub(crate) fps: RECT,
+    /// The room left of the clock for the count of frames a hand on the track is standing at, and a
+    /// box of no width on a bar that writes no count.
+    pub(crate) frames: RECT,
+}
+
+/// The room held between the parts of a transport bar at a display's scale: one part is never
+/// written through the next, and a strip whose parts touched would be one run of ink.
+pub(super) fn strip_gap(scale: f32) -> i32 {
+    (text_paint::scaled(10, scale) / 2).max(2)
 }
 
 /// The room each part of a transport bar is given at a display's scale.
@@ -90,7 +116,17 @@ pub(crate) fn transport_layout(
     let padding = text_paint::scaled(10, scale);
     let play_side = (height - text_paint::scaled(8, scale)).clamp(8, height.max(8));
     let label = text_paint::scaled(52, scale);
-    let gap = (padding / 2).max(2);
+    let gap = strip_gap(scale);
+    // The room a picture that plays keeps left of its clock for the count of frames under the hand.
+    // It is held open whether or not a hand is on the track, because the count is written beside a
+    // bar that must not move while it is dragged - and given up where the strip is too narrow to
+    // hold both it and a track worth dragging, since a strip a tenth of a window wide is a bar
+    // nobody can aim at.
+    let frames_room = if animated && width >= text_paint::scaled(360, scale) {
+        text_paint::scaled(74, scale)
+    } else {
+        0
+    };
 
     let play = RECT {
         left: padding,
@@ -98,38 +134,45 @@ pub(crate) fn transport_layout(
         right: padding + play_side,
         bottom: (height + play_side) / 2,
     };
-    // The volume button is the last thing on the bar, against the right edge the way it is on
-    // every player that has one — and it keeps its box whether or not the bar it sits on has
-    // controls, since it is this app's own control rather than the player's (see
-    // `TransportPart::Volume`).
-    let volume = RECT {
+    // The far end of the bar, against the right edge the way it is on every player that has one,
+    // and keeping its box whether or not the bar it sits on has controls, since it is this app's
+    // own control rather than the player's (see `TransportPart::Volume`).
+    let last = RECT {
         left: (width - padding - play_side).max(padding),
         top: (height - play_side) / 2,
         right: (width - padding).max(padding),
         bottom: (height + play_side) / 2,
+    };
+    let nothing = RECT {
+        left: last.left,
+        top: last.top,
+        right: last.left,
+        bottom: last.bottom,
+    };
+    // One control at the far end: the level on a bar with a player behind it, and the pace on a
+    // picture that plays, which has no level to show (see `TransportPart::Fps`).
+    let (volume, fps) = if animated {
+        (nothing, last)
+    } else {
+        (last, nothing)
     };
     let content_left = if interactive {
         play.right + gap
     } else {
         padding
     };
-    let elapsed = RECT {
+    let frames = RECT {
         left: content_left,
         top: 0,
-        right: content_left + label,
+        right: content_left + frames_room,
         bottom: height,
     };
-    // The FPS button, where a picture that plays asks for one: it sits in the volume
-    // button's own square, one square and one gap to the left, so the two controls are
-    // the same size and a hand finds the second where it found the first.
-    let fps = RECT {
-        left: (volume.left - gap - play_side).max(padding),
-        top: volume.top,
-        right: (volume.left - gap).max(padding),
-        bottom: volume.bottom,
+    let elapsed = RECT {
+        left: frames.right,
+        top: 0,
+        right: frames.right + label,
+        bottom: height,
     };
-    // The clock is pushed left by the FPS button where one is drawn, and sits against
-    // the volume button otherwise: the room it was given is the room nothing else took.
     let controls_left = if animated { fps.left } else { volume.left };
     let total = RECT {
         left: (controls_left - gap - label).max(elapsed.right),
@@ -152,6 +195,7 @@ pub(crate) fn transport_layout(
         total,
         volume,
         fps,
+        frames,
     }
 }
 
@@ -174,7 +218,7 @@ pub(crate) fn transport_part_at(
     let layout = transport_layout(width, height, dpi, interactive, animated);
     let inside = |rect: RECT| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 
-    if inside(layout.volume) {
+    if !animated && inside(layout.volume) {
         return Some(TransportPart::Volume);
     }
     // The FPS button is this app's own control too, and it is answered on a bar whose
@@ -250,9 +294,23 @@ pub(crate) fn volume_popup_layout(
 /// `audio_preview::CardControl::Volume`), and a second panel for it would be a second set of
 /// numbers for one control this app has once.
 pub(crate) fn volume_popup_from_button(button: RECT, width: i32, dpi: u32) -> VolumePopup {
+    popup_from_button(button, width, dpi, VOLUME_PANEL_WIDTH)
+}
+
+/// The panel a bar's pace button opens, hung from that button's own box: the level's panel in
+/// every way but the room across it, since what a pace's panel holds is a number written over its
+/// groove and a number in a level's own narrow panel would be a figure read out of a slot.
+///
+/// It is placed from the button the same way and for the same reason - the panel a press is
+/// answered against is the panel that is drawn (see `paint_fps_popup`).
+pub(crate) fn fps_popup_from_button(button: RECT, width: i32, dpi: u32) -> VolumePopup {
+    popup_from_button(button, width, dpi, FPS_PANEL_WIDTH)
+}
+
+fn popup_from_button(button: RECT, width: i32, dpi: u32, panel_width_in: i32) -> VolumePopup {
     let scale = dpi as f32 / 96.0;
 
-    let panel_width = text_paint::scaled(VOLUME_PANEL_WIDTH, scale).max(8);
+    let panel_width = text_paint::scaled(panel_width_in, scale).max(8);
     let panel_height = text_paint::scaled(VOLUME_PANEL_HEIGHT, scale).max(8);
     let gap = text_paint::scaled(VOLUME_PANEL_GAP, scale).max(1);
 
@@ -348,6 +406,18 @@ pub(crate) fn volume_thumb_row(track: RECT, volume: u32) -> i32 {
     track.bottom - (span * share).round() as i32
 }
 
+/// The room a track has to name a place in the file: its own columns less the one the last of them
+/// already is.
+///
+/// A bar of `n` columns spans `n - 1` steps between its first and its last, and a file read as `n`
+/// is a press on the last column that lands a frame short of the end and a thumb drawn one column
+/// past the hand that put it there — so the track's own length is measured from its first column to
+/// its last rather than across the room *between* the two ends (see
+/// `a_press_puts_the_thumb_under_the_hand_wherever_it_landed`).
+fn bar_span(bar: RECT) -> i32 {
+    (bar.right - bar.left - 1).max(1)
+}
+
 /// Where along a transport bar a point is, as a share of the file: what a press on the bar asks
 /// the player to be taken to.
 ///
@@ -368,7 +438,10 @@ pub(crate) fn transport_share_at(
     animated: bool,
 ) -> f64 {
     let layout = transport_layout(width, height, dpi, interactive, animated);
-    let span = (layout.bar.right - layout.bar.left).max(1) as f64;
+    // The track's own columns, of which the last is the end of the file: a share read across the
+    // room *between* the two ends leaves the last frame of a file under a strip's rightmost pixel
+    // out of reach, and a press there is the one place a hand means "the end" (see `bar_span`).
+    let span = f64::from(bar_span(layout.bar));
 
     ((x - layout.bar.left) as f64 / span).clamp(0.0, 1.0)
 }
@@ -409,6 +482,11 @@ pub(crate) struct TransportState {
     /// Whether the FPS popup is open — a button whose own slider is up is a button held down, the
     /// way an open volume popup is.
     pub(crate) fps_open: bool,
+    /// The frame of the file a hand on the track is standing at, and how many the file plays: a
+    /// drag of a picture that plays is a walk through its frames rather than through seconds of a
+    /// player, and the count of where the hand is written beside the clock says which frame the
+    /// picture is about to be left on (see `pin_frame_share`).
+    pub(crate) frames: Option<(usize, usize)>,
 }
 
 /// Paint a transport bar into a surface the size of the strip: the play button, the bar with the
@@ -422,6 +500,7 @@ pub(crate) fn paint_transport(
     let width = surface.width as i32;
     let height = surface.height as i32;
     let scale = dpi as f32 / 96.0;
+    let gap = strip_gap(scale);
     let layout = transport_layout(width, height, dpi, state.interactive, state.animated);
 
     text_paint::fill_rect(
@@ -456,8 +535,11 @@ pub(crate) fn paint_transport(
 
     // The volume button, which is on the bar whether or not the player behind it answers
     // anything: the level is this app's to keep, and both engines are given it (see
-    // `TransportPart::Volume`).
-    paint_volume_button(surface, palette, state, layout.volume, scale);
+    // `TransportPart::Volume`). A picture that plays has no level to keep and no button to keep it
+    // on, so its far end carries the pace's own instead.
+    if !state.animated {
+        paint_volume_button(surface, palette, state, layout.volume, scale);
+    }
 
     // And the FPS button, where the bar belongs to a picture that plays: the pace is this
     // app's own control for the same reason the level is (see `TransportPart::Fps`).
@@ -472,8 +554,7 @@ pub(crate) fn paint_transport(
         }
         _ => 0.0,
     };
-    let thumb =
-        layout.bar.left + (((layout.bar.right - layout.bar.left) as f64) * filled).round() as i32;
+    let thumb = layout.bar.left + (f64::from(bar_span(layout.bar)) * filled).round() as i32;
 
     {
         let buffer = unsafe {
@@ -520,13 +601,34 @@ pub(crate) fn paint_transport(
         }
     }
 
+    // The clock before the bar, written against it rather than laid out from the strip's own
+    // padding: a clock that starts where the strip starts is a clock a bar's own length away from
+    // the strip's, and the gap it opens is a gap in the middle of one read-out. And where a hand
+    // is on the track of a picture that plays, the frame it is standing at is written in the room
+    // held open left of the clock, so that the two are one read-out beside the track - the count
+    // has a room of its own whether or not it is written, which is why the clock does not move
+    // under a hand that is dragging the bar it belongs to (see `paint_frame_count`).
+    if let Some((frame, total)) = state.frames {
+        paint_frame_count(
+            surface,
+            palette,
+            (frame, total),
+            RECT {
+                left: layout.frames.left,
+                top: 0,
+                right: (layout.frames.right - gap / 2).max(layout.frames.left),
+                bottom: height,
+            },
+            scale,
+        );
+    }
     paint_time(
         surface,
         palette,
         state.position,
         layout.elapsed,
         scale,
-        false,
+        true,
     );
     paint_time(surface, palette, state.duration, layout.total, scale, true);
 
@@ -671,6 +773,54 @@ pub(super) fn draw_track_step(
         ],
         color,
         1.0,
+    );
+}
+
+/// Write the frame a hand on the track is standing at against the file's own count of them —
+/// `[212/1021]` — in the room the clock leaves, answering the width it took so the clock is held
+/// off it rather than written through it.
+///
+/// It is the count a drag is read by: a picture that plays is moved a frame at a time, and a track
+/// of a few hundred columns over a file of a few thousand frames is a place in the file that a
+/// second of the run does not name. Nothing is written where the room it is given cannot hold it,
+/// which is a strip too narrow to have kept any room at all (see `transport_layout`).
+fn paint_frame_count(
+    surface: &DibSurface,
+    palette: &ChromePalette,
+    (frame, total): (usize, usize),
+    rect: RECT,
+    scale: f32,
+) {
+    if rect.right <= rect.left {
+        return;
+    }
+
+    let text = format!("[{frame}/{total}]");
+    let style = caption_style(palette.number);
+    let measured = measure_text(surface, &style, &text, scale);
+    if measured <= 0 || measured >= rect.right - rect.left {
+        return;
+    }
+
+    let cell = text_paint::scaled(
+        text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+        scale,
+    );
+    let top = ((surface.height as i32 - cell) / 2).max(0);
+    let box_ = RECT {
+        left: rect.right - measured,
+        top,
+        right: rect.right,
+        bottom: (top + cell).min(surface.height as i32),
+    };
+    let mut painter = text_paint::RunPainter::new(surface, scale);
+    painter.draw(
+        &text,
+        box_.left,
+        box_,
+        &style,
+        palette.number,
+        palette.background,
     );
 }
 
@@ -1139,7 +1289,9 @@ pub(crate) fn paint_fps_popup(
     let thumb = (VOLUME_THUMB_RADIUS * scale).max(2.0);
 
     // The shadow and the panel, exactly as the volume panel's own: one panel, drawn twice for
-    // one bar's two controls.
+    // one bar's two controls - and flat rather than shaded from the top, because the figures the
+    // pace is read by are written across the top of it in a colour of their own, with no panel of
+    // their own behind them (see `paint_fps_popup_text`).
     let shadow = (2.0 * scale).round().max(1.0) as i32;
     fill_round_rect(
         buffer,
@@ -1155,15 +1307,8 @@ pub(crate) fn paint_fps_popup(
         [0, 0, 0],
         0.32,
     );
-    fill_round_rect(
-        buffer,
-        width,
-        popup.panel,
-        radius,
-        palette.hover(0.08),
-        palette.hover(0.0),
-        0.97,
-    );
+    let face = fps_panel_colour(palette);
+    fill_round_rect(buffer, width, popup.panel, radius, face, face, 0.97);
     stroke_round_rect(
         buffer,
         width,
@@ -1225,8 +1370,28 @@ pub(crate) fn paint_fps_popup(
     fill_disc(buffer, width, center_x, center_y, thumb, ink, 1.0);
 }
 
+/// The colour a pace's panel is: the theme's page moved off the caption's the way the tool tip is,
+/// one colour over the whole of the panel rather than a shade from its top to its bottom.
+///
+/// It is one colour because the figures are written across the top of it with no panel of their
+/// own under them: a run whose background is the panel's own colour is a run that is only ink, and
+/// a run across a gradient is a patch of some shade of the panel with a number in it (see
+/// `paint_fps_popup_text`).
+fn fps_panel_colour(palette: &ChromePalette) -> [u8; 3] {
+    palette.hover(0.06)
+}
+
 /// Write the pace a popup is holding over its own groove's top, in the strip's text: the number a
 /// hand set, which is the whole of what the panel is for.
+///
+/// **It is written in the theme's own blue and with nothing behind it.** The number is the one
+/// figure on this strip that is a setting rather than a state of the file, and it is read against
+/// the panel the way a function is read against a page: One Dark Pro's neon blue, Atom One Light's
+/// strong one, and whatever blue a theme of the user's own names (see `ChromePalette::blue`). Its
+/// background is the panel's own flat colour, so that where the run is not a figure it is exactly
+/// what the panel already is, and the alpha byte GDI leaves behind is handed back the panel's own:
+/// a run sealed whole over a panel held a shade off whole would be a patch of the panel cut out of
+/// it.
 ///
 /// The panel and its knob are painted as pixels, and the figure is written through GDI —
 /// `RunPainter` needs a device context, which the surface a popup is painted on has and the raw
@@ -1244,19 +1409,61 @@ pub(crate) fn paint_fps_popup_text(
     }
 
     let scale = dpi as f32 / 96.0;
-    let style = caption_style(palette.foreground);
+    let style = caption_style(palette.blue);
     let text = fps.to_string();
     let measured = measure_text(surface, &style, &text, scale);
     let left = (rect.left + ((rect.right - rect.left - measured) / 2)).max(rect.left);
+    let box_ = RECT {
+        right: (left + measured).min(rect.right),
+        ..rect
+    };
+
+    // The panel's own alpha byte under the figures, put back after GDI has drawn through it.
+    let stride = surface.width as usize;
+    let alpha_under: Vec<u8> = {
+        let pixels = unsafe {
+            std::slice::from_raw_parts(
+                surface_pixels(surface),
+                stride * surface.height as usize * 4,
+            )
+        };
+        let mut alphas = Vec::with_capacity(
+            ((box_.right - box_.left).max(0) * (box_.bottom - box_.top).max(0)) as usize,
+        );
+        for y in box_.top.max(0)..box_.bottom.min(surface.height as i32) {
+            for x in box_.left.max(0)..box_.right.min(surface.width as i32) {
+                alphas.push(pixels[(y as usize * stride + x as usize) * 4 + 3]);
+            }
+        }
+        alphas
+    };
+
     let mut painter = text_paint::RunPainter::new(surface, scale);
     painter.draw(
         &text,
         left,
-        rect,
+        box_,
         &style,
-        palette.foreground,
-        palette.background,
+        palette.blue,
+        fps_panel_colour(palette),
     );
+    drop(painter);
+
+    let pixels = unsafe {
+        std::slice::from_raw_parts_mut(
+            surface_pixels(surface),
+            stride * surface.height as usize * 4,
+        )
+    };
+    let mut at = 0;
+    for y in box_.top.max(0)..box_.bottom.min(surface.height as i32) {
+        for x in box_.left.max(0)..box_.right.min(surface.width as i32) {
+            if let Some(alpha) = alpha_under.get(at) {
+                pixels[(y as usize * stride + x as usize) * 4 + 3] = *alpha;
+            }
+            at += 1;
+        }
+    }
 }
 
 /// Where the pace a popup is holding is written, given the popup and the room one line of the

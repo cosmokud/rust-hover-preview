@@ -17,7 +17,11 @@ pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
 /// The top a pinned animation's FPS slider opens at unless the file says otherwise:
 /// the fastest pace a picture that plays is offered by this app's own control.
-pub const DEFAULT_ANIMATED_FPS_MAX: u32 = 360;
+///
+/// It is a ceiling rather than a pace: a file that plays slower than this plays at the pace it was
+/// written at, and a hand that asks for more is answered up to here. A `config.ini` of the user's
+/// own may name another top for it, up to `MAX_ANIMATED_FPS_MAX` (see `sanitize_animated_fps_max`).
+pub const DEFAULT_ANIMATED_FPS_MAX: u32 = 180;
 /// The ceiling a hand-edited `animated_fps_max` is reduced to. Past a display's own
 /// refresh there is nothing a frame a second more can be seen at, and the figure
 /// leaves room for a file whose own pace is read out on the way up to it.

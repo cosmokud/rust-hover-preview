@@ -287,6 +287,34 @@ impl MediaData {
             .unwrap_or(0)
     }
 
+    /// Put the playhead on the frame the file carries `index` at, answering whether that frame is
+    /// one of those in hand.
+    ///
+    /// A picture whose frames have all been decoded is taken to one by moving the playhead rather
+    /// than by decoding the file again from that place: a hand dragging a bar across a picture of a
+    /// few thousand frames asks for a frame per column of the track, and a decode per column is a
+    /// drag that lags the hand it is following (see `take_the_picture_to_frame`). A frame of a file
+    /// that is still streaming is answered "not in hand", which is the caller's cue to ask for one.
+    pub(super) fn show_the_frame(&mut self, index: usize) -> bool {
+        if !self.media_type.is_animation() {
+            return false;
+        }
+        let Some(at) = self
+            .frames
+            .iter()
+            .position(|frame| frame.file_index == index)
+        else {
+            return false;
+        };
+
+        self.current_frame = at;
+        // The clock is set to now rather than left where it stood: the frame the hand put the
+        // picture on is a frame that begins here, and a delay counted from the frame before it
+        // would hold it for a stretch of somebody else's.
+        self.last_frame_time = Instant::now();
+        true
+    }
+
     pub(super) fn current_pixels(&self) -> &[u8] {
         self.current_frame()
             .map(|frame| frame.pixels.as_slice())

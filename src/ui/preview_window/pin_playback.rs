@@ -1801,6 +1801,11 @@ pub(super) fn a_relaunch_is_in_flight() -> bool {
 pub(super) fn reconcile_swap_take_up() {
     drain_pin_box_request();
 
+    // A picture held on a frame by a hand on the bar of the file that was up is not a hold on the
+    // file that is up now: the take-up builds the pin whole and the drag went with it, and a hold
+    // left standing is a picture that never plays again (see `hold_the_picture_on_its_frame`).
+    hold_the_picture_on_its_frame(false);
+
     if pending_pinned_relaunch().is_some() {
         let _ = reap_superseded_relaunch();
         if let Some(still) = pending_pinned_relaunch() {
@@ -1873,6 +1878,70 @@ pub(super) fn animation_total() -> Option<usize> {
     let (path, _) = pinned_media_owner()?;
 
     crate::formats::animation_frames::timeline(&path).map(|timeline| timeline.frames())
+}
+
+/// Whether the picture on screen is being held on its own frame, which is what a hand on a
+/// picture's track does to it: its track is dragged frame by frame, and a picture that played on
+/// under the hand would be off the frame the hand was reading as it moved.
+///
+/// An atomic rather than a flag on the media, because a decode begun at a frame lands a media of
+/// its own: a hold written on the one the drag was taken up against would be a hold the next frame
+/// in hand does not carry, and a drag across a file of a few thousand frames is a decode asked for
+/// on every column of the track (see `take_the_picture_to_frame`).
+static PICTURE_HELD_ON_ITS_FRAME: AtomicBool = AtomicBool::new(false);
+
+/// Hold the picture on screen on the frame it is on, or let it play on: asked by the press that
+/// takes a picture's track and by every road a drag ends on (see `pin_capture_lost` and
+/// `reconcile_swap_take_up`).
+///
+/// Letting go starts the frame the hand left it on now rather than where its own clock had got to:
+/// a picture held for as long as a drag lasted is not a picture that is behind, and the catch-up a
+/// late playhead is given — the walk `advance_frame` makes over the frames it owes — would
+/// otherwise run on through a stretch of frames the moment the hand let go.
+pub(super) fn hold_the_picture_on_its_frame(held: bool) {
+    let was_held = PICTURE_HELD_ON_ITS_FRAME.swap(held, Ordering::AcqRel);
+    if held || !was_held {
+        // Taken up, or let go of by a road that found nothing held: a picture nobody had hold of
+        // is a picture whose clock is already its own.
+        return;
+    }
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            media.last_frame_time = Instant::now();
+        }
+    }
+}
+
+/// Whether the picture on screen is held on its own frame (see `hold_the_picture_on_its_frame`).
+///
+/// It is asked by the loop's own tick before it lets a picture that plays move on, which is why it
+/// answers without a lock of any kind.
+pub(super) fn picture_is_held_on_its_frame() -> bool {
+    PICTURE_HELD_ON_ITS_FRAME.load(Ordering::Acquire)
+}
+
+/// Take the picture on screen to `frame` of its own file, which is the frame a hand on the track
+/// named.
+///
+/// It is a playhead put down on a frame where the picture has the frame in hand, and a decode asked
+/// for at it otherwise: a picture watched through to a compressed release, or one begun at a place
+/// and still streaming, is a file whose frames are not all here, and a hand that dragged to a frame
+/// nothing holds is a picture only a decode can put there (see `MediaData::show_the_frame` and
+/// `seek_pinned_animation`).
+pub(super) fn take_the_picture_to_frame(frame: usize) {
+    let held = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|mut media| media.as_mut().map(|media| media.show_the_frame(frame)));
+    if held == Some(true) {
+        return;
+    }
+
+    if let (Some((path, content, _, _)), Some(total)) = (pinned_playback_state(), animation_total())
+    {
+        seek_pinned_animation(&path, content, frame, total);
+    }
 }
 
 /// Take a pinned picture that plays to `frame`, which is a decode of this app's begun at that

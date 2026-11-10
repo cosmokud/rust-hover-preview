@@ -165,12 +165,12 @@ fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
 fn a_press_puts_the_thumb_under_the_hand_wherever_it_landed() {
     for (width, height, dpi) in [(800, 30, 96), (640, 40, 144), (480, 30, 96)] {
         let layout = transport_layout(width, height, dpi, true, false);
-        let span = (layout.bar.right - layout.bar.left) as f64;
+        let span = (layout.bar.right - layout.bar.left - 1).max(1);
 
         for x in layout.bar.left..layout.bar.right {
             let share = transport_share_at(x, width, height, dpi, true, false);
             // Where `paint_transport` draws the thumb for that share.
-            let thumb = layout.bar.left + (span * share).round() as i32;
+            let thumb = layout.bar.left + (f64::from(span) * share).round() as i32;
 
             assert_eq!(
                 thumb, x,
@@ -178,6 +178,14 @@ fn a_press_puts_the_thumb_under_the_hand_wherever_it_landed() {
                 layout.bar.left, layout.bar.right,
             );
         }
+
+        // And the last column of the track is the end of the file rather than a step short of it:
+        // a press there is the one place a hand means the file's last frame.
+        assert_eq!(
+            transport_share_at(layout.bar.right - 1, width, height, dpi, true, false),
+            1.0,
+            "the track's own last column is the end at {width}x{height} dpi {dpi}"
+        );
     }
 }
 
@@ -559,42 +567,98 @@ fn draws_the_marks_of_a_bar() {
     }
 }
 
-/// The FPS button is the volume button's own square, one square and one gap to its left, and the
-/// two never overlap at any width or scale a bar is drawn at: a bar with two controls whose boxes
-/// were each other's would be a hand that always pressed the wrong one.
+/// The clock beside the track is written against it, and the room a picture that plays keeps for
+/// the count of frames under a hand is left of the clock rather than between the clock and the
+/// track: a clock laid out from the strip's own padding is a clock a bar's worth of nothing away
+/// from the read-out it belongs to, which is the gap this app used to open there.
 #[test]
-fn the_fps_button_sits_left_of_the_volume_button_and_never_over_it() {
+fn the_clock_is_written_against_the_track_and_the_count_beside_it() {
+    let picture = transport_layout(800, 30, 96, false, true);
+
+    // What stands against the track is the clock's own box: the count's room is outside it, and
+    // one gap is all that is held between the clock and the bar it belongs to.
+    assert_eq!(picture.elapsed.right + strip_gap(1.0), picture.bar.left);
+    assert_eq!(picture.frames.right, picture.elapsed.left);
+    assert!(picture.frames.left < picture.frames.right);
+
+    // And the room holds the widest count a strip is asked to write - a file of a thousand frames
+    // and more, under a hand near its end - at every scale a strip is drawn at: a count written
+    // into a room too narrow for it is a count clipped to `[10...`.
+    for dpi in [96, 144, 192] {
+        let scale = dpi as f32 / 96.0;
+        let layout = transport_layout(text_paint::scaled(800, scale), 30, dpi, false, true);
+        let widest = measure_text(
+            &DibSurface::create(320, 40).expect("a surface to measure on"),
+            &caption_style([255, 255, 255]),
+            "[1021/1021]",
+            scale,
+        );
+        assert!(
+            widest > 0 && widest <= layout.frames.right - layout.frames.left,
+            "at dpi {dpi} the count takes {widest} of the {} columns it is given",
+            layout.frames.right - layout.frames.left
+        );
+    }
+
+    // And a strip too narrow to hold both the count and a track worth dragging keeps the track:
+    // a count is a read-out of a hand on the bar, and a bar of nothing is not a bar.
+    let narrow = transport_layout(320, 30, 96, false, true);
+    assert_eq!(narrow.frames.left, narrow.frames.right);
+    assert_eq!(narrow.elapsed.right + strip_gap(1.0), narrow.bar.left);
+
+    // And a film's bar keeps none of it, and writes its clock against the track the same way.
+    let film = transport_layout(800, 30, 96, true, false);
+    assert_eq!(film.frames.left, film.frames.right);
+    assert_eq!(film.elapsed.right + strip_gap(1.0), film.bar.left);
+}
+
+/// The pace's button is the far end of the bar a picture that plays carries, and the level's is the
+/// far end of every other bar: a file of frames has no sound for a level to be a level of, so the
+/// two are never on one strip — a second control beside a picture that plays would be a button that
+/// does nothing (see `TransportPart::Volume`).
+#[test]
+fn a_picture_that_plays_carries_one_control_at_the_far_end_and_never_two() {
     for (width, height) in [(320, 30), (600, 30), (600, 40), (1920, 48), (220, 26)] {
         for dpi in [96, 144, 192] {
-            let layout = transport_layout(width, height, dpi, true, true);
+            let picture = transport_layout(width, height, dpi, true, true);
+            let film = transport_layout(width, height, dpi, true, false);
 
-            assert!(
-                layout.fps.right <= layout.volume.left,
-                "at {width}x{height} dpi {dpi} the two controls overlap"
-            );
-            assert!(
-                layout.fps.left >= 0 && layout.fps.right <= width,
-                "at {width}x{height} dpi {dpi} the pace's button is off the bar"
+            // One square, at the strip's own right edge, and the same square the level's button is
+            // on a film's bar: a hand finds the far control where it always was.
+            assert_eq!(
+                picture.fps, film.volume,
+                "at {width}x{height} dpi {dpi} the pace is not where the level was"
             );
             assert_eq!(
-                (layout.fps.bottom - layout.fps.top),
-                (layout.volume.bottom - layout.volume.top),
-                "the two are one size of button at {width}x{height} dpi {dpi}"
+                picture.volume.left, picture.volume.right,
+                "at {width}x{height} dpi {dpi} a picture that plays drew a level's button"
+            );
+            assert_eq!(
+                film.fps.left, film.fps.right,
+                "at {width}x{height} dpi {dpi} a film drew a pace's button"
+            );
+            assert!(
+                picture.fps.left >= 0 && picture.fps.right <= width,
+                "at {width}x{height} dpi {dpi} the pace's button is off the bar"
             );
 
-            // And the bar drawn without one gives its room back to the clock: a [picture] that
-            // plays has a button there, and every other bar has a longer track.
-            let film = transport_layout(width, height, dpi, true, false);
-            assert!(
-                film.bar.right >= layout.bar.right,
-                "a bar with no pace to set keeps the room for its track"
-            );
+            // And nothing on a picture's bar is the level: every column of it, and every row wide
+            // enough to hold the square, is answered by something else or by nothing at all.
+            for x in 0..width {
+                for y in [0, height / 2, height - 1] {
+                    assert_ne!(
+                        transport_part_at(x, y, width, height, dpi, true, true),
+                        Some(TransportPart::Volume),
+                        "at {width}x{height} dpi {dpi} a column of a picture's bar is a level"
+                    );
+                }
+            }
         }
     }
 }
 
 /// A point on the FPS button is answered before anyone else's, and a bar drawn without one has
-/// nothing at that point at all.
+/// nothing of the pace's at that point at all.
 #[test]
 fn the_fps_button_is_hit_where_it_is_drawn() {
     let layout = transport_layout(800, 30, 96, true, true);
@@ -604,23 +668,18 @@ fn the_fps_button_is_hit_where_it_is_drawn() {
         transport_part_at(middle, 15, 800, 30, 96, true, true),
         Some(TransportPart::Fps)
     );
+    // A film's bar has no pace to set, and the same column of it is the level's button - one
+    // control at the far end, whichever bar it is on.
     assert_eq!(
         transport_part_at(middle, 15, 800, 30, 96, true, false),
-        None,
-        "a film's bar has no pace to set, and a button there would be a button that does nothing"
+        Some(TransportPart::Volume),
+        "a film's bar has a level where a picture's has a pace"
     );
 
-    // The volume button is still its own, one square to the right.
-    let volume = (layout.volume.left + layout.volume.right) / 2;
-    assert_eq!(
-        transport_part_at(volume, 15, 800, 30, 96, true, true),
-        Some(TransportPart::Volume)
-    );
-
-    // And the track stops short of both, so a press near the end of the strip is a control rather
-    // than a seek.
+    // And the track stops short of the button, so a press near the end of the strip is a control
+    // rather than a seek.
     assert_ne!(
-        transport_part_at(layout.volume.left, 15, 800, 30, 96, true, true),
+        transport_part_at(layout.fps.left, 15, 800, 30, 96, true, true),
         Some(TransportPart::Seek)
     );
 }
@@ -631,7 +690,7 @@ fn the_fps_button_is_hit_where_it_is_drawn() {
 #[test]
 fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
     let layout = transport_layout(800, 30, 96, true, true);
-    let popup = volume_popup_from_button(
+    let popup = fps_popup_from_button(
         RECT {
             top: layout.fps.top + 400,
             bottom: layout.fps.bottom + 400,
@@ -641,8 +700,11 @@ fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
         96,
     );
     let track = popup.track;
-    let max = 360;
+    // The top this app's own setting names, which is the ceiling the slider is read against
+    // rather than a second one of its own (see `animated_fps_max`).
+    let max = DEFAULT_ANIMATED_FPS_MAX;
 
+    assert_eq!(max, 180, "the pace this app opens at is a setting");
     assert_eq!(fps_at(track.bottom, track, max), 1, "the bottom is one");
     assert_eq!(
         fps_at(track.top, track, max),
@@ -651,7 +713,7 @@ fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
     );
     let quarter = fps_at(track.bottom - (track.bottom - track.top) / 4, track, max);
     assert!(
-        (87..=93).contains(&quarter),
+        (43..=49).contains(&quarter),
         "a quarter of the way up is a quarter of the pace above one, and not all of it: {quarter}"
     );
 
@@ -663,8 +725,165 @@ fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
     // in between the row between them.
     assert_eq!(fps_thumb_row(track, 1, max), track.bottom);
     assert_eq!(fps_thumb_row(track, max, max), track.top);
-    assert!(fps_thumb_row(track, 180, max) < track.bottom);
-    assert!(fps_thumb_row(track, 180, max) > track.top);
+    assert!(fps_thumb_row(track, max / 2, max) < track.bottom);
+    assert!(fps_thumb_row(track, max / 2, max) > track.top);
+
+    // The panel is the level's own shape widened by what it has to hold: a number written across
+    // its top is a figure read in a panel of its own width, and the two are one panel otherwise
+    // (see `FPS_PANEL_WIDTH` and `fps_popup_text_rect`).
+    let volume = volume_popup_from_button(
+        RECT {
+            top: layout.fps.top + 400,
+            bottom: layout.fps.bottom + 400,
+            ..layout.fps
+        },
+        800,
+        96,
+    );
+    assert!(popup.panel.right - popup.panel.left > volume.panel.right - volume.panel.left);
+    let text = fps_popup_text_rect(&popup, 96);
+    assert!(
+        text.right - text.left
+            >= measure_text(
+                &DibSurface::create(40, 20).expect("a surface to measure on"),
+                &caption_style([255, 255, 255]),
+                "180",
+                1.0,
+            ),
+        "the room the pace is written in holds the figure the slider can be taken to"
+    );
+}
+
+/// The pace is written over its own panel in blue and with nothing of the page behind it: the
+/// figures are ink on a flat panel, and the panel's own alpha byte is handed back under them (see
+/// `paint_fps_popup_text`).
+///
+/// It is judged on the strip a layered window carries rather than on the figure alone, because the
+/// two faults it is written against are faults of what is *under* the figure: a run whose
+/// background came from the caption's page instead of the panel is a patch of another colour around
+/// a number, and a run that left GDI's zero alpha behind it is a number cut out of the panel it is
+/// read on.
+#[test]
+fn the_pace_is_written_in_blue_with_no_panel_of_its_own_behind_it() {
+    let shift = |rect: RECT, by: (i32, i32)| RECT {
+        left: rect.left - by.0,
+        top: rect.top - by.1,
+        right: rect.right - by.0,
+        bottom: rect.bottom - by.1,
+    };
+    let button = RECT {
+        left: 600,
+        top: 500,
+        right: 622,
+        bottom: 522,
+    };
+    let (width, height, text, strip_width, popup) = {
+        let popup = fps_popup_from_button(button, 1200, 96);
+        let bounds = volume_popup_bounds(&popup, 1200, 700);
+        let by = (bounds.left, bounds.top);
+        (
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top,
+            shift(fps_popup_text_rect(&popup, 96), by),
+            (bounds.right - bounds.left).max(1),
+            VolumePopup {
+                panel: shift(popup.panel, by),
+                track: shift(popup.track, by),
+            },
+        )
+    };
+
+    // The strip a pace's panel is painted into, with or without the figures written over it, so
+    // that what the figures did to the panel can be told apart from the panel itself.
+    let painted = |figures: bool| {
+        let palette = ChromePalette {
+            background: [24, 26, 32],
+            foreground: [240, 240, 240],
+            accent: [86, 182, 194],
+            blue: [97, 175, 239],
+            number: [209, 154, 102],
+            dark: true,
+        };
+        let surface = DibSurface::create(width as u32, height as u32)
+            .expect("a strip to paint a pace's panel into");
+        let len = (width.max(1) * height.max(1) * 4) as usize;
+        {
+            let pixels = unsafe { std::slice::from_raw_parts_mut(surface.bits(), len) };
+            pixels.fill(0);
+            paint_fps_popup(pixels, strip_width, &palette, &popup, 180, 180, false);
+        }
+
+        // The panel's own alpha byte under the figures, before they are written over it.
+        let under = alphas(surface.bits(), strip_width, text, height);
+        if figures {
+            paint_fps_popup_text(&surface, &palette, &popup, 180, 96);
+        }
+        let pixels = unsafe { std::slice::from_raw_parts(surface.bits(), len) }.to_vec();
+
+        (pixels, under)
+    };
+
+    let (bare, _) = painted(false);
+    let (page, under) = painted(true);
+
+    // **Nothing of the run is a panel of its own.** What it writes is the figure and the figure
+    // only: the pixels it leaves alone are still the panel's, and none of them is outside the room
+    // the pace is written in — a run whose background came from the page would be a rectangle of
+    // another colour around a number, and every pixel of its box would have changed.
+    let box_ = |x: i32, y: i32| ((y * strip_width + x) * 4) as usize;
+    let mut changed = 0;
+    for y in 0..height {
+        for x in 0..strip_width {
+            let at = box_(x, y);
+            if page[at..at + 3] == bare[at..at + 3] {
+                continue;
+            }
+            assert!(
+                x >= text.left && x < text.right && y >= text.top && y < text.bottom,
+                "the run painted outside the room the pace is written in, at ({x}, {y})"
+            );
+            changed += 1;
+        }
+    }
+    let room = ((text.right - text.left).max(0) * (text.bottom - text.top).max(0)) as usize;
+    assert!(changed > 0, "the pace was not written at all");
+    assert!(
+        changed < room,
+        "the run filled its box with a background of its own: {changed} of {room} pixels changed"
+    );
+
+    // And the panel's alpha is handed back under the figures rather than left at the zero GDI draws
+    // through: a strip carries per-pixel alpha, so a run that sealed it would be a hole in the panel.
+    assert_eq!(
+        under,
+        alphas(page.as_ptr(), strip_width, text, height),
+        "the run hands the panel's own alpha back"
+    );
+
+    // And the figure is the theme's blue: the bluest pixel of the room leans to it by a wide margin
+    // over the panel it is written on, which no run in the panel's own colour could be.
+    let bluest = (text.top.max(0)..text.bottom.min(height))
+        .flat_map(|y| (text.left.max(0)..text.right.min(strip_width)).map(move |x| (x, y)))
+        .map(|(x, y)| page[box_(x, y)..][..4].to_vec())
+        .max_by_key(|pixel| i32::from(pixel[0]) - i32::from(pixel[2]))
+        .expect("the room the pace is written in");
+    assert!(
+        i32::from(bluest[0]) - i32::from(bluest[2]) > 60,
+        "the bluest pixel of the pace is not blue: {bluest:?}"
+    );
+}
+
+/// The alpha byte of every pixel in `rect`, row by row, off a strip's own premultiplied BGRA.
+fn alphas(bits: *const u8, width: i32, rect: RECT, height: i32) -> Vec<u8> {
+    let pixels =
+        unsafe { std::slice::from_raw_parts(bits, (width.max(1) * height.max(1) * 4) as usize) };
+    let mut found = Vec::new();
+    for y in rect.top.max(0)..rect.bottom.min(height) {
+        for x in rect.left.max(0)..rect.right.min(width) {
+            found.push(pixels[((y * width + x) * 4) as usize + 3]);
+        }
+    }
+    found
 }
 
 /// The pace's panel is the volume panel, hung from a button of its own: inside the window, over the
@@ -679,7 +898,7 @@ fn the_pace_popup_is_inside_the_window_and_floats_above_its_button() {
                 bottom: layout.fps.bottom + height,
                 ..layout.fps
             };
-            let popup = volume_popup_from_button(button, width, dpi);
+            let popup = fps_popup_from_button(button, width, dpi);
 
             assert!(popup.panel.left >= 0 && popup.panel.right <= width);
             // The panel floats over the media rather than over the button that opened it — unless

@@ -1549,7 +1549,13 @@ pub fn run_preview_window() {
                         || media.media_type.is_audio()
                         || media.media_type.is_loading()
                         || media.should_draw_streaming_overlay();
-                    if media.advance_frame() {
+                    // **A picture whose track is under a hand stands still.** A drag of a picture
+                    // that plays walks its frames, and a picture that went on playing between the
+                    // frames the hand named would be a frame that arrived and left under the hand
+                    // reading it — so the frame the hand is on is the frame that is drawn, until
+                    // the hand lets go (see `hold_the_picture_on_its_frame`).
+                    let held = pinned() && picture_is_held_on_its_frame();
+                    if !held && media.advance_frame() {
                         needs_repaint = true;
                     }
                     if media.update_loading_frame() {

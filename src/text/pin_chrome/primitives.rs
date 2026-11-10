@@ -27,6 +27,14 @@ pub(crate) struct ChromePalette {
     pub(crate) foreground: [u8; 3],
     /// The bubble's ring, and the played part of a transport's bar.
     pub(crate) accent: [u8; 3],
+    /// The theme's own blue: the ink a setting written over a panel is read in, which is the pace a
+    /// picture that plays is held at (see `paint_fps_popup_text`).
+    ///
+    /// It is a second colour beside the accent because the two are different things in every theme
+    /// this app bundles: the accent is the theme's cyan - `#56B6C2` on One Dark Pro, `#0184BC` on
+    /// Atom One Light - which is a mark rather than a figure, and the blue a name of a function is
+    /// written in is the one the bundled themes call their own (`#61AFEF` and `#4078F2`).
+    pub(crate) blue: [u8; 3],
     /// The ink a state of the window's own is read in rather than a choice it still offers — that it
     /// is kept on top, that it is a window of its own — and the one a sound's card and a playlist row
     /// both read the format of a file in, so that a caption's button and that card's button say the
@@ -51,6 +59,7 @@ impl ChromePalette {
         // chrome and the track on that card are one color rather than two near neighbours (see
         // `audio_preview::build_page`).
         let accent = text_paint::rgb(theme.style_for_scopes(&["support.function"]).foreground);
+        let blue = text_paint::rgb(theme.style_for_scopes(&["entity.name.function"]).foreground);
         // The numbers' ink, read against the bar it is drawn on rather than as the theme writes it, so
         // that a state said in it is legible on either of the bundled themes (see
         // `audio_preview::build_page`, which reads the same scope the same way for its card).
@@ -63,6 +72,7 @@ impl ChromePalette {
             background,
             foreground,
             accent,
+            blue,
             number,
             dark: text_paint::luminance(background) <= 0.5,
         })

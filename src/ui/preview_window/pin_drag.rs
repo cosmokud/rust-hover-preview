@@ -834,8 +834,16 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
             // finds the pointer away from it (see `refresh_pin_volume`).
             pin.volume.dragging = false;
             pin.volume.held = None;
+            // And the picture a hand was walking through, which is held on the frame that hand left
+            // it on: a capture taken away is a drag abandoned, and a hold left standing is a picture
+            // that never plays again (see `hold_the_picture_on_its_frame`).
+            pin.fps.seeking = None;
+            pin.fps.seeking_frame = None;
+            pin.fps.dragging = false;
+            pin.fps.held = None;
         }
     }
+    hold_the_picture_on_its_frame(false);
 
     // And the playlist band's own height, which the pointer was taken for the way a drag takes it:
     // a capture somebody else has taken is a band whose edge has stopped following the hand.

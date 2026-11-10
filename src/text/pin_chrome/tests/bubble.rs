@@ -16,6 +16,7 @@ fn palette() -> ChromePalette {
         background: [24, 26, 32],
         foreground: [240, 240, 240],
         accent: [97, 175, 239],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     }
