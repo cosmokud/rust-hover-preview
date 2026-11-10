@@ -965,3 +965,198 @@ fn the_query_lets_through_the_names_that_hold_it_and_keeps_their_order() {
     assert!(names("4.2 MB").is_empty(), "and so is the room it takes");
     assert!(names("nothing here").is_empty());
 }
+
+/// What a field's pixel is, read back out of the surface in the order the palette keeps its colours:
+/// the page under it where nothing was drawn, or the ink that was.
+fn field_pixels(surface: &DibSurface) -> Vec<[u8; 3]> {
+    let width = surface.width as usize;
+    let pixels =
+        unsafe { std::slice::from_raw_parts(surface.bits(), width * surface.height as usize * 4) };
+
+    (0..width * surface.height as usize)
+        .map(|at| {
+            let index = at * 4;
+            [pixels[index + 2], pixels[index + 1], pixels[index]]
+        })
+        .collect()
+}
+
+/// The field is a **pill**: the plate it is filled with is rounded to half its height, so the four
+/// pixels in its corners are the band's page rather than the plate, and the two in the middle of its
+/// sides are the plate. A square box of the same colour would be the one shape this is not.
+#[test]
+fn the_field_is_a_pill_rather_than_a_box() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let page = palette.background;
+    let plate = text_paint::blend(page, palette.foreground, 0.07);
+
+    let (surface, box_) = a_band_of_the_field(PlaylistSearch {
+        text: "",
+        caret: 0,
+        focused: false,
+    });
+    let pixels = field_pixels(&surface);
+    let at = |x: i32, y: i32| pixels[y as usize * surface.width as usize + x as usize];
+    let corner_ink = |x: i32, y: i32| {
+        let corner = at(x, y);
+        corner != page && corner != plate
+    };
+
+    // The corners are off the pill, so what is there is the band's page and not the plate: the radius
+    // takes the corner of the box the layout gave it.
+    assert_eq!(
+        at(box_.left, box_.top),
+        page,
+        "the top-left corner of the field's box is outside the pill"
+    );
+    assert_eq!(
+        at(box_.right - 1, box_.bottom - 1),
+        page,
+        "and so is the bottom-right one"
+    );
+
+    // The middle of each side is inside it, which is the same box read where the pill is whole: the
+    // pill's own edge carries its hairline there and the pixel past it is the plate.
+    let middle = (box_.top + box_.bottom) / 2;
+    assert_ne!(
+        at(box_.left, middle),
+        page,
+        "the middle of the pill's left edge is the pill's own edge"
+    );
+    assert_eq!(
+        at(box_.left + 1, middle),
+        plate,
+        "and the pixel inside it is the plate the pill is filled with"
+    );
+    assert_ne!(
+        at(box_.right - 1, middle),
+        page,
+        "the middle of its right edge is the pill's too"
+    );
+    assert_eq!(
+        at(box_.right - 2, middle),
+        plate,
+        "and the pixel inside that edge is the plate"
+    );
+
+    // The corner is the page and the pixel a row in from it is on the curve rather than on the
+    // plate, which is what a radius of half the height does to the box the layout gave the field.
+    assert!(
+        !corner_ink(box_.left + 2, box_.top + 1),
+        "the pill's own edge is a curve, not a stair of whole pixels"
+    );
+}
+
+/// The mark is a magnifier at the pill's left — a ring and a handle, in the muted ink, inside the
+/// square the layout kept for it — and the query is set after it rather than over it.
+#[test]
+fn the_field_draws_its_mark_at_its_left_and_sets_the_query_after_it() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let page = palette.background;
+    let plate = text_paint::blend(page, palette.foreground, 0.07);
+
+    let layout = playlist_layout(400, 240, SCALE, 0);
+    let (surface, box_) = a_band_of_the_field(PlaylistSearch {
+        text: "",
+        caret: 0,
+        focused: false,
+    });
+    let pixels = field_pixels(&surface);
+    let width = surface.width as usize;
+    let inked = |left: i32, right: i32| {
+        (box_.top..box_.bottom)
+            .flat_map(|y| (left..right).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                let at = pixels[*y as usize * width + *x as usize];
+                at != page && at != plate
+            })
+            .count()
+    };
+
+    // The mark's own square is the one the layout names, and it is the square the mark is inked in.
+    let mark = layout.search_mark;
+    let side = layout.search_text_left - mark;
+    assert!(side > 0, "the query begins past the mark");
+
+    // The mark is a ring and a handle rather than a solid square of ink: the middle of its square is
+    // the hole of the ring, which carries the plate rather than the mark.
+    let centre = (box_.top + box_.bottom) / 2;
+    assert!(
+        inked(mark, layout.search_text_left) > 0,
+        "the mark's square carries ink"
+    );
+
+    // Its centre is the ring's hole, so the mark is a shape rather than a block: the hole's own
+    // pixels are the plate the pill was filled with.
+    let hole = (mark + 1..layout.search_text_left - 1)
+        .filter(|x| {
+            (centre - 1..=centre + 1).all(|y| {
+                let at = pixels[y as usize * width + *x as usize];
+                at == plate || at == page
+            })
+        })
+        .count();
+    assert!(
+        hole > 0,
+        "the mark's middle is a hole rather than a block of ink"
+    );
+
+    // And the query begins at the column the layout kept for it, past the mark's own square: the
+    // field's text and the mark never share a pixel.
+    assert!(
+        layout.search_text_left > mark + side / 2,
+        "the query begins past the middle of the mark, not on it"
+    );
+}
+
+/// The caret is the size of the face the query is set in rather than the height of the line box: a
+/// bar taller than the characters it stands between reads as a column of the field, not as a place
+/// the next character lands.
+///
+/// The two fields painted here are one query with the caret in it and the same query without it, so
+/// every pixel they disagree on is the caret's — which is the exact question, a bar of an accent that
+/// is blended over the plate cannot be found by its own colour.
+#[test]
+fn the_caret_is_the_height_of_the_letter_it_stands_between() {
+    let with = a_band_of_the_field(PlaylistSearch {
+        text: "  ",
+        caret: 0,
+        focused: true,
+    })
+    .0;
+    let without = a_band_of_the_field(PlaylistSearch {
+        text: "  ",
+        caret: 0,
+        focused: false,
+    })
+    .0;
+    let painted = field_pixels(&with);
+    let spare = field_pixels(&without);
+    let width = with.width as usize;
+    let height = with.height as usize;
+
+    // The tallest column the two disagree on, which is the caret's own.
+    let column = (0..width)
+        .map(|x| {
+            (0..height)
+                .filter(|y| painted[y * width + x] != spare[y * width + x])
+                .count()
+        })
+        .max()
+        .unwrap_or_default();
+
+    // The face's own pixels, which is what a caret between characters is as tall as — the line box
+    // the query is laid out in is taller than that, and a bar drawn its height stands in the leading.
+    let level = facts_style().level as usize;
+    let cell = text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[level], SCALE) as usize;
+
+    assert!(column > 0, "a focused field draws its caret");
+    assert!(
+        column <= cell,
+        "the caret is no taller than the letters it stands between"
+    );
+    assert!(
+        column >= cell / 2,
+        "and it is not a speck in the middle of the pill either"
+    );
+}

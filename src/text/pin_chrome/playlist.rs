@@ -14,7 +14,10 @@
 //! anything.
 
 use super::caption::fit_title;
-use super::primitives::{fill_box, measure_run, ChromePalette};
+use super::primitives::{
+    fill_box, fill_ring, fill_round_rect, measure_run, stroke_round_rect, stroke_segment,
+    ChromePalette, GLYPH_STROKE_PIXELS,
+};
 use crate::readers::audio_track::{self, Probed};
 use crate::text::audio_preview;
 use crate::text::text_paint::{self, DibSurface};
@@ -52,10 +55,18 @@ pub(crate) struct PlaylistLayout {
     pub(crate) visible: i32,
     /// The search field at the band's bottom: the rows end where it begins, and its own bottom is
     /// held the pad off the window's last row so that it never meets the drag strip there.
+    ///
+    /// It is a pill: the box is filled with the band's own page blended a little toward its ink and
+    /// rounded to half its height, and the two columns inside it are the mark's and the query's.
     pub(crate) search_top: i32,
     pub(crate) search_bottom: i32,
     pub(crate) search_left: i32,
     pub(crate) search_right: i32,
+    /// Where the search mark's square begins, inside the pill's own left pad.
+    pub(crate) search_mark: i32,
+    /// Where the query begins: past the pill's pad, the mark and the gap after it. A press names a
+    /// place in the query from this column, so the mark is never a character of it.
+    pub(crate) search_text_left: i32,
     /// Where a row's name begins: past the pad, the stripe the shown row carries and a gap.
     pub(crate) text_left: i32,
     /// The last column a row's name may reach: the length is right-aligned in its column and drawn
@@ -174,6 +185,9 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let name_gap = text_paint::scaled(NAME_GAP_PIXELS as i32, scale).max(0);
 
     let search = text_paint::scaled(SEARCH_PIXELS as i32, scale).max(0);
+    let mark = text_paint::scaled(SEARCH_MARK_PIXELS as i32, scale).max(0);
+    let search_pad = text_paint::scaled(SEARCH_PAD_PIXELS as i32, scale).max(0);
+    let mark_gap = text_paint::scaled(SEARCH_MARK_GAP_PIXELS as i32, scale).max(0);
 
     let rows_top = pad.min(height);
     // The field is a constant of the layout: a band taller or shorter than this one gives the rows
@@ -183,6 +197,11 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let search_bottom = (search_top + search).min(height - pad).max(search_top);
     let search_left = pad.min(width);
     let search_right = (width - pad).max(search_left);
+    // The mark is the first thing in the pill and the query is set after it, each held the pill's own
+    // pad off the edge it begins at: a query drawn over the mark is a mark no one can see, and a
+    // press on the mark is a press before the first character rather than one in it.
+    let search_mark = search_left + search_pad;
+    let search_text_left = (search_mark + mark + mark_gap).min(search_right);
     let visible = ((rows_bottom - rows_top) / row_height).max(0);
     let scrolling = rows.saturating_sub(visible as usize) > 0;
     // The scrollbar is a mark on the window's own edge rather than a column of the band's: it is
@@ -219,6 +238,8 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
         search_bottom,
         search_left,
         search_right,
+        search_mark,
+        search_text_left,
         text_left,
         name_right: (drawn_left - name_gap).max(text_left),
         facts_right: (clock_left - clock_gap).max(text_left),
@@ -371,9 +392,9 @@ pub(crate) fn search_field_holds(layout: &PlaylistLayout, x: i32, y: i32) -> boo
     (layout.search_left..layout.search_right).contains(&x) && (top..bottom).contains(&y)
 }
 
-/// The column the query's first character is drawn at, which is the pad inside the field's own box.
-fn search_text_left(layout: &PlaylistLayout, scale: f32) -> i32 {
-    layout.search_left + text_paint::scaled(PAD_PIXELS as i32, scale).max(0)
+/// The column the query's first character is drawn at: the one the layout kept past the mark.
+fn search_text_left(layout: &PlaylistLayout) -> i32 {
+    layout.search_text_left
 }
 
 /// The place in the query a point of the field names: a press puts the caret between the characters
@@ -389,7 +410,7 @@ pub(crate) fn search_index_at(layout: &PlaylistLayout, text: &str, x: i32, scale
         return text.len();
     };
     let columns = measure_run(&surface, &facts_style(), text, scale);
-    let character = super::find_bar::index_at_column(&columns, search_text_left(layout, scale), x);
+    let character = super::find_bar::index_at_column(&columns, layout.search_text_left, x);
 
     text.char_indices()
         .nth(character)
@@ -739,8 +760,8 @@ pub(crate) fn paint_playlist(
     }
 }
 
-/// The search field's own pixels: a faint box, the query from the pad inside it, the caret when it is
-/// focused, and the muted placeholder where the query is nothing.
+/// The search field's own pixels: a pill, the search mark at its left, the query after it, the caret
+/// when it is focused, and the muted placeholder where the query is nothing.
 ///
 /// Answers the boxes GDI wrote into, which the band's own seal gives their coverage back — a field
 /// drawn but not sealed is a hole in an opaque band, and a hole in an opaque band is a press that
@@ -777,32 +798,65 @@ fn paint_search(
         return Vec::new();
     }
 
-    fill_box(
+    // **The pill.** The plate is the band's own page lifted a little toward its ink, so that the field
+    // reads as a surface in the band rather than as a band of two colours, and it is rounded to half
+    // its height — past that a radius stops being a curve and becomes the box it started as.
+    let radius = (field.bottom - field.top) as f32 / 2.0;
+    let plate = text_paint::blend(page, palette.foreground, SEARCH_INK);
+    fill_round_rect(pixels, width, field, radius, plate, plate, 1.0);
+    // And the hairline that keeps a pill of a page a shade off the page from being the page: the same
+    // line the card's own boxes are drawn with, so a field and the card it hangs under are one chrome.
+    stroke_round_rect(
         pixels,
         width,
         field,
-        text_paint::blend(page, palette.foreground, SEARCH_INK),
+        radius,
+        1.0,
+        palette.hover(SEARCH_EDGE_INK),
         1.0,
     );
 
-    let text_left = search_text_left(layout, scale);
+    // **The mark**: the ring and the handle of a magnifier, drawn as the two strokes it is rather than
+    // as a glyph, because a glyph of a face the theme chose is a mark whose weight the theme decided
+    // (see `paint_search_mark`).
+    let centre_y = (layout.search_top + layout.search_bottom) as f32 / 2.0;
+    paint_search_mark(
+        pixels,
+        width,
+        layout.search_mark,
+        centre_y,
+        text_paint::scaled(SEARCH_MARK_PIXELS as i32, scale),
+        muted,
+    );
+
+    let text_left = search_text_left(layout);
     let cell = text_paint::scaled(FACTS_PIXELS as i32, scale).max(1);
+    // The run is the line box the text is set in, centred in the pill and held its own pad off the
+    // pill's right: what GDI opaques over, and the box the seal gives its coverage back to.
     let run = RECT {
         left: text_left,
         top: layout.search_top + ((layout.search_bottom - layout.search_top - cell).max(0) / 2),
-        right: (layout.search_right - text_paint::scaled(PAD_PIXELS as i32, scale).max(0))
+        right: (layout.search_right - text_paint::scaled(SEARCH_PAD_PIXELS as i32, scale).max(0))
             .max(text_left),
         bottom: layout.search_bottom,
     };
 
     let mut painter = text_paint::RunPainter::new(surface, scale);
     let style = facts_style();
+    // A run opaques its box, so the text's own box is filled with the pill's plate first: what is
+    // written over the field is set on the field rather than on the band's page.
+    let under = RECT {
+        left: run.left,
+        right: run.right,
+        ..run
+    };
+    fill_box(pixels, width, under, plate, 1.0);
 
     if search.text.is_empty() {
-        painter.draw(PLACEHOLDER, text_left, run, &style, muted, page);
+        painter.draw(PLACEHOLDER, text_left, run, &style, muted, plate);
     } else {
         let cut = fit_title(surface, &style, search.text, run.right - run.left, scale);
-        painter.draw(&cut, text_left, run, &style, palette.foreground, page);
+        painter.draw(&cut, text_left, run, &style, palette.foreground, plate);
     }
     painter.forget_the_face();
 
@@ -811,16 +865,22 @@ fn paint_search(
         let carried = measure(surface, &style, &search.text[..caret], scale);
         let bar = text_paint::scaled(CARET_PIXELS as i32, scale).max(1);
         let at = (text_left + carried).clamp(run.left, (run.right - bar).max(run.left));
+        // **The caret is the size of the face, not of the line box.** The run is a line of the font with
+        // its leading above and below the glyphs, and a bar drawn the height of it stands taller than
+        // every character it is between — so it is the font's own pixels, centred in the pill.
+        let top = centre_y as i32 - cell / 2;
 
-        // The accent, which is the ink the clock and the card's own caret are drawn in.
+        // The accent, which is the ink the clock and the card's own caret are drawn in — and the
+        // height of a line of the face the query is set in, so that a caret is the size of the
+        // characters it stands between rather than of the box the line is laid out in.
         fill_box(
             pixels,
             width,
             RECT {
                 left: at,
-                top: run.top,
+                top,
                 right: at + bar,
-                bottom: run.bottom,
+                bottom: top + cell,
             },
             palette.accent,
             0.9,
@@ -828,6 +888,49 @@ fn paint_search(
     }
 
     vec![run]
+}
+
+/// The magnifier at the field's left: a ring and the handle off its lower right, which is the mark a
+/// person reads a text field by — two strokes of one face, so it matches the query beside it whatever
+/// the theme's typeface is.
+///
+/// The ring's radius and the handle's length are the square's own numbers rather than a font's: a
+/// glyph of a theme's face is a mark whose weight the theme decided, and this is chrome the band draws
+/// itself as it draws its chevrons and its play mark.
+fn paint_search_mark(
+    pixels: &mut [u8],
+    width: i32,
+    left: i32,
+    centre_y: f32,
+    side: i32,
+    ink: [u8; 3],
+) {
+    if side <= 0 {
+        return;
+    }
+
+    let stroke = (GLYPH_STROKE_PIXELS * side as f32 / SEARCH_MARK_PIXELS).max(1.0);
+    // The ring takes the square's upper two thirds and the handle the rest, so that the mark is the
+    // square it was given rather than a smaller one floating in it.
+    let radius = side as f32 * 0.30;
+    let centre_x = left as f32 + radius + stroke / 2.0;
+    let centre_y = centre_y - side as f32 * 0.06;
+    fill_ring(pixels, width, centre_x, centre_y, radius, stroke, ink, 1.0);
+    stroke_segment(
+        pixels,
+        width,
+        (
+            centre_x + radius * std::f32::consts::FRAC_1_SQRT_2,
+            centre_y + radius * std::f32::consts::FRAC_1_SQRT_2,
+        ),
+        (
+            centre_x + radius + stroke / 2.0,
+            centre_y + radius + stroke / 2.0,
+        ),
+        stroke,
+        ink,
+        1.0,
+    );
 }
 
 /// One run, measured at the scale it is drawn at, without a box to draw it in: what a name's
@@ -937,18 +1040,33 @@ const ROW_PIXELS: f32 = 44.0;
 
 /// How tall the search field is, in logical pixels: a constant of the layout, so that a band dragged
 /// taller or shorter gives the rows above it what it took rather than stretching the field.
+///
+/// It is a pill of a whole line of the query inside it: the pad above and below a line of the face the
+/// query is set in, so that the two are centred in it rather than the pill being drawn around them.
 const SEARCH_PIXELS: f32 = 34.0;
 
 /// What an empty field says, in the muted ink and nothing else: it is a note about what the field is
 /// for rather than a character it holds.
 const PLACEHOLDER: &str = "Search names";
 
-/// How wide the caret bar is.
+/// How wide the caret bar is: a hairline of accent rather than a stem, because it stands between
+/// characters and is read as the place the next one lands rather than as a mark of its own.
 const CARET_PIXELS: f32 = 1.5;
 
-/// How far the field's own box stands off the band's page: enough that the two read as a box inside
-/// the band rather than as a band of two colours.
+/// The search mark's square, and the two gaps the pill keeps around it: its own pad off the left edge
+/// of the pill, and the room between the mark and the first character of the query.
+const SEARCH_MARK_PIXELS: f32 = 13.0;
+const SEARCH_PAD_PIXELS: f32 = 12.0;
+const SEARCH_MARK_GAP_PIXELS: f32 = 7.0;
+
+/// How far the pill stands off the band's page: enough that the two read as a field inside the band
+/// rather than as a band of two colours, and little enough that it is a tint of the band's own page
+/// rather than a second surface in the window.
 const SEARCH_INK: f32 = 0.07;
+
+/// How far the hairline around the pill stands off the page, which is a shade under the line a card's
+/// own boxes are drawn with: a pill's outline says where the field ends, and it is not a border.
+const SEARCH_EDGE_INK: f32 = 0.22;
 
 /// The pad the rows are held off every edge of the band by, and the room the drag handle at the
 /// band's bottom edge is drawn in — the pad is the wider of the two on purpose, so that no press
