@@ -591,6 +591,12 @@ pub(super) struct PinnedPreview {
     /// Where the playback of a video is, which is what the transport bar is drawn from and what
     /// a seek or a pause is measured against (see `PinTransport`).
     pub(super) transport: PinTransport,
+    /// Whether the transport bar is one a picture that plays carries, decided when the pin was
+    /// taken up: its seek is the file's frames and its FPS button is the first of the bar's two
+    /// own controls (see `is_played_picture`).
+    pub(super) transport_animated: bool,
+    /// The pace this pin plays at, for a pin that is a picture that plays (see `PinFps`).
+    pub(super) fps: PinFps,
     /// The level this pin plays at, which belongs to this window rather than to the setting it was
     /// read from (see `PinVolume`).
     pub(super) volume: PinVolume,
@@ -650,6 +656,8 @@ impl PinnedPreview {
             tooltip: PinTooltip::default(),
             dragging: None,
             transport: PinTransport::default(),
+            transport_animated: false,
+            fps: PinFps::default(),
             volume: PinVolume::default(),
             audio_hovered: None,
             audio_pressed: None,
@@ -863,9 +871,61 @@ pub(super) fn next_subtitle(current: Option<usize>, streams: usize) -> Option<us
     (streams > 0).then(|| current.map_or(0, |index| (index + 1) % streams))
 }
 
+/// The pace a pinned picture that plays is held at, and the slider the hand sets it with.
+///
+/// A picture that plays has no player behind it to report a pace and no speaker to point at, so
+/// the two controls at the end of its bar are this app's own: the level is a setting's, and the
+/// pace is the file's — read out of the frames themselves when the pin is taken up, and moved by
+/// a hand from there (see `AnimationPlayback` and `TransportPart::Fps`).
+#[derive(Clone, Copy, Default)]
+pub(super) struct PinFps {
+    /// The pace the file itself keeps, in frames a second — what the slider opens at.
+    pub(super) detected: f64,
+    /// The pace a hand asked for, and nothing while the file plays at its own.
+    pub(super) wanted: Option<u32>,
+    /// Whether the slider is up.
+    pub(super) open: bool,
+    /// Where a hand has dragged the bar's track to, as a share of the file's own run: the playhead
+    /// is drawn there while the drag lasts, and the decode lands on the frame when it lets go
+    /// (see `pin_frame_share`).
+    pub(super) seeking: Option<f64>,
+    /// Whether its knob is being held: a drag is a hand on the pace, and it must not be mistaken
+    /// for the pointer having gone away from the slider.
+    pub(super) dragging: bool,
+    /// The slider's box as it stood when the drag began, so that a chrome or card that lays itself
+    /// out under the hand does not move the groove out from under the knob.
+    pub(super) held: Option<pin_chrome::VolumePopup>,
+}
+
+impl PinFps {
+    /// The pace this pin plays at: the one a hand asked for, or the file's own.
+    pub(super) fn pace(&self) -> u32 {
+        self.wanted
+            .unwrap_or_else(|| self.detected.round().max(1.0) as u32)
+            .max(1)
+    }
+}
+
 /// Whether a kind is one the transport bar is drawn for.
 pub(super) fn pin_transport_kind(kind: Option<MediaType>) -> bool {
-    matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo))
+    matches!(kind, Some(MediaType::Video) | Some(MediaType::NativeVideo)) || is_played_picture(kind)
+}
+
+/// Whether a kind is a picture that plays with nothing behind it — the frames of a GIF, an APNG
+/// or an animated WebP, which this app decodes and draws itself.
+///
+/// It is the question the bar's own seek asks rather than the one the film's does: a film is
+/// taken to a second of itself by a player that has to be told where, and a picture that plays is
+/// taken to a frame of itself by this app decoding from that frame — so the bar's track means the
+/// file's frames here and its watches are seconds of the run, and both are read off one walk of
+/// the container (see `animation_frames`).
+pub(super) fn is_played_picture(kind: Option<MediaType>) -> bool {
+    matches!(
+        kind,
+        Some(MediaType::AnimatedGif)
+            | Some(MediaType::AnimatedApng)
+            | Some(MediaType::AnimatedWebP)
+    )
 }
 
 /// Whether a kind is one whose transport bar carries controls that do something.
@@ -883,7 +943,11 @@ pub(super) fn pin_transport_kind(kind: Option<MediaType>) -> bool {
 /// kind's — and there is none, because a sound's card carries its own controls on its own row and
 /// everything else has no playback behind it at all.
 pub(super) fn pin_transport_live(kind: Option<MediaType>) -> bool {
-    pin_transport_kind(kind)
+    // A picture that plays is the exception, and the whole of it is that there is no player on
+    // its bar: nothing behind it takes a pause and nothing reports a position, so a button drawn
+    // there would be a promise this app cannot keep — while the track and the two controls at its
+    // end are this app's own and answer whatever the kind is (see `is_played_picture`).
+    !is_played_picture(kind) && pin_transport_kind(kind)
 }
 
 /// Whether a pinned window's chrome comes and goes with the pointer, which is true of the kinds

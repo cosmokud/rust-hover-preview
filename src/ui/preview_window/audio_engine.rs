@@ -331,6 +331,7 @@ pub(super) fn load_audio_card(path: &Path, width: u32, height: u32, dpi: u32) ->
         loading_start: None,
         text_state: None,
         audio_scale: Some(scale),
+        animation: AnimationPlayback::default(),
     })
 }
 

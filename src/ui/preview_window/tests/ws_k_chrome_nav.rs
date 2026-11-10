@@ -54,6 +54,8 @@ fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
             transport
         },
         volume: PinVolume::default(),
+        transport_animated: false,
+        fps: PinFps::default(),
         audio_hovered: None,
         audio_pressed: None,
         audio_window_buttons: false,
@@ -118,7 +120,15 @@ fn seek_track_point() -> (i32, i32) {
     let bar = pinned_transport_geometry().expect("a banded pin has a bar");
     let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
     assert_eq!(
-        pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi, bar.live),
+        pin_chrome::transport_part_at(
+            x,
+            y - bar.top,
+            bar.width,
+            bar.height,
+            bar.dpi,
+            bar.live,
+            bar.animated
+        ),
         Some(pin_chrome::TransportPart::Seek),
         "the middle of the bar is the seek track"
     );
@@ -301,6 +311,7 @@ fn a_transport_part_point(part: pin_chrome::TransportPart) -> (i32, i32) {
                 bar.height,
                 bar.dpi,
                 bar.live,
+                bar.animated,
             ) == Some(part)
         })
         .unwrap_or_else(|| panic!("this bar draws no {part:?} to press"))

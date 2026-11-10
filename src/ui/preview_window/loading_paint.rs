@@ -111,6 +111,7 @@ pub(super) fn create_loading_media(width: u32, height: u32) -> MediaData {
         loading_start: Some(Instant::now()),
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
     }
 }
 

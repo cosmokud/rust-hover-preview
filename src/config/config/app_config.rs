@@ -5,10 +5,10 @@ use crate::formats::lists;
 use crate::readers::tone_map::Curve;
 
 use super::defaults::{
-    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_MARK_OFFSET_Y,
-    DEFAULT_AUDIO_VOLUME, DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED, DEFAULT_CHECK_FOR_UPDATES,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_F3D_PATH,
-    DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
+    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_FPS_MAX, DEFAULT_ANIMATED_SCALE_PERCENT,
+    DEFAULT_AUDIO_MARK_OFFSET_Y, DEFAULT_AUDIO_VOLUME, DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED,
+    DEFAULT_CHECK_FOR_UPDATES, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB,
+    DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH,
     DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
     DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER,
@@ -206,6 +206,9 @@ pub struct AppConfig {
     /// Vertical pixel alignment offset for the audio preview mark beside the filename.
     pub audio_mark_offset_y: f32,
     pub webp_playback_fps: u32,
+    /// The top a pinned animation's FPS slider opens at: 1 frame a second at the bottom of
+    /// it, the file's own pace where it is drawn, and this at the top (see `PinFps`).
+    pub animated_fps_max: u32,
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
     /// cache off, so every preview is decoded again.
     pub image_cache_mb: u32,
@@ -775,6 +778,7 @@ impl Default for AppConfig {
             pin_zoom_bounce_power: DEFAULT_PIN_ZOOM_BOUNCE_POWER,
             audio_mark_offset_y: DEFAULT_AUDIO_MARK_OFFSET_Y,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
+            animated_fps_max: DEFAULT_ANIMATED_FPS_MAX,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: DEFAULT_IMAGE_BACKGROUND,
             zoom_background: DEFAULT_ZOOM_BACKGROUND,

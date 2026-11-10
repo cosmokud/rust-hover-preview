@@ -10,11 +10,11 @@ use crate::readers::tone_map::Curve;
 
 use super::app_config::AppConfig;
 use super::defaults::{
-    parse_text_font_scale, sanitize_audio_mark_offset_y, sanitize_decode_budget_gb,
-    sanitize_document_cache_mb, sanitize_general_disk_cache_mb, sanitize_hdr_exposure,
-    sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_pin_zoom_bounce_ms,
-    sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms, sanitize_program_path,
-    sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
+    parse_text_font_scale, sanitize_animated_fps_max, sanitize_audio_mark_offset_y,
+    sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
+    sanitize_hdr_exposure, sanitize_image_cache_mb, sanitize_image_disk_cache_mb,
+    sanitize_pin_zoom_bounce_ms, sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms,
+    sanitize_program_path, sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
     sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
     sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
 };
@@ -235,6 +235,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "webp_playback_fps",
             Some(sanitize_webp_playback_fps(self.webp_playback_fps).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "animated_fps_max",
+            Some(sanitize_animated_fps_max(self.animated_fps_max).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -855,6 +860,11 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "webp_playback_fps") {
             if let Ok(value) = u32::try_from(value) {
                 self.webp_playback_fps = sanitize_webp_playback_fps(value);
+            }
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "animated_fps_max") {
+            if let Ok(value) = u32::try_from(value) {
+                self.animated_fps_max = sanitize_animated_fps_max(value);
             }
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "image_cache_mb") {

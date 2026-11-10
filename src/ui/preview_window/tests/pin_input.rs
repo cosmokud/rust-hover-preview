@@ -511,6 +511,7 @@ fn a_models_band_leaves_the_chrome_and_the_frame_to_the_pin() {
                 bar.height,
                 bar.dpi,
                 bar.live,
+                bar.animated,
             ) == Some(pin_chrome::TransportPart::Play)
         })
         .expect("a live bar draws a play button");

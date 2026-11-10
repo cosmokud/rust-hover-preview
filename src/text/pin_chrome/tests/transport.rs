@@ -8,7 +8,7 @@ use super::*;
 fn the_popup_hung_from_a_button_is_the_one_the_transport_bar_opens() {
     for (width, height, top) in [(600, 30, 0), (600, 40, 200), (320, 30, 55)] {
         for dpi in [96, 144] {
-            let strip = transport_layout(width, height, dpi, true).volume;
+            let strip = transport_layout(width, height, dpi, true, false).volume;
             let button = RECT {
                 top: strip.top + top,
                 bottom: strip.bottom + top,
@@ -141,9 +141,9 @@ fn the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them() {
 
 #[test]
 fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
-    let layout = transport_layout(800, 30, 96, true);
+    let layout = transport_layout(800, 30, 96, true, false);
     let middle = (layout.bar.left + layout.bar.right) / 2;
-    let share = transport_share_at(middle, 800, 30, 96, true);
+    let share = transport_share_at(middle, 800, 30, 96, true, false);
     assert!(
         (share - 0.5).abs() < 0.05,
         "the middle of the bar is half of it"
@@ -151,8 +151,8 @@ fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
 
     // A press past either end is the end it is past, which is what keeps a drag from asking
     // for a second of a file that is not there.
-    assert_eq!(transport_share_at(0, 800, 30, 96, true), 0.0);
-    assert_eq!(transport_share_at(800, 800, 30, 96, true), 1.0);
+    assert_eq!(transport_share_at(0, 800, 30, 96, true, false), 0.0);
+    assert_eq!(transport_share_at(800, 800, 30, 96, true, false), 1.0);
 }
 
 /// A thumb is drawn where the bar *draws* the playhead, and a press is read against the bar the
@@ -164,11 +164,11 @@ fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
 #[test]
 fn a_press_puts_the_thumb_under_the_hand_wherever_it_landed() {
     for (width, height, dpi) in [(800, 30, 96), (640, 40, 144), (480, 30, 96)] {
-        let layout = transport_layout(width, height, dpi, true);
+        let layout = transport_layout(width, height, dpi, true, false);
         let span = (layout.bar.right - layout.bar.left) as f64;
 
         for x in layout.bar.left..layout.bar.right {
-            let share = transport_share_at(x, width, height, dpi, true);
+            let share = transport_share_at(x, width, height, dpi, true, false);
             // Where `paint_transport` draws the thumb for that share.
             let thumb = layout.bar.left + (span * share).round() as i32;
 
@@ -186,8 +186,8 @@ fn a_press_puts_the_thumb_under_the_hand_wherever_it_landed() {
 /// as the media engine does — by being started again at it.
 #[test]
 fn the_volume_button_answers_on_a_bar_with_no_other_controls() {
-    let live = transport_layout(800, 30, 96, true);
-    let readout = transport_layout(800, 30, 96, false);
+    let live = transport_layout(800, 30, 96, true, false);
+    let readout = transport_layout(800, 30, 96, false, false);
 
     // It keeps its own box at the right edge of the strip, and it is the same box whether or
     // not the bar carries a play button: a control that moved because the engine changed would
@@ -206,11 +206,11 @@ fn the_volume_button_answers_on_a_bar_with_no_other_controls() {
     let x = (live.volume.left + live.volume.right) / 2;
     let y = (live.volume.top + live.volume.bottom) / 2;
     assert_eq!(
-        transport_part_at(x, y, 800, 30, 96, true),
+        transport_part_at(x, y, 800, 30, 96, true, false),
         Some(TransportPart::Volume)
     );
     assert_eq!(
-        transport_part_at(x, y, 800, 30, 96, false),
+        transport_part_at(x, y, 800, 30, 96, false, false),
         Some(TransportPart::Volume),
         "and on a bar whose player cannot be told anything"
     );
@@ -228,7 +228,7 @@ fn the_volume_button_answers_on_a_bar_with_no_other_controls() {
 fn a_volume_popup_is_placed_over_its_button_and_read_bottom_up() {
     let (width, strip_top, strip_height) = (800, 400, 30);
     let popup = volume_popup_layout(width, strip_top, strip_height, 96);
-    let button = transport_layout(width, strip_height, 96, true).volume;
+    let button = transport_layout(width, strip_height, 96, true, false).volume;
 
     // Above the bar, centered on the button that opened it, and clear of the button itself.
     assert_eq!(
@@ -299,7 +299,7 @@ fn a_volume_popup_is_centered_on_its_button() {
         (320, 30, 55, 96),
         (1920, 40, 100, 144),
     ] {
-        let strip = transport_layout(width, height, dpi, true).volume;
+        let strip = transport_layout(width, height, dpi, true, false).volume;
         let button = RECT {
             top: strip.top + strip_top,
             bottom: strip.bottom + strip_top,
@@ -373,22 +373,22 @@ fn a_volume_popup_is_kept_inside_a_narrow_window() {
 
 #[test]
 fn the_parts_of_a_transport_bar_are_hit_where_they_are_drawn() {
-    let layout = transport_layout(800, 30, 96, true);
+    let layout = transport_layout(800, 30, 96, true, false);
 
     let play = (layout.play.left + layout.play.right) / 2;
     assert_eq!(
-        transport_part_at(play, 15, 800, 30, 96, true),
+        transport_part_at(play, 15, 800, 30, 96, true, false),
         Some(TransportPart::Play)
     );
 
     let bar = (layout.bar.left + layout.bar.right) / 2;
     assert_eq!(
-        transport_part_at(bar, 15, 800, 30, 96, true),
+        transport_part_at(bar, 15, 800, 30, 96, true, false),
         Some(TransportPart::Seek)
     );
 
     // Nothing is hit where nothing is drawn.
-    assert_eq!(transport_part_at(2, 2, 800, 30, 96, true), None);
+    assert_eq!(transport_part_at(2, 2, 800, 30, 96, true, false), None);
 }
 
 /// A bar whose player cannot be told anything is a read-out: FFmpeg's player reports no
@@ -397,8 +397,8 @@ fn the_parts_of_a_transport_bar_are_hit_where_they_are_drawn() {
 /// the strip does rather than after a control that is not there.
 #[test]
 fn a_bar_with_no_controls_has_none_to_press() {
-    let dead = transport_layout(800, 30, 96, false);
-    let live = transport_layout(800, 30, 96, true);
+    let dead = transport_layout(800, 30, 96, false, false);
+    let live = transport_layout(800, 30, 96, true, false);
 
     assert_eq!(dead.elapsed.left, 10, "the clock begins at the padding");
     assert_eq!(
@@ -418,10 +418,10 @@ fn a_bar_with_no_controls_has_none_to_press() {
     // And neither the button's place nor the track answers a press.
     let play = (live.play.left + live.play.right) / 2;
     let bar = (dead.bar.left + dead.bar.right) / 2;
-    assert_eq!(transport_part_at(play, 15, 800, 30, 96, false), None);
-    assert_eq!(transport_part_at(bar, 15, 800, 30, 96, false), None);
+    assert_eq!(transport_part_at(play, 15, 800, 30, 96, false, false), None);
+    assert_eq!(transport_part_at(bar, 15, 800, 30, 96, false, false), None);
     assert_eq!(
-        transport_part_at(play, 15, 800, 30, 96, true),
+        transport_part_at(play, 15, 800, 30, 96, true, false),
         Some(TransportPart::Play)
     );
 }
@@ -490,6 +490,7 @@ fn draws_the_marks_of_a_bar() {
                 text_paint::scaled(30, scale),
                 dpi,
                 true,
+                false,
             );
             layout.play.bottom - layout.play.top
         };

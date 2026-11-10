@@ -746,6 +746,7 @@ const ANOTHER_VALUE: &[(&str, &str)] = &[
     ("video_engine", "mpv"),
     ("video_engine_idle", "30"),
     ("webp_playback_fps", "30"),
+    ("animated_fps_max", "120"),
     ("webview_idle", "30"),
     ("zoom_background", "white"),
 ];

@@ -100,6 +100,8 @@ fn a_seek_made_while_a_pinned_video_is_paused_moves_the_second_it_is_drawn_at() 
                 ..Default::default()
             },
             volume: PinVolume::default(),
+            transport_animated: false,
+            fps: PinFps::default(),
             audio_hovered: None,
             audio_pressed: None,
             audio_window_buttons: false,

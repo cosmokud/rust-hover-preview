@@ -37,6 +37,7 @@ pub(super) fn pin_point_is_volume_button(x: i32, y: i32) -> bool {
                 bar.height,
                 bar.dpi,
                 bar.live,
+                bar.animated,
             ) == Some(pin_chrome::TransportPart::Volume)
     });
 

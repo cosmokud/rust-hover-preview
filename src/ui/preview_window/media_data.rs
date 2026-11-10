@@ -98,6 +98,9 @@ pub(super) struct MediaData {
     /// Nothing at all for a media of another kind, whose frame is not a
     /// sound's card and is never painted from the configuration.
     pub(super) audio_scale: Option<PreviewScale>,
+    /// The pace this picture plays at, for one that plays: its own, and the one a hand asked for
+    /// at the pin's FPS control (see `AnimationPlayback`).
+    pub(super) animation: AnimationPlayback,
 }
 
 /// Paint a band of a layered window one flat opaque colour, for a window whose media is not there.
@@ -521,6 +524,7 @@ impl MediaData {
             let delay = Duration::from_millis(effective_frame_delay_ms(
                 &self.media_type,
                 self.frames[self.current_frame].delay_ms,
+                self.animation,
             ) as u64);
             if self.last_frame_time.elapsed() >= delay {
                 let next = self.current_frame + 1;
@@ -568,6 +572,7 @@ impl MediaData {
         let waiting_for = Duration::from_millis(effective_frame_delay_ms(
             &self.media_type,
             self.frames[self.current_frame].delay_ms,
+            self.animation,
         ) as u64)
             + Duration::from_secs(1);
         if self.last_frame_time.elapsed() > waiting_for {
@@ -768,6 +773,7 @@ pub(super) fn engine_svg_media() -> MediaData {
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
     }
 }
 
@@ -819,5 +825,6 @@ pub(super) fn static_image_media(frame: Arc<ImageFrame>, kind: MediaType) -> Med
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
     }
 }

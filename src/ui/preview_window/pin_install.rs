@@ -1291,6 +1291,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         // opposite reasons: the engine answers every question the bar asks,
         // and FFmpeg's player answers the two that are keys.
         transport_live: pin_transport_live(kind),
+        transport_animated: is_played_picture(kind),
         frame: pin_frame(kind),
         overlay,
         hides_chrome,
@@ -1355,7 +1356,17 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             // since before the pin existed, and its own clock starts
             // here — which is the best that can be said about a player
             // that reports nothing at all (see `PinTransport`).
-            duration,
+            // The length the probe read, and — for a picture that plays — the length of its own
+            // run of frames, which is a walk of the container rather a watch of nothing: there is
+            // no player behind the bar to report one (see `animation_frames`).
+            duration: duration.or_else(|| {
+                is_played_picture(kind)
+                    .then(|| {
+                        crate::formats::animation_frames::timeline(path)
+                            .map(|timeline| timeline.seconds())
+                    })
+                    .flatten()
+            }),
             started: (kind == Some(MediaType::Video)).then_some((Instant::now(), reached)),
             // Which subtitle track this pin opens on, which is the
             // player's own choice for the file until a key says
@@ -1364,6 +1375,17 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             // `video_subtitles`).
             subtitle: video_subtitles(path).chosen(),
             ..Default::default()
+        },
+        // The file's own pace, read out of its frames before the window stands on it — the same
+        // walk the bar's track is measured by (see `animation_frames` and `PinFps`).
+        fps: PinFps {
+            detected: is_played_picture(kind)
+                .then(|| {
+                    crate::formats::animation_frames::timeline(path).map(|timeline| timeline.rate())
+                })
+                .flatten()
+                .unwrap_or(0.0),
+            ..PinFps::default()
         },
         // A level carried onto a file of the same kind is that file's
         // own and is carried; one carried onto a file of another kind
@@ -1695,6 +1717,48 @@ pub(super) enum PinRelayoutRoad {
 /// that is drawn for that box arrives when it arrives. An arc over it would say a thing that is
 /// not true: that the window has nothing to show yet. It is the same answer a resized video is
 /// given while the media engine's next frame is on its way.
+/// The seek a hand asked for on a picture's own bar, waiting for the loop to take it up.
+///
+/// A press on the track names a frame of the file, and the decode that frame begins at runs on a
+/// thread of its own — so the ask is written down here and picked up by the tick that holds the
+/// relayout slot, exactly as a box change's ask is (see `PinRelayout` and
+/// `seek_pinned_animation`). One ask is held at a time: a drag across a long picture is the newest
+/// place under the hand, and the answer to the one ahead of it is dropped with the frames it had
+/// decoded.
+pub(super) static PIN_RELAYOUT_ASK: Lazy<Mutex<Option<PinRelayout>>> =
+    Lazy::new(|| Mutex::new(None));
+
+/// Write an ask about a picture that plays into the slot the loop reads (see `PIN_RELAYOUT_ASK`),
+/// putting down whatever was there: the newest place under a hand is the one worth decoding.
+pub(super) fn ask_for_a_pin_relayout(relayout: PinRelayout) {
+    if let Ok(mut slot) = PIN_RELAYOUT_ASK.lock() {
+        // The older ask's frames are told to stop here rather than left decoding for a place
+        // nobody is asking about any more (see `PinRelayout`'s own `Drop`).
+        drop(slot.take());
+        *slot = Some(relayout);
+    }
+}
+
+/// Take a seek a hand asked for off the slot, where the loop has nothing of its own in flight.
+///
+/// One decode of the picture at a time is the whole of what keeps a drag from paying for a decode
+/// per pixel under the hand: a seek asked for while an answer is still on its way is one the
+/// answer already being waited on will land near enough to, and the ask left standing is the
+/// newest one when that answer lands.
+pub(super) fn take_the_seek_a_hand_asked_for(relayout: &mut Option<PinRelayout>) {
+    if relayout.is_some() {
+        return;
+    }
+
+    let asked = PIN_RELAYOUT_ASK
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    if let Some(asked) = asked {
+        *relayout = Some(asked);
+    }
+}
+
 pub(super) struct PinRelayout {
     /// The file being decoded, which is what the answer is installed over: a relayout left in
     /// flight across a swap would otherwise install a frame of the file the pin has left behind,
@@ -1900,6 +1964,10 @@ pub(super) fn keep_animation_place(media: MediaData) -> MediaData {
     let served = old.last_frame_time.elapsed();
 
     let mut media = media;
+    // The pace a hand asked for travels with the place: a decode begun at a frame a hand chose is
+    // the same picture at the same pace, and a picture put back to its file's own pace on every
+    // scrub would be a slider that did nothing but snap (see `AnimationPlayback`).
+    media.animation.wanted = old.animation.wanted;
     // The landing is the frame the place names, or the first one past it where the answer's own
     // stream has already overtaken the pin — a frame skipped, which a picture that plays does not
     // show, rather than the answer's first frame, which would be the picture put back. A place no
