@@ -809,6 +809,7 @@ fn every_animated_kind_drains_its_queue() {
             text_state: None,
             audio_scale: None,
             animation: AnimationPlayback::default(),
+            paused: false,
         };
 
         assert!(

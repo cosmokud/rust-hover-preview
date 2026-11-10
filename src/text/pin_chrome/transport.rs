@@ -191,6 +191,10 @@ pub(crate) struct BarShape {
     pub(crate) interactive: bool,
     /// Whether the bar belongs to a picture that plays rather than a film.
     pub(crate) animated: bool,
+    /// Whether this app's own button is the one at the bar's start: a picture that plays is held
+    /// on its frame and let go again by it, and there is no player behind the bar to be told
+    /// anything (see `TransportState::controllable`).
+    pub(crate) controllable: bool,
     /// The room the clock before the track is given, which the track is laid out around.
     pub(crate) clock: i32,
 }
@@ -204,10 +208,10 @@ impl BarShape {
 
 /// The room each part of a transport bar is given at a display's scale.
 ///
-/// A bar whose player cannot be told anything is laid out without the button: the two clocks and
-/// the track begin at the strip's own padding rather than after a control that is not there (see
-/// `TransportState::interactive`, which is now `false` for no kind this app has — it is kept
-/// because the layout is the only thing that reads it).
+/// A bar nobody can press anything on is laid out without the button: the two clocks and the
+/// track begin at the strip's own padding rather than after a control that is not there (see
+/// `BarShape::interactive` for the player's own button, and `BarShape::controllable` for the one a
+/// picture that plays carries, which is this app's own).
 pub(crate) fn transport_layout(shape: BarShape) -> TransportLayout {
     let BarShape {
         width,
@@ -215,8 +219,12 @@ pub(crate) fn transport_layout(shape: BarShape) -> TransportLayout {
         dpi,
         interactive,
         animated,
+        controllable,
         clock,
     } = shape;
+    // One button's room, whichever button it is: a player's at the start of a film's bar, and this
+    // app's hold at the start of a picture's.
+    let button = interactive || controllable;
     let scale = dpi as f32 / 96.0;
     let padding = text_paint::scaled(10, scale);
     let play_side = (height - text_paint::scaled(8, scale)).clamp(8, height.max(8));
@@ -253,11 +261,7 @@ pub(crate) fn transport_layout(shape: BarShape) -> TransportLayout {
     } else {
         (last, nothing)
     };
-    let content_left = if interactive {
-        play.right + gap
-    } else {
-        padding
-    };
+    let content_left = if button { play.right + gap } else { padding };
     let elapsed = RECT {
         left: content_left,
         top: 0,
@@ -301,6 +305,7 @@ pub(crate) fn transport_part_at(shape: BarShape, x: i32, y: i32) -> Option<Trans
         dpi,
         interactive,
         animated,
+        controllable,
         ..
     } = shape;
     let layout = shape.layout();
@@ -316,11 +321,13 @@ pub(crate) fn transport_part_at(shape: BarShape, x: i32, y: i32) -> Option<Trans
         return Some(TransportPart::Fps);
     }
 
-    if !interactive && !animated {
+    // A bar with no player behind it and no button of its own is a read-out, and the early answer
+    // after this says that nothing on it is the pointer's.
+    if !interactive && !animated && !controllable {
         return None;
     }
 
-    if interactive && inside(layout.play) {
+    if (interactive || controllable) && inside(layout.play) {
         return Some(TransportPart::Play);
     }
     // The bar is a thin line, so what is dragged is a band around it rather than the line: a
@@ -370,6 +377,7 @@ pub(crate) fn volume_popup_layout(
         dpi,
         interactive: true,
         animated: false,
+        controllable: false,
         clock,
     })
     .volume;
@@ -569,6 +577,10 @@ pub(crate) struct TransportState {
     /// Whether the bar belongs to a picture that plays rather than a film: its seek is the
     /// file's frames, and the FPS button at its end is the pace those frames play at.
     pub(crate) animated: bool,
+    /// Whether this app's own hold is what the button at the bar's start works: a picture that
+    /// plays is held on its frame and let go again by it, with no player to be told anything
+    /// (see `BarShape::controllable`).
+    pub(crate) controllable: bool,
     /// Whether the FPS popup is open — a button whose own slider is up is a button held down, the
     /// way an open volume popup is.
     pub(crate) fps_open: bool,
@@ -596,6 +608,7 @@ pub(crate) fn paint_transport(
         dpi,
         interactive: state.interactive,
         animated: state.animated,
+        controllable: state.controllable,
         clock: clock_width(state.duration, dpi),
     });
 
@@ -623,9 +636,10 @@ pub(crate) fn paint_transport(
         palette.hover(0.18),
     );
 
-    // The button is drawn only where there is a player to press it: a bar with no controls is a
+    // The button is drawn where there is something behind it to press — a player, or the hold a
+    // picture that plays is given (see `BarShape::controllable`): a bar with no controls at all is a
     // read-out, and a button that does nothing is a promise the app cannot keep.
-    if state.interactive {
+    if state.interactive || state.controllable {
         paint_play_button(surface, palette, state, layout.play, scale);
     }
 

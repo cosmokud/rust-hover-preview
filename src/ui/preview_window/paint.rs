@@ -606,6 +606,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 volume: paint.volume.level,
                 volume_open: paint.volume.open,
                 animated: paint.transport_animated,
+                controllable: paint.transport_controllable,
                 // A picture that plays is taken to a frame rather than a second, so the bar's
                 // playhead is the share of the run the hand let go on while it is being dragged,
                 // and the frame the picture is on otherwise.
@@ -994,6 +995,9 @@ pub(super) struct PinnedPaint {
     /// Whether the bar is one a picture that plays carries, which is what its own seek and its
     /// FPS button answer to (see `PinnedPreview::transport_animated`).
     pub(super) transport_animated: bool,
+    /// Whether the button at the bar's start is this app's own hold rather than a player's pause
+    /// (see `PinnedPreview::transport_controllable`).
+    pub(super) transport_controllable: bool,
     /// The pace a picture that plays is held at, and whether its slider is up (see `PinFps`).
     pub(super) fps: PinFps,
     /// The frame a hand on a picture's track is standing at, and how many frames the file plays:
@@ -1105,6 +1109,7 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             transport: pin.transport,
             volume: pin.volume,
             transport_animated: pin.transport_animated,
+            transport_controllable: pin.transport_controllable,
             fps: pin.fps,
             frames: None,
             fps_popup: None,
