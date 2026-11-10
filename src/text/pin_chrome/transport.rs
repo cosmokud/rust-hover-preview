@@ -18,9 +18,9 @@
 //! numbers for one control this app has once is a button that moves between two windows.
 
 use super::primitives::{
-    caption_style, fill_box, fill_disc, fill_polygon, fill_round_rect, fill_triangle, measure_text,
-    paint_time, put, stroke_arc, stroke_round_rect, stroke_segment, surface_pixels, ChromePalette,
-    GLYPH_STROKE_PIXELS,
+    caption_style, clock_text, fill_box, fill_disc, fill_polygon, fill_round_rect, fill_triangle,
+    measure_text, paint_time, put, stroke_arc, stroke_round_rect, stroke_segment, surface_pixels,
+    ChromePalette, GLYPH_STROKE_PIXELS,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -88,9 +88,85 @@ pub(crate) struct TransportLayout {
     /// on every other bar: the same square as the level's, because it is the same button a hand
     /// reaches for, saying the one thing its own slider changes.
     pub(crate) fps: RECT,
-    /// The room left of the clock for the count of frames a hand on the track is standing at, and a
-    /// box of no width on a bar that writes no count.
-    pub(crate) frames: RECT,
+}
+
+/// The room a clock takes at a display's scale, from the string it is written as: the clocks are
+/// what the track is laid out between, so the box each of them is given has to be the box its
+/// digits fill — a box of a fixed width is a clock either pushed off the strip's own padding or
+/// held a label's worth of nothing away from the track, and both of those are a read-out that
+/// looks broken (see `clock_text`).
+///
+/// It is measured rather than estimated, because GDI's own advances are what the strip is drawn
+/// with: a run measured against a font the painter does not use is a run a pixel short at one
+/// scale and eight pixels proud of itself at another. The answer is a property of the string and
+/// the scale alone, so it is held (see `CLOCK_WIDTHS`) — a clock is asked for on every repaint of
+/// every bar and on every move of a drag.
+pub(crate) fn clock_width(seconds: Option<f64>, dpi: u32) -> i32 {
+    let text = clock_text(seconds);
+    let scale = dpi as f32 / 96.0;
+
+    if let Some(held) =
+        CLOCK_WIDTHS.with(|widths| widths.borrow().get(&(text.clone(), dpi)).copied())
+    {
+        return held;
+    }
+
+    let measured = CLOCK_SURFACE.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if cell.is_none() {
+            *cell = DibSurface::create(1, 1);
+        }
+        let surface = cell.as_ref()?;
+        let style = caption_style([255, 255, 255]);
+        Some(measure_text(surface, &style, &text, scale))
+    });
+
+    // A digit is measured a whole run wide and given a pixel more than it takes: the run is
+    // written with its last digit against the track, so a box a pixel short would clip the hours
+    // off the front of a film rather than push the clock off the strip's own padding.
+    let width = match measured {
+        Some(columns) if columns > 0 => columns + text_paint::scaled(1, scale),
+        _ => estimated_clock_width(&text, scale),
+    };
+
+    CLOCK_WIDTHS.with(|widths| {
+        let mut widths = widths.borrow_mut();
+        if widths.len() >= CLOCK_WIDTHS_MAX_ENTRIES {
+            widths.clear();
+        }
+        widths.insert((text, dpi), width);
+    });
+
+    width
+}
+
+/// Where a measured clock is held, and how many answers are held at once: the map is one entry per
+/// string and scale a bar has been drawn at, and a strip that has run through a whole film's worth
+/// of seconds is a strip to start again rather than one to grow for ever.
+const CLOCK_WIDTHS_MAX_ENTRIES: usize = 128;
+
+thread_local! {
+    static CLOCK_WIDTHS: std::cell::RefCell<std::collections::HashMap<(String, u32), i32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The surface a clock is measured on: one pixel of a strip, kept for the thread it is used on,
+    /// since a measure needs a device context and the answer is a number rather than a drawing.
+    static CLOCK_SURFACE: std::cell::RefCell<Option<DibSurface>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The room a clock takes, counted in the advances its characters have at the strip's own face and
+/// size rather than measured: the floor a measurement that came back with nothing falls to, and
+/// the answer the font's own advances are not available for.
+fn estimated_clock_width(text: &str, scale: f32) -> i32 {
+    let mut pixels = 0.0f32;
+    for character in text.chars() {
+        pixels += match character {
+            ':' => 3.0,
+            '-' => 4.0,
+            _ => 6.0,
+        };
+    }
+
+    (((pixels + 2.0) * scale).round() as i32).max(text_paint::scaled(8, scale))
 }
 
 /// The room held between the parts of a transport bar at a display's scale: one part is never
@@ -99,34 +175,55 @@ pub(super) fn strip_gap(scale: f32) -> i32 {
     (text_paint::scaled(10, scale) / 2).max(2)
 }
 
+/// The strip a bar is laid out in, as every question about that bar is asked: its size, the scale
+/// it is drawn at, whether its controls do anything, whether it belongs to a picture that plays, and
+/// the room the clock before its track takes (see `clock_width`).
+///
+/// It is one value rather than six arguments so that a press, a drag, a popup hung from a button and
+/// the paint itself cannot disagree about which bar they are asking about — the track a press is
+/// read against is then the track that was drawn, by construction.
+#[derive(Clone, Copy)]
+pub(crate) struct BarShape {
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) dpi: u32,
+    /// Whether the player behind the bar can be told anything at all (see `TransportState`).
+    pub(crate) interactive: bool,
+    /// Whether the bar belongs to a picture that plays rather than a film.
+    pub(crate) animated: bool,
+    /// The room the clock before the track is given, which the track is laid out around.
+    pub(crate) clock: i32,
+}
+
+impl BarShape {
+    /// Where the parts of this bar are.
+    pub(crate) fn layout(&self) -> TransportLayout {
+        transport_layout(*self)
+    }
+}
+
 /// The room each part of a transport bar is given at a display's scale.
 ///
 /// A bar whose player cannot be told anything is laid out without the button: the two clocks and
 /// the track begin at the strip's own padding rather than after a control that is not there (see
 /// `TransportState::interactive`, which is now `false` for no kind this app has — it is kept
 /// because the layout is the only thing that reads it).
-pub(crate) fn transport_layout(
-    width: i32,
-    height: i32,
-    dpi: u32,
-    interactive: bool,
-    animated: bool,
-) -> TransportLayout {
+pub(crate) fn transport_layout(shape: BarShape) -> TransportLayout {
+    let BarShape {
+        width,
+        height,
+        dpi,
+        interactive,
+        animated,
+        clock,
+    } = shape;
     let scale = dpi as f32 / 96.0;
     let padding = text_paint::scaled(10, scale);
     let play_side = (height - text_paint::scaled(8, scale)).clamp(8, height.max(8));
-    let label = text_paint::scaled(52, scale);
+    // A clock's own room, and never less than a mark or two: a strip whose clock box is nothing
+    // is a track laid out where the digits are.
+    let label = clock.max(text_paint::scaled(8, scale));
     let gap = strip_gap(scale);
-    // The room a picture that plays keeps left of its clock for the count of frames under the hand.
-    // It is held open whether or not a hand is on the track, because the count is written beside a
-    // bar that must not move while it is dragged - and given up where the strip is too narrow to
-    // hold both it and a track worth dragging, since a strip a tenth of a window wide is a bar
-    // nobody can aim at.
-    let frames_room = if animated && width >= text_paint::scaled(360, scale) {
-        text_paint::scaled(74, scale)
-    } else {
-        0
-    };
 
     let play = RECT {
         left: padding,
@@ -161,16 +258,10 @@ pub(crate) fn transport_layout(
     } else {
         padding
     };
-    let frames = RECT {
+    let elapsed = RECT {
         left: content_left,
         top: 0,
-        right: content_left + frames_room,
-        bottom: height,
-    };
-    let elapsed = RECT {
-        left: frames.right,
-        top: 0,
-        right: frames.right + label,
+        right: content_left + label,
         bottom: height,
     };
     let controls_left = if animated { fps.left } else { volume.left };
@@ -195,7 +286,6 @@ pub(crate) fn transport_layout(
         total,
         volume,
         fps,
-        frames,
     }
 }
 
@@ -206,16 +296,14 @@ pub(crate) fn transport_layout(
 /// given, and start the player again at it where the player cannot be told anything — is a thing
 /// both engines can be asked. A bar that is not `interactive` has no button and no track for a
 /// press to have found, which is what the early answer after it says.
-pub(crate) fn transport_part_at(
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-    dpi: u32,
-    interactive: bool,
-    animated: bool,
-) -> Option<TransportPart> {
-    let layout = transport_layout(width, height, dpi, interactive, animated);
+pub(crate) fn transport_part_at(shape: BarShape, x: i32, y: i32) -> Option<TransportPart> {
+    let BarShape {
+        dpi,
+        interactive,
+        animated,
+        ..
+    } = shape;
+    let layout = shape.layout();
     let inside = |rect: RECT| x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
 
     if !animated && inside(layout.volume) {
@@ -271,11 +359,20 @@ pub(crate) fn volume_popup_layout(
     strip_top: i32,
     strip_height: i32,
     dpi: u32,
+    clock: i32,
 ) -> VolumePopup {
     // The button is the transport bar's own, and the bar begins `strip_top` rows down the
     // window, so the box it opens from is the strip's box moved down the window — which is what
     // makes the two answers one answer (see `volume_popup_from_button`).
-    let in_strip = transport_layout(width, strip_height, dpi, true, false).volume;
+    let in_strip = transport_layout(BarShape {
+        width,
+        height: strip_height,
+        dpi,
+        interactive: true,
+        animated: false,
+        clock,
+    })
+    .volume;
     let button = RECT {
         top: in_strip.top + strip_top,
         bottom: in_strip.bottom + strip_top,
@@ -429,15 +526,8 @@ fn bar_span(bar: RECT) -> i32 {
 /// thumb lands short of the hand at one end of the bar and past it at the other, while the middle
 /// stays where it is by the accident that the two tracks share a centre (see
 /// `a_press_puts_the_thumb_under_the_hand_wherever_it_landed`).
-pub(crate) fn transport_share_at(
-    x: i32,
-    width: i32,
-    height: i32,
-    dpi: u32,
-    interactive: bool,
-    animated: bool,
-) -> f64 {
-    let layout = transport_layout(width, height, dpi, interactive, animated);
+pub(crate) fn transport_share_at(shape: BarShape, x: i32) -> f64 {
+    let layout = shape.layout();
     // The track's own columns, of which the last is the end of the file: a share read across the
     // room *between* the two ends leaves the last frame of a file under a strip's rightmost pixel
     // out of reach, and a press there is the one place a hand means "the end" (see `bar_span`).
@@ -500,8 +590,14 @@ pub(crate) fn paint_transport(
     let width = surface.width as i32;
     let height = surface.height as i32;
     let scale = dpi as f32 / 96.0;
-    let gap = strip_gap(scale);
-    let layout = transport_layout(width, height, dpi, state.interactive, state.animated);
+    let layout = transport_layout(BarShape {
+        width,
+        height,
+        dpi,
+        interactive: state.interactive,
+        animated: state.animated,
+        clock: clock_width(state.duration, dpi),
+    });
 
     text_paint::fill_rect(
         surface,
@@ -577,10 +673,41 @@ pub(crate) fn paint_transport(
             palette.accent,
             1.0,
         );
+    }
+
+    // **The count of frames a hand on the track is standing at, written over the track's own
+    // beginning.** It is a read-out of a gesture, so it is where the gesture is and only while it
+    // lasts: the strip has no room beside the clock that a drag may take without moving the track
+    // under the hand, and a room held open for it would be a blank strip beside every bar (see
+    // `paint_frame_count`).
+    if let Some((frame, total)) = state.frames {
+        paint_frame_count(
+            surface,
+            palette,
+            (frame, total),
+            RECT {
+                left: layout.bar.left,
+                top: 0,
+                right: layout.bar.right,
+                bottom: height,
+            },
+            thumb,
+            scale,
+        );
+    }
+
+    {
+        let buffer = unsafe {
+            std::slice::from_raw_parts_mut(
+                surface_pixels(surface),
+                surface.width as usize * surface.height as usize * 4,
+            )
+        };
 
         // The thumb is drawn only where there is a length to place it against: a bar with no
         // duration is a file whose container says nothing, and a thumb on it would be a position
-        // that means nothing.
+        // that means nothing. It is drawn after the count, so a hand at the very start of a file
+        // is a thumb rather than a digit a hand cannot find.
         if state.duration.is_some() {
             let radius = text_paint::scaled(5, scale).clamp(3, 12);
             let center_y = (layout.bar.top + layout.bar.bottom) / 2;
@@ -601,27 +728,8 @@ pub(crate) fn paint_transport(
         }
     }
 
-    // The clock before the bar, written against it rather than laid out from the strip's own
-    // padding: a clock that starts where the strip starts is a clock a bar's own length away from
-    // the strip's, and the gap it opens is a gap in the middle of one read-out. And where a hand
-    // is on the track of a picture that plays, the frame it is standing at is written in the room
-    // held open left of the clock, so that the two are one read-out beside the track - the count
-    // has a room of its own whether or not it is written, which is why the clock does not move
-    // under a hand that is dragging the bar it belongs to (see `paint_frame_count`).
-    if let Some((frame, total)) = state.frames {
-        paint_frame_count(
-            surface,
-            palette,
-            (frame, total),
-            RECT {
-                left: layout.frames.left,
-                top: 0,
-                right: (layout.frames.right - gap / 2).max(layout.frames.left),
-                bottom: height,
-            },
-            scale,
-        );
-    }
+    // The clock before the bar, written against it: its box is the width of its own digits, so
+    // there is no room between the run and the track it belongs to (see `clock_width`).
     paint_time(
         surface,
         palette,
@@ -777,18 +885,23 @@ pub(super) fn draw_track_step(
 }
 
 /// Write the frame a hand on the track is standing at against the file's own count of them —
-/// `[212/1021]` — in the room the clock leaves, answering the width it took so the clock is held
-/// off it rather than written through it.
+/// `[212/1021]` — at the track's own beginning, answering nothing.
 ///
-/// It is the count a drag is read by: a picture that plays is moved a frame at a time, and a track
-/// of a few hundred columns over a file of a few thousand frames is a place in the file that a
-/// second of the run does not name. Nothing is written where the room it is given cannot hold it,
-/// which is a strip too narrow to have kept any room at all (see `transport_layout`).
+/// **It is written over the track and only while a hand is on it.** A read-out that is only there
+/// for the length of a drag cannot have a room of its own: a room held open for it would be a blank
+/// strip beside every bar of every picture that plays, and the strip has no other 60 columns to
+/// spare between the clock and the track. So the run is written where the track begins, on the
+/// strip's own background — the track's first columns are hidden under it for as long as the drag
+/// lasts and are drawn whole again when the hand lets go (see `paint_transport`).
+///
+/// Nothing is written while the thumb is inside the room it would take: a hand at the start of a
+/// file is looking at the thumb, and a run of digits under it is a mark nobody can read either way.
 fn paint_frame_count(
     surface: &DibSurface,
     palette: &ChromePalette,
     (frame, total): (usize, usize),
     rect: RECT,
+    thumb: i32,
     scale: f32,
 ) {
     if rect.right <= rect.left {
@@ -798,7 +911,15 @@ fn paint_frame_count(
     let text = format!("[{frame}/{total}]");
     let style = caption_style(palette.number);
     let measured = measure_text(surface, &style, &text, scale);
-    if measured <= 0 || measured >= rect.right - rect.left {
+    let room = text_paint::scaled(6, scale);
+    if measured <= 0 || measured + room >= rect.right - rect.left {
+        return;
+    }
+
+    let left = rect.left + room;
+    if thumb >= left - text_paint::scaled(6, scale)
+        && thumb <= left + measured + text_paint::scaled(6, scale)
+    {
         return;
     }
 
@@ -808,9 +929,9 @@ fn paint_frame_count(
     );
     let top = ((surface.height as i32 - cell) / 2).max(0);
     let box_ = RECT {
-        left: rect.right - measured,
+        left,
         top,
-        right: rect.right,
+        right: left + measured,
         bottom: (top + cell).min(surface.height as i32),
     };
     let mut painter = text_paint::RunPainter::new(surface, scale);

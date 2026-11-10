@@ -169,17 +169,7 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     // The same question of the transport bar, which is the other strip a pointer lights up.
     let transport_hovered = pinned_transport_geometry().and_then(|bar| {
         (bar.wanted && y >= bar.top)
-            .then(|| {
-                pin_chrome::transport_part_at(
-                    x,
-                    y - bar.top,
-                    bar.width,
-                    bar.height,
-                    bar.dpi,
-                    bar.live,
-                    bar.animated,
-                )
-            })
+            .then(|| pin_chrome::transport_part_at(bar.shape(), x, y - bar.top))
             .flatten()
     });
     let transport_changed = pin_state()
@@ -319,6 +309,24 @@ pub(super) struct PinnedTransportBar {
     /// Whether the bar is showing, which is the same question the caption's buttons are answered
     /// by: a bar that is not drawn is not a bar a press may act on (see `PinnedCaption::wanted`).
     pub(super) wanted: bool,
+    /// The room the clock before the track is given, which is the width of its own digits: the
+    /// track is laid out around it, so a press read against a bar the clocks were not measured for
+    /// would be a press read against a track that is not drawn (see `clock_width`).
+    pub(super) clock: i32,
+}
+
+impl PinnedTransportBar {
+    /// The strip this bar was laid out in, as a question about its parts is asked.
+    pub(super) fn shape(&self) -> pin_chrome::BarShape {
+        pin_chrome::BarShape {
+            width: self.width,
+            height: self.height,
+            dpi: self.dpi,
+            interactive: self.live,
+            animated: self.animated,
+            clock: self.clock,
+        }
+    }
 }
 
 pub(super) fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
@@ -345,6 +353,7 @@ pub(super) fn pinned_transport_bar_of(pin: &PinnedPreview) -> Option<PinnedTrans
         live: pin.transport_live,
         animated: pin.transport_animated,
         wanted: pin.chrome.bar,
+        clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
     })
 }
 
@@ -362,15 +371,7 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
         return false;
     }
 
-    let Some(part) = pin_chrome::transport_part_at(
-        x,
-        y - bar.top,
-        bar.width,
-        bar.height,
-        bar.dpi,
-        bar.live,
-        bar.animated,
-    ) else {
+    let Some(part) = pin_chrome::transport_part_at(bar.shape(), x, y - bar.top) else {
         return false;
     };
 
@@ -379,14 +380,7 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             update_pin_transport(|transport| transport.pressed = Some(part));
         }
         pin_chrome::TransportPart::Seek => {
-            let share = pin_chrome::transport_share_at(
-                x,
-                bar.width,
-                bar.height,
-                bar.dpi,
-                bar.live,
-                bar.animated,
-            );
+            let share = pin_chrome::transport_share_at(bar.shape(), x);
             let aim = pin_state().and_then(|pinned| {
                 pinned
                     .pin()
@@ -496,8 +490,7 @@ pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
         return false;
     }
 
-    let share =
-        pin_chrome::transport_share_at(x, bar.width, bar.height, bar.dpi, bar.live, bar.animated);
+    let share = pin_chrome::transport_share_at(bar.shape(), x);
     if bar.animated {
         let frame = pin_frame_share(share);
         let previous =
@@ -567,15 +560,7 @@ pub(super) unsafe fn pinned_transport_release(
         let still_on_it = pinned_transport_geometry()
             .map(|bar| {
                 y >= bar.top
-                    && pin_chrome::transport_part_at(
-                        x,
-                        y - bar.top,
-                        bar.width,
-                        bar.height,
-                        bar.dpi,
-                        bar.live,
-                        bar.animated,
-                    ) == Some(part)
+                    && pin_chrome::transport_part_at(bar.shape(), x, y - bar.top) == Some(part)
             })
             .unwrap_or(false);
 
@@ -709,7 +694,16 @@ pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
         let (width, height) = pin.window_size();
         let band = pinned_transport_height(pin.dpi, true);
         let strip_top = (height - band).max(0);
-        let in_strip = pin_chrome::transport_layout(width, band, pin.dpi, true, false).volume;
+        let in_strip = pin_chrome::BarShape {
+            width,
+            height: band,
+            dpi: pin.dpi,
+            interactive: true,
+            animated: false,
+            clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
+        }
+        .layout()
+        .volume;
         Some(RECT {
             top: in_strip.top + strip_top,
             bottom: in_strip.bottom + strip_top,
@@ -907,15 +901,8 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -
 pub(super) fn pin_point_is_fps_button(x: i32, y: i32) -> bool {
     pinned_transport_geometry().is_some_and(|bar| {
         y >= bar.top
-            && pin_chrome::transport_part_at(
-                x,
-                y - bar.top,
-                bar.width,
-                bar.height,
-                bar.dpi,
-                bar.live,
-                bar.animated,
-            ) == Some(pin_chrome::TransportPart::Fps)
+            && pin_chrome::transport_part_at(bar.shape(), x, y - bar.top)
+                == Some(pin_chrome::TransportPart::Fps)
     })
 }
 
@@ -953,7 +940,16 @@ pub(super) fn pinned_fps_button(pin: &PinnedPreview) -> Option<RECT> {
     let (width, height) = pin.window_size();
     let band = pinned_transport_height(pin.dpi, true);
     let strip_top = (height - band).max(0);
-    let in_strip = pin_chrome::transport_layout(width, band, pin.dpi, true, true).fps;
+    let in_strip = pin_chrome::BarShape {
+        width,
+        height: band,
+        dpi: pin.dpi,
+        interactive: true,
+        animated: true,
+        clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
+    }
+    .layout()
+    .fps;
     Some(RECT {
         top: in_strip.top + strip_top,
         bottom: in_strip.bottom + strip_top,

@@ -120,15 +120,7 @@ fn seek_track_point() -> (i32, i32) {
     let bar = pinned_transport_geometry().expect("a banded pin has a bar");
     let (x, y) = (bar.width / 2, bar.top + bar.height / 2);
     assert_eq!(
-        pin_chrome::transport_part_at(
-            x,
-            y - bar.top,
-            bar.width,
-            bar.height,
-            bar.dpi,
-            bar.live,
-            bar.animated
-        ),
+        pin_chrome::transport_part_at(bar.shape(), x, y - bar.top),
         Some(pin_chrome::TransportPart::Seek),
         "the middle of the bar is the seek track"
     );
@@ -303,17 +295,7 @@ fn a_transport_part_point(part: pin_chrome::TransportPart) -> (i32, i32) {
 
     (0..bar.width)
         .map(|x| (x, y))
-        .find(|(x, y)| {
-            pin_chrome::transport_part_at(
-                *x,
-                *y - bar.top,
-                bar.width,
-                bar.height,
-                bar.dpi,
-                bar.live,
-                bar.animated,
-            ) == Some(part)
-        })
+        .find(|(x, y)| pin_chrome::transport_part_at(bar.shape(), *x, *y - bar.top) == Some(part))
         .unwrap_or_else(|| panic!("this bar draws no {part:?} to press"))
 }
 

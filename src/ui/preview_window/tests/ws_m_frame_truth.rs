@@ -513,17 +513,7 @@ fn a_transport_part_point(part: pin_chrome::TransportPart) -> (i32, i32) {
 
     (0..bar.width)
         .map(|x| (x, y))
-        .find(|(x, y)| {
-            pin_chrome::transport_part_at(
-                *x,
-                *y - bar.top,
-                bar.width,
-                bar.height,
-                bar.dpi,
-                bar.live,
-                bar.animated,
-            ) == Some(part)
-        })
+        .find(|(x, y)| pin_chrome::transport_part_at(bar.shape(), *x, *y - bar.top) == Some(part))
         .unwrap_or_else(|| panic!("this bar draws no {part:?} to press"))
 }
 
