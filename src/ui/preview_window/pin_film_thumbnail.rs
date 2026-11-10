@@ -363,29 +363,38 @@ pub(super) fn stand_the_pending_source_since(since: Option<Instant>) {
     }
 }
 
-/// Where a source is launched: the pin's own corner.
+/// Where a source is launched: **off every display, so that the window its player shows is a window
+/// nobody can see.**
 ///
-/// **The source is launched where it will stand rather than at wherever mpv would put it**: mpv shows
-/// its own window as soon as it has opened the file — before this app has found the window and adopted
-/// it — and the one placement this road makes puts it under the host (see the module note).
+/// **This is the one place a film's flash is decided, and it is a *place* rather than a style.**
+/// FFmpeg's player shows its own window the moment it has configured its output — measured on the
+/// player this app launches: 250–340ms into a launch, at the film's own size, whatever the launch was
+/// asked for. Two roads that would beat it both fail, and both were measured rather than argued: a
+/// `STARTUPINFO` of `SW_HIDE` is ignored by SDL, and `WS_EX_LAYERED` with alpha 1 asked of a window
+/// nobody has shown yet is taken and reads back as nothing (so the window is drawn at full opacity
+/// anyway, see `make_the_source_invisible`, whose frame-change-and-ask-again is the other half of that
+/// same fact). What is left is where the window is: begun at `OFF_THE_SCREEN` it is on no display's
+/// screen at any moment of its life before this app moves it, and the move is the last step of the
+/// adoption rather than its first (see `bring_the_parked_source_to_its_box`).
 ///
-/// **`--geometry` is measured from the primary display's work area rather than its monitor**, which
-/// mpv adds to the position it is given (`options/m_option.c`'s `m_geometry_apply` and
-/// `video/out/win_state.c`, which offsets by the work area's origin). That origin is (0, 0) unless
-/// the taskbar is docked along the primary's left or top edge, where an uncorrected launch would be a
-/// taskbar's thickness away from the corner of the box showing the film. The offset is taken off the
-/// corner and nothing else.
+/// **The size is untouched by this, on purpose.** The film is born at its own size because that is the
+/// picture it is (see `the_box_a_source_is_born_at`), and a film drawn smaller than it is a film drawn
+/// pixelated: parking changes where the window stands and nothing about what it holds. The box the one
+/// placement names is asked of the film's own size, and the window is moved there rather than resized
+/// to it.
 ///
-/// **Nothing here is clamped by mpv.** Its geometry parser takes the numbers as integers and its
-/// Windows backend applies them exactly where `--geometry` names an x and a y — the first placement
-/// is forced rather than fitted to a screen (`window_resize`, whose `force_pos` is true until the
-/// window's bounds are initialized), so a negative box lands where it says. The one clamp is the
-/// *size*: mpv limits it to 100% of the screen it picks, which a pin's box is at or under — and the
-/// source's own size is asked for after the launch, by this app and not by an argument (see
-/// `place_the_source`).
-pub(super) fn the_source_launch_origin(at: (i32, i32)) -> (i32, i32) {
-    let work = displays::the_primary_work_area();
-    (at.0 - work.left, at.1 - work.top)
+/// **mpv adds its own work-area origin to the position it is given** (`options/m_option.c`'s
+/// `m_geometry_apply` and `video/out/win_state.c`), which is (0, 0) unless the taskbar is docked along
+/// the primary's left or top edge. Off the screen that offset is immaterial — `-32000` is past every
+/// display — and `the_primary_work_area` is not consulted for it.
+///
+/// `at` is the corner the film is watched at, which this no longer uses: it is the caller's own box and
+/// the box the placement will name, and the window is moved onto it once the source has drawn. It is
+/// kept in the signature because the question "where does this film belong" is the launch's, and the
+/// parked corner is only ever answered a fixed distance from it.
+const OFF_THE_SCREEN: i32 = -32000;
+pub(super) fn the_source_launch_origin(_at: (i32, i32)) -> (i32, i32) {
+    (OFF_THE_SCREEN, OFF_THE_SCREEN)
 }
 
 /// The source window as the number of its handle, read without the lock by the questions the tick
