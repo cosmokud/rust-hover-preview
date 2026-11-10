@@ -45,8 +45,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetAncestor, GetClassNameW,
     GetClientRect, IsIconic, IsWindowVisible, PeekMessageW, PostMessageW, RegisterClassW,
     SetWindowPos, ShowWindow, TranslateMessage, WindowFromPoint, GA_ROOT, MSG, PM_NOREMOVE,
-    PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WHEEL_DELTA, WINDOW_EX_STYLE,
-    WNDCLASSW, WS_POPUP,
+    PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WHEEL_DELTA,
+    WINDOW_EX_STYLE, WNDCLASSW, WS_POPUP,
 };
 
 use crate::app::engine_processes;
@@ -59,10 +59,11 @@ use crate::engines::webview_preview::{
 /// table: one `GetClassNameW` on the root above the point.
 const VIEWER_CLASS: PCWSTR = w!("RhpPdfViewer");
 
-/// What the browser is given, which is nothing: the default runtime, in its own PDF viewer. The
-/// hover engine's arguments are deliberately not reused — `--hide-scrollbars` would take the
+/// What the browser is given: the hover engine's promise that nothing a document names is ever
+/// fetched — a PDF may name a remote resource as readily as a page may, and this app reads the file
+/// under the pointer and nothing else — and **not** its `--hide-scrollbars`, which would take the
 /// scrollbar out of a document the user is meant to scroll.
-const BROWSER_ARGUMENTS: &str = "";
+const BROWSER_ARGUMENTS: &str = "--host-resolver-rules=\"MAP * ~NOTFOUND\"";
 
 /// How long a viewer may take to arrive before the pin is read as one that will not: a local PDF
 /// through the runtime's own reader is a browser start and a file read, so what is past this is a
@@ -514,7 +515,14 @@ impl Host {
     /// suspension is still the whole of what a pin that goes away pays: the document is kept, and a
     /// pin that comes back is a resume rather than a browser begun again.
     fn the_document_is_on_the_screen(&self) -> bool {
-        unsafe { IsWindowVisible(self.hwnd).as_bool() && !IsIconic(self.owner).as_bool() }
+        // The pin's own window is asked as well as this one: a viewer hidden *by* us is hidden for
+        // the same reason an owner's hide would be, and asking both means the answer does not
+        // depend on whether the Shell hides an owned window with its owner.
+        unsafe {
+            IsWindowVisible(self.hwnd).as_bool()
+                && IsWindowVisible(self.owner).as_bool()
+                && !IsIconic(self.owner).as_bool()
+        }
     }
 
     fn reveal(&mut self) {
@@ -609,6 +617,13 @@ impl Host {
             }
         }
 
+        // The window goes off the screen with the controller, because a hidden document that a
+        // suspended controller no longer draws is a blank band: the pin's band is owed nothing of
+        // this app's while the pin is away (see `the_document_is_on_the_screen`).
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+
         self.suspended = true;
         trace(&format!("pdf: suspended {}", self.path.display()));
     }
@@ -628,6 +643,7 @@ impl Host {
 
         unsafe {
             let _ = self.controller.SetIsVisible(true);
+            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
 
         trace(&format!("pdf: resumed {}", self.path.display()));
