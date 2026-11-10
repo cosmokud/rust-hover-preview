@@ -544,7 +544,9 @@ pub(super) fn refresh_pin_chrome(
         // that draws one is held up by it, though — a sound's popup hangs off a button on the
         // card rather than off a strip, and `bar` for a kind with no strip would otherwise be
         // stuck true for as long as the popup is open.
-        let bar = pin.transport_bar && (bar || pin.volume.open);
+        // A strip the popup came out of stays showing while it is open, whichever of the bar's two
+        // own controls opened it (see `TransportPart::Volume` and `TransportPart::Fps`).
+        let bar = pin.transport_bar && (bar || pin.volume.open || pin.fps.open);
 
         shown = (pin.chrome.caption, pin.chrome.bar) != (caption, bar);
         pin.chrome.caption = caption;
