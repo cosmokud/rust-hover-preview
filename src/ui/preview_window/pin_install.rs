@@ -1783,13 +1783,30 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
         }
     }
 
-    // The place the pin has played to while this was out. A frame that has not been answered for a
-    // place at all — a picture that does not play, a pin with no media — has nothing to catch up to.
-    let wanted = CURRENT_MEDIA.lock().ok().and_then(|media| {
-        media
-            .as_ref()
-            .and_then(|media| media.current_frame_of_file())
-    });
+    // The answer's own stream is filled in here, once a tick, while it waits: a decode is handed over
+    // as soon as it has its startup frames (see `load_animated_gif`), so an answer that lands after the
+    // pin has played on is behind the place below and only its own stream can reach it — and nothing
+    // else pumps it, the frames being nobody's until they are installed.
+    if let Some(decoded) = pending.decoded.as_mut() {
+        decoded.sync_shared_frames();
+    }
+
+    // The place the pin has played to while this was out, and the size of the frame it is showing
+    // — both read in one look, before either lock below is taken. A frame that has not been answered
+    // for a place at all — a picture that does not play, a pin with no media — has nothing to catch up
+    // to.
+    let (wanted, held) = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media.as_ref().map(|media| {
+                (
+                    media.current_frame_of_file(),
+                    Some((media.current_width(), media.current_height())),
+                )
+            })
+        })
+        .unwrap_or((None, None));
 
     // The answer is the one to install once it holds the place the picture has played to, or one
     // past it — which is a frame skipped rather than a picture put back. Short of it, the frames on
@@ -1819,6 +1836,23 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     // a window that is no longer there, and its frame must not be installed over whatever is
     // there now — and its frames are told to stop, nobody wanting them.
     if pinned_path().as_deref() != Some(pending.path.as_path()) {
+        let mut media = media;
+        media.cancel_background_work();
+        return false;
+    }
+
+    // **An answer no bigger than the frame in hand is dropped rather than installed**, and that is
+    // what a box change asks of a picture that plays: the decode is at the file's own pixels (see
+    // `the_scale_a_road_lays_out_at`), so a window taken past those pixels — maximized, or carried to
+    // the other display — asks for frames it already has. Installing them put the picture back to the
+    // place the decode began at and started the file's stream over from there, which is the picture
+    // snapping back a few frames and stalling while the stream decodes its way up again. The band
+    // stretches the frames already playing into the box, which is the answer a resized video is given.
+    let adds_nothing = media.media_type.is_animation()
+        && held.is_some_and(|(held_width, held_height)| {
+            media.current_width() <= held_width && media.current_height() <= held_height
+        });
+    if adds_nothing {
         let mut media = media;
         media.cancel_background_work();
         return false;
