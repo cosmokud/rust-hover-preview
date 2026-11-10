@@ -128,12 +128,19 @@ struct PinPlaylist {
     /// once. A name the band has let go of is kept here until it has wound home (see
     /// `set_the_marquee`).
     marquees: Vec<Marquee>,
-    /// Whether the pointer is anywhere in the band, which is one of the two things that holds the
-    /// field in sight and the only one that changes as a hand moves (see `retarget_the_search`).
-    pointer_in_the_band: bool,
+    /// Whether the pointer is in the band or within reach of it, which is one of the two things that
+    /// holds the field in sight and the only one that changes as a hand moves (see
+    /// `retarget_the_search`).
+    ///
+    /// **It is the field's own answer rather than the rows'.** The field stands on the band's last
+    /// row, which is the window's own bottom edge, so the gesture a hand makes for it lands a few
+    /// pixels short of the band or beside it: the reach is what a hand arriving at the field is, and a
+    /// row is still only ever the pointer's inside the band's own rect (see `set_the_hover`).
+    pointer_in_reach: bool,
     /// Whether the field is meant to be in sight, and how much of it is: the target is the pointer in
-    /// the band, the caret or a query hiding rows, and the slide is the share it has travelled toward
-    /// it — `1.0` whole, `0.0` parked under the window's own edge (see `advance_the_search`).
+    /// the band or reaching for it, the caret or a query hiding rows, and the slide is the share it
+    /// has travelled toward it — `1.0` whole, `0.0` parked under the window's own edge (see
+    /// `advance_the_search`).
     search_in_sight: bool,
     search_slide: f32,
     /// When the slide was last advanced, which is the cadence the next step of it is counted in.
@@ -160,9 +167,9 @@ impl Default for PinPlaylist {
             marquees: Vec::new(),
             // **A band opens with its field parked.** The field is the pointer's and the caret's, and
             // a band drawn for a hand that has not reached for it yet has neither: it slides in when
-            // the pointer comes into the band, which is the one gesture that asks for it (see
+            // the pointer comes at the band, which is the one gesture that asks for it (see
             // `advance_the_search`).
-            pointer_in_the_band: false,
+            pointer_in_reach: false,
             search_in_sight: false,
             search_slide: 0.0,
             search_last: Instant::now(),
@@ -329,9 +336,9 @@ impl PinPlaylist {
     }
 
     /// **The one place the field's target is decided**, and the one place its slide is ever put
-    /// somewhere without travelling: it is in sight while the pointer is anywhere in the band, while
-    /// it has the caret, and while its query is not empty — the query is what is hiding rows, and a
-    /// field a hand cannot see is a list it cannot explain.
+    /// somewhere without travelling: it is in sight while the pointer is in the band or reaching for
+    /// it, while it has the caret, and while its query is not empty — the query is what is hiding rows,
+    /// and a field a hand cannot see is a list it cannot explain.
     ///
     /// A field with either of the last two is put in sight **whole** rather than sliding in: it is not
     /// on its way anywhere, it is a field a hand is typing into, and a query that is filtering a list
@@ -340,7 +347,7 @@ impl PinPlaylist {
     /// hide it, and no query is dropped to park it.
     fn retarget_the_search(&mut self) {
         let held = self.search_focused || !self.query.text().trim().is_empty();
-        self.search_in_sight = self.pointer_in_the_band || held;
+        self.search_in_sight = self.pointer_in_reach || held;
         if held {
             self.search_slide = 1.0;
         }
@@ -532,7 +539,7 @@ pub(super) fn toggle(pin: &PinnedPreview) {
     if let Ok(mut playlist) = THE_PLAYLIST.lock() {
         playlist.search_focused = false;
         playlist.query.clear();
-        playlist.pointer_in_the_band = false;
+        playlist.pointer_in_reach = false;
         playlist.search_in_sight = false;
         playlist.search_slide = 0.0;
         playlist.search_last = Instant::now();
@@ -904,7 +911,7 @@ pub(super) fn the_pointer_has_left_the_band() -> bool {
         return false;
     };
 
-    set_the_hover((height, width, scale), None)
+    set_the_hover((height, width, scale), None, false)
 }
 
 /// The wheel's notches, stepped on the band, which is what a wheel over a band asks of it: the answer
@@ -1081,8 +1088,8 @@ fn advance_the_marquees() -> bool {
 /// tick at a time, so that a hand that reaches into the band sees a pill slide up out of the window's
 /// own bottom edge and a hand that leaves sees it park there again — never a field that blinks.
 ///
-/// The target is the pointer in the band, the caret, and a query that is hiding rows (see
-/// `PinPlaylist::should_the_search_be_in_sight`): a field that is filtering a list is a field the hand
+/// The target is the pointer in the band or reaching for it, the caret, and a query that is hiding
+/// rows (see `PinPlaylist::retarget_the_search`): a field that is filtering a list is a field the hand
 /// has to be able to read and edit, and one that is parked under a pointer that has gone is a field
 /// nothing is asking for. The ends are snapped to exactly, because a slide left a hair short of its
 /// end is a tick asking for a paint for the rest of the run.
@@ -1101,28 +1108,53 @@ fn advance_the_search() -> bool {
 /// A pointer over the band, answering whether the band changed for it: which row the hand is on is
 /// the marquee's own answer, and a row a hand has come to is a name that starts moving.
 ///
-/// `y` is the window's own row, which the band's begins some way down: a hand above the band is a
-/// hand on no row at all, and one on the card's own bar is not one either.
-pub(super) unsafe fn hover(y: i32) -> bool {
+/// `x` and `y` are the window's own columns and rows, which the band's begin some way down: a hand
+/// above the band is a hand on no row at all, and one on the card's own bar is not one either.
+pub(super) unsafe fn hover(x: i32, y: i32) -> bool {
     let Some(band) = the_band_of_the_pin() else {
         return false;
     };
 
-    hover_at_the_band(band, Some(y))
+    hover_at_the_band(band, Some((x, y)))
 }
 
-/// The band's answer to a pointer at a row of the window, or at no row at all — **the one place the
-/// band's own top is taken off the window's row**, so that a move the window is sent and a tick that
-/// reads the cursor off the screen cannot name two different rows of one band.
+/// The band's answer to a pointer at a point of the window, or at no point at all — **the one place
+/// the band's own top is taken off the window's row**, so that a move the window is sent and a tick
+/// that reads the cursor off the screen cannot name two different rows of one band.
 ///
 /// It is handed the band's own geometry rather than asking the pin for it because the tick stands
 /// inside the pin's lock, which `the_band_of_the_pin` would block on (see `set_the_hover`).
-fn hover_at_the_band((top, height, width, scale): (i32, i32, i32, f32), y: Option<i32>) -> bool {
-    let local = y
-        .map(|y| y - top)
-        .filter(|local| (0..height).contains(local));
+fn hover_at_the_band(
+    (top, height, width, scale): (i32, i32, i32, f32),
+    at: Option<(i32, i32)>,
+) -> bool {
+    // **A hand that is only near the band is reaching for its field all the same.** The field stands on
+    // the band's bottom row, which is the window's own, so a hand coming at it arrives from under that
+    // edge or from beside it — and a band that waited for the pointer to be inside its own box is a
+    // field that comes up one row too late (see `pin_chrome::playlist_reach`).
+    //
+    // The reach is the field's alone: `local` is the band's own rect and nothing beside it, so a row,
+    // and the name a row travels, are only ever a pointer inside the band's.
+    let reach = pin_chrome::playlist_reach(scale);
+    let (local, near) = match at {
+        Some((x, y)) => {
+            let local = y - top;
+            let near =
+                x >= -reach && x < width + reach && local >= -reach && local < height + reach;
 
-    set_the_hover((height, width, scale), local)
+            // A row is the pointer's only inside the band's own box, on both axes: the reach is what
+            // asks for the field, and it is never what a row is on.
+            (
+                Some(local)
+                    .filter(|local| (0..height).contains(local))
+                    .filter(|_| (0..width).contains(&x)),
+                near,
+            )
+        }
+        None => (None, false),
+    };
+
+    set_the_hover((height, width, scale), local, near)
 }
 
 /// The row under the pointer the tick reads for itself, which is the one answer a move this window
@@ -1150,9 +1182,7 @@ pub(super) fn pin_playlist_hover_refresh(
         return false;
     };
 
-    let y = (0..width).contains(&x).then_some(y);
-
-    hover_at_the_band((top, height, width, pin.dpi as f32 / 96.0), y)
+    hover_at_the_band((top, height, width, pin.dpi as f32 / 96.0), Some((x, y)))
 }
 
 /// The band's hover, written in the one place: which row a band-local row of the window is on, and
@@ -1161,7 +1191,7 @@ pub(super) fn pin_playlist_hover_refresh(
 /// It is handed the band's own geometry rather than asking the pin for it because its two callers
 /// stand on either side of the pin's lock: a pointer's move arrives with the lock free, and the
 /// tick that reads the cursor for itself holds it.
-fn set_the_hover(band: (i32, i32, f32), local: Option<i32>) -> bool {
+fn set_the_hover(band: (i32, i32, f32), local: Option<i32>, near: bool) -> bool {
     let (height, width, scale) = band;
     let Ok(mut playlist) = THE_PLAYLIST.lock() else {
         return false;
@@ -1179,20 +1209,38 @@ fn set_the_hover(band: (i32, i32, f32), local: Option<i32>) -> bool {
     playlist.hovered = hovered;
     playlist.set_the_marquee(&layout, scale);
 
-    // **A pointer anywhere in the band is a hand reaching for its field.** The pointer is asked of the
-    // band's own rows rather than of a row: the pads above and below a list are the band's too, and a
-    // field that stayed parked under a hand that is in the band is a field the hand cannot reach — the
-    // engagement is the whole of the band, and the row is the marquee's answer alone.
+    // **A pointer in the band, or one only reaching for it, is a hand asking for its field.** The rows
+    // are asked for the hand's row rather than for its engagement: the pads above and below a list are
+    // the band's too, and a field that stayed parked under a hand that is in the band is a field the
+    // hand cannot reach — the engagement is the band and the reach around it, and the row is the
+    // marquee's answer alone (see `hover_at_the_band`).
     //
     // **And the field is never taken away from a hand that has named it.** A field with the caret or
     // one filtering the list is in sight whole rather than mid-slide, whatever the pointer does: it is
     // the only thing on the band that explains rows missing, and the only way to put them back (see
     // `PinPlaylist::retarget_the_search`).
-    let was = (playlist.search_in_sight, playlist.search_slide);
-    playlist.pointer_in_the_band = local.is_some();
+    let was = (
+        playlist.search_in_sight,
+        playlist.search_slide,
+        playlist.search_focused,
+    );
+    playlist.pointer_in_reach = near;
+    // **The caret belongs to a hand that is still reaching for the field.** A pointer that has walked
+    // away from a field it pressed is a pointer no key is going to be typed from, and a caret left
+    // blinking in it is a field that never parks: it is the one thing that held a band open with no
+    // pointer on it and no query in it (see `retarget_the_search`). A field with a query in it stays
+    // in sight either way — the query is what is hiding rows (see `the_search`).
+    if !near {
+        playlist.search_focused = false;
+    }
     playlist.retarget_the_search();
 
-    changed || (playlist.search_in_sight, playlist.search_slide) != was
+    changed
+        || (
+            playlist.search_in_sight,
+            playlist.search_slide,
+            playlist.search_focused,
+        ) != was
 }
 
 /// A press on the band, answering whether the press was the band's: either of the window's two
@@ -1257,7 +1305,7 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
         // band, so the field it reached for comes down to meet it (see `advance_the_search`).
         let reached_for_the_field = pin_chrome::search_field_holds(&layout, x, local);
         if reached_for_the_field && playlist.search_slide < 1.0 {
-            playlist.pointer_in_the_band = true;
+            playlist.pointer_in_reach = true;
             playlist.retarget_the_search();
             return true;
         }
@@ -1266,7 +1314,7 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
             // follows: a field focused is a field in sight whole whatever the pointer then does (see
             // `retarget_the_search`).
             playlist.search_focused = true;
-            playlist.pointer_in_the_band = true;
+            playlist.pointer_in_reach = true;
             playlist.retarget_the_search();
             let at = pin_chrome::search_index_at(&layout, playlist.query.text(), x, scale);
             playlist.query.place_caret(at, false);
@@ -1276,7 +1324,7 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
             // stays: it is what the band is filtered by until `Esc` or the next press on the field.
             // Whether that lets the pill park is the target's own answer, not this one's: a query that
             // is still hiding rows keeps it in sight (see `retarget_the_search`).
-            playlist.pointer_in_the_band = true;
+            playlist.pointer_in_reach = true;
             playlist.search_focused = false;
             playlist.retarget_the_search();
 
