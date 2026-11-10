@@ -1907,5 +1907,6 @@ pub(super) fn seek_pinned_animation(
         path: path.to_path_buf(),
         answer,
         decoded: None,
+        place: Some(frame),
     });
 }
