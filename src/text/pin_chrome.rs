@@ -84,7 +84,7 @@ use primitives::{
 pub(crate) use transport::volume_popup_layout;
 #[cfg(test)]
 use transport::{
-    draw_pause_glyph, draw_play_glyph, draw_track_step, size_in, volume_thumb_row,
+    draw_pause_glyph, draw_play_glyph, draw_track_step, fps_thumb_row, size_in, volume_thumb_row,
     VOLUME_COLLAR_PIXELS, VOLUME_PANEL_GAP, VOLUME_PANEL_WIDTH, VOLUME_THUMB_RADIUS,
 };
 #[cfg(test)]

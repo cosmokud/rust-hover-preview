@@ -558,3 +558,138 @@ fn draws_the_marks_of_a_bar() {
         }
     }
 }
+
+/// The FPS button is the volume button's own square, one square and one gap to its left, and the
+/// two never overlap at any width or scale a bar is drawn at: a bar with two controls whose boxes
+/// were each other's would be a hand that always pressed the wrong one.
+#[test]
+fn the_fps_button_sits_left_of_the_volume_button_and_never_over_it() {
+    for (width, height) in [(320, 30), (600, 30), (600, 40), (1920, 48), (220, 26)] {
+        for dpi in [96, 144, 192] {
+            let layout = transport_layout(width, height, dpi, true, true);
+
+            assert!(
+                layout.fps.right <= layout.volume.left,
+                "at {width}x{height} dpi {dpi} the two controls overlap"
+            );
+            assert!(
+                layout.fps.left >= 0 && layout.fps.right <= width,
+                "at {width}x{height} dpi {dpi} the pace's button is off the bar"
+            );
+            assert_eq!(
+                (layout.fps.bottom - layout.fps.top),
+                (layout.volume.bottom - layout.volume.top),
+                "the two are one size of button at {width}x{height} dpi {dpi}"
+            );
+
+            // And the bar drawn without one gives its room back to the clock: a [picture] that
+            // plays has a button there, and every other bar has a longer track.
+            let film = transport_layout(width, height, dpi, true, false);
+            assert!(
+                film.bar.right >= layout.bar.right,
+                "a bar with no pace to set keeps the room for its track"
+            );
+        }
+    }
+}
+
+/// A point on the FPS button is answered before anyone else's, and a bar drawn without one has
+/// nothing at that point at all.
+#[test]
+fn the_fps_button_is_hit_where_it_is_drawn() {
+    let layout = transport_layout(800, 30, 96, true, true);
+    let middle = (layout.fps.left + layout.fps.right) / 2;
+
+    assert_eq!(
+        transport_part_at(middle, 15, 800, 30, 96, true, true),
+        Some(TransportPart::Fps)
+    );
+    assert_eq!(
+        transport_part_at(middle, 15, 800, 30, 96, true, false),
+        None,
+        "a film's bar has no pace to set, and a button there would be a button that does nothing"
+    );
+
+    // The volume button is still its own, one square to the right.
+    let volume = (layout.volume.left + layout.volume.right) / 2;
+    assert_eq!(
+        transport_part_at(volume, 15, 800, 30, 96, true, true),
+        Some(TransportPart::Volume)
+    );
+
+    // And the track stops short of both, so a press near the end of the strip is a control rather
+    // than a seek.
+    assert_ne!(
+        transport_part_at(layout.volume.left, 15, 800, 30, 96, true, true),
+        Some(TransportPart::Seek)
+    );
+}
+
+/// The pace's slider reads one frame a second at the bottom of its groove and the ceiling at the
+/// top, and every whole frame in between: a groove whose ends were not those two would be a slider
+/// a hand cannot reach either end of.
+#[test]
+fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
+    let layout = transport_layout(800, 30, 96, true, true);
+    let popup = volume_popup_from_button(
+        RECT {
+            top: layout.fps.top + 400,
+            bottom: layout.fps.bottom + 400,
+            ..layout.fps
+        },
+        800,
+        96,
+    );
+    let track = popup.track;
+    let max = 360;
+
+    assert_eq!(fps_at(track.bottom, track, max), 1, "the bottom is one");
+    assert_eq!(
+        fps_at(track.top, track, max),
+        max,
+        "and the top is all of it"
+    );
+    let quarter = fps_at(track.bottom - (track.bottom - track.top) / 4, track, max);
+    assert!(
+        (87..=93).contains(&quarter),
+        "a quarter of the way up is a quarter of the pace above one, and not all of it: {quarter}"
+    );
+
+    // And a point off the groove is held at its ends rather than read past them.
+    assert_eq!(fps_at(track.bottom + 500, track, max), 1);
+    assert_eq!(fps_at(track.top - 500, track, max), max);
+
+    // The knob is drawn where the pace it holds is: the two ends of the groove again, and a pace
+    // in between the row between them.
+    assert_eq!(fps_thumb_row(track, 1, max), track.bottom);
+    assert_eq!(fps_thumb_row(track, max, max), track.top);
+    assert!(fps_thumb_row(track, 180, max) < track.bottom);
+    assert!(fps_thumb_row(track, 180, max) > track.top);
+}
+
+/// The pace's panel is the volume panel, hung from a button of its own: inside the window, over the
+/// media rather than over the button that opened it, and with a groove to drag.
+#[test]
+fn the_pace_popup_is_inside_the_window_and_floats_above_its_button() {
+    for (width, height) in [(600, 30), (320, 30), (1920, 48)] {
+        for dpi in [96, 144] {
+            let layout = transport_layout(width, height, dpi, true, true);
+            let button = RECT {
+                top: layout.fps.top + height,
+                bottom: layout.fps.bottom + height,
+                ..layout.fps
+            };
+            let popup = volume_popup_from_button(button, width, dpi);
+
+            assert!(popup.panel.left >= 0 && popup.panel.right <= width);
+            // The panel floats over the media rather than over the button that opened it — unless
+            // the window is too short to hold it above the button, which is where the panel's own
+            // floor puts it at the window's top edge instead (see `volume_popup_from_button`).
+            assert!(
+                popup.panel.bottom <= button.top || popup.panel.top == 0,
+                "the panel covers the button that opened it"
+            );
+            assert!(popup.track.bottom > popup.track.top, "a groove to drag");
+        }
+    }
+}

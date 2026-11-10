@@ -989,6 +989,7 @@ mod pin_cards;
 mod pin_edges;
 mod pin_film_host_window;
 mod pin_frames;
+mod pin_frames_play;
 mod pin_gesture_no_restart;
 mod pin_input;
 mod pin_keys;
