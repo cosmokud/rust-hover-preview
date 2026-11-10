@@ -1084,6 +1084,13 @@ pub fn run_preview_window() {
                 // field, whose characters are the `WM_CHAR` `TranslateMessage` only makes from a
                 // key-down nothing swallowed (see `key_input::publish_find_bar_up`).
                 crate::app::seam::publish_find_bar_up(pinned() && text_find::is_open());
+                // And whether the band's own search field holds the caret, published here beside it
+                // and for the same reason: the field is written on the press that focuses it, and the
+                // hook has to be told before the next key is typed into it (see
+                // `pin_playlist::search_has_focus`).
+                crate::app::seam::publish_playlist_search_up(
+                    pinned() && pin_playlist::search_has_focus(),
+                );
 
                 // A window dragged by an edge owes its media a layout at the box it ended up
                 // with: the window procedure owns the drag and asks for it here, because the
@@ -4436,6 +4443,13 @@ pub fn run_preview_window() {
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).
                         install(pin);
+
+                        // A band that is already up is a band this pin comes up with, and the
+                        // press that turned it over was the last pin's: the walk behind this one
+                        // is asked for its playlist here rather than by the first **Next**, so the
+                        // band draws the folder it walks instead of the one row the pin is
+                        // standing on (see `ask_the_bands_playlist`).
+                        ask_the_bands_playlist();
 
                         // A pin that is taken up owes the front from the moment it is up: the
                         // click that picks the next file activates the listing, and a pin in the

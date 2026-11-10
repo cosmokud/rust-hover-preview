@@ -221,7 +221,7 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
 
     // And the playlist band under a pinned sound's card, where a row a hand has come to is a name
     // that starts travelling across it (see `pin_playlist::hover`).
-    let playlist_changed = pin_playlist::hover(y);
+    let playlist_changed = pin_playlist::hover(x, y);
 
     if hovered_changed
         || chrome_changed
@@ -1065,6 +1065,15 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
     // `pin_playlist::press`).
     if pin_playlist::press(hwnd, x, y, double_click) {
         return true;
+    }
+
+    // **A press the band did not take is the hand leaving its search field.** The block above answers a
+    // press on the band itself, and a press anywhere else on the pin is a caret moving out of the field
+    // — the query it typed stays applied, because the list under the press is the list it asked for (see
+    // `pin_playlist::blur_the_search`).
+    if pin_playlist::search_has_focus() {
+        pin_playlist::blur_the_search();
+        render_layered_preview(hwnd);
     }
 
     if framed {

@@ -61,7 +61,73 @@ fn a_word_move_crosses_the_marks_between_one_word_and_the_next() {
     );
 }
 
-/// A typed character lands at the caret, and a selection is what it replaces rather than what it is
+/// **A double press takes the word it landed on, and a second double press on that same word takes the
+/// whole query** — the line an editor widens a word's selection to, and a query is one line. A press on
+/// another word after that is that word again rather than the line: the widening belongs to the word
+/// the hand has already taken (see `Field::select_word`).
+#[test]
+fn a_double_press_takes_a_word_and_the_same_word_again_takes_the_line() {
+    let mut field = holding("cute cat");
+
+    field.select_word(6);
+    assert_eq!(
+        field.selection(),
+        Some((5, 8)),
+        "the word the place stands in, and nothing of the one beside it"
+    );
+    assert_eq!(field.selected_text(), "cat");
+
+    field.select_word(6);
+    assert_eq!(
+        field.selection(),
+        Some((0, 8)),
+        "the same word again is the whole of the query"
+    );
+    assert_eq!(field.selected_text(), "cute cat");
+
+    field.select_word(1);
+    assert_eq!(
+        field.selected_text(),
+        "cute",
+        "another word is another word"
+    );
+    field.select_word(1);
+    assert_eq!(
+        field.selected_text(),
+        "cute cat",
+        "and its own second press widens that one"
+    );
+}
+
+/// A word is the page's own run — letters, digits and the underscore — so a gap between two words is a
+/// run of its own, and every place a word is picked by is a character boundary rather than a byte
+/// (see `text_preview::run_at` and `Field::word_at`).
+#[test]
+fn a_word_is_the_pages_run_and_never_half_a_character() {
+    let mut field = holding("cute cat");
+
+    field.select_word(4);
+    assert_eq!(
+        field.selected_text(),
+        " ",
+        "the gap between two words is a run a press can land in"
+    );
+
+    let mut accented = holding("héllo wörld");
+    accented.select_word(2);
+    let (start, end) = accented.selection().expect("the word the place stands in");
+    assert_eq!(
+        accented.selected_text(),
+        "héllo",
+        "a character of more than one byte is one character of the word"
+    );
+    assert!(
+        accented.text().is_char_boundary(start) && accented.text().is_char_boundary(end),
+        "and neither end of the range cuts a character in half"
+    );
+}
+
+/// A typed character lands at the caret, and a selection replaces rather than what it is
 /// appended to — including a selection that reaches over the caret's own end (see `Field::insert`).
 #[test]
 fn a_typed_character_lands_at_the_caret_and_replaces_a_selection() {

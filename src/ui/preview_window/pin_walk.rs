@@ -400,13 +400,29 @@ pub(super) fn take_pin_walk() -> Option<PinStep> {
 /// order, so it steps the same playlist instead of starting another. Only the order goes —
 /// the pin has not moved, so where it is standing is still where the next step is taken from
 /// (see `PinUp::walk`).
+///
+/// **And where the pin holds no walk at all it is taken whole**, which is a pin nothing has
+/// stepped yet: `step: 0` is the walk asked for its order rather than for a step — the question
+/// the band behind a sound's card asks (see `ask_the_walk_again`) — and there is no walk to hand
+/// that order to, so the answer is the playlist, and the press after it is a step of that one
+/// rather than a fresh draw. A step's answer is *not* taken that way: it lands on a file the pin
+/// has not been shown yet, and the install that shows it is what puts its walk on the pin.
 pub(super) fn pin_walk_synced_its_playlist(walk: &PinStep) {
-    if let Some(mut state) = pin_state() {
-        if let Some(Some(held)) = state.walk_mut() {
+    let Some(mut state) = pin_state() else {
+        return;
+    };
+    let Some(held) = state.walk_mut() else {
+        return;
+    };
+
+    match held {
+        Some(held) => {
             held.order = walk.order.clone();
             held.shuffle = walk.shuffle;
             held.anchor = walk.anchor;
         }
+        None if walk.step == 0 => *held = Some(walk.clone()),
+        None => {}
     }
 }
 
@@ -511,6 +527,36 @@ pub(super) fn ask_the_walk_again() {
     };
 
     ask_pin_walk(at, 0, pin_walk_anchor(&None));
+}
+
+/// Ask the walk behind the band for the playlist a pin that has just come up is owed, where the
+/// band is already up over it.
+///
+/// **A band left up is a band the next pin comes up with** (see `pin_playlist`), and the press that
+/// turned it over was the pin before this one's: nothing has asked *this* pin's walk for an order,
+/// so the band draws the one row the pin is standing on and the first **Next** spawns a playlist
+/// nothing on screen was showing. The order is spawned here instead — with the file the pin came up
+/// on as its head, which is where a playlist is built around (see `around_the_showing_file`) — so
+/// the rows are the walk's own from the first paint and the press after them steps that playlist
+/// rather than drawing another (see `ask_pin_walk`).
+///
+/// Only a sound's card is asked for it, because the band is drawn under one and nothing else, and
+/// only where the pin holds no walk: a walk carried onto the file is the playlist already, and
+/// asking again would be a second one drawn over it.
+pub(super) fn ask_the_bands_playlist() {
+    if !pin_playlist::the_band_is_open() {
+        return;
+    }
+
+    // Read under the pin's lock and let go of before the question is asked: the ask takes that lock
+    // again, for the file the walk is built around and for the walk it carries (see `ask_pin_walk`).
+    let owed = pin_state().as_ref().is_some_and(|state| {
+        state.walk().is_none() && state.pin().is_some_and(pin_shows_an_audio_card)
+    });
+
+    if owed {
+        ask_the_walk_again();
+    }
 }
 
 /// Ask the planner which program this file would open with.
