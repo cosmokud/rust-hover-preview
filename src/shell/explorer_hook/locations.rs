@@ -339,6 +339,22 @@ pub(super) fn anchored_view_context(
         });
     }
 
+    // **Everything's place is the window and nothing else**, and the folder is the fact that must not
+    // be recorded: a search spans folders, so the folder the row under the pointer is in is that row's
+    // own and the next row's is another one — written down as the place, every row-to-row move would
+    // read as a place change and blink the preview (see `HoverLocation` and `hover_location_changed`).
+    // The window is where the rows are drawn, which is one place for every row in it, and the file's own
+    // path is what says whether the file changed.
+    if window.everything {
+        return Some(ActiveShellViewContext {
+            // The frame rather than a view: it registers no Shell view, and the window the rows are
+            // drawn in is the place a look is compared in.
+            shell_view_hwnd: window.frame,
+            location_url: None,
+            folder_path: None,
+        });
+    }
+
     let remembered = resolver.remembered_view(window.frame);
     let registrations = shell_window_count(resolver);
 

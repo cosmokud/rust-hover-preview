@@ -39,6 +39,12 @@ windows = { version = "0.58", features = [
     "Win32_System_Com",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    # `ReadProcessMemory`/`WriteProcessMemory`, which are what reads a voidtools Everything result row:
+    # the list answers a message carrying a struct against a pointer in *its own* address space, so the
+    # struct has to be written there and the answer read back out of it (see
+    # `shell::explorer_hook::everything`). Both live in this module of the bindings, not in the memory
+    # one, which is why it is named here beside it.
+    "Win32_System_Diagnostics_Debug",
     "Win32_UI_Accessibility",
     "Win32_System_Ole",
     "Win32_System_Variant",

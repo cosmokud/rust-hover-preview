@@ -8,6 +8,9 @@
 //!   pointer is over, the file that item names.
 //! - `file_dialog` — the same two questions asked of a Common Item Dialog, which has no
 //!   Shell view to ask: the folder it is showing, and the file an item of it stands for.
+//! - `everything` — the item question again, asked of voidtools Everything's result list: a
+//!   `SysListView32` of another process, whose rows are read out of Everything's own address
+//!   space because reading them through UI Automation is what must not be done.
 //! - `resolver` — the UI Automation client, the Shell window collection, and the view that
 //!   answered last. What holds a COM object for the rest of this.
 //! - `view_sort` — how long the hook waits between looks, and the order a folder is listed
@@ -37,6 +40,7 @@
 //! items rather than naming them through their own — so that moving one question across a
 //! boundary is not a change to it.
 
+mod everything;
 mod file_dialog;
 mod focus_items;
 mod hover_location;
@@ -151,6 +155,7 @@ pub(crate) fn the_shift_key_is_down() -> bool {
 
 // The parts, in one namespace (see the note above). The macro is named rather than globbed:
 // it is written from two parts and lives with the counter it is written beside.
+use everything::*;
 use file_dialog::*;
 use focus_items::*;
 use hover_location::*;

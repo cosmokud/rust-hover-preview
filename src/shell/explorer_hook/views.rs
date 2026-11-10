@@ -98,6 +98,9 @@ pub(super) struct ItemResolver {
     /// The folder a Common Item Dialog was last read as showing, against the frame it was
     /// read from — see `file_dialog::dialog_folder`.
     pub(super) dialog_folder: Option<DialogFolderMemo>,
+    /// The scratch page in Everything's own process that its result list is read through, kept for
+    /// as long as it describes the list being read — see `everything::EverythingReads`.
+    pub(super) everything: Option<EverythingReads>,
 }
 
 /// The folder one Common Item Dialog is showing, kept while it still describes it.
@@ -240,6 +243,16 @@ pub(super) struct ItemWindow {
     /// before it takes a position (see `item_file_path`), and the place is read from the
     /// breadcrumb rather than from a view (see `anchored_view_context`).
     pub(super) dialog: bool,
+    /// Whether the frame is voidtools Everything's result window — see
+    /// `explorer_hook::everything`.
+    ///
+    /// **It is the one thing about that window every other route here cannot be asked**, and it is the
+    /// reason every road branches on it before it asks anything: reading an Everything list through UI
+    /// Automation is reported to hang the program and to leave it holding gigabytes, so the class of
+    /// the frame decides the road (see `uia_item_from_point`), the item path resolves the file out of
+    /// the row's own cells (see `item_file_path`), and the place is the window alone
+    /// (see `anchored_view_context`).
+    pub(super) everything: bool,
 }
 
 impl ItemWindow {

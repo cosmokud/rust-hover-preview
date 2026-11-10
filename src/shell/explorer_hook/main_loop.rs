@@ -1264,7 +1264,7 @@ pub fn run_explorer_hook() {
                             >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
                     {
                         last_keyboard_focus_probe = Instant::now();
-                        if let Some(focused_info) = get_focused_explorer_item(&resolver) {
+                        if let Some(focused_info) = get_focused_explorer_item(&mut resolver) {
                             let focused_key = FocusedItemKey::new(
                                 focused_info.item.name.clone(),
                                 &focused_info.item.bounds,
@@ -1431,7 +1431,7 @@ pub fn run_explorer_hook() {
                     >= Duration::from_millis(KEYBOARD_FOCUS_PROBE_MS)
             {
                 last_keyboard_focus_probe = Instant::now();
-                if let Some(focused_info) = get_focused_explorer_item(&resolver) {
+                if let Some(focused_info) = get_focused_explorer_item(&mut resolver) {
                     // The name alone cannot tell two observations apart: a search
                     // can hold the same name in more than one folder, and the box is
                     // what says which of them the keyboard is on. The frame is taken
@@ -1719,7 +1719,7 @@ pub fn run_explorer_hook() {
                                 &file_path,
                                 cursor_pos.x,
                                 cursor_pos.y,
-                                avoid_box_under_cursor(&resolver, cursor_pos),
+                                avoid_box_under_cursor(&mut resolver, cursor_pos),
                             );
                         }
                     } else {
