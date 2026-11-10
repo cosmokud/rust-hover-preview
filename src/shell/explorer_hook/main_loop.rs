@@ -166,8 +166,10 @@ pub fn run_explorer_hook() {
             );
             // The dialog switch is published rather than kept here: the press road and the pin's
             // placement ask it from low-level callbacks, which may take no lock (see
-            // `app::seam::BROWSE_DIALOG_PREVIEWS`).
+            // `app::seam::BROWSE_DIALOG_PREVIEWS`), and Everything's with it (see
+            // `app::seam::EVERYTHING_PREVIEWS`).
             crate::app::seam::publish_browse_dialog_previews(c.browse_dialog_preview_enabled);
+            crate::app::seam::publish_everything_previews(c.everything_previews);
             (snapshot, binding, c.trigger_key.clone())
         })
         .unwrap_or((
@@ -406,8 +408,10 @@ pub fn run_explorer_hook() {
 
         if let Ok(config) = CONFIG.lock() {
             // A switch thrown in the tray is read here on the next tick, and it is what every
-            // lock-free road answers about a dialog with (see `app::seam::BROWSE_DIALOG_PREVIEWS`).
+            // lock-free road answers about a dialog with (see `app::seam::BROWSE_DIALOG_PREVIEWS`),
+            // and about Everything's results with (see `app::seam::EVERYTHING_PREVIEWS`).
             crate::app::seam::publish_browse_dialog_previews(config.browse_dialog_preview_enabled);
+            crate::app::seam::publish_everything_previews(config.everything_previews);
             config_snapshot = (
                 config.preview_enabled,
                 config.hover_delay_ms,

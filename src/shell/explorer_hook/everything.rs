@@ -517,10 +517,10 @@ impl EverythingRow {
 /// It is the branch every road takes before it asks UI Automation anything, and it is taken on the
 /// class of the frame alone: the ask is a `GetAncestor` and two class compares, which is what keeps
 /// the answer out of a walk that must never be made in this window (see the note at the top of this
-/// module).
+/// module, and `app::seam::an_everything_is_previewed` for the setting beside the class).
 pub(super) fn the_everything_frame_of(window: HWND) -> Option<isize> {
     let frame = crate::shell::window_classes::the_frame_of(window);
-    crate::shell::window_classes::everything_class_matches(frame).then_some(frame.0 as isize)
+    crate::app::seam::an_everything_is_previewed(frame).then_some(frame.0 as isize)
 }
 
 /// The result list of an Everything frame: the visible `SysListView32` in it with room to draw a row.
@@ -659,6 +659,13 @@ pub(super) fn item_path(
     window: &ItemWindow,
     item: &HoveredItem,
 ) -> Option<PathBuf> {
+    // The switch is read here as well as where the window was classified, because a tick that
+    // classified an Everything window while it was on must answer nothing after it is turned off (see
+    // `app::seam::an_everything_is_previewed`).
+    if !crate::app::seam::everything_previews() {
+        return None;
+    }
+
     let answer =
         row_of(resolver, window.frame, item.index? - 1).and_then(|row| row_file(&row.cells));
 

@@ -710,6 +710,54 @@ fn the_browse_dialog_switch_is_on_until_the_file_says_otherwise() {
     assert!(read_file(&mut ini).browse_dialog_preview_enabled);
 }
 
+/// Whether a preview is made in **voidtools Everything**'s results is on where the app starts — a
+/// results list is a listing of files like any other — and a file that says nothing about it is read as
+/// that same on, so a file written before the switch existed keeps previewing in Everything. Off is a
+/// value of the file's own, and it is a value the file writes back.
+#[test]
+fn the_everything_switch_is_on_until_the_file_says_otherwise() {
+    let config = AppConfig::default();
+    assert_eq!(config.everything_previews, DEFAULT_EVERYTHING_PREVIEWS);
+    assert!(
+        config.everything_previews,
+        "a fresh configuration previews a file where Everything is showing its results"
+    );
+
+    let mut ini = written_file();
+    ini.set(
+        CONFIG_SECTION,
+        "everything_previews",
+        Some("false".to_string()),
+    );
+    let read = read_file(&mut ini);
+    assert!(
+        !read.everything_previews,
+        "`false` in the file is a results list no preview is made in"
+    );
+
+    // And it is written back as the file said: the switch is a setting, so a save keeps it.
+    let file = super::persistence::ConfigFileAsItWas::take();
+    read.save();
+    assert_eq!(
+        fs::read_to_string(&file.path)
+            .expect("the file a save writes")
+            .lines()
+            .find(|line| line.starts_with("everything_previews")),
+        Some("everything_previews=false"),
+        "and a save writes the switch the way it is set"
+    );
+    assert!(
+        !AppConfig::load().everything_previews,
+        "which the next start reads back off the file"
+    );
+
+    // A file written before the switch existed says nothing about it, and saying nothing is the
+    // switch left where it starts.
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "preview_enabled", Some("true".to_string()));
+    assert!(read_file(&mut ini).everything_previews);
+}
+
 /// Whether an update found as the app starts is put on without asking is the user's to switch
 /// on: a fresh configuration checks for one and installs nothing, which is what a row above the
 /// `System` submenu is for.

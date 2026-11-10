@@ -188,7 +188,7 @@ impl FocusedItemInfo {
             frame,
             drawn_in: self.item.native_window,
             dialog: crate::app::seam::a_dialog_is_previewed(HWND(frame as *mut core::ffi::c_void)),
-            everything: crate::shell::window_classes::everything_class_matches(HWND(
+            everything: crate::app::seam::an_everything_is_previewed(HWND(
                 frame as *mut core::ffi::c_void,
             )),
         })
