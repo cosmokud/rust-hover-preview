@@ -409,7 +409,7 @@ pub(crate) fn search_index_at(layout: &PlaylistLayout, text: &str, x: i32, scale
     let Some(surface) = DibSurface::create(1, 1) else {
         return text.len();
     };
-    let columns = measure_run(&surface, &facts_style(), text, scale);
+    let columns = measure_run(&surface, &facts_style(), text, facts_scale(scale));
     let character = super::find_bar::index_at_column(&columns, layout.search_text_left, x);
 
     text.char_indices()
@@ -802,16 +802,19 @@ fn paint_search(
     // reads as a surface in the band rather than as a band of two colours, and it is rounded to half
     // its height — past that a radius stops being a curve and becomes the box it started as.
     let radius = (field.bottom - field.top) as f32 / 2.0;
+    let edge = text_paint::scaled(SEARCH_EDGE_PIXELS as i32, scale).max(1);
     let plate = text_paint::blend(page, palette.foreground, SEARCH_INK);
+    // **The plate is filled a hairline short of the pill, and the outline is drawn after it.** A fill
+    // drawn over an outline covers exactly the rows the outline is, so the border of a field is drawn
+    // last of the two: a pill whose bottom edge is repainted by the box its text sits in is a field
+    // with a border on three sides, which is what the bottom of this band used to show.
     fill_round_rect(pixels, width, field, radius, plate, plate, 1.0);
-    // And the hairline that keeps a pill of a page a shade off the page from being the page: the same
-    // line the card's own boxes are drawn with, so a field and the card it hangs under are one chrome.
     stroke_round_rect(
         pixels,
         width,
         field,
         radius,
-        1.0,
+        edge as f32,
         palette.hover(SEARCH_EDGE_INK),
         1.0,
     );
@@ -830,18 +833,30 @@ fn paint_search(
     );
 
     let text_left = search_text_left(layout);
-    let cell = text_paint::scaled(FACTS_PIXELS as i32, scale).max(1);
-    // The run is the line box the text is set in, centred in the pill and held its own pad off the
-    // pill's right: what GDI opaques over, and the box the seal gives its coverage back to.
+    // **The query is set at the size of a row's facts line**, which is the note under a name rather than
+    // a second name: the pill is a control inside the band, and a query in the band's own body size
+    // would be the loudest thing in a window of names. It is one scale for the face, the box it sits
+    // in and the caret that stands between its characters, so the three cannot disagree.
+    let small = facts_scale(scale);
+    let level = facts_style().level as usize;
+    let cell = text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[level], small).max(1);
+    // **The run is the pill's own inside, never its edge.** GDI opaques the box it is handed, so a run
+    // that reached the pill's last row would paint the border there back to the plate — a field with a
+    // hairline on three sides. It is held the outline's own width inside the box, which leaves the
+    // ring of the pill whole and the whole of a line's height to set the query in.
+    //
+    // It is one line of the face, centred in the pill rather than the pill's whole height: the box is
+    // what GDI opaques, and a box a taller pill hands it is the pill's border rows painted over.
+    let top = centre_y as i32 - cell / 2;
     let run = RECT {
         left: text_left,
-        top: layout.search_top + ((layout.search_bottom - layout.search_top - cell).max(0) / 2),
+        top: top.max(layout.search_top + edge),
         right: (layout.search_right - text_paint::scaled(SEARCH_PAD_PIXELS as i32, scale).max(0))
             .max(text_left),
-        bottom: layout.search_bottom,
+        bottom: (top + cell).min(layout.search_bottom - edge),
     };
 
-    let mut painter = text_paint::RunPainter::new(surface, scale);
+    let mut painter = text_paint::RunPainter::new(surface, small);
     let style = facts_style();
     // A run opaques its box, so the text's own box is filled with the pill's plate first: what is
     // written over the field is set on the field rather than on the band's page.
@@ -855,14 +870,14 @@ fn paint_search(
     if search.text.is_empty() {
         painter.draw(PLACEHOLDER, text_left, run, &style, muted, plate);
     } else {
-        let cut = fit_title(surface, &style, search.text, run.right - run.left, scale);
+        let cut = fit_title(surface, &style, search.text, run.right - run.left, small);
         painter.draw(&cut, text_left, run, &style, palette.foreground, plate);
     }
     painter.forget_the_face();
 
     if search.focused {
         let caret = search.caret.min(search.text.len());
-        let carried = measure(surface, &style, &search.text[..caret], scale);
+        let carried = measure(surface, &style, &search.text[..caret], small);
         let bar = text_paint::scaled(CARET_PIXELS as i32, scale).max(1);
         let at = (text_left + carried).clamp(run.left, (run.right - bar).max(run.left));
         // **The caret is the size of the face, not of the line box.** The run is a line of the font with
@@ -1041,9 +1056,10 @@ const ROW_PIXELS: f32 = 44.0;
 /// How tall the search field is, in logical pixels: a constant of the layout, so that a band dragged
 /// taller or shorter gives the rows above it what it took rather than stretching the field.
 ///
-/// It is a pill of a whole line of the query inside it: the pad above and below a line of the face the
-/// query is set in, so that the two are centred in it rather than the pill being drawn around them.
-const SEARCH_PIXELS: f32 = 34.0;
+/// It is a pill of one line of the query and the pad around it — a field in a list is a control a hand
+/// reaches for, not a bar the band is built around, so it is kept to the height of a row's own note
+/// rather than of a row.
+const SEARCH_PIXELS: f32 = 24.0;
 
 /// What an empty field says, in the muted ink and nothing else: it is a note about what the field is
 /// for rather than a character it holds.
@@ -1055,9 +1071,9 @@ const CARET_PIXELS: f32 = 1.5;
 
 /// The search mark's square, and the two gaps the pill keeps around it: its own pad off the left edge
 /// of the pill, and the room between the mark and the first character of the query.
-const SEARCH_MARK_PIXELS: f32 = 13.0;
-const SEARCH_PAD_PIXELS: f32 = 12.0;
-const SEARCH_MARK_GAP_PIXELS: f32 = 7.0;
+const SEARCH_MARK_PIXELS: f32 = 11.0;
+const SEARCH_PAD_PIXELS: f32 = 10.0;
+const SEARCH_MARK_GAP_PIXELS: f32 = 6.0;
 
 /// How far the pill stands off the band's page: enough that the two read as a field inside the band
 /// rather than as a band of two colours, and little enough that it is a tint of the band's own page
@@ -1067,6 +1083,11 @@ const SEARCH_INK: f32 = 0.07;
 /// How far the hairline around the pill stands off the page, which is a shade under the line a card's
 /// own boxes are drawn with: a pill's outline says where the field ends, and it is not a border.
 const SEARCH_EDGE_INK: f32 = 0.22;
+
+/// How wide that hairline is, in the display's own pixels: one row of the window, which is all an edge
+/// of a field in a list is — and the width the query's own run is held inside it by (see
+/// `paint_search`).
+const SEARCH_EDGE_PIXELS: f32 = 1.0;
 
 /// The pad the rows are held off every edge of the band by, and the room the drag handle at the
 /// band's bottom edge is drawn in — the pad is the wider of the two on purpose, so that no press
