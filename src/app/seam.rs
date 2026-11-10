@@ -294,6 +294,10 @@ pub(crate) struct SeamFacts {
     toggle_presses: AtomicU32,
     /// Wheel notches the run's one wheel hook has seen (see `WHEEL_TICKS`).
     wheel_ticks: AtomicU64,
+    /// Whether a browse dialog is a listing the app previews a file in (see
+    /// `BROWSE_DIALOG_PREVIEWS`): the run's rather than a block's, a setting being one setting for
+    /// every window of the run.
+    browse_dialog_previews: AtomicBool,
 }
 
 // Safety: every field is an atomic or a block of them, and the two rings are written through their own
@@ -311,6 +315,7 @@ impl SeamFacts {
             pin_main_down: AtomicU32::new(0),
             toggle_presses: AtomicU32::new(0),
             wheel_ticks: AtomicU64::new(0),
+            browse_dialog_previews: AtomicBool::new(true),
         }
     }
 
@@ -3050,6 +3055,52 @@ pub(crate) static PIN_MAIN_DOWN: RunFact<AtomicU32> = RunFact::of(|facts| &facts
 /// `PIN_MAIN_DOWN`).
 pub(crate) fn the_pin_key_is_down() -> bool {
     PIN_MAIN_DOWN.load(Ordering::Acquire) != 0
+}
+
+/// Whether a preview is made where a **browse dialog** is showing (`Preview Settings → General → Enable
+/// in Browse Dialogs`), published for every road that may take no lock.
+///
+/// **The class of a window is not this question.** `window_classes::listing_class_matches` answers
+/// whether a frame is a `#32770` file dialog on facts of the desktop alone, because the low-level hooks
+/// call it and a callback may wait on nothing; whether a preview is *made* there is the setting, and
+/// the setting is asked where a preview is decided (see `a_listing_is_previewed`, and through it
+/// `window_state::the_front_is_a_listing`, `focus_items::is_explorer_window` and
+/// `file_dialog::dialog_item_path`).
+///
+/// A dialog is never Explorer's own window (see `explorer_class_matches`), so this silences nothing a
+/// folder view answers for: with it off, a dialog reads as the window it was before a dialog was a
+/// listing at all, which is exactly what the app did before the feature.
+pub(crate) static BROWSE_DIALOG_PREVIEWS: RunFact<AtomicBool> =
+    RunFact::of(|facts| &facts.browse_dialog_previews);
+
+/// Tell every road that may take no lock whether a browse dialog is a listing the app answers for (see
+/// `BROWSE_DIALOG_PREVIEWS`).
+pub(crate) fn publish_browse_dialog_previews(enabled: bool) {
+    BROWSE_DIALOG_PREVIEWS.store(enabled, Ordering::Release);
+}
+
+/// Whether a browse dialog is a listing the app answers for, as it was last published (see
+/// `BROWSE_DIALOG_PREVIEWS`).
+pub(crate) fn browse_dialog_previews() -> bool {
+    BROWSE_DIALOG_PREVIEWS.load(Ordering::Acquire)
+}
+
+/// Whether a window is one a file is previewed in: Explorer's own folder window, or a browse dialog
+/// while the setting says those are listings too (see `BROWSE_DIALOG_PREVIEWS`).
+///
+/// It is `listing_class_matches` with the setting read beside the class, and it is a function here rather
+/// than in `window_classes` because that module is the class alone: it is asked from a low-level callback,
+/// and the setting is the one thing there cannot be asked there.
+pub(crate) fn a_listing_is_previewed(hwnd: HWND) -> bool {
+    crate::shell::window_classes::explorer_class_matches(hwnd)
+        || (browse_dialog_previews() && crate::shell::window_classes::listing_class_matches(hwnd))
+}
+
+/// Whether `hwnd` is a browse dialog the app previews in right now — the dialog half of
+/// `a_listing_is_previewed`, for the places that mean "this window is a dialog" rather than "this
+/// window is a listing" (see `shell_views::item_window_of` and `focus_items::FocusedItemInfo::item_window`).
+pub(crate) fn a_dialog_is_previewed(hwnd: HWND) -> bool {
+    browse_dialog_previews() && crate::shell::window_classes::file_dialog_class_matches(hwnd)
 }
 
 /// The keys a standing pin answers, as the commands they mean.

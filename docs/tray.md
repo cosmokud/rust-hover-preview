@@ -83,6 +83,8 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - A PeaZip archive uses **Archives**.
     - A Calibre book uses **Ebook**, as do the app-drawn PDF and comic pages.
 - **Preview Settings** — What each kind's previews are like, below **Preview Types**: one half per kind that has settings beyond whether it previews at all, named for the kind and nothing else. What a film and a sound are heard *at* is the **Volume** submenu below **Background**, since the level is the one question both kinds answer the same way.
+  - **General** — The one question about *where* a preview is made rather than about a kind of file, which is why it hangs above the kinds instead of inside one of them.
+    - **Enable in Browse Dialogs** — On by default: a preview is made where a browse dialog is showing — the Common Item Dialog every program draws for itself, like Chrome's or Notepad's `Ctrl`+`O`, a `Save As`, a folder pick. Off, a dialog is no listing at all and previews behave exactly as they did before one was. Written `browse_dialog_preview_enabled`.
   - **Video** — What a film's previews are like: whether a hovered one goes round, and what a *pinned* one does.
     - **Subtitles** — Whether a film's own subtitle tracks are probed for and copied out at all, which is what **General (Disk)** holds between hovers; `0` there draws a film without them.
       - Where the engine that will play is mpv the row reads **Subtitles (MPV)** and is not about a copy at all: mpv finds a film's own tracks and the `.srt` beside it and draws them itself, so nothing is extracted and the pinned `T` key does nothing on that route.

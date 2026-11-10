@@ -2689,13 +2689,14 @@ fn where_the_band_goes_back(foreground: HWND, listing: HWND) -> HWND {
     // road has no press at all and so never lowered the pin; the mouse road must land in the same
     // place, which is the front of the band, wherever the user is still in a listing or in the pin
     // (see `keep_pin_at_the_front`).
-    // Asked of the class rather than of `the_front_is_a_listing` on purpose: what this needs is the
-    // foreground as a *place*, and a dialog the user is in is that place — it is no Explorer window and
-    // no window of the pin's, and the band has nowhere else to go either way.
+    // Asked of the place the foreground is rather than of the debt: a dialog the user is in is that place,
+    // and `a_listing_is_previewed` is the answer the switch says — with `Preview Settings → General →
+    // Enable in Browse Dialogs` on, a dialog is a listing and the band stays in front of it; off, it is the
+    // other window the user moved to, and the band goes back as it did before a dialog was a listing.
     let nowhere_else_to_go = listing.is_invalid()
         || foreground == listing
         || foreground == pinned_window()
-        || crate::shell::window_classes::listing_class_matches(foreground);
+        || crate::app::seam::a_listing_is_previewed(foreground);
 
     if nowhere_else_to_go {
         HWND::default()

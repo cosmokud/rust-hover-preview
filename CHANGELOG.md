@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- **Previews in a program's own Open or Save dialog can be switched off** — `Preview Settings → General → Enable in Browse Dialogs`, on where the app starts, above the kinds because it is a question of *where* a preview happens rather than of what the file is. Off, a browse dialog is no listing at all and previews behave exactly as they did before one ever was: no hover in it, no pin taken up from its rows, no pick behind it. Written `browse_dialog_preview_enabled` in `config.ini`.
+
 ## [0.5.3] - 2026-11-10
 
 ### Added
