@@ -15,8 +15,8 @@
 
 use super::caption::fit_title;
 use super::primitives::{
-    fill_box, fill_ring, fill_round_rect, measure_run, stroke_round_rect, stroke_segment,
-    ChromePalette, GLYPH_STROKE_PIXELS,
+    draw_cross, fill_box, fill_ring, fill_round_rect, measure_run, stroke_round_rect,
+    stroke_segment, ChromePalette, GLYPH_STROKE_PIXELS,
 };
 use crate::readers::audio_track::{self, Probed};
 use crate::text::audio_preview;
@@ -67,6 +67,13 @@ pub(crate) struct PlaylistLayout {
     /// Where the query begins: past the pill's pad, the mark and the gap after it. A press names a
     /// place in the query from this column, so the mark is never a character of it.
     pub(crate) search_text_left: i32,
+    /// Where the query ends: the pill's right pad taken off, and the gap the pill keeps before the
+    /// clear button held off that again, so that a query never runs under the × that clears it.
+    pub(crate) search_text_right: i32,
+    /// The clear button's own square at the pill's right, as the columns it runs between: the × a
+    /// press puts the query back to nothing with (see `search_close_holds`).
+    pub(crate) search_close_left: i32,
+    pub(crate) search_close_right: i32,
     /// Where a row's name begins: past the pad, the stripe the shown row carries and a gap.
     pub(crate) text_left: i32,
     /// The last column a row's name may reach: the length is right-aligned in its column and drawn
@@ -118,6 +125,11 @@ pub(crate) struct PlaylistSearch<'a> {
     pub(crate) text: &'a str,
     /// A byte index on a character boundary, as the field keeps it (see `text_find_field::Field`).
     pub(crate) caret: usize,
+    /// The selected range of the query, in the text's own order, where the field holds one: the wash
+    /// drawn between its two ends is what a press carried across the text or a `Ctrl`+`A` puts there,
+    /// and the keys that cut text take the range rather than a character (see
+    /// `text_find_field::Field`).
+    pub(crate) selection: Option<(usize, usize)>,
     /// Whether the caret is drawn, and the bar with it.
     pub(crate) focused: bool,
     /// Whether the caret's blink is in its lit half, which is the half the bar is drawn in: a field that
@@ -274,6 +286,13 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     // press on the mark is a press before the first character rather than one in it.
     let search_mark = search_left + search_pad;
     let search_text_left = (search_mark + mark + mark_gap).min(search_right);
+    // **The clear button is the last thing in the pill**, at the same pad off its right edge the mark
+    // keeps off its left, and the query is held the mark's own gap off it: a × a query runs under is a
+    // × nothing can press, and a field whose text reaches its own edge has nowhere to say "clear".
+    let close = text_paint::scaled(SEARCH_CLOSE_PIXELS as i32, scale).max(0);
+    let search_close_right = (search_right - search_pad).max(search_text_left);
+    let search_close_left = (search_close_right - close).max(search_text_left);
+    let search_text_right = (search_close_left - mark_gap).max(search_text_left);
     let visible = ((rows_bottom - rows_top) / row_height).max(0);
     let scrolling = rows.saturating_sub(visible as usize) > 0;
     // The scrollbar is a mark on the window's own edge rather than a column of the band's: it is
@@ -312,6 +331,9 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
         search_right,
         search_mark,
         search_text_left,
+        search_text_right,
+        search_close_left,
+        search_close_right,
         text_left,
         name_right: (drawn_left - name_gap).max(text_left),
         facts_right: (clock_left - clock_gap).max(text_left),
@@ -462,6 +484,18 @@ pub(crate) fn search_field_holds(layout: &PlaylistLayout, x: i32, y: i32) -> boo
     let (top, bottom) = search_box(layout);
 
     (layout.search_left..layout.search_right).contains(&x) && (top..bottom).contains(&y)
+}
+
+/// Whether a band-local point of the field is the clear button's rather than the query's: the × at
+/// the pill's right, and the pad between it and the pill's own edge, which is the one press on a
+/// field that asks for nothing in it (see `paint_search`, which draws the × where this names it).
+///
+/// The button is a mark of the pill's own row rather than a box drawn around it, so its rows are the
+/// whole field's: a hand made to find a mark ten pixels square is a hand the field was not drawn for.
+pub(crate) fn search_close_holds(layout: &PlaylistLayout, x: i32, y: i32) -> bool {
+    let (top, bottom) = search_box(layout);
+
+    (layout.search_close_left..layout.search_right).contains(&x) && (top..bottom).contains(&y)
 }
 
 /// The column the query's first character is drawn at: the one the layout kept past the mark.
@@ -954,6 +988,20 @@ fn paint_search(
         muted,
     );
 
+    // **The clear button**, at the pill's other end: the × that puts the query back to nothing, drawn
+    // in the muted ink the mark beside it is drawn in — a control about the text rather than text of
+    // its own, and the query is the one bright thing in the field (see `search_close_holds`, which is
+    // the press it answers).
+    draw_cross(
+        pixels,
+        width,
+        (layout.search_close_left + layout.search_close_right) / 2,
+        centre_y as i32,
+        layout.search_close_right - layout.search_close_left,
+        (SEARCH_CLOSE_STROKE * scale).max(1.0),
+        muted,
+    );
+
     let text_left = search_text_left(layout);
     // **The query is set at the size of a row's facts line**, which is the note under a name rather than
     // a second name: the pill is a control inside the band, and a query in the band's own body size
@@ -973,8 +1021,7 @@ fn paint_search(
     let run = RECT {
         left: text_left,
         top: top.max(field.top + edge),
-        right: (layout.search_right - text_paint::scaled(SEARCH_PAD_PIXELS as i32, scale).max(0))
-            .max(text_left),
+        right: layout.search_text_right.max(text_left),
         bottom: (top + cell).min(field.bottom - edge),
     };
 
@@ -989,11 +1036,87 @@ fn paint_search(
     };
     fill_box(pixels, width, under, plate, 1.0);
 
+    // The boxes the query's own pieces fill, which the band's seal gives their coverage back: a piece
+    // drawn by GDI leaves the alpha byte of its box at zero, and a hole in an opaque band is a press
+    // that falls through it (see `paint_playlist`).
+    let mut boxes = Vec::new();
+
     if search.text.is_empty() {
         painter.draw(PLACEHOLDER, text_left, run, &style, muted, plate);
+        // The placeholder is drawn as one run, so the box it filled is the whole of what the band's
+        // seal has to give back.
+        boxes.push(run);
     } else {
         let cut = fit_title(surface, &style, search.text, run.right - run.left, small);
-        painter.draw(&cut, text_left, run, &style, palette.foreground, plate);
+        // **A selection is a wash between its two ends**, in the ink the find bar washes its own query
+        // with: a field in a list and a bar over a page are one editor's widget, and a selection a hand
+        // can see is a selection the keys that cut text act on (see `text_find_field::Field`).
+        //
+        // It is the field's while the field holds the caret, and only then: a wash left standing over
+        // a field the keys have left is a selection nothing on the window acts on.
+        let characters = cut.chars().count();
+        let selected = search
+            .selection
+            .filter(|_| search.focused)
+            .map(|(from, to)| {
+                (
+                    super::find_bar::char_index(search.text, from).min(characters),
+                    super::find_bar::char_index(search.text, to).min(characters),
+                )
+            })
+            .filter(|(from, to)| from != to);
+
+        // The columns the run's own characters end at, measured once and read by the wash and by every
+        // piece: one measurement, so that neither can name a place the other does not.
+        let columns = measure_run(surface, &style, &cut, small);
+        let wash = text_paint::blend(plate, palette.foreground, SEARCH_SELECTION_WASH);
+        if let Some((from, to)) = selected {
+            let washed = RECT {
+                left: text_left + columns.get(from).copied().unwrap_or(0),
+                top: run.top,
+                right: text_left + columns.get(to).copied().unwrap_or(0),
+                bottom: run.bottom,
+            };
+            if washed.right > washed.left {
+                fill_box(pixels, width, washed, wash, 1.0);
+            }
+        }
+
+        // **The run is drawn in the pieces the selection cuts it into**, each at its own column and
+        // over its own background: a selected piece carries the wash and the rest carry the plate, so
+        // the run and its wash cannot disagree about where one ends and the other begins.
+        let pieces: Vec<char> = cut.chars().collect();
+        let mut edges = vec![0usize, characters];
+        if let Some((from, to)) = selected {
+            edges.push(from);
+            edges.push(to);
+        }
+        edges.sort_unstable();
+        edges.dedup();
+
+        for pair in edges.windows(2) {
+            let (from, to) = (pair[0], pair[1]);
+            if from >= to {
+                continue;
+            }
+
+            let text: String = pieces[from..to].iter().collect();
+            let left = text_left + columns[from];
+            let piece = RECT {
+                left,
+                right: text_left + columns[to],
+                ..run
+            };
+            if piece.right <= piece.left {
+                continue;
+            }
+            let background = match selected {
+                Some((start, end)) if start <= from && to <= end => wash,
+                _ => plate,
+            };
+            painter.draw(&text, left, piece, &style, palette.foreground, background);
+            boxes.push(piece);
+        }
     }
     painter.forget_the_face();
 
@@ -1040,7 +1163,7 @@ fn paint_search(
         fill_box(pixels, width, below, page, 1.0);
     }
 
-    vec![run]
+    boxes
 }
 
 /// The magnifier at the field's left: a ring and the handle off its lower right, which is the mark a
@@ -1207,6 +1330,12 @@ const PLACEHOLDER: &str = "Search names";
 /// characters and is read as the place the next one lands rather than as a mark of its own.
 const CARET_PIXELS: f32 = 1.5;
 
+/// The clear button's cross: how wide the × is drawn by, and the stroke it is drawn at — the find
+/// bar's own close mark to the pixel, so that the two fields of one app carry one button rather than
+/// one button drawn two ways.
+const SEARCH_CLOSE_PIXELS: f32 = 10.0;
+const SEARCH_CLOSE_STROKE: f32 = 1.6;
+
 /// The search mark's square, and the two gaps the pill keeps around it: its own pad off the left edge
 /// of the pill, and the room between the mark and the first character of the query.
 const SEARCH_MARK_PIXELS: f32 = 11.0;
@@ -1285,6 +1414,11 @@ const ROW_WASH: f32 = 0.10;
 /// How far the muted ink a facts line's words and its separators are drawn in stands off the page,
 /// which is the amount the card's own facts line is muted by (see `audio_preview::page`).
 const MUTED_INK: f32 = 0.45;
+
+/// How far the wash under a selected range of the query stands off the pill's own plate, which is the
+/// amount the find bar washes its own selection by: the two fields are one editor's widget, and a
+/// selection in one reads as a selection in the other (see `find_bar`).
+const SEARCH_SELECTION_WASH: f32 = 0.25;
 
 /// How far the seam at the band's top is drawn off the page, and the scrollbar's two inks: the
 /// same two amounts a page of text draws its own bar in.
