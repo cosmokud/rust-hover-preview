@@ -191,11 +191,12 @@ use windows::Win32::Graphics::Gdi::{
     BitBlt, ClientToScreen, GetDC, GetPixel, InvalidateRect, ReleaseDC, UpdateWindow, CLR_INVALID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClientRect, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, IsWindow, IsWindowVisible,
-    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, ShowWindowAsync, GWL_EXSTYLE,
-    HWND_BOTTOM, LWA_ALPHA, SM_CXMAXTRACK, SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    GetClientRect, GetLayeredWindowAttributes, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
+    IsWindow, IsWindowVisible, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
+    ShowWindowAsync, GWL_EXSTYLE, HWND_BOTTOM, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA,
+    SM_CXMAXTRACK, SM_CYMAXTRACK, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 // Only the binary asks a window who owns it: a test has one process (see `the_source_is_up`).
 #[cfg(not(test))]
@@ -1262,7 +1263,15 @@ pub(super) fn the_picture_is_composed_in(host: HWND, pid: u32) -> bool {
 /// cheap to ask: a window without `WS_EX_LAYERED` is a film standing over the pin. Every re-application
 /// is traced, so a run says how often the player un-did it instead of leaving it to be guessed.
 ///
-/// Safety: the handle is the source this module adopted, if there is one, and the two calls only put a
+/// **The bit is half the answer, and the alpha is the half that can be refused.** `WS_EX_LAYERED` on a
+/// window with no alpha set draws nothing at all — the black band the Shell shows for it — and the ask
+/// that gives it one is refused while the window has not read its style yet, which is the state a
+/// source adopted in the same pass it was born in is in (measured: `source invisible … applied ok 0` on
+/// two hovers of one run, each of them a player's own window left standing over the desktop for the
+/// whole hover). So both halves are checked here, and the alpha is asked for again rather than assumed
+/// from the bit.
+///
+/// Safety: the handle is the source this module adopted, if there is one, and the calls only put a
 /// style on a window of another process's — the same pair the adoption pass makes.
 pub(super) unsafe fn keep_the_source_invisible() {
     if !the_source_is_invisible() {
@@ -1272,18 +1281,52 @@ pub(super) unsafe fn keep_the_source_invisible() {
         return;
     };
     let ex = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) };
-    if ex & (WS_EX_LAYERED.0 as isize) != 0 {
+    let layered = ex & (WS_EX_LAYERED.0 as isize) != 0;
+    if layered && the_sources_alpha(source) == Some(INVISIBLE_ALPHA) {
         return;
     }
-    let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, source_ex_style(ex, true)) };
+    if !layered {
+        let _ = unsafe { SetWindowLongPtrW(source, GWL_EXSTYLE, source_ex_style(ex, true)) };
+        let _ = unsafe {
+            SetWindowPos(
+                source,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
+    }
     let applied =
         unsafe { SetLayeredWindowAttributes(source, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA) };
     note_pin_trace!(
-        "source invisible {:?} re-applied: the layered style had gone, alpha {} ok {}",
+        "source invisible {:?} re-applied: {} alpha {} ok {}",
         source,
+        if layered {
+            "the alpha had gone"
+        } else {
+            "the layered style had gone"
+        },
         INVISIBLE_ALPHA,
         applied.is_ok() as u8,
     );
+}
+
+/// The alpha a layered window is drawn at, read back out of the attributes this app gave it — or
+/// nothing for a window that is layered with no attributes at all, which draws nothing at all (see
+/// `keep_the_source_invisible`).
+fn the_sources_alpha(source: HWND) -> Option<u8> {
+    let mut key = COLORREF(0);
+    let mut alpha: u8 = 0;
+    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+    // Safety: the window is the source this app adopted, and the call only reads its attributes.
+    unsafe {
+        GetLayeredWindowAttributes(source, Some(&mut key), Some(&mut alpha), Some(&mut flags))
+    }
+    .is_ok()
+    .then_some(alpha)
 }
 
 /// Point the Shell's thumbnail at the host's client area — **the whole of it, filled by the picture**
@@ -1355,10 +1398,9 @@ fn place_the_source(
         return None;
     }
     let origin = (unsafe { client_origin(host) })?;
-    let wanted = native.box_size(the_max_track());
-    let Some((x, y, width, height)) =
-        the_one_placement(None, Some(origin), wanted, the_max_track())
-    else {
+    let largest = the_largest_source_box(host);
+    let wanted = native.box_size(largest);
+    let Some((x, y, width, height)) = the_one_placement(None, Some(origin), wanted, largest) else {
         if native == NativeSize::NotYet {
             note_pin_trace!(
                 "thumbnail source native unknown {:?}: no box asked yet, the player has not answered",
@@ -2034,8 +2076,17 @@ fn a_late_placement_is_due(waited: Duration, since_the_last_ask: Option<Duration
 }
 
 /// The one box a source is ever asked for — the film's own picture size at the corner of the host
-/// showing it, clamped to what the window system will take — and nothing at all for a source that has
-/// been placed already, for a host that is not there, or for a film whose own size is not known yet.
+/// showing it, **scaled down to fit the largest box a source may take and never reshaped** — and nothing
+/// at all for a source that has been placed already, for a host that is not there, or for a film whose
+/// own size is not known yet.
+///
+/// **The clamp is proportional because a window is not a box the film is fitted into.** Clamping each
+/// axis on its own is a source asked for a shape its film does not have — a 3840×2160 film in a
+/// 3460×1460 window — and the player then draws the film letterboxed inside it: the film is smaller than
+/// the window it is in, the crop has a margin to exclude, and the window is bigger than the work area the
+/// crop has to stand in (measured: a crop of 1460 px on a work area of 1440, `cannot hold the crop on
+/// screen`). One scale for both axes keeps the film's shape, so the picture fills the client, the crop is
+/// the picture, and the box is always inside the work area it was clamped to.
 ///
 /// **Every `None` is a promise.** A placed source is a source whose client, whose picture and whose
 /// shape cannot change under the Shell again, so a press, a drag, a release and a settle have nothing
@@ -2046,24 +2097,29 @@ fn the_one_placement(
     placed: Option<SourceShape>,
     host_origin: Option<(i32, i32)>,
     native: Option<(i32, i32)>,
-    max_track: (i32, i32),
+    largest: (i32, i32),
 ) -> Option<SourceBox> {
     if placed.is_some() {
         return None;
     }
     let (x, y) = host_origin?;
-    let wanted = native?;
+    let (width, height) = native?;
+    let (width, height) = (width.max(1), height.max(1));
+    let (largest_width, largest_height) = (largest.0.max(1), largest.1.max(1));
+    let scale = (f64::from(largest_width) / f64::from(width))
+        .min(f64::from(largest_height) / f64::from(height))
+        .min(1.0);
     Some((
         x,
         y,
-        wanted.0.clamp(1, max_track.0.max(1)),
-        wanted.1.clamp(1, max_track.1.max(1)),
+        ((f64::from(width) * scale).round() as i32).clamp(1, largest_width),
+        ((f64::from(height) * scale).round() as i32).clamp(1, largest_height),
     ))
 }
 
 /// The largest window the window system will take, per axis: `SM_CXMAXTRACK` and `SM_CYMAXTRACK`
-/// measured on the desktop, which is the clamp a source asked for a film larger than the screen is
-/// held to (see `the_one_placement`).
+/// measured on the desktop — the one limit a source may never pass, whatever room its display has (see
+/// `the_largest_source_box_at`).
 fn the_max_track() -> (i32, i32) {
     // Safety: two metrics questions about the desktop, which need no window.
     unsafe {
@@ -2072,6 +2128,33 @@ fn the_max_track() -> (i32, i32) {
             GetSystemMetrics(SM_CYMAXTRACK).max(1),
         )
     }
+}
+
+/// **The largest box a source may take on the display the picture is drawn on**: the work area of the
+/// monitor its host stands on, which is the room its crop has to be inside for the Shell to draw every
+/// pixel of it (see `keep_the_crop_on_the_screen`).
+///
+/// **Not `the_max_track`**, which is the screen plus the window system's border allowance: a source
+/// clamped to that is a crop taller than the work area it must stand in, and the Shell leaves the band
+/// outside it its own black (measured, `cannot hold the crop on screen` on every 4K film of one run).
+/// The work area is what a window can put on the glass; the smaller of the two is the limit.
+fn the_largest_source_box_at(point: (i32, i32)) -> (i32, i32) {
+    let work = displays::work_area_at(point.0, point.1);
+    let (max_track_width, max_track_height) = the_max_track();
+    (
+        (work.right - work.left).clamp(1, max_track_width),
+        work.height().clamp(1, max_track_height),
+    )
+}
+
+/// The same, asked of the window the picture is drawn in: the work area of the monitor the host stands
+/// on, and the window system's own limit where the host answers nothing (see
+/// `the_largest_source_box_at`).
+fn the_largest_source_box(host: HWND) -> (i32, i32) {
+    let Some((x, y, width, height)) = (unsafe { window_box(host) }) else {
+        return the_max_track();
+    };
+    the_largest_source_box_at((x + width / 2, y + height / 2))
 }
 
 /// **The box a player of this film is to be born at**: the film's own picture size as the probe
@@ -2089,29 +2172,36 @@ fn the_max_track() -> (i32, i32) {
 /// **A film drawn over the preview and not through a host is born at the preview's box**, and the
 /// preview is the whole of what it is drawn in: there is no source for a crop to disagree with.
 ///
+/// `box_` is the box the film is drawn in — the hover's or the pin's — and its middle is the display
+/// whose work area the placement's own clamp is taken from, so the two numbers are one (see
+/// `the_largest_source_box_at`).
+///
 /// **It is the probe's measurement and not the player's `video-params`**, because it is asked before
 /// there is a player to ask; the two are the same number for a film the player reports no crop for,
 /// which is every film but the ones the probe cuts a crop out of. A film the probe could not measure
-/// is born at `box_` and placed by the road that watches the player (see
+/// is born at the box it is drawn in and placed by the road that watches the player (see
 /// `place_the_source_when_the_player_answers`).
 pub(super) fn the_box_a_source_is_born_at(
     path: &Path,
     behind_the_host: bool,
-    box_: (i32, i32),
+    box_: (i32, i32, i32, i32),
 ) -> (i32, i32) {
+    let (x, y, width, height) = box_;
+    let drawn_in = (width.max(1), height.max(1));
     if !behind_the_host {
-        return box_;
+        return drawn_in;
     }
     let Some(ProbedGeometry::Measured(geometry)) = cached_video_geometry(path) else {
-        return box_;
+        return drawn_in;
     };
     // The one placement's own answer, asked with a corner this question has no use for: the origin
     // is not part of what is asked here, and taking the clamp from that call is what keeps this
     // launch and that placement from ever naming two sizes.
     let native = (geometry.width as i32, geometry.height as i32);
-    the_one_placement(None, Some((0, 0)), Some(native), the_max_track())
+    let largest = the_largest_source_box_at((x + width / 2, y + height / 2));
+    the_one_placement(None, Some((0, 0)), Some(native), largest)
         .map(|(_, _, width, height)| (width, height))
-        .unwrap_or(box_)
+        .unwrap_or(drawn_in)
 }
 
 /// The film's own picture size as the player answers it, or the probe's measurement of the same film
@@ -4279,10 +4369,10 @@ mod tests {
 
     /// **A film kept for a host is born at the box its one placement will ask it for**, so that
     /// nothing of the source is resized under the Shell after its first frame: the film's own size as
-    /// the probe measured it, clamped exactly as that placement clamps it (see
-    /// `the_box_a_source_is_born_at`). A film drawn over the preview is born at the preview's box,
-    /// and one nothing measured at the box it was launched at — the road that watches the player's
-    /// own answer places that one (see `place_the_source_when_the_player_answers`).
+    /// the probe measured it, scaled into the work area exactly as that placement scales it (see
+    /// `the_box_a_source_is_born_at`). A film drawn over the preview is born at the preview's box, and
+    /// one nothing measured at the box it was launched at — the road that watches the player's own
+    /// answer places that one (see `place_the_source_when_the_player_answers`).
     #[test]
     fn a_source_kept_for_a_host_is_born_at_the_box_its_one_placement_asks() {
         let _room = the_room_to_itself();
@@ -4307,42 +4397,49 @@ mod tests {
                 subtitle_extraction_failed: false,
             })
         };
-        let box_it_is_drawn_in = (916, 515);
+        // The box the film is drawn in, and the largest source its display can show.
+        let drawn_in = (1200, 300, 1400, 800);
+        let largest = the_largest_source_box_at((1200 + 700, 300 + 400));
 
         video_geometry_cache().insert(key.clone(), measured(3840, 2160));
-        let placed_at = the_one_placement(None, Some((0, 0)), Some((3840, 2160)), the_max_track())
+        let placed_at = the_one_placement(None, Some((0, 0)), Some((3840, 2160)), largest)
             .map(|(_, _, width, height)| (width, height))
-            .expect("a film of a size the window system will take is placed once");
+            .expect("a film of a size a source may take is placed once");
         assert_eq!(
-            the_box_a_source_is_born_at(&path, true, box_it_is_drawn_in),
+            the_box_a_source_is_born_at(&path, true, drawn_in),
             placed_at,
             "the box the player is born at is the box its one placement will ask it for"
         );
 
-        // A film larger than any window is born at the largest window there is, which is the number
-        // the placement is held to as well.
-        let (max_width, max_height) = the_max_track();
-        video_geometry_cache().insert(
-            key.clone(),
-            measured((max_width + 512) as u32, (max_height + 512) as u32),
+        // **The film's own shape survives the clamp**: a film bigger than the work area is scaled down
+        // whole rather than squeezed on one axis, which is what leaves a picture smaller than the
+        // window it is drawn in (see `the_one_placement`).
+        video_geometry_cache().insert(key.clone(), measured(7680, 4320));
+        let (width, height) = the_box_a_source_is_born_at(&path, true, drawn_in);
+        assert!(
+            width <= largest.0 && height <= largest.1,
+            "a source is never asked for a window larger than the work area it stands in: {width}x{height} in {largest:?}"
         );
-        assert_eq!(
-            the_box_a_source_is_born_at(&path, true, box_it_is_drawn_in),
-            (max_width, max_height),
-            "a source is never asked for a window larger than the window system's own limit"
+        assert!(
+            width == largest.0 || height == largest.1,
+            "and it is as large as that work area allows"
+        );
+        assert!(
+            (f64::from(width) / f64::from(height) - 16.0 / 9.0).abs() < 0.01,
+            "a 16:9 film is born 16:9, whatever box it is clamped into: {width}x{height}"
         );
 
         // Nothing widened where nothing is placed: a film drawn over the preview is the box it is
         // drawn in, and so is one the probe could not measure.
         assert_eq!(
-            the_box_a_source_is_born_at(&path, false, box_it_is_drawn_in),
-            box_it_is_drawn_in,
+            the_box_a_source_is_born_at(&path, false, drawn_in),
+            (drawn_in.2, drawn_in.3),
             "a film drawn over the preview has no source for a crop to disagree with"
         );
         video_geometry_cache().insert(key.clone(), ProbedGeometry::Unmeasurable);
         assert_eq!(
-            the_box_a_source_is_born_at(&path, true, box_it_is_drawn_in),
-            box_it_is_drawn_in,
+            the_box_a_source_is_born_at(&path, true, drawn_in),
+            (drawn_in.2, drawn_in.3),
             "a film nothing measured is born at the box it is drawn in"
         );
 
@@ -4633,8 +4730,8 @@ mod tests {
         mpv_ipc::clear_reads();
     }
 
-    /// **The one placement: the film's own size at the pin's corner, clamped to what the window system
-    /// will take — and nothing at all the second time.** A press, a drag, a release, a settle, a
+    /// **The one placement: the film's own size at the pin's corner, scaled down to what the window system
+    /// will take and never reshaped — and nothing at all the second time.** A press, a drag, a release, a settle, a
     /// maximize and a zoom all arrive here with a source that has been placed, and every one of them is
     /// answered with nothing: what the crop is cut from is a constant for the pin's life (see
     /// `place_the_source`).
@@ -4674,8 +4771,8 @@ mod tests {
         );
         assert_eq!(
             the_one_placement(None, Some((0, 0)), Some((8192, 4608)), max_track),
-            Some((0, 0, 3440, 1440)),
-            "a film bigger than the desktop is clamped to what a window may be"
+            Some((0, 0, 2560, 1440)),
+            "a film bigger than the desktop is scaled down whole, into the box a window may be"
         );
         assert_eq!(
             the_one_placement(None, Some((0, 0)), Some((0, 0)), max_track),

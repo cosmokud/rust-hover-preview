@@ -373,7 +373,12 @@ pub(super) fn begin_a_resident_for_a_test(behind_the_host: bool) -> Option<u32> 
 /// resident.** A resident whose pipe had not opened yet, or which never drew a frame, is one the
 /// next hover can be served by: it is stopped and left standing *by* — not serving, its TTL
 /// running — rather than killed for a failure this hover is already paying for.
-pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<Served> {
+pub(super) fn serve(
+    path: &Path,
+    volume: u32,
+    behind_the_host: bool,
+    box_: (i32, i32, i32, i32),
+) -> Option<Served> {
     if !keeping_a_resident() || !the_resident_may_serve(pinned()) {
         return None;
     }
@@ -440,11 +445,8 @@ pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<S
     // that has not made its window yet is answered nothing rather than waited for — the window arrives
     // after the pipe does (see `PIPE_UP_WAIT`), and the placement that follows asks for the same box.
     // A film nothing measured answers the parked box, which is the window left as it stands.
-    let (born_width, born_height) = pin_film_thumbnail::the_box_a_source_is_born_at(
-        path,
-        behind_the_host,
-        (PARKED_SIZE, PARKED_SIZE),
-    );
+    let (born_width, born_height) =
+        pin_film_thumbnail::the_box_a_source_is_born_at(path, behind_the_host, box_);
     if (born_width, born_height) != (PARKED_SIZE, PARKED_SIZE) {
         unsafe { ffplay_window::size_a_players_window(pid, (born_width, born_height)) };
     }
