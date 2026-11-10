@@ -40,6 +40,13 @@ pub(crate) struct FrameTimeline {
 }
 
 impl FrameTimeline {
+    /// A timeline of the delays given, for a test that asks what a run of them means rather than
+    /// what a container holds (see `FrameTimeline::new`).
+    #[cfg(test)]
+    pub(crate) fn of_delays(delays_ms: &[u32]) -> Self {
+        Self::new(delays_ms.to_vec())
+    }
+
     /// A timeline of `delays_ms`, each floored at the delay floor the decoders use.
     fn new(delays_ms: Vec<u32>) -> Self {
         let mut starts_ms = Vec::with_capacity(delays_ms.len() + 1);
