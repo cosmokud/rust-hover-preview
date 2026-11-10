@@ -298,6 +298,9 @@ pub(crate) struct SeamFacts {
     /// `BROWSE_DIALOG_PREVIEWS`): the run's rather than a block's, a setting being one setting for
     /// every window of the run.
     browse_dialog_previews: AtomicBool,
+    /// Whether voidtools Everything's result window is a listing the app previews a file in (see
+    /// `EVERYTHING_PREVIEWS`), for the same reason.
+    everything_previews: AtomicBool,
 }
 
 // Safety: every field is an atomic or a block of them, and the two rings are written through their own
@@ -316,6 +319,7 @@ impl SeamFacts {
             toggle_presses: AtomicU32::new(0),
             wheel_ticks: AtomicU64::new(0),
             browse_dialog_previews: AtomicBool::new(true),
+            everything_previews: AtomicBool::new(true),
         }
     }
 
@@ -3096,7 +3100,7 @@ pub(crate) fn browse_dialog_previews() -> bool {
 pub(crate) fn a_listing_is_previewed(hwnd: HWND) -> bool {
     crate::shell::window_classes::explorer_class_matches(hwnd)
         || a_dialog_is_previewed(hwnd)
-        || crate::shell::window_classes::everything_class_matches(hwnd)
+        || an_everything_is_previewed(hwnd)
 }
 
 /// Whether `hwnd` is a browse dialog the app previews in right now — the dialog half of
@@ -3104,6 +3108,40 @@ pub(crate) fn a_listing_is_previewed(hwnd: HWND) -> bool {
 /// window is a listing" (see `shell_views::item_window_of` and `focus_items::FocusedItemInfo::item_window`).
 pub(crate) fn a_dialog_is_previewed(hwnd: HWND) -> bool {
     browse_dialog_previews() && crate::shell::window_classes::file_dialog_class_matches(hwnd)
+}
+
+/// Whether a preview is made where **voidtools Everything** is showing its results (`Preview Settings →
+/// General → Enable in Everything`), published for every road that may take no lock.
+///
+/// **The class of a window is not this question**, for the reason `BROWSE_DIALOG_PREVIEWS` gives:
+/// `window_classes::everything_class_matches` answers on facts of the desktop alone, because the
+/// low-level hooks call it and a callback may wait on nothing, and whether a preview is made there is
+/// the setting — asked where a preview is decided (see `a_listing_is_previewed` and
+/// `an_everything_is_previewed`).
+///
+/// Everything's frame is never Explorer's own (see `explorer_class_matches`), so this silences nothing
+/// a folder view answers for: off, Everything reads as the window it was before its list was a listing,
+/// which is exactly what the app did before the feature.
+pub(crate) static EVERYTHING_PREVIEWS: RunFact<AtomicBool> =
+    RunFact::of(|facts| &facts.everything_previews);
+
+/// Tell every road that may take no lock whether Everything's result window is a listing the app
+/// answers for (see `EVERYTHING_PREVIEWS`).
+pub(crate) fn publish_everything_previews(enabled: bool) {
+    EVERYTHING_PREVIEWS.store(enabled, Ordering::Release);
+}
+
+/// Whether Everything's result window is a listing the app answers for, as it was last published (see
+/// `EVERYTHING_PREVIEWS`).
+pub(crate) fn everything_previews() -> bool {
+    EVERYTHING_PREVIEWS.load(Ordering::Acquire)
+}
+
+/// Whether `hwnd` is Everything's result window, and one the app previews in right now — the Everything
+/// half of `a_listing_is_previewed`, for the places that mean "this is Everything" rather than "this is
+/// a listing" (see `explorer_hook::everything`, which is the only road that may read that window).
+pub(crate) fn an_everything_is_previewed(hwnd: HWND) -> bool {
+    everything_previews() && crate::shell::window_classes::everything_class_matches(hwnd)
 }
 
 /// The keys a standing pin answers, as the commands they mean.

@@ -89,6 +89,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         "General",
         &[
             "browse_dialog_preview_enabled",
+            "everything_previews",
             "check_for_updates",
             "silent_auto_update",
             "pin_always_on_top",

@@ -7,8 +7,8 @@ use crate::readers::tone_map::Curve;
 use super::defaults::{
     DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_MARK_OFFSET_Y,
     DEFAULT_AUDIO_VOLUME, DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED, DEFAULT_CHECK_FOR_UPDATES,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_F3D_PATH,
-    DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
+    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_EVERYTHING_PREVIEWS,
+    DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH,
     DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
     DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER,
@@ -62,6 +62,14 @@ pub struct AppConfig {
     /// no lock, and the setting is published and read where a preview is decided instead (see
     /// `app::seam::BROWSE_DIALOG_PREVIEWS`).
     pub browse_dialog_preview_enabled: bool,
+    /// Whether a preview is made where **voidtools Everything** is showing its results (see the
+    /// `Preview Settings → General → Enable in Everything` row and `DEFAULT_EVERYTHING_PREVIEWS`).
+    ///
+    /// Off, Everything's result window is no listing the app answers for and every road reads it as
+    /// the window it was before the feature: the class predicate stays Everything's own, because a
+    /// hook callback may take no lock, and the setting is published and read where a preview is
+    /// decided instead (see `app::seam::EVERYTHING_PREVIEWS`).
+    pub everything_previews: bool,
     /// The key that turns previews on or off while File Explorer is the foreground window,
     /// by the same spellings the trigger and pin keys accept.
     pub toggle_key: String,
@@ -742,6 +750,7 @@ impl Default for AppConfig {
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             preview_enabled: true,
             browse_dialog_preview_enabled: DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED,
+            everything_previews: DEFAULT_EVERYTHING_PREVIEWS,
             toggle_key: DEFAULT_TOGGLE_KEY.to_string(),
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,

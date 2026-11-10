@@ -432,6 +432,13 @@ pub(super) const ID_TRAY_PIN_RESTORE: u16 = 1727;
 /// beside `Restore Pin Mode` and below the engine-idle ranges — so no click on it is read as
 /// another submenu's row, and it is inside no range a submenu's click is read against.
 pub(super) const ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED: u16 = 1728;
+/// The other row of `Preview Settings → General`: whether a preview is made where **voidtools
+/// Everything** is showing its results (see `everything_previews`). On where the app starts.
+///
+/// It shares the ids `Restore Pin Mode` and the browse-dialog row sit in — the ones the `… TTL`
+/// ranges and the `Components → Install` range leave free — so no click on it is read as another
+/// submenu's row, and it is inside no range a submenu's click is read against.
+pub(super) const ID_TRAY_EVERYTHING_PREVIEWS: u16 = 1729;
 /// The `Pin Mode → Update Preview → Move To Top` row: whether an update also brings a pin that was
 /// behind in front of the window covering it. It sits past every id the app hands out, beside the
 /// pin's other rows, where no click on it is read as another submenu's item.

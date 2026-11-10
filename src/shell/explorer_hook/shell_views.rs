@@ -34,7 +34,7 @@ pub(super) fn item_window_of(window: HWND) -> Option<ItemWindow> {
             frame: frame.0 as isize,
             drawn_in: window.0 as isize,
             dialog: crate::app::seam::a_dialog_is_previewed(frame),
-            everything: crate::shell::window_classes::everything_class_matches(frame),
+            everything: crate::app::seam::an_everything_is_previewed(frame),
         })
     }
 }
