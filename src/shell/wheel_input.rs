@@ -138,6 +138,13 @@ fn note_a_press(point: POINT) {
     // Safety: asks the desktop for the window under a point it was given; dereferences nothing.
     let window = unsafe { WindowFromPoint(point) };
     let ours = press_is_inside_ours(window, point);
+    // **A press that is not ours is the one thing a pin's search field is told about.** This callback
+    // stands on every press on the desktop, and a pin takes no activation: a click on another window is
+    // a caret the hand has let go of, and this counter is where the pin hears of it (see
+    // `seam::note_a_press_elsewhere`).
+    if !ours {
+        crate::app::seam::note_a_press_elsewhere();
+    }
     let always_on_top = our_window_stands_over_everything();
     let the_listing_answers = !ours && the_pick_road_answers(window);
 
