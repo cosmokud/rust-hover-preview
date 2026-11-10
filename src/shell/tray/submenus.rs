@@ -164,7 +164,7 @@ pub(super) fn decode_budget_label(gigabytes: f32) -> String {
     default_label(&label, gigabytes == DEFAULT_DECODE_BUDGET_GB)
 }
 
-/// The label an `Decode Budget → Animated WEBP` item carries: the room it gives a pinned picture's
+/// The label a `Memory → Animated WEBP` item carries: the room it gives a pinned picture's
 /// held run of frames, in megabytes, with the one the app starts at marked.
 pub(super) fn animated_webp_budget_label(megabytes: u32) -> String {
     let label = if megabytes >= 1024 {
