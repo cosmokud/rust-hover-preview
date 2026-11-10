@@ -13,6 +13,7 @@
 //! left.
 
 use super::*;
+use crate::engines::pdf_viewer::a_documents_window;
 
 /// Main loop for explorer hook
 pub fn run_explorer_hook() {
@@ -465,6 +466,10 @@ pub fn run_explorer_hook() {
             && !trigger_key_affect_pin_mode;
         let trigger_key_down = trigger_key_enabled
             && !trigger_key_muted_by_pin
+            // **A key typed into a document we are showing is the document's.** A trigger key spelt
+            // `a` is a letter in Chromium's search box, and read here it would hold every preview and
+            // end the pin the box is in (see `a_documents_window`).
+            && !a_documents_window(unsafe { GetForegroundWindow() })
             && crate::shell::key_binding::binding_is_active(&trigger_binding);
         let previews_allowed =
             !trigger_key_enabled || trigger_key_mode.allows_previews(trigger_key_down);

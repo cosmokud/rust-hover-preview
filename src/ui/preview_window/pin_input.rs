@@ -1170,6 +1170,11 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
 ///
 /// `wants_the_keyboard` is the caller's answer to *the pin is not the window the user is in*: asked of
 /// Windows by the window procedure rather than here, and staged by a test that has no desktop.
+///
+/// **A press inside a document's box is the document's**, and it is answered here rather than passed
+/// into the chrome: nothing is carried, nothing is resized, and the keyboard is not taken back from
+/// Chromium. Our chrome claims input only on its own strips — the caption row and the frame margin
+/// around the viewer — and the band between them is neither (see `a_documents_press`).
 pub(super) unsafe fn press_the_pin(
     hwnd: HWND,
     x: i32,
@@ -1177,6 +1182,10 @@ pub(super) unsafe fn press_the_pin(
     window: &dyn PinWindow,
     wants_the_keyboard: bool,
 ) -> bool {
+    if a_documents_press(hwnd, x, y) {
+        return true;
+    }
+
     let answered =
         unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
 
@@ -1185,6 +1194,34 @@ pub(super) unsafe fn press_the_pin(
     }
 
     answered
+}
+
+/// Whether a press on this app's own window belongs to the document standing in its band rather than to
+/// the window.
+///
+/// **It is the box the viewer stands in, and nothing else**: the pin's content band less the margin the
+/// viewer is inset by, which leaves the caption row above it and that margin around it the pin's — a
+/// hand on either still carries and resizes the window, and a hand inside the document is Chromium's
+/// (see `the_documents_area` and `PIN_DOCUMENT_MARGIN_PIXELS`).
+///
+/// A pin with no viewer up answers no: with nothing of Chromium's in the band, the band is the pin's
+/// raster, and a press on it is the handle every other picture's band is.
+unsafe fn a_documents_press(hwnd: HWND, x: i32, y: i32) -> bool {
+    if !crate::engines::pdf_viewer::is_up_for(pinned_window().0 as isize) {
+        return false;
+    }
+
+    let Some(content) = pinned_content() else {
+        return false;
+    };
+
+    let area = super::pin_lifecycle::the_documents_area(content, dpi_at(content.0, content.1));
+    let (screen_x, screen_y) = client_to_screen(hwnd, x, y);
+
+    screen_x >= area.x
+        && screen_x < area.x + area.width
+        && screen_y >= area.y
+        && screen_y < area.y + area.height
 }
 
 /// A press on one of the controls a pinned sound's card carries: the walk either side of the
