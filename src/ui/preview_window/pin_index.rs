@@ -38,9 +38,17 @@ const INDEX_PROXY_MIN_WIDTH: u32 = 96;
 struct Index {
     path: PathBuf,
     version: FileVersion,
+    /// The walk that is filling this run, which is what says whether a frame arriving belongs in
+    /// it: a box change asks for the same file at another size, and a frame of the size it was is a
+    /// frame of a run nobody holds any more.
+    walk: u64,
     /// The size the frames are held at, which is why a run of another size is another run.
     width: u32,
     height: u32,
+    /// How many frames the run may hold, which is the budget divided by the size of one frame of
+    /// it: a file of a few thousand frames is read as far as the budget reaches rather than to the
+    /// end of it, so that an index of one picture never becomes the reason the app is using memory.
+    max_frames: usize,
     /// The frames in hand, by the place they are in the file. A frame the walk has not reached is
     /// nothing yet, and a frame that could not be decoded keeps its hole.
     frames: Vec<Option<Arc<ImageFrame>>>,
@@ -94,14 +102,16 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
     }
 
     let walk = INDEX_WALK.fetch_add(1, Ordering::AcqRel) + 1;
-    let cancel = Arc::new(AtomicBool::new(false));
+    let max_frames = max_frames(width, height);
 
     if let Ok(mut index) = INDEX.lock() {
         *index = Some(Index {
             path: path.to_path_buf(),
             version,
+            walk,
             width,
             height,
+            max_frames,
             frames: Vec::new(),
         });
     }
@@ -113,7 +123,7 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
         // frames that have been read, and one that drags while the rest is still being read follows
         // the walk instead of waiting for it.
         let mut push = |index_in_file: usize, frame: ImageFrame| -> bool {
-            if cancel.load(Ordering::Acquire) || INDEX_WALK.load(Ordering::Acquire) != walk {
+            if INDEX_WALK.load(Ordering::Acquire) != walk {
                 return false;
             }
             let Ok(mut held) = INDEX.lock() else {
@@ -122,7 +132,10 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
             let Some(held) = held.as_mut() else {
                 return false;
             };
-            if held.path != path {
+            if held.walk != walk {
+                return false;
+            }
+            if index_in_file >= held.max_frames {
                 return false;
             }
             if held.frames.len() <= index_in_file {
@@ -138,6 +151,13 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
             walk_animated_gif(&path, (width, height), &mut push);
         }
     });
+}
+
+/// How many frames of a run held at `width` by `height` fit the budget, and never none.
+fn max_frames(width: u32, height: u32) -> usize {
+    let frame_bytes = (width as u64 * height as u64 * 4).max(4);
+
+    (INDEX_RETAINED_BYTES as u64 / frame_bytes).max(1) as usize
 }
 
 /// The size a run of `total` frames is held at: the pin's own where that fits the budget, and the
@@ -238,9 +258,12 @@ fn walk_animated_gif(
     while let Ok(Some(frame)) = decoder.read_next_frame() {
         composite_gif_frame(&mut canvas, frame, gif_width, gif_height);
         let delay_ms = (frame.delay as u32 * 10).max(MIN_ANIMATION_FRAME_DELAY_MS);
-        if let Some(img) =
+        if let Some(mut img) =
             decode_gif_frame_to_image(&canvas, gif_width, gif_height, target.0, target.1, delay_ms)
         {
+            // The place in the file travels with the frame, the way it does in every other run of
+            // one: what the bar says the picture is on is read of it (see `current_frame_of_file`).
+            img.file_index = index;
             if !push(index, img) {
                 return;
             }
@@ -283,7 +306,7 @@ fn walk_animated_webp(
         let delay_ms = (timestamp - previous_timestamp).max(0) as u32;
         previous_timestamp = timestamp;
 
-        if let Some(img) = decode_webp_animation_frame_to_image(
+        if let Some(mut img) = decode_webp_animation_frame_to_image(
             frame.data(),
             orig_width,
             orig_height,
@@ -291,6 +314,7 @@ fn walk_animated_webp(
             target.1,
             delay_ms,
         ) {
+            img.file_index = index;
             if !push(index, img) {
                 return;
             }
@@ -320,8 +344,10 @@ mod tests {
         *index = Some(Index {
             path: path.to_path_buf(),
             version: file_version(path),
+            walk: INDEX_WALK.fetch_add(1, Ordering::AcqRel) + 1,
             width,
             height,
+            max_frames: max_frames(width, height),
             frames: frames_held,
         });
     }
@@ -355,6 +381,60 @@ mod tests {
         let elsewhere = path.with_file_name("other.webp");
         std::fs::write(&elsewhere, b"RIFF").expect("a fixture file");
         assert!(at(&elsewhere, 4).is_none(), "a run belongs to one file");
+        forget();
+    }
+
+    /// **A run is read off the file's own frames, in the order they play, each frame carrying the
+    /// place it has in the file** — which is what says that the frame a hand named is the frame it
+    /// got, and what the bar is drawn on while the picture is standing there.
+    #[test]
+    fn a_run_is_read_off_the_file_with_a_frame_for_every_place_in_it() {
+        let folder = std::env::temp_dir().join("pin-index-walk-tests");
+        std::fs::create_dir_all(&folder).expect("a fixture folder");
+        let path = folder.join("run.webp");
+
+        // A three-frame animation written by libwebp, which is the same library that reads it.
+        let dimensions = (32u32, 24u32);
+        let mut encoder = webp_animation::Encoder::new(dimensions).expect("an encoder");
+        for (index, shade) in [0u8, 90, 200].into_iter().enumerate() {
+            let pixels: Vec<u8> = [shade, shade, shade, 255]
+                .into_iter()
+                .cycle()
+                .take((dimensions.0 * dimensions.1 * 4) as usize)
+                .collect();
+            encoder
+                .add_frame(&pixels, index as i32 * 100)
+                .expect("a frame");
+        }
+        let bytes = encoder.finalize(300).expect("an animation");
+        std::fs::write(&path, bytes.as_ref()).expect("a fixture file");
+
+        forget();
+        start(&path, MediaType::AnimatedWebP, 3, dimensions);
+
+        // The walk runs on a thread of its own, so the wait is on the condition rather than on a
+        // stretch of time (see the terminal rules this app is developed under).
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if (0..3).all(|index| at(&path, index).is_some()) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        for index in 0..3 {
+            let frame = at(&path, index).unwrap_or_else(|| panic!("frame {index} of the run"));
+            assert_eq!(
+                frame.file_index, index,
+                "and it says where it is in the file"
+            );
+            assert_eq!(
+                (frame.width, frame.height),
+                dimensions,
+                "at the size asked for"
+            );
+        }
+        assert!(at(&path, 3).is_none(), "and nothing past the last frame");
         forget();
     }
 
