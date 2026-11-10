@@ -134,7 +134,9 @@ pub(super) fn checkerboard_color(x: u32, y: u32) -> (u8, u8, u8) {
 }
 
 /// Compose `bgra` into `out` (BGRA, top-down) with `background` applied to the
-/// alpha channel.
+/// alpha channel, for a hover preview: the pixels the picture leaves empty are left empty, since
+/// the window is drawn under a pointer that is still working in the listing behind it (see
+/// `compose_preview_row`).
 ///
 /// Writes into the caller's buffer so a repaint can target the layered window's
 /// DIB directly, and walks it row by row so the per-pixel background position is
@@ -147,6 +149,12 @@ pub(super) fn checkerboard_color(x: u32, y: u32) -> (u8, u8, u8) {
 /// asks for and the blend over an opaque one come to the pixel's own bytes where the alpha is
 /// 255. That is the difference between a copy and a division per channel per pixel, on every
 /// frame of a video or an animation drawn at the size of the display.
+///
+/// **A picture with transparency in it draws its backdrop, and a see-through one draws the pin**
+/// (see `compose_preview_row`): the pixels the picture leaves empty are given the least coverage a
+/// pixel can have, so a band this app paints is a band this app's window is hit-tested in, whatever
+/// stands behind it — and `fill_band_hit_testable`'s own claim is left to the rows and columns a
+/// picture is not drawn in at all (`fill_band_backdrop`).
 pub(super) fn compose_preview_pixels_into(
     bgra: &[u8],
     width: u32,
@@ -178,7 +186,7 @@ pub(super) fn compose_preview_pixels_into(
         .zip(out[..expected].chunks_exact_mut(row_bytes))
         .enumerate()
     {
-        compose_preview_row(src_row, dst_row, background, 0, y as u32);
+        compose_preview_row(src_row, dst_row, background, 0, y as u32, false);
     }
 }
 
@@ -213,7 +221,7 @@ pub(super) fn compose_preview_block_into(
             return;
         };
 
-        compose_preview_row(src_row, dst_row, background, area.left, row as u32);
+        compose_preview_row(src_row, dst_row, background, area.left, row as u32, false);
     }
 }
 
@@ -239,12 +247,22 @@ pub(super) fn copy_frame_box_into(
     }
 }
 
+/// Compose one row of a frame into a row of the window's surface, over `background`.
+///
+/// `claim_the_empty` is whether the pixels this row's picture leaves with no coverage are this
+/// window's to claim — which is not the same question as whether they are the picture's:
+/// a *pinned* window is a window whose whole band Windows hit-tests as its own, so a pixel the
+/// picture leaves empty is a pixel the press falls through to the listing behind it unless the
+/// pin claims the least coverage a pixel can have (see `claim_the_holes`). A hover preview is the
+/// opposite arrangement and passes `false`: it stands over a listing the user is working in, and
+/// the pixels it leaves empty are the ones a click must reach the file under it through.
 pub(super) fn compose_preview_row(
     src_row: &[u8],
     dst_row: &mut [u8],
     background: TransparentBackground,
     x_offset: u32,
     y: u32,
+    claim_the_empty: bool,
 ) {
     match background {
         TransparentBackground::Transparent => {
@@ -258,6 +276,21 @@ pub(super) fn compose_preview_row(
                 let g = px[1] as u32;
                 let r = px[2] as u32;
                 let a = px[3] as u32;
+
+                // **A pixel the picture leaves empty is the pin's least claim rather than a
+                // hole**, which is the one thing a see-through backdrop may not write: a layered
+                // window is hit-tested by the shape of its pixels, so a band a picture is drawn
+                // over with nothing in it is a band Windows hands to whatever stands behind the
+                // pin — a title bar or a seek bar with no pixel under it answers nothing at all,
+                // and the hand falls through the very chrome it came for. Made of a pixel with no
+                // coverage in it and no other, and the smallest coverage there is: `backdrop
+                // * 254/255 + 1` is the backdrop the desktop already shows, a step away from the
+                // darkest end of it and never further than that one step (see
+                // `fill_band_hit_testable`).
+                if a == 0 && claim_the_empty {
+                    *dst = [1, 1, 1, 1];
+                    continue;
+                }
 
                 dst[0] = ((b * a + 127) / 255) as u8;
                 dst[1] = ((g * a + 127) / 255) as u8;

@@ -7,6 +7,10 @@
 - **Previews in Q-Dir's panes** — hovering a row, or walking a pane with the keyboard, shows that file's preview the way a folder view does, and `Space` or the middle button pins it. A Q-Dir frame holds four panes, and the rows are read out of the pane the pointer is in (never through UI Automation), joined onto the folder that pane's address bar shows — so it works with no Explorer window open. Switched by `Preview Settings → General → Enable in Q-Dir`, on where the app starts; written `q_dir_previews` in `config.ini`.
 - **Previews in a program's own Open or Save dialog can be switched off** — `Preview Settings → General → Enable in Browse Dialogs`, on where the app starts, above the kinds because it is a question of *where* a preview happens rather than of what the file is. Off, a browse dialog is no listing at all and previews behave exactly as they did before one ever was: no hover in it, no pin taken up from its rows, no pick behind it. Written `browse_dialog_preview_enabled` in `config.ini`.
 
+### Fixed
+
+- **A pinned picture with transparency under its chrome can be pressed again** — a `.png` or an `.apng` with alpha in the rows the caption and the transport bar are drawn in left those pixels empty, and a layered window is hit-tested by the shape of its pixels, so the strips were drawn over a hole the press fell through: the title bar and the seek bar came out under a hand that could not click a single button on them. Every road a pinned band is composed by now writes the pin's least claim — one part in 255, which is a change no eye can see — on the pixels the picture left with no coverage and no other, so a pixel the picture painted stays the picture's and a hole in it is the pin's. The hover's own window is untouched: the pixels its picture leaves empty are still what a click reaches the listing through.
+
 ## [0.5.3] - 2026-11-10
 
 ### Added
