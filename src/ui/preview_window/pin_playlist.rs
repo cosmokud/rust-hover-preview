@@ -138,6 +138,10 @@ struct PinPlaylist {
     /// and a row of the list is only ever the pointer's inside the band's own rect (see
     /// `set_the_hover`).
     pointer_in_reach: bool,
+    /// The caret's own blink, which is the one thing about the field that changes with nothing else
+    /// having happened: a field holding the caret is painted twice a blink, and one that is not holding
+    /// it paints none (see `advance_the_search`, and `CaretBlink`, which is the find bar's own).
+    blink: text_find_field::CaretBlink,
     /// Whether the field is meant to be in sight, and how much of it is: the target is the pointer in
     /// the band or reaching for it, the caret or a query hiding rows, and the slide is the share it
     /// has travelled toward it — `1.0` whole, `0.0` parked under the window's own edge (see
@@ -171,6 +175,7 @@ impl Default for PinPlaylist {
             // the pointer comes at the band, which is the one gesture that asks for it (see
             // `advance_the_search`).
             pointer_in_reach: false,
+            blink: text_find_field::CaretBlink::default(),
             search_in_sight: false,
             search_slide: 0.0,
             search_last: Instant::now(),
@@ -274,6 +279,23 @@ impl PinPlaylist {
         before != self.search_slide
     }
 
+    /// **The field's own tick**: the slide carried on by `cadence`, and the caret's blink turned over
+    /// where its own interval has passed — the two things about the field that change with nothing else
+    /// having happened, and both of them the paint's.
+    ///
+    /// A field that is not holding the caret blinks nothing: its bar is not drawn at all, and a tick
+    /// asking for a paint every half blink for a caret nobody can see is a band redrawn for nothing (see
+    /// `CaretBlink`).
+    fn advance_the_search_by(&mut self, cadence: std::time::Duration) -> bool {
+        let slid = self.slide_the_search_by(cadence);
+        let blinked = self.search_focused
+            && self
+                .blink
+                .advance(std::time::Instant::now(), text_find::caret_blink());
+
+        slid || blinked
+    }
+
     /// **The row the hand picked and the row the pin is showing are rows the band draws**: the scroll
     /// is moved — and never the pick — so that both are inside the rows that fit, and only then is it
     /// clamped into the list. A pick a walk answered from off the bottom of the band is a pick the
@@ -304,7 +326,10 @@ impl PinPlaylist {
         // **A query is what keeps the field in sight**, so a keystroke that leaves one behind is a
         // keystroke that holds the pill open — the target is asked again here because a hand typing
         // into a field the pointer has left is a hand the pointer's own answer knows nothing about.
+        // The caret is drawn solid from the keystroke, which is what a hand typing is looking at (see
+        // `CaretBlink`).
         self.retarget_the_search();
+        self.blink.restart(Instant::now(), text_find::caret_blink());
         the_box_has_moved();
     }
 
@@ -332,6 +357,7 @@ impl PinPlaylist {
             text: self.query.text(),
             caret: self.query.caret(),
             focused,
+            caret_lit: self.blink.lit(),
             slide: self.search_slide,
         }
     }
@@ -522,16 +548,27 @@ pub(super) fn toggle(pin: &PinnedPreview) {
     );
     let room = (bounds.bottom - bounds.top).max(1);
     let scale = pin.dpi as f32 / 96.0;
-    let floor = pin_chrome::playlist_row_height(scale) * TWO_ROWS;
-    let ceiling = (room as f32 * MOST_OF_THE_DISPLAY) as i32;
+    // **A band stands at a whole number of rows.** Its bottom edge is the last row's bottom edge rather
+    // than a strip kept for the field or a row cut in half, so the height chosen here and the height a
+    // drag gives it are both snapped (see `pin_chrome::snapped_playlist_height`).
+    let floor = pin_chrome::snapped_playlist_height(
+        pin_chrome::playlist_row_height(scale) * TWO_ROWS,
+        scale,
+    );
+    let ceiling =
+        pin_chrome::snapped_playlist_height((room as f32 * MOST_OF_THE_DISPLAY) as i32, scale)
+            .max(floor);
 
     let chosen = match HEIGHT.load(Ordering::Acquire) {
         remembered if remembered > 0 => remembered,
         _ => (room as f32 * DEFAULT_SHARE_OF_THE_DISPLAY) as i32,
     };
 
-    HEIGHT.store(chosen.clamp(floor, ceiling.max(floor)), Ordering::Release);
-    CEILING.store(ceiling.max(floor), Ordering::Release);
+    HEIGHT.store(
+        pin_chrome::snapped_playlist_height(chosen, scale).clamp(floor, ceiling),
+        Ordering::Release,
+    );
+    CEILING.store(ceiling, Ordering::Release);
 
     // **A band put up is a band whose field starts parked.** Whatever the band before it was left
     // holding — a caret, a query, a pointer that is long gone — is not this band's, and a field put up
@@ -573,6 +610,11 @@ fn the_band_of_the_pin() -> Option<(i32, i32, i32, f32)> {
     Some((top, height, width, pin.dpi as f32 / 96.0))
 }
 
+/// How many presses elsewhere this band has already read, so that the tick can tell a press that is
+/// news from the count it has been looking at all along (see
+/// `crate::app::seam::presses_elsewhere`).
+static PRESSES_GREETED: AtomicU64 = AtomicU64::new(0);
+
 /// The tick's own work for the band, answering whether the window is owed a paint for it: the rows
 /// rebuilt where the pin's walk has moved, the notch the wheel left here, and the name a row is
 /// marooned with. One answer rather than three, because a tick owes one paint.
@@ -592,6 +634,18 @@ pub(super) fn the_tick_is_owed_a_repaint() -> bool {
     let notches = crate::app::seam::take_pin_playlist_delta();
     if notches != 0 {
         owed |= step_the_notches(notches);
+    }
+
+    // **A press somewhere else is a caret let go.** A pin takes no activation, so a click on another
+    // window is not something this one is sent: the hook counts those presses, and a field holding the
+    // caret lets it go on one — the hand has named something else, and a caret left blinking in a field
+    // nothing is coming back to is the field that never parks (see `blur_the_search`). The count is read
+    // every tick whether the field holds anything or not, so that a press made while it held nothing is
+    // not still news when the hand reaches for the field.
+    let presses = crate::app::seam::presses_elsewhere();
+    let seen = PRESSES_GREETED.swap(presses, Ordering::AcqRel);
+    if presses != seen && search_has_focus() {
+        owed |= blur_the_search();
     }
 
     owed | advance_the_marquees() | advance_the_search()
@@ -861,14 +915,22 @@ pub(super) fn search_has_focus() -> bool {
 /// Let the search field go, which a press anywhere else on the pin asks for: the query stays, because
 /// it is what the band is filtered by — a hand that has gone to the transport bar has not asked for the
 /// list it can see to come back (see `pin_input::pinned_press_on`).
-pub(super) fn blur_the_search() {
-    if let Ok(mut playlist) = THE_PLAYLIST.lock() {
-        playlist.search_focused = false;
-        // **A caret let go is a field's target asked again**: with no pointer in the band and no query
-        // in the field there is nothing holding it, so it starts its way out from here (see
-        // `retarget_the_search`).
-        playlist.retarget_the_search();
-    }
+///
+/// **A press is the one thing that takes the caret away.** The pointer may wander off the field and off
+/// the pin entirely; a caret is ended by the hand naming something else, and this is where that answer is
+/// written. It answers whether the field was holding the caret at all, which is the repaint a tick that
+/// took the caret from a press elsewhere owes (see `the_tick_is_owed_a_repaint`).
+pub(super) fn blur_the_search() -> bool {
+    let Ok(mut playlist) = THE_PLAYLIST.lock() else {
+        return false;
+    };
+
+    let held = std::mem::replace(&mut playlist.search_focused, false);
+    // **A caret let go is a field's target asked again**: with no pointer at the field and no query in
+    // it there is nothing holding it, so it starts its way out from here (see `retarget_the_search`).
+    playlist.retarget_the_search();
+
+    held
 }
 
 /// The field's own box, top and bottom, in the window's rows — the number a test keeps from changing
@@ -901,7 +963,38 @@ pub(super) fn slide_the_search_on(millis: u64) -> bool {
         return false;
     };
 
-    playlist.slide_the_search_by(std::time::Duration::from_millis(millis))
+    playlist.advance_the_search_by(std::time::Duration::from_millis(millis))
+}
+
+/// Turn the caret's blink over, as a tick one blink interval later would: what a test that reads the
+/// two halves of it asks for, without waiting the half out.
+///
+/// Each call is a blink further along than the one before it, which is what keeps a second call from
+/// landing on the instant the first one armed the next half to.
+#[cfg(test)]
+pub(super) fn turn_the_caret_over() -> bool {
+    use std::sync::atomic::AtomicU32;
+
+    static HALVES: AtomicU32 = AtomicU32::new(1);
+
+    let Ok(mut playlist) = THE_PLAYLIST.lock() else {
+        return false;
+    };
+
+    let interval = text_find::caret_blink();
+    let halves = HALVES.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    let ahead = Instant::now() + interval * halves;
+
+    playlist.blink.advance(ahead, interval)
+}
+
+/// Whether the caret's blink is in the half it is drawn in, as a test reads it.
+#[cfg(test)]
+pub(super) fn the_caret_is_lit() -> bool {
+    THE_PLAYLIST
+        .lock()
+        .map(|playlist| playlist.blink.lit())
+        .unwrap_or(false)
 }
 
 /// The pointer taken out of the band, which is what a tick that finds the cursor outside it asks: the
@@ -1011,8 +1104,12 @@ pub(super) fn key_while_the_search_has_focus(vk: i32) -> bool {
             }
         }
         FindEdit::Move(motion, extend) => {
-            // A caret move changes no query, so it is not the filter's and owes the band no paint.
+            // A caret move changes no query, so it is not the filter's and owes the band no paint — but it
+            // is a hand using the caret, so the bar is drawn solid from it (see `CaretBlink`).
             playlist.query.move_caret(motion, extend);
+            playlist
+                .blink
+                .restart(Instant::now(), text_find::caret_blink());
         }
         _ => {}
     }
@@ -1033,8 +1130,12 @@ pub(super) fn focus_the_search() -> bool {
     };
     playlist.search_focused = true;
     // A field whose caret has just been asked for is a field in sight whole: `Ctrl`+`F` over a parked
-    // band is the hand asking for the pill, and it is there rather than being typed into unseen.
+    // band is the hand asking for the pill, and it is there rather than being typed into unseen. The
+    // caret is drawn solid from here and blinks from there on (see `CaretBlink`).
     playlist.retarget_the_search();
+    playlist
+        .blink
+        .restart(Instant::now(), text_find::caret_blink());
     let end = playlist.query.text().len();
     playlist.query.place_caret(end, false);
 
@@ -1103,7 +1204,7 @@ fn advance_the_search() -> bool {
     let cadence = now.saturating_duration_since(playlist.search_last);
     playlist.search_last = now;
 
-    playlist.slide_the_search_by(cadence)
+    playlist.advance_the_search_by(cadence)
 }
 
 /// A pointer over the band, answering whether the band changed for it: which row the hand is on is
@@ -1138,7 +1239,7 @@ fn hover_at_the_band(
     // The reach is the field's alone: `local` is the band's own rect, so a row, and the name a row
     // travels, are only ever a pointer inside the band's.
     let reach = pin_chrome::playlist_reach(scale);
-    let field_top = pin_chrome::search_strip_top(height, scale);
+    let field_top = pin_chrome::search_field_top(height, scale);
     let (local, near) = match at {
         Some((x, y)) => {
             let local = y - top;
@@ -1214,31 +1315,28 @@ fn set_the_hover(band: (i32, i32, f32), local: Option<i32>, near: bool) -> bool 
     playlist.hovered = hovered;
     playlist.set_the_marquee(&layout, scale);
 
-    // **A pointer at the field's strip, or one only reaching for it, is a hand asking for the field.**
-    // The rows are asked for the hand's row rather than for its engagement: the pads above and below a
-    // list are the band's too, and a field that stayed parked under a hand that is on its strip is a
-    // field the hand cannot reach — the engagement is the strip and the reach around it, and the row
-    // is the marquee's answer alone (see `hover_at_the_band`).
+    // **A pointer at the field's own rows, or one only reaching for them, is a hand asking for the
+    // field.** The rows are asked for the hand's row rather than for its engagement: the pads above and
+    // below a list are the band's too, and a field that stayed parked under a hand that is at its rows is
+    // a field the hand cannot reach — the engagement is the field's rows and the reach around them, and
+    // the row is the marquee's answer alone (see `hover_at_the_band`).
     //
-    // **And the field is never taken away from a hand that has named it.** A field with the caret or
-    // one filtering the list is in sight whole rather than mid-slide, whatever the pointer does: it is
-    // the only thing on the band that explains rows missing, and the only way to put them back (see
+    // **And the field is never taken away from a hand that has named it.** A field with the caret or one
+    // filtering the list is in sight whole rather than mid-slide, whatever the pointer does: it is the
+    // only thing on the band that explains rows missing, and the only way to put them back (see
     // `PinPlaylist::retarget_the_search`).
+    //
+    // **Neither is the caret taken away by a pointer that has gone.** A field the hand has pressed holds
+    // the caret until a press takes it elsewhere: a pointer that walks away from it is a pointer the hand
+    // is free to move, and a field that let its caret go because the mouse wandered is a field the hand
+    // has to press again to type the next character (see `blur_the_search`, which is a press's own
+    // answer).
     let was = (
         playlist.search_in_sight,
         playlist.search_slide,
         playlist.search_focused,
     );
     playlist.pointer_in_reach = near;
-    // **The caret belongs to a hand that is still reaching for the field.** A pointer that has walked
-    // away from the field it pressed — onto a row of the list, onto the card above it, or off the pin
-    // altogether — is a pointer no key is going to be typed from, and a caret left blinking in it is a
-    // field that never parks: it is the one thing that held a band open with no pointer on the field
-    // and no query in it (see `retarget_the_search`). A field with a query in it stays in sight either
-    // way — the query is what is hiding rows (see `the_search`).
-    if !near {
-        playlist.search_focused = false;
-    }
     playlist.retarget_the_search();
 
     changed
@@ -1300,27 +1398,22 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
         };
         let layout = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
 
-        // **The search field first, and it picks nothing.** A press on it is the caret's and the keys',
-        // and the field stands where a row cannot: the press is put down before the scrollbar and the
-        // rows are asked, or the field's own bottom row would be a row of a list that is not under it.
-        //
-        // **A field on its way out is not one yet.** The pill's strip is reserved whether the pill is
-        // in it or not, so a press there while the slide is anywhere short of whole is a press on the
-        // band's own bottom pad — the hand has reached for a field that is not there, and what it gets
-        // is nothing rather than a caret in a pill it cannot see. The press is still a press *in* the
-        // band, so the field it reached for comes down to meet it (see `advance_the_search`).
-        let reached_for_the_field = pin_chrome::search_field_holds(&layout, x, local);
-        if reached_for_the_field && playlist.search_slide < 1.0 {
-            playlist.pointer_in_reach = true;
-            playlist.retarget_the_search();
-            return true;
-        }
+        // **The field takes a press only where it is drawn.** The pill floats over the last rows of the
+        // list rather than a strip being kept from them, so the rows under it are rows a hand can press
+        // until the pill is there: a press on the pill is the caret's and the keys' and picks nothing, and
+        // one on a row of the list is that row's (see `paint_search`).
+        let reached_for_the_field =
+            playlist.search_slide > 0.0 && pin_chrome::search_field_holds(&layout, x, local);
         if reached_for_the_field {
-            // **The caret is what holds the field open**, so it is written before the paint that
-            // follows: a field focused is a field in sight whole whatever the pointer then does (see
-            // `retarget_the_search`).
+            // **The caret is what holds the field open**, so it is written before the paint that follows:
+            // a field focused is a field in sight whole whatever the pointer then does (see
+            // `retarget_the_search`). It is drawn solid from the press that put it there, and blinks from
+            // there on (see `CaretBlink`).
             playlist.search_focused = true;
             playlist.pointer_in_reach = true;
+            playlist
+                .blink
+                .restart(Instant::now(), text_find::caret_blink());
             playlist.retarget_the_search();
             let at = pin_chrome::search_index_at(&layout, playlist.query.text(), x, scale);
             playlist.query.place_caret(at, false);
@@ -1430,7 +1523,10 @@ pub(super) unsafe fn drag(hwnd: HWND, x: i32, y: i32) -> bool {
         return false;
     };
 
-    let floor = pin_chrome::playlist_row_height(scale) * TWO_ROWS;
+    let floor = pin_chrome::snapped_playlist_height(
+        pin_chrome::playlist_row_height(scale) * TWO_ROWS,
+        scale,
+    );
     let ceiling = CEILING.load(Ordering::Acquire).max(floor);
     let travel = screen_y(hwnd, x, y) - resize.from;
 
@@ -1439,6 +1535,10 @@ pub(super) unsafe fn drag(hwnd: HWND, x: i32, y: i32) -> bool {
         pin_chrome::PlaylistEdge::Top => resize.height - travel,
     }
     .clamp(floor, ceiling);
+    // **A drag lands on whole rows**, so that the band's bottom edge is a row's bottom edge whatever
+    // the hand did with it: a band dragged to an arbitrary height is a band whose list ends in a row cut
+    // in half (see `pin_chrome::snapped_playlist_height`).
+    let height = pin_chrome::snapped_playlist_height(height, scale).clamp(floor, ceiling);
 
     if height == HEIGHT.load(Ordering::Acquire) {
         return true;

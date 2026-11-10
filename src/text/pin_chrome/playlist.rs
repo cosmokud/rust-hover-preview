@@ -120,6 +120,10 @@ pub(crate) struct PlaylistSearch<'a> {
     pub(crate) caret: usize,
     /// Whether the caret is drawn, and the bar with it.
     pub(crate) focused: bool,
+    /// Whether the caret's blink is in its lit half, which is the half the bar is drawn in: a field that
+    /// holds the caret turns its bar over at the pace the system's own caret blinks at (see
+    /// `pin_playlist::advance_the_search`).
+    pub(crate) caret_lit: bool,
     /// How much of the field is in sight, from `0.0` — parked out of the band's bottom edge — to
     /// `1.0`, whole. It is the one thing the band's own animation draws with: the field is carried
     /// down by the share of its height that is out and clipped to the strip the layout kept for it,
@@ -166,17 +170,36 @@ pub(crate) fn playlist_reach(scale: f32) -> i32 {
     text_paint::scaled(REACH_PIXELS as i32, scale).max(0)
 }
 
-/// The row the strip a band keeps for its search field begins at, in the band's own rows: the field is
-/// the last thing at the band's bottom, and every row above it is the band's own.
+/// The row the band's search field begins at, in the band's own rows: the field is anchored to the
+/// band's bottom, so it floats over the last rows of the list rather than sitting in a strip the rows
+/// are kept out of.
 ///
 /// It is asked without a layout of its own because it is the answer a pointer is measured against
-/// before there is a band to lay one out for — a hand asks for the field at the strip it lives in, and
+/// before there is a band to lay one out for — a hand asks for the field at the field's own rows, and
 /// never at a row of the list above it (see `pin_playlist::hover_at_the_band`).
-pub(crate) fn search_strip_top(height: i32, scale: f32) -> i32 {
+pub(crate) fn search_field_top(height: i32, scale: f32) -> i32 {
     let pad = text_paint::scaled(PAD_PIXELS as i32, scale).max(0);
     let search = text_paint::scaled(SEARCH_PIXELS as i32, scale).max(0);
 
     (height - pad - search).max(pad.min(height))
+}
+
+/// The height a band stands at, snapped to the rows it can draw: the pad above and below them and a
+/// whole number of rows between.
+///
+/// **A band's bottom edge is a row's bottom edge.** The field floats over the last row rather than a
+/// strip being kept from it, so a band left at an arbitrary height is a band whose list ends in a row
+/// cut in half — a row of nothing at the bottom of the window. The height a band opens at and every
+/// height a drag gives it are snapped here, which is the one place the two are counted.
+pub(crate) fn snapped_playlist_height(height: i32, scale: f32) -> i32 {
+    let pad = text_paint::scaled(PAD_PIXELS as i32, scale).max(0);
+    let row = playlist_row_height(scale);
+    let room = (height - 2 * pad).max(0);
+    // Rounded to the nearest row rather than down: a drag that has come half a row past its last whole
+    // row is a drag asking for that row.
+    let rows = ((room + row / 2) / row).max(1);
+
+    2 * pad + rows * row
 }
 
 /// The top row the search pill has at the share of it that is in sight: the whole strip down to the
@@ -184,7 +207,7 @@ pub(crate) fn search_strip_top(height: i32, scale: f32) -> i32 {
 ///
 /// It is the line a row peeking under the field is cut against, so that the pill takes the row back as
 /// it comes up rather than a band of page standing under it (see `paint_playlist` and `paint_search`).
-fn search_field_top(layout: &PlaylistLayout, slide: f32) -> i32 {
+fn painted_field_top(layout: &PlaylistLayout, slide: f32) -> i32 {
     let out = ((1.0 - slide.clamp(0.0, 1.0)) * (layout.search_bottom - layout.search_top) as f32)
         .round() as i32;
 
@@ -234,11 +257,16 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let mark_gap = text_paint::scaled(SEARCH_MARK_GAP_PIXELS as i32, scale).max(0);
 
     let rows_top = pad.min(height);
-    // The field is a constant of the layout: a band taller or shorter than this one gives the rows
-    // above it away or takes them back, and the field itself neither moves nor changes size.
-    let rows_bottom = search_strip_top(height, scale);
-    let search_top = rows_bottom;
-    let search_bottom = (search_top + search).min(height - pad).max(search_top);
+    // **The rows are the band's own and the field is drawn over them.** A band is a list, and a band
+    // that kept a strip of its own bottom for a field is a band that ended in a row of nothing: the
+    // rows reach the band's bottom pad, and the field floats over the last of them while it is in sight
+    // (see `paint_search` and `snapped_playlist_height`).
+    let rows_bottom = (height - pad).max(rows_top);
+    // The field is a constant of the layout still, anchored to the band's bottom rather than to its own
+    // strip: its rows are the last rows of the band, and a band taller or shorter than this one gives
+    // the rows above it what it took rather than stretching the field.
+    let search_top = search_field_top(height, scale);
+    let search_bottom = (search_top + search).min(rows_bottom).max(search_top);
     let search_left = pad.min(width);
     let search_right = (width - pad).max(search_left);
     // The mark is the first thing in the pill and the query is set after it, each held the pill's own
@@ -593,17 +621,13 @@ pub(crate) fn paint_playlist(
         })
         .collect();
 
-    // **The room under the last whole row is a row peeking rather than a band of empty page.** The
-    // rows above the field are whole ones, so what is left between the last of them and the field's
-    // strip is a row's own top — and a page there is a band that reads as a list which has ended
-    // above its own field. The next row is drawn into it, cut where the pill has come up to, which is
-    // how the strip looks like a list scrolled under a field rather than a hole in it, and how a pill
-    // on its way up covers the row as it comes (see `search_field_top`).
-    let peek_floor = match band.search.as_ref() {
-        Some(search) => search_field_top(&layout, search.slide),
-        None => height,
-    }
-    .min(height);
+    // **The room under the last whole row is a row peeking rather than a band of empty page.** A band
+    // is snapped to whole rows, so there is normally nothing left under them; a band caught between two
+    // rows — a drag in flight, or a height a clamp held short — leaves a part of the next row, and a page
+    // there is a band that reads as a list which ended above its own bottom. The next row is drawn into
+    // it and cut at the band's own bottom pad, which is the row the field floats over when it is in sight
+    // (see `snapped_playlist_height` and `paint_search`).
+    let peek_floor = layout.rows_bottom.min(height);
     if let Some(index) = band.shown.get(last).copied() {
         let top = layout.rows_top + (last - first) as i32 * layout.row_height;
         let bottom = (top + layout.row_height).min(peek_floor);
@@ -870,13 +894,13 @@ fn paint_search(
     };
 
     let page = palette.background;
-    // **The field is carried down by the share of it that is out of sight, and the strip it lives in
-    // is not.** The pill is drawn in full at the row its slide puts it at, and everything of it that
-    // has gone past the band's own last row of that strip is painted back to the band's page after:
-    // what a hand sees is a pill sliding under the window's edge and being cut there, which is the
-    // parking animation — a pill that faded or blinked would be one that disappeared where it stood
-    // (see `pin_playlist::advance_the_search`).
-    let field_top = search_field_top(layout, search.slide);
+    // **The field is carried down by the share of it that is out of sight, and the rows it floats over
+    // are not.** The pill is drawn in full at the row its slide puts it at, and everything of it that
+    // has gone past the band's own bottom pad is painted back to the band's page after: what a hand sees
+    // is a pill sliding under the window's edge and being cut there, which is the parking animation — a
+    // pill that faded or blinked would be one that disappeared where it stood (see
+    // `pin_playlist::advance_the_search`).
+    let field_top = painted_field_top(layout, search.slide);
     let field = RECT {
         left: layout.search_left,
         top: field_top,
@@ -886,13 +910,14 @@ fn paint_search(
     if field.right <= field.left || field.bottom <= field.top {
         return Vec::new();
     }
-    // The strip the layout kept for the field, which is the whole of it a hand may see: the rows above
-    // it and the drag handle below it are not the field's to paint over.
+    // The rows the field stands in, which is the whole of it a hand may see: the field floats over the
+    // last rows of the list, so what is above it is a row's and what is below it is the band's own pad,
+    // which is not the field's to paint over.
     let strip = RECT {
         left: 0,
         top: layout.search_top,
         right: width,
-        bottom: layout.search_bottom.min(height),
+        bottom: (layout.search_top + (layout.search_bottom - layout.search_top)).min(height),
     };
 
     // **The pill.** The plate is the band's own page lifted a little toward its ink, so that the field
@@ -972,7 +997,11 @@ fn paint_search(
     }
     painter.forget_the_face();
 
-    if search.focused {
+    // **The caret is drawn solid, and it blinks**: a field that holds the caret says so with a bar that
+    // turns over at the pace the system's own text fields do, and a bar that never blinked would be a
+    // caret a hand cannot tell from the field's own mark (see `pin_playlist::advance_the_search`, which
+    // is the tick the two halves of it are counted on).
+    if search.focused && search.caret_lit {
         let caret = search.caret.min(search.text.len());
         let carried = measure(surface, &style, &search.text[..caret], small);
         let bar = text_paint::scaled(CARET_PIXELS as i32, scale).max(1);
@@ -999,8 +1028,8 @@ fn paint_search(
         );
     }
 
-    // **Whatever the pill has taken below the strip is given back to the band's page**, and the strip's
-    // own row is where the cut falls: the two rows under it are the band's pad, which nothing else in
+    // **Whatever the pill has taken below its own rows is given back to the band's page**, and the rows'
+    // own bottom is where the cut falls: what is under them is the band's pad, which nothing else in
     // this paint writes on, so the page is what belongs there.
     let below = RECT {
         top: strip.bottom,

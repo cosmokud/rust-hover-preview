@@ -673,8 +673,14 @@ fn the_search_field_sits_at_the_bands_bottom_whatever_its_height() {
 
     for layout in [tall, short] {
         assert_eq!(
-            layout.search_top, layout.rows_bottom,
-            "the rows end where the field begins, so nothing is drawn under both"
+            layout.search_bottom, layout.rows_bottom,
+            "the field's own bottom is the rows' own bottom: it floats over the last rows rather than a
+             strip being kept from them"
+        );
+        assert_eq!(
+            layout.search_top,
+            layout.rows_bottom - height,
+            "and its top is where a pill of its own height begins, over the rows under it"
         );
         assert_eq!(
             layout.search_left, layout.rows_top,
@@ -688,9 +694,8 @@ fn the_search_field_sits_at_the_bands_bottom_whatever_its_height() {
     }
 
     assert_eq!(
-        tall.search_bottom,
-        tall.rows_bottom + height,
-        "the field's own bottom is its top grown by the one constant"
+        tall.search_bottom, tall.rows_bottom,
+        "the field's own bottom is the band's bottom pad, not its top grown by the one constant"
     );
     assert_eq!(
         tall.search_bottom - short.search_bottom,
@@ -733,6 +738,50 @@ fn the_search_field_sits_at_the_bands_bottom_whatever_its_height() {
         playlist_edge_at(top, band, SCALE, top + band - 1),
         Some(PlaylistEdge::Bottom),
         "and the window's last rows are the band's edge, below the field"
+    );
+}
+
+/// **The search field floats over the last rows of the list.** A band is a list to its own bottom pad:
+/// the rows reach it, and the pill is drawn over the last of them while it is in sight — a field that
+/// held a strip of the band back from the rows is a band that ends in a row of nothing.
+///
+/// What is drawn under the last whole row is a row peeking only where the band is not a whole number of
+/// rows: a band snapped to its rows (see `snapped_playlist_height`) has none at all.
+#[test]
+fn the_field_floats_over_the_rows_and_they_reach_the_bands_own_pad() {
+    let pad = 10;
+    let row = playlist_row_height(SCALE);
+    // A band a row and a half tall: four whole rows, and a row peeking under them.
+    let unsnapped = 2 * pad + 4 * row + row / 2;
+    let layout = playlist_layout(400, unsnapped, SCALE, 40);
+
+    assert_eq!(
+        layout.rows_bottom,
+        unsnapped - pad,
+        "the rows reach the band's own bottom pad"
+    );
+    assert_eq!(
+        layout.search_bottom, layout.rows_bottom,
+        "and the field's bottom is that same row: it floats over the rows rather than under them"
+    );
+    assert!(
+        layout.search_top < layout.rows_bottom
+            && layout.search_top >= layout.rows_top + (layout.visible - 1) * row,
+        "the pill is drawn over the last rows the list draws rather than over a row of page"
+    );
+
+    // A band snapped to whole rows has nothing left under the last of them, and the field over the last
+    // row of the list rather than a row of page.
+    let snapped = snapped_playlist_height(unsnapped - 3, SCALE);
+    let layout = playlist_layout(400, snapped, SCALE, 40);
+    assert_eq!(
+        layout.rows_top + layout.visible * row + pad,
+        snapped,
+        "a snapped band ends exactly on its last whole row and the pad under it"
+    );
+    assert!(
+        layout.search_bottom > layout.rows_top + (layout.visible - 1) * row,
+        "so the field is drawn over a row of the list and not over a row of page"
     );
 }
 
@@ -834,6 +883,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         text: "",
         caret: 0,
         focused: false,
+        caret_lit: true,
         slide: 1.0,
     });
     let placeholder = inked(&empty, box_);
@@ -846,6 +896,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         text: "",
         caret: 0,
         focused: true,
+        caret_lit: true,
         slide: 1.0,
     });
     assert!(
@@ -875,6 +926,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         text: "mixdown",
         caret: 4,
         focused: true,
+        caret_lit: true,
         slide: 1.0,
     });
     assert!(
@@ -997,6 +1049,7 @@ fn the_field_is_a_pill_rather_than_a_box() {
         text: "",
         caret: 0,
         focused: false,
+        caret_lit: true,
         slide: 1.0,
     });
     let pixels = field_pixels(&surface);
@@ -1064,6 +1117,7 @@ fn the_field_draws_its_mark_at_its_left_and_sets_the_query_after_it() {
         text: "",
         caret: 0,
         focused: false,
+        caret_lit: true,
         slide: 1.0,
     });
     let pixels = field_pixels(&surface);
@@ -1127,6 +1181,7 @@ fn the_caret_is_the_height_of_the_letter_it_stands_between() {
         text: "  ",
         caret: 0,
         focused: true,
+        caret_lit: true,
         slide: 1.0,
     })
     .0;
@@ -1134,6 +1189,7 @@ fn the_caret_is_the_height_of_the_letter_it_stands_between() {
         text: "  ",
         caret: 0,
         focused: false,
+        caret_lit: true,
         slide: 1.0,
     })
     .0;
@@ -1165,6 +1221,39 @@ fn the_caret_is_the_height_of_the_letter_it_stands_between() {
     assert!(
         column >= cell / 2,
         "and it is not a speck in the middle of the pill either"
+    );
+}
+
+/// **The caret is drawn blinking rather than always**: a field holding it is painted with its bar for one
+/// half of a blink and without it for the other, and the half without it is the field as it is when
+/// nothing holds the caret at all — a bar that never went dark would be a mark of the field rather than a
+/// caret in it.
+#[test]
+fn the_caret_is_drawn_only_in_the_half_of_its_blink_it_is_lit_in() {
+    let paint = |focused: bool, caret_lit: bool| {
+        let (surface, _) = a_band_of_the_field(PlaylistSearch {
+            text: " ",
+            caret: 0,
+            focused,
+            caret_lit,
+            slide: 1.0,
+        });
+
+        field_pixels(&surface)
+    };
+
+    let lit = paint(true, true);
+    let dark = paint(true, false);
+    let unfocused = paint(false, true);
+
+    assert!(
+        lit.iter().zip(&dark).any(|(a, b)| a != b),
+        "the lit half of the blink draws a caret, and the dark half of the same field does not"
+    );
+    assert_eq!(
+        dark, unfocused,
+        "and the dark half is the field nothing holds the caret in: the bar is the whole of what a blink
+         changes"
     );
 }
 
@@ -1213,6 +1302,7 @@ fn the_field_border_runs_the_whole_straight_part_of_the_pill() {
             text,
             caret: text.len(),
             focused,
+            caret_lit: true,
             slide: 1.0,
         });
         let pixels = field_pixels(&surface);
@@ -1269,17 +1359,14 @@ fn a_press_on_the_field_is_measured_at_the_size_the_query_is_drawn() {
     );
 }
 
-/// **The room under the last whole row is a row peeking rather than a band of empty page.** The rows
-/// above the field are whole ones, so what is left between the last of them and the field's strip is a
-/// row's own top: a page there is a band that reads as a list which ended above its own field. The next
-/// row is drawn into it, and it is cut where the pill has come up to — so the pill takes the row back
-/// as it slides rather than a strip of page standing under a field in sight.
-///
-/// The band here is a height that leaves the rows flush with the strip (`leftover` is nothing), which
-/// is the shape the two are drawn against: the row under the field is the whole of the strip when the
-/// field is parked, and none of it when the pill is in it.
+/// **The room under the last whole row is a row peeking rather than a band of empty page, and the pill
+/// is drawn over the rows rather than a strip being cut out of them.** A band is a list to its own
+/// bottom pad: a page under the last whole row is a band that reads as a list which ended above its own
+/// bottom, so the next row is drawn into the room and cut at the pad — and the field floats over the
+/// last rows while it is in sight, which is where a hand reaching for it finds it (see
+/// `snapped_playlist_height`, which is what keeps a band from being caught between two rows at all).
 #[test]
-fn the_strip_under_the_rows_is_a_row_peeking_and_the_pill_takes_it_back() {
+fn the_room_under_the_last_row_is_a_row_peeking_and_the_pill_floats_over_the_rows() {
     let palette = ChromePalette::current().expect("a theme to paint in");
     let foreground = palette.foreground;
 
@@ -1295,12 +1382,13 @@ fn the_strip_under_the_rows_is_a_row_peeking_and_the_pill_takes_it_back() {
         .collect();
     let shown: Vec<usize> = (0..rows.len()).collect();
 
-    let (width, height) = (400u32, 220u32);
+    // A band caught most of a row past its last whole one, which is the shape the peek is for.
+    let (width, height) = (400u32, 230u32);
     let layout = playlist_layout(width as i32, height as i32, SCALE, rows.len());
     let leftover = layout.rows_bottom - (layout.rows_top + layout.visible * layout.row_height);
-    assert_eq!(
-        leftover, 0,
-        "a band whose rows end flush with the field's strip is the one this test is drawn against"
+    assert!(
+        leftover > 0 && leftover < layout.row_height,
+        "the band is caught between two rows, so the one under the last whole row has room"
     );
     assert!(
         rows.len() > layout.visible as usize,
@@ -1325,6 +1413,7 @@ fn the_strip_under_the_rows_is_a_row_peeking_and_the_pill_takes_it_back() {
                     text: "",
                     caret: 0,
                     focused: false,
+                    caret_lit: true,
                     slide,
                 }),
                 note: None,
@@ -1335,23 +1424,41 @@ fn the_strip_under_the_rows_is_a_row_peeking_and_the_pill_takes_it_back() {
         field_pixels(&surface)
     };
 
-    // The strip's own rows, inside the columns a row's name is drawn in: the band's ink there is a
-    // row's and the field's own ink is its plate, its edge, its mark and its placeholder — the query is
-    // empty, so no character of it is drawn.
-    let row_ink = |pixels: &[[u8; 3]]| {
-        (layout.search_top..layout.search_bottom)
+    // The room under the last whole row, in the columns a row's name is drawn in: a row's ink there is
+    // the row peeking, and a band of page is the empty row this is not.
+    let peeked = |pixels: &[[u8; 3]]| {
+        let top = layout.rows_top + layout.visible * layout.row_height;
+        (top..layout.rows_bottom)
             .flat_map(|y| (layout.text_left..layout.name_right).map(move |x| (x, y)))
             .filter(|(x, y)| pixels[*y as usize * width as usize + *x as usize] == foreground)
             .count()
     };
-
     assert!(
-        row_ink(&paint(0.0)) > 0,
-        "a parked field leaves the next row drawn in the strip below the last whole one"
+        peeked(&paint(0.0)) > 0,
+        "the row under the last whole one is drawn into the room the band has left"
+    );
+
+    // And the field is drawn over the rows: inside the pill's own straight part there is no row's ink
+    // while it is in sight, because the pill's plate is what a hand sees there — the row is under the
+    // field rather than cut away for it.
+    let over_the_rows = |pixels: &[[u8; 3]]| {
+        let radius = (layout.search_bottom - layout.search_top) as f32 / 2.0;
+        ((layout.search_top)..layout.search_bottom)
+            .flat_map(|y| {
+                ((layout.search_left + radius.ceil() as i32)
+                    ..(layout.search_right - radius.ceil() as i32))
+                    .map(move |x| (x, y))
+            })
+            .filter(|(x, y)| pixels[*y as usize * width as usize + *x as usize] == foreground)
+            .count()
+    };
+    assert!(
+        over_the_rows(&paint(0.0)) > 0,
+        "a parked field leaves the rows it would cover drawn where it would be"
     );
     assert_eq!(
-        row_ink(&paint(1.0)),
+        over_the_rows(&paint(1.0)),
         0,
-        "and a pill in sight is drawn in a strip of its own: no row of the band reaches into it"
+        "and a pill in sight is drawn over them: the field floats on the list rather than beside it"
     );
 }
