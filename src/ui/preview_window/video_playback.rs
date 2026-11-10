@@ -1055,15 +1055,6 @@ fn start_video_playback_where(
                 player.id(),
                 if for_a_hover { "hover" } else { "pin" },
             );
-            // **And its window is handed to the monitor to be styled before it is shown**, which is
-            // the half FFmpeg's player never had: mpv's road notes this a few lines further down and
-            // this one did not, so the eager pass — the only pass that looks at a window before the
-            // player shows it — was never run for an ffplay hover at all, whatever class it searched
-            // for. FFmpeg's player shows its own window 250–340ms into a launch, at the film's own
-            // size, so what a 4K hover was is that window on the glass until the adoption reached
-            // it (see `ffplay_window::note_a_player_about_to_show` and
-            // `style_the_window_before_the_show`).
-            ffplay_window::note_a_player_about_to_show(player.id(), for_a_hover);
         }
         // The host holds this player and no older one, recorded before the player has a window of
         // its own to adopt: the monitor's wait for that window is a wait for *this* player's (see

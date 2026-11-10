@@ -102,9 +102,6 @@ pub(super) struct EnumWindowsData {
     pub(super) target_pid: u32,
     pub(super) found_hwnd: HWND,
     pub(super) best_area: i64,
-    /// Whether a window nobody has shown may be the film's: the hosted road's ask, and nobody else's
-    /// (see `try_apply_noactivate_style`).
-    pub(super) before_the_show: bool,
 }
 
 /// Callback for EnumWindows to find a window belonging to a specific process
@@ -121,31 +118,7 @@ pub(super) unsafe extern "system" fn enum_windows_callback(
     }
 
     // Prefer visible, top-level windows (skip hidden and owned/popups behind owners)
-    //
-    // **A window nobody has shown yet is the film's where the film is drawn through a host, and nowhere
-    // else.** A player puts its window up itself — FFmpeg's at 250–340ms into a launch, measured, at the
-    // film's own size — and a hosted film is only ever seen through the Shell's thumbnail of that window
-    // into this app's host. So the window that matters there is the one the player has made and not yet
-    // shown, because there is still time to place it at the box the placement will name before any of it
-    // reaches the screen (see `try_apply_noactivate_style`). Refusing it, as this callback did for every
-    // road, is the film's own window standing on the glass for the whole of the adoption.
-    //
-    // **And a window that is not up yet has to wear the player's own class to be taken.** With the visible
-    // test gone, this pass would otherwise answer with any window of the process — a player's own IME
-    // window, a helper, a window of this suite's own — and a source picked that way is a picture nothing
-    // drew. The class is what says which of a player's windows is the film (see `a_films_window_class`).
-    let unnamed = |hwnd: HWND| -> bool {
-        let mut class: [u16; 64] = [0; 64];
-        let named = unsafe { GetClassNameW(hwnd, &mut class) };
-        named <= 0
-            || !String::from_utf16_lossy(&class[..named as usize])
-                .eq_ignore_ascii_case(a_films_window_class())
-    };
-    if data.before_the_show {
-        if unnamed(hwnd) {
-            return windows::Win32::Foundation::BOOL(1);
-        }
-    } else if !IsWindowVisible(hwnd).as_bool() {
+    if !IsWindowVisible(hwnd).as_bool() {
         return windows::Win32::Foundation::BOOL(1);
     }
 
@@ -391,10 +364,6 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
                 target_pid: pid,
                 found_hwnd: HWND::default(),
                 best_area: 0,
-                // **A hosted film's window is taken while it is still parked and hidden** — the very
-                // window the player made and has not put on the glass, which is the one `IsWindowVisible`
-                // is false for (see `EnumWindowsData::before_the_show`).
-                before_the_show: true,
             };
             let _ = EnumWindows(
                 Some(enum_windows_callback),
@@ -446,10 +415,6 @@ pub(super) unsafe fn try_apply_noactivate_style(pid: u32) -> bool {
         target_pid: pid,
         found_hwnd: HWND::default(),
         best_area: 0,
-        // The pass that finds a film drawn *over* the preview asks for a window already up: that one is a
-        // window of the desktop's this app places and raises itself, and one nobody has shown is not the
-        // picture the user is looking at yet.
-        before_the_show: false,
     };
 
     let _ = EnumWindows(
