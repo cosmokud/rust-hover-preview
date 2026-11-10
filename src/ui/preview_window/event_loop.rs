@@ -4444,6 +4444,13 @@ pub fn run_preview_window() {
                         // is written (see `pin_window::install`).
                         install(pin);
 
+                        // A band that is already up is a band this pin comes up with, and the
+                        // press that turned it over was the last pin's: the walk behind this one
+                        // is asked for its playlist here rather than by the first **Next**, so the
+                        // band draws the folder it walks instead of the one row the pin is
+                        // standing on (see `ask_the_bands_playlist`).
+                        ask_the_bands_playlist();
+
                         // A pin that is taken up owes the front from the moment it is up: the
                         // click that picks the next file activates the listing, and a pin in the
                         // ordinary band is that window over it for a frame however fast the pick
