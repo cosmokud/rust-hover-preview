@@ -1,5 +1,9 @@
 # TODO
 
+## Known Issues
+
+- **Hover detection under tooltips:** The app cannot detect files located beneath an active tooltip window (affects Windows File Explorer, voidtools Everything, and Q-Dir).
+
 ## Features
 
 - **Detach mode:** the pin mode window handed to a process of its own is done (**Detach Window**, and a run's previews drawn in a viewer process); what is left is the `--detach` road nothing calls any more, and the pin's own menu inside a window of its own.
