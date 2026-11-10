@@ -575,15 +575,34 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // around its media leaves its first rows and its last to the strips, and what stands in them
     // is the pin's claim rather than a hole a press falls through — a layered window is hit-tested
     // by the shape of its pixels (see `chrome_rows_are_hit_testable`). A kind whose chrome is drawn
-    // over its media has no such rows — they are the band's own, painted above — and owes nothing
-    // here. A caption too narrow to hold one, or asked away, leaves the same claim: the strips
-    // carry nothing where the pin paints nothing, and the rows stay the pin's either way.
+    // over its media has no such rows — they are the band's own, painted above, and the claim its
+    // compose takes is the least pixel on every hole the picture leaves (see `claim_the_holes`), so
+    // a picture with transparency in it is a caption a hand can still press.
+    //
+    // A caption too narrow to hold one, or asked away, leaves the same claim: the strips carry
+    // nothing where the pin paints nothing, and the rows stay the pin's either way.
     if chrome_rows_are_hit_testable(paint.overlay) {
         if caption_height > 0 {
             fill_band_hit_testable(out, width.max(1) as u32, 0, caption_height.max(1) as u32);
         }
         if paint.transport_height > 0 {
             fill_band_hit_testable(
+                out,
+                width.max(1) as u32,
+                (height - paint.transport_height).max(0) as u32,
+                paint.transport_height.max(1) as u32,
+            );
+        }
+    } else {
+        // A band this app painted nothing into — no media in hand for the moment a step is between
+        // two files — is rows of nothing under a strip that is showing, so the claim is taken here
+        // as well, and only for the rows a strip is actually standing over: the media's own band
+        // already carries its claim from the compose above (see `claim_the_holes`).
+        if caption_height > 0 && paint.caption {
+            claim_the_holes(out, width.max(1) as u32, 0, caption_height.max(1) as u32);
+        }
+        if paint.transport_height > 0 && paint.bar {
+            claim_the_holes(
                 out,
                 width.max(1) as u32,
                 (height - paint.transport_height).max(0) as u32,
@@ -1249,7 +1268,7 @@ pub(super) fn compose_preview_pixels_into_band(
             continue;
         }
 
-        compose_preview_row(src_row, destination, background, 0, row as u32);
+        compose_preview_row(src_row, destination, background, 0, row as u32, true);
     }
 }
 
@@ -1402,6 +1421,16 @@ pub(super) fn resample_into_band(
 
                         match background {
                             TransparentBackground::Transparent => {
+                                // The least claim where the picture leaves nothing, for the reason
+                                // `compose_preview_row` gives it: a band a picture with
+                                // transparency in it is drawn over is the pin's band, and a pixel
+                                // of it with no coverage is a pixel Windows hands the press
+                                // through to whatever stands behind the window.
+                                if a == 0 {
+                                    *pixel = [1, 1, 1, 1];
+                                    continue;
+                                }
+
                                 let alpha = a as u32;
                                 pixel[0] = ((b as u32 * alpha + 127) / 255) as u8;
                                 pixel[1] = ((g as u32 * alpha + 127) / 255) as u8;

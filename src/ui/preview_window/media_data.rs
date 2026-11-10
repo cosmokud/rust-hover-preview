@@ -128,6 +128,34 @@ pub(super) fn fill_band_hit_testable(out: &mut [u8], width: u32, origin_y: u32, 
     fill_band(out, width, origin_y, height, [1, 1, 1, 1]);
 }
 
+/// Paint that least pixel over the holes of a band, leaving every pixel that is anything at all
+/// exactly as it was.
+///
+/// It is `fill_band_hit_testable`'s claim confined to what is *nothing*: a row of a band is not
+/// always the pin's to claim whole, because a pixel a picture painted is the picture's — so what is
+/// written here is only ever the pixel whose coverage is zero, and a pixel with any coverage at all
+/// is a pixel Windows already hit-tests as this window's (see `claim_the_holes_under_the_strips`).
+pub(super) fn claim_the_holes(out: &mut [u8], width: u32, origin_y: u32, height: u32) {
+    let stride = width as usize * 4;
+    if stride == 0 {
+        return;
+    }
+
+    let rows = out.len() / stride;
+    let first = (origin_y as usize).min(rows);
+    let last = (origin_y as usize + height as usize).min(rows);
+    for row in first..last {
+        let Some(pixels) = out.get_mut(row * stride..row * stride + stride) else {
+            return;
+        };
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            if pixel[3] == 0 {
+                *pixel = [1, 1, 1, 1];
+            }
+        }
+    }
+}
+
 /// Paint a band of a layered window with the backdrop its media is composited over, for the rows and
 /// the columns a picture has been carried off.
 ///
@@ -148,7 +176,11 @@ pub(super) fn fill_band_hit_testable(out: &mut [u8], width: u32, origin_y: u32, 
 ///
 /// A transparent backdrop is written as the band's own emptiness, which is what the caller has
 /// already left there — the same pixels either way, and the fill is the one road that has a colour
-/// to place per *column* and so cannot be folded into the flat one above.
+/// to place per *column* and so cannot be folded into the flat one above. What the emptiness is
+/// given instead is the pin's least claim, because it is emptiness *of a picture the pin is drawn
+/// by* and not a hole to the desktop: a picture with transparency in it is a band windows hands
+/// the press to whatever stands behind it while the window is being carried past the picture's own
+/// rows (see `claim_the_holes`).
 pub(super) fn fill_band_backdrop(
     out: &mut [u8],
     width: u32,
@@ -217,7 +249,14 @@ fn fill_backdrop_span(
     // as the caller left the band — the emptiness above, which a layered window shows the desktop
     // through — and not written as the black the colour table would make of it.
     let (b, g, r) = match background {
-        TransparentBackground::Transparent => return,
+        TransparentBackground::Transparent => {
+            for pixel in span.as_chunks_mut::<4>().0.iter_mut() {
+                if pixel[3] == 0 {
+                    *pixel = [1, 1, 1, 1];
+                }
+            }
+            return;
+        }
         TransparentBackground::Black => (0, 0, 0),
         TransparentBackground::White => (255, 255, 255),
         TransparentBackground::Checkerboard => {
