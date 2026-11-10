@@ -1337,7 +1337,7 @@ const CARET_PIXELS: f32 = 1.5;
 /// mark the size of the magnifier beside it — and the × is the button a hand presses by mistake, so
 /// it is drawn a pixel under it rather than level with it. The stroke is the find bar's own, which is
 /// the cross this app already draws at a caption's close button.
-const SEARCH_CLOSE_PIXELS: f32 = 7.0;
+const SEARCH_CLOSE_PIXELS: f32 = 5.0;
 const SEARCH_CLOSE_STROKE: f32 = 1.6;
 
 /// The search mark's square, and the two gaps the pill keeps around it: its own pad off the left edge
