@@ -327,3 +327,128 @@ fn a_picture_held_by_its_button_stands_on_its_frame_and_plays_on_from_it() {
         "one frame past the one it was held on rather than the whole run"
     );
 }
+/// **A run that has played to its end wraps round to the frame carrying the file's first frame**,
+/// which is the loop a picture that fits the pin's budget plays for as long as it is up: the run is
+/// held whole, plays from beginning to end, and starts again at the file's first frame whatever
+/// place that frame is at in the list (see `MediaData::frame_of_file_start` and `advance_frame`).
+#[test]
+fn a_run_that_has_played_to_its_end_and_holds_its_head_wraps_to_the_files_first_frame() {
+    let a_run = |indices: &[usize]| {
+        let frame = |file_index: usize| {
+            let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 100);
+            frame.file_index = file_index;
+            Arc::new(frame)
+        };
+        let mut media = static_image_media(frame(indices[0]), MediaType::AnimatedGif);
+        media.frames = indices.iter().copied().map(frame).collect();
+        media.all_frames_loaded = Some(Arc::new(AtomicBool::new(true)));
+        media
+    };
+
+    // A decode begun part-way through the file answers the file's tail and then its head, so the
+    // frame carrying the file's first frame is not the list's own first one.
+    let mut media = a_run(&[180, 181, 0, 1]);
+    media.current_frame = 3;
+    // The clock owes one frame and not a stretch of them: a playhead left late is caught up through
+    // several frames at once, and what wraps is the one it lands on (see `advance_frame`).
+    media.last_frame_time = Instant::now() - Duration::from_millis(100);
+    assert!(media.advance_frame(), "a run at its end plays on");
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(0),
+        "and the picture starts again at the frame the file begins with"
+    );
+}
+
+/// **A run whose head was never delivered holds its last frame instead of replaying its own tail**,
+/// which is the cycle a cancelled head pass used to turn into: the run holds the file's tail and no
+/// frame carrying `0`, so there is no start to wrap to and nothing wraps (see `advance_frame`).
+#[test]
+fn a_run_whose_head_was_never_delivered_holds_its_last_frame_instead_of_replaying_it() {
+    let mut media = static_image_media(
+        {
+            let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 100);
+            frame.file_index = 180;
+            Arc::new(frame)
+        },
+        MediaType::AnimatedGif,
+    );
+    media.frames = (180..200)
+        .map(|file_index| {
+            let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 100);
+            frame.file_index = file_index;
+            Arc::new(frame)
+        })
+        .collect();
+    media.all_frames_loaded = Some(Arc::new(AtomicBool::new(true)));
+    media.current_frame = media.frames.len() - 1;
+    media.last_frame_time = Instant::now() - Duration::from_millis(500);
+
+    assert!(
+        !media.advance_frame(),
+        "a run with no start holds where it is"
+    );
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(199),
+        "the last frame of the tail is the frame it holds"
+    );
+
+    // And it holds it however long it is asked again: nothing here walks the tail round.
+    media.last_frame_time = Instant::now() - Duration::from_millis(500);
+    assert!(!media.advance_frame());
+    assert_eq!(media.current_frame_of_file(), Some(199));
+}
+
+/// **A run whose stream was cancelled holds its last frame as well**, which is the shape the fault
+/// took: a decode begun at a place answered the file's tail, its head pass was stopped part-way, and
+/// the flag the decoder leaves behind on its way out says the file is fully loaded — so the walk
+/// takes the wrap arm with a run that holds no head at all (see `cancel_background_work` and
+/// `MediaData::frame_of_file_start`).
+#[test]
+fn a_run_whose_stream_was_cancelled_holds_its_last_frame_and_never_returns_to_its_tail() {
+    let mut media = static_image_media(
+        {
+            let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 100);
+            frame.file_index = 180;
+            Arc::new(frame)
+        },
+        MediaType::AnimatedGif,
+    );
+    media.frames = (180..200)
+        .map(|file_index| {
+            let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 100);
+            frame.file_index = file_index;
+            Arc::new(frame)
+        })
+        .collect();
+    media.shared_frames = Some(Arc::new(Mutex::new(StreamedFrames {
+        queue: VecDeque::new(),
+        released: false,
+        decoded: false,
+    })));
+    media.all_frames_loaded = Some(Arc::new(AtomicBool::new(true)));
+    media.stream_cancel = Some(Arc::new(AtomicBool::new(false)));
+    media.current_frame = media.frames.len() - 1;
+    media.last_frame_time = Instant::now() - Duration::from_millis(500);
+
+    media.cancel_background_work();
+
+    assert!(
+        !media.advance_frame(),
+        "a run whose head pass was cancelled holds where it is"
+    );
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(199),
+        "on the last frame of the tail, and never back at its first"
+    );
+
+    media.last_frame_time = Instant::now() - Duration::from_millis(500);
+    assert!(!media.advance_frame());
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(199),
+        "so the frames the picture would have cycled through are not played again"
+    );
+}

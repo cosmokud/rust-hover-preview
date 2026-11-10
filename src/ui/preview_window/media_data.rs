@@ -286,14 +286,14 @@ impl MediaData {
     ///
     /// The frames are the file's in play order and not from its first frame — a decode begun at a
     /// place answers the file's tail and then its head — so the start of the file is found by the
-    /// index each frame carries rather than by its place in the list. A media whose head a cancelled
-    /// decode never delivered has no frame carrying `0`, and its own first frame is the nearest thing
-    /// it has to a start.
-    fn frame_of_file_start(&self) -> usize {
-        self.frames
-            .iter()
-            .position(|frame| frame.file_index == 0)
-            .unwrap_or(0)
+    /// index each frame carries rather than by its place in the list.
+    ///
+    /// `None` for a run whose head was never delivered: a decode begun part-way whose head pass was
+    /// cancelled, so the run holds the file's tail and nothing else. Such a run has no start to wrap
+    /// to — wrapping to its own first frame is a picture that plays its tail and then replays it
+    /// for good — so nothing wraps to it (see `advance_frame`).
+    fn frame_of_file_start(&self) -> Option<usize> {
+        self.frames.iter().position(|frame| frame.file_index == 0)
     }
 
     /// The frame of this media nearest `index` in the file, with where it is: what a hand is shown
@@ -626,7 +626,18 @@ impl MediaData {
                     // the file's first frame: looping back to the list's first frame is only right
                     // for a file whose list begins at zero, since a decode begun at a place answers
                     // the file's tail and then its head.
-                    self.current_frame = self.frame_of_file_start();
+                    //
+                    // A run whose head was never delivered has no such frame, and it is held where
+                    // it stands rather than wrapped: wrapping to its own first frame is the file's
+                    // tail replayed from the top for as long as the picture is up — the cycle a
+                    // cancelled head pass used to turn into.
+                    let Some(start) = self.frame_of_file_start() else {
+                        self.last_frame_time = Instant::now()
+                            .checked_sub(delay)
+                            .unwrap_or_else(Instant::now);
+                        break;
+                    };
+                    self.current_frame = start;
                     self.last_frame_time += delay;
                     advanced = true;
                 } else {

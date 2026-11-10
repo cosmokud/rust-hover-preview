@@ -350,26 +350,6 @@ fn a_media_decoded_at_a_place_wraps_onto_the_frame_carrying_the_file_s_first() {
     );
 }
 
-/// **A media whose head a decode never delivered wraps onto its own first frame.** A decode cancelled before the
-/// pass that begins at the file's first frame leaves no frame carrying frame zero — what it answered is installed
-/// as it came — so the wrap falls back to the first frame in hand rather than stalling on the end of the list.
-#[test]
-fn a_media_whose_head_was_never_delivered_wraps_onto_its_own_first_frame() {
-    let mut media = a_playing_media(&[5, 6, 7]);
-    media.current_frame = media.frames.len() - 1;
-    media.last_frame_time = Instant::now() - Duration::from_millis(1001);
-
-    assert!(
-        media.advance_frame(),
-        "a file that ends on the part it began in the middle of still plays round"
-    );
-    assert_eq!(
-        (media.current_frame, media.current_frame_of_file()),
-        (0, Some(5)),
-        "to its own first frame, which is the nearest thing it has to the start of the file"
-    );
-}
-
 /// **A frame the media has in hand is a playhead put down on it.** A hand dragging a picture's
 /// track names a frame per column of it, and a decode per column is a drag that lags the hand it is
 /// following — so a picture whose frames were all decoded is taken to one by moving the playhead,
