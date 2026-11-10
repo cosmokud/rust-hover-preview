@@ -1,5 +1,57 @@
 use super::*;
 
+/// The bar as these tests ask for it: the room the clock before the track is given is the width
+/// of its own digits, and none of these tests is about the clock — so every call below reads the
+/// bar through the room a bar with no length in it would have, and the tests that are about the
+/// clock ask `clock_width` themselves.
+fn a_bar(width: i32, height: i32, dpi: u32, interactive: bool, animated: bool) -> BarShape {
+    BarShape {
+        width,
+        height,
+        dpi,
+        interactive,
+        animated,
+        clock: clock_width(None, dpi),
+    }
+}
+
+fn transport_layout(
+    width: i32,
+    height: i32,
+    dpi: u32,
+    interactive: bool,
+    animated: bool,
+) -> crate::text::pin_chrome::transport::TransportLayout {
+    a_bar(width, height, dpi, interactive, animated).layout()
+}
+
+fn transport_part_at(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    dpi: u32,
+    interactive: bool,
+    animated: bool,
+) -> Option<TransportPart> {
+    super::transport_part_at(a_bar(width, height, dpi, interactive, animated), x, y)
+}
+
+fn transport_share_at(
+    x: i32,
+    width: i32,
+    height: i32,
+    dpi: u32,
+    interactive: bool,
+    animated: bool,
+) -> f64 {
+    super::transport_share_at(a_bar(width, height, dpi, interactive, animated), x)
+}
+
+fn volume_popup_layout(width: i32, strip_top: i32, strip_height: i32, dpi: u32) -> VolumePopup {
+    super::volume_popup_layout(width, strip_top, strip_height, dpi, clock_width(None, dpi))
+}
+
 /// The popup the transport bar's own button opens, and the same panel hung from that button
 /// given directly, are one panel and not two: a sound's card opens the very same one from a
 /// button drawn on its own row, so a level that was placed one way there and another way on
@@ -567,49 +619,66 @@ fn draws_the_marks_of_a_bar() {
     }
 }
 
-/// The clock beside the track is written against it, and the room a picture that plays keeps for
-/// the count of frames under a hand is left of the clock rather than between the clock and the
-/// track: a clock laid out from the strip's own padding is a clock a bar's worth of nothing away
-/// from the read-out it belongs to, which is the gap this app used to open there.
+/// The clock beside the track is the width of its own digits and written against the track: a box
+/// of a fixed width is a clock either held a label's worth of nothing away from the track or pushed
+/// off the strip's own padding, and both of those are one read-out with a gap in it (see
+/// `clock_width`).
 #[test]
-fn the_clock_is_written_against_the_track_and_the_count_beside_it() {
-    let picture = transport_layout(800, 30, 96, false, true);
-
-    // What stands against the track is the clock's own box: the count's room is outside it, and
-    // one gap is all that is held between the clock and the bar it belongs to.
-    assert_eq!(picture.elapsed.right + strip_gap(1.0), picture.bar.left);
-    assert_eq!(picture.frames.right, picture.elapsed.left);
-    assert!(picture.frames.left < picture.frames.right);
-
-    // And the room holds the widest count a strip is asked to write - a file of a thousand frames
-    // and more, under a hand near its end - at every scale a strip is drawn at: a count written
-    // into a room too narrow for it is a count clipped to `[10...`.
+fn a_clock_is_given_the_room_of_its_own_digits() {
     for dpi in [96, 144, 192] {
         let scale = dpi as f32 / 96.0;
-        let layout = transport_layout(text_paint::scaled(800, scale), 30, dpi, false, true);
-        let widest = measure_text(
-            &DibSurface::create(320, 40).expect("a surface to measure on"),
-            &caption_style([255, 255, 255]),
-            "[1021/1021]",
-            scale,
-        );
-        assert!(
-            widest > 0 && widest <= layout.frames.right - layout.frames.left,
-            "at dpi {dpi} the count takes {widest} of the {} columns it is given",
-            layout.frames.right - layout.frames.left
-        );
+        let surface = DibSurface::create(320, 40).expect("a surface to measure on");
+        let style = caption_style([255, 255, 255]);
+
+        // Every length a clock is written at, held and measured: the room is never less than the
+        // run (a room short of it clips the hours off the front of a film) and never much more
+        // (a room wider than it is the gap this exists to remove).
+        for seconds in [
+            None,
+            Some(5.0),
+            Some(65.0),
+            Some(600.0),
+            Some(3_725.0),
+            Some(7_325.0),
+        ] {
+            let room = clock_width(seconds, dpi);
+            let measured = measure_text(&surface, &style, &clock_text(seconds), scale);
+            assert!(
+                room >= measured,
+                "at dpi {dpi} {seconds:?} is written in {measured} columns and given {room}"
+            );
+            assert!(
+                room <= measured + text_paint::scaled(3, scale),
+                "at dpi {dpi} {seconds:?} is given {} columns for {measured} of ink",
+                room
+            );
+        }
+
+        // And the track is laid out around the room of the clock run in it: one gap between the
+        // run's own end and the track, at every width a strip is drawn at.
+        for seconds in [Some(5.0), Some(7_325.0)] {
+            let clock = clock_width(seconds, dpi);
+            let width = text_paint::scaled(800, scale);
+            let layout = BarShape {
+                width,
+                height: 30,
+                dpi,
+                interactive: false,
+                animated: true,
+                clock,
+            }
+            .layout();
+            assert_eq!(layout.elapsed.right - layout.elapsed.left, clock);
+            assert_eq!(layout.elapsed.left, text_paint::scaled(10, scale));
+            assert_eq!(layout.elapsed.right + strip_gap(scale), layout.bar.left);
+            assert_eq!(layout.total.right - layout.total.left, clock);
+            assert_eq!(
+                layout.bar.right + strip_gap(scale),
+                layout.total.left,
+                "the length is written against the track the same way"
+            );
+        }
     }
-
-    // And a strip too narrow to hold both the count and a track worth dragging keeps the track:
-    // a count is a read-out of a hand on the bar, and a bar of nothing is not a bar.
-    let narrow = transport_layout(320, 30, 96, false, true);
-    assert_eq!(narrow.frames.left, narrow.frames.right);
-    assert_eq!(narrow.elapsed.right + strip_gap(1.0), narrow.bar.left);
-
-    // And a film's bar keeps none of it, and writes its clock against the track the same way.
-    let film = transport_layout(800, 30, 96, true, false);
-    assert_eq!(film.frames.left, film.frames.right);
-    assert_eq!(film.elapsed.right + strip_gap(1.0), film.bar.left);
 }
 
 /// The pace's button is the far end of the bar a picture that plays carries, and the level's is the
@@ -884,6 +953,88 @@ fn alphas(bits: *const u8, width: i32, rect: RECT, height: i32) -> Vec<u8> {
         }
     }
     found
+}
+
+/// The count of frames under a hand is written over the track's own beginning, is written only
+/// while a hand is on the track, and is not written where the thumb is: the strip has no room
+/// beside the clock that a drag may take, so the run is drawn where the track begins and the track
+/// is whole again when the hand lets go (see `paint_frame_count`).
+#[test]
+fn the_frames_under_a_hand_are_written_over_the_track_until_the_hand_lets_go() {
+    let palette = ChromePalette {
+        background: [24, 26, 32],
+        foreground: [240, 240, 240],
+        accent: [86, 182, 194],
+        blue: [97, 175, 239],
+        number: [209, 154, 102],
+        dark: true,
+    };
+    let (width, height, dpi) = (600, 30, 96);
+    let paint = |frames: Option<(usize, usize)>, position: f64| -> Vec<u8> {
+        let surface = DibSurface::create(width as u32, height as u32).expect("a strip");
+        let len = (width * height * 4) as usize;
+        let state = TransportState {
+            interactive: false,
+            playing: true,
+            position: Some(position),
+            duration: Some(21.0),
+            hovered: None,
+            pressed: None,
+            volume: 0,
+            volume_open: false,
+            animated: true,
+            fps_open: false,
+            frames,
+        };
+        unsafe {
+            std::slice::from_raw_parts_mut(surface.bits(), len).fill(0);
+        }
+        paint_transport(&surface, &palette, &state, dpi);
+        unsafe { std::slice::from_raw_parts(surface.bits(), len) }.to_vec()
+    };
+    let at = |x: i32, y: i32| ((y * width + x) * 4) as usize;
+    let layout = BarShape {
+        width,
+        height,
+        dpi,
+        interactive: false,
+        animated: true,
+        clock: clock_width(Some(21.0), dpi),
+    }
+    .layout();
+    let (left, right) = (layout.bar.left, layout.bar.right);
+
+    let quiet = paint(None, 10.0);
+    let dragging = paint(Some((212, 1021)), 10.0);
+
+    // The run stands in the track's own first columns, in the ink this app writes numbers in.
+    let numbered = (0..height)
+        .flat_map(|y| (left..(left + 60).min(right)).map(move |x| (x, y)))
+        .any(|(x, y)| {
+            let pixel = &dragging[at(x, y)..];
+            // A strip is premultiplied BGRA, and the ink here is the theme's digits.
+            let ink = [palette.number[2], palette.number[1], palette.number[0]];
+            pixel[..3]
+                .iter()
+                .zip(ink.iter())
+                .all(|(drawn, ink)| (*drawn as i32 - *ink as i32).abs() <= 6)
+        });
+    assert!(
+        numbered,
+        "the count of frames is not written over the track"
+    );
+    assert!(
+        quiet != dragging,
+        "the count is written whether or not a hand is on the track"
+    );
+
+    // And a hand at the very start of a file is a thumb rather than a mark written under it: with
+    // the thumb in the room the run would take, nothing is written at all.
+    assert_eq!(
+        paint(Some((1, 1021)), 0.0),
+        paint(None, 0.0),
+        "a count written under the thumb of the hand that is on it"
+    );
 }
 
 /// The pace's panel is the volume panel, hung from a button of its own: inside the window, over the
