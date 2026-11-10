@@ -647,7 +647,7 @@ pub struct AppConfig {
     /// A picture that plays is read once, in the background, and every frame of it is kept so
     /// that a hand on its track is shown whatever frame it names at once (see `pin_index`). This
     /// is what bounds that run: the frames are held at the pin's own size while they fit, and at
-    /// the largest size that does when they do not. It is `Decode Budget → Animated WEBP` in the
+    /// the largest size that does when they do not. It is `Memory → Animated WEBP` in the
     /// tray, and it is the one setting under that submenu that is about what is *kept*.
     pub animated_webp_budget_mb: u32,
     /// Whether a video is decoded on the graphics card rather than on a core, which is the

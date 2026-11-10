@@ -9,7 +9,7 @@
 //! therefore the file, not the seek: going back four frames costs the walk to the beginning again.
 //!
 //! So the run is read once, in the background, and every frame of it is kept — at the size the
-//! pin draws at when that fits the room `Performance → Decode Budget → Animated WEBP` names, and at
+//! pin draws at when that fits the room `Performance → Memory → Animated WEBP` names, and
 //! the largest size that does when it does not. The frames are what is *kept*, so the walk this
 //! file needs is paid once per pin rather than once per press, and a hand that goes back and forth
 //! reads frames of memory both ways.
@@ -40,7 +40,7 @@ use super::*;
 /// pin's own size or a size that fits: a file of a few hundred frames at a thumbnail's box is held
 /// whole and exactly, and one of a few thousand is held whole and small.
 ///
-/// It is the `Performance → Decode Budget → Animated WEBP` setting rather than a constant: the run
+/// It is the `Performance → Memory → Animated WEBP` setting rather than a constant: the run
 /// is what a hand on a picture's track is shown a frame of, so how sharp a dragged picture is, is
 /// a question a machine with less memory to spare answers for itself (see
 /// `animated_webp_budget_bytes`).
