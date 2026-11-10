@@ -1786,18 +1786,15 @@ fn a_return_plays_the_row_a_sounds_band_has_picked() {
         "and one with no row picked asks for none either"
     );
 
-    // The row a `Down` arrow picks is the row the key plays, and it is the second of the walk — asked
-    // with the pointer in the band, because a band with its field parked is a band the hand can reach.
-    // The band's own row is read and the pin's lock let go of before the move is answered: the pin is
+    // The row a `Down` arrow picks is the row the key plays, and it is the second of the walk. The
+    // hand is put on the band's own first row first, which is where a hand reading the list is. The
+    // band's own row is read and the pin's lock let go of before the move is answered: the pin is
     // not asked twice on one thread (see `the_band_of_the_pin`).
     let band_top = pin_state()
         .and_then(|pinned| pinned.pin().and_then(pin_playlist::pin_playlist_band))
         .expect("the band")
         .0;
-    assert!(
-        unsafe { pin_playlist::hover(40, band_top + 4) },
-        "the hand reaches into the band"
-    );
+    let _ = unsafe { pin_playlist::hover(40, band_top + pin_chrome::playlist_row_height(1.0) / 2) };
     assert!(
         pin_playlist::step_the_pick(1),
         "the band takes the arrow over it"
@@ -3583,10 +3580,10 @@ fn a_query_in_the_bands_field_hides_the_rows_it_does_not_name() {
     let field = (field_top + field_bottom) / 2;
 
     // A press on the field is the caret's and picks nothing — and it is a press on a field a hand has
-    // reached into the band for, since a field parked under the edge is a field nothing can press.
+    // reached for, since a field parked under the edge is a field nothing can press.
     assert!(
-        unsafe { pin_playlist::hover(40, band_top + 4) },
-        "the hand reaches into the band"
+        unsafe { pin_playlist::hover(40, field) },
+        "the hand reaches for the field"
     );
     for _ in 0..14 {
         pin_playlist::slide_the_search_on(20);
@@ -3836,7 +3833,7 @@ fn the_bands_field_slides_in_with_the_pointer_and_parks_when_it_goes() {
     let mut pin = sound_pin();
     pin.path = sounds[0].clone();
     pin_playlist::toggle(&pin);
-    let (band_top, band_height) =
+    let (band_top, _) =
         pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
     stand_pin(Some(pin));
     stand_pin_walk(Some(PinStep {
@@ -3859,11 +3856,29 @@ fn the_bands_field_slides_in_with_the_pointer_and_parks_when_it_goes() {
         "the field is out of sight until the pointer comes into the band"
     );
 
-    // A pointer inside the band is a hand reaching for it: the target moves, and the paint that
-    // follows travels toward it rather than landing on it.
+    // **A row of the list is not the field's.** A hand reading the rows of a band is a hand on the list,
+    // and a field that came up under every row it read is a field that covered the row it was reading:
+    // what the pointer is asked for is the strip the field lives in, and nothing above it.
+    let row = pin_chrome::playlist_row_height(1.0) / 2;
+    let _ = unsafe { pin_playlist::hover(40, band_top + row) };
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(Some(0)),
+        "a pointer on the band's first row is a hand on that row"
+    );
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((0.0, false)),
+        "and it asks for no field: the rows are what the hand is reading"
+    );
+
+    // **The field's own strip is what a hand reaches for.** A pointer at it is a hand asking for the
+    // field: the target moves, and the paint that follows travels toward it rather than landing on it.
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
     assert!(
-        unsafe { pin_playlist::hover(40, band_top + band_height / 2) },
-        "a pointer in the band is the band's own"
+        unsafe { pin_playlist::hover(40, (field_top + field_bottom) / 2) },
+        "a pointer at the field's strip is the field's own"
     );
     assert_eq!(
         pin_playlist::the_search_slide(),
@@ -3941,14 +3956,12 @@ fn a_caret_goes_with_the_pointer_and_a_query_holds_the_field_open_alone() {
     }));
     assert!(pin_playlist::refresh_the_rows(), "the band builds its rows");
 
-    // The hand reaches into the band, the field comes in to meet it, and a press takes it: after that
-    // the pointer may go wherever it likes and the field stays whole.
-    let (band_top, _) =
-        pin_playlist::pin_playlist_band(pin_state().expect("the pin").pin().expect("the pin"))
-            .expect("the band");
+    // The hand reaches for the field's strip, the field comes in to meet it, and a press takes it.
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
     assert!(
-        unsafe { pin_playlist::hover(40, band_top + 4) },
-        "the hand reaches in"
+        unsafe { pin_playlist::hover(40, (field_top + field_bottom) / 2) },
+        "the hand reaches for the field"
     );
     for _ in 0..14 {
         pin_playlist::slide_the_search_on(20);
@@ -3958,8 +3971,6 @@ fn a_caret_goes_with_the_pointer_and_a_query_holds_the_field_open_alone() {
         Some((1.0, true)),
         "the field is in sight whole before a hand presses it"
     );
-    let (field_top, field_bottom) =
-        pin_playlist::the_field_rows().expect("a band with its field on screen");
     assert!(unsafe {
         pin_playlist::press(HWND::default(), 100, (field_top + field_bottom) / 2, false)
     });
@@ -4036,6 +4047,16 @@ fn a_pointer_near_the_band_reaches_for_its_field_and_is_on_no_row_of_it() {
         pin_playlist::the_search_slide(),
         Some((0.0, false)),
         "the field is parked before the pointer comes near it"
+    );
+
+    // **A row of the list is not the field's.** The strip at the band's bottom is what a hand reaches
+    // for, so a hand reading the band's own rows asks for nothing: a field that came up under every row
+    // the hand read is a field that covered the row it was reading.
+    let _ = unsafe { pin_playlist::hover(40, band_top + 4) };
+    assert_eq!(
+        pin_playlist::the_search_slide().map(|(_, wanted)| wanted),
+        Some(false),
+        "and a row of the list asks for no field"
     );
 
     // Four pixels under the window's own last row, which is the band's: a hand at the field rather
