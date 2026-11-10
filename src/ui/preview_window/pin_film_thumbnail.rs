@@ -75,13 +75,16 @@
 //! instead of the desktop. **The film's shape is the pair's constant and its client is whatever the
 //! source has now**: nothing this app does resizes the source, but something else can — Windows
 //! rescales mpv's window when a pin is carried to a display of another scale, and mpv takes the
-//! rectangle it is handed (see `video_launch::mpv_box_size`) — so the crop is built against the window
-//! the Shell is sampling rather than the box the placement asked for. A pair built for the placed
-//! client was a 1920x1080 crop of a 3840x2160 surface: the top-left quarter of the film stretched
-//! into the band, read as a pin zoomed in (measured: `cli 3840x2160 pic 1920x1080 asked 1920x1080` with
-//! no `thumbnail update` after it). The trace's `cli` (that live client) and `pic` (the client the
-//! crop was fitted into) are one number, and a source away from its placement is a line of its own
-//! (see `note_the_source_resized`).
+//! rectangle it is handed (see `video_launch::mpv_box_size`) — so the crop is fitted into the area the
+//! player reports drawing rather than into the box the placement asked for, and the window's own client
+//! where the player fills it. A pair built for the placed client was a 1920x1080 crop of a 3840x2160
+//! surface: the top-left quarter of the film stretched into the band, read as a pin zoomed in (measured:
+//! `cli 3840x2160 pic 1920x1080 asked 1920x1080` with no `thumbnail update` after it) — and the mirror of
+//! it, a player whose output is a size behind the window it draws in, was the film's own pixels in a
+//! field of black, which is a preview that never filled its box until the player reorganised its output
+//! (measured: a 1280x720 picture standing in a 2560x1440 window). **The player is the one thing that knows
+//! what it drew**, so `osd-dimensions` answers where the crop is fitted and a player that answers nothing
+//! (FFmpeg's) draws the whole client it was placed at (see `the_pictures_area` and `note_the_crop_area`).
 //!
 //! **The invariant has teeth in this module, not only in prose.** Three calls name the source's
 //! geometry and there are no others: `size_the_source` — the one placement, reached only through
@@ -1954,11 +1957,11 @@ fn note_the_source_not_ready(pending: PendingSource, live: Option<(i32, i32)>) {
 ///
 /// **The three numbers are the whole of the smaller-than-the-box frame.** A `cli` that is not `asked`
 /// is the source away from the box the one placement asked for — a window Windows rescaled on a display
-/// change, which the crop follows rather than being built for it (see `note_the_source_resized`) — so
-/// it is a fact of the window and not of the pair. A `pic` that *was read* and is not `asked` is a film
-/// the player is fitting inside its own window, which is a surface the crop was not built for. Either
-/// is a difference the line names, so a seek that flashed and a seek that did not are told apart by
-/// what they wrote and not by what was remembered.
+/// change, which the crop is fitted into rather than built for (see `note_the_crop_area`) — so it is a
+/// fact of the window and not of the pair. A `pic` that *was read* and is not `asked` is a film the
+/// player is fitting inside its own window, which is why the crop is fitted into it. Either is a
+/// difference the line names, so a seek that flashed and a seek that did not are told apart by what they
+/// wrote and not by what was remembered.
 ///
 /// **`pic none` is nothing read, and never a mismatch.** FFmpeg's player answers no property at all,
 /// so the picture of the frame it has drawn cannot be read from it; a seek onto one was written as a
@@ -2315,9 +2318,11 @@ fn let_the_picture_go() {
         let_the_registration_go(registration);
     }
     // The film this road was waiting to size went with the window it was going to place, and so did
-    // the source it was waiting to hand the picture to (see `arm_the_pending_source`).
+    // the source it was waiting to hand the picture to (see `arm_the_pending_source`), and so did the
+    // area that source's player reported drawing.
     forget_the_late_placement();
     forget_the_pending_source();
+    forget_the_pictures_area();
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
@@ -2653,7 +2658,7 @@ fn a_picture_fitted_to(aspect: Option<f64>, box_: (i32, i32)) -> (i32, i32, i32,
 }
 
 /// What one registration of the Shell's thumbnail shows: the box the picture is drawn in, the rectangle
-/// of the source's client it is taken from, and the client that rectangle was fitted into.
+/// of the source's client it is taken from, and the area that rectangle was fitted into.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct ThumbnailBox {
     /// The rectangle of the host's client area the picture is drawn in: **the whole of it, always** (see
@@ -2662,7 +2667,9 @@ struct ThumbnailBox {
     /// The picture's rectangle in the source's own client area, as left, top, right and bottom — or
     /// nothing where the whole client is what is shown (see `the_thumbnail_box`).
     source: Option<(i32, i32, i32, i32)>,
-    /// The client the source is at, as a width and a height.
+    /// **The area the crop was fitted into**: the source window's client, or the area its player reports
+    /// drawing where that is a size behind the client — never a box the film was not drawn in (see
+    /// `the_pictures_area`).
     client: (i32, i32),
     /// Whether the crop had to be cut to the picture rather than being the extent the box's shape asks
     /// for — a box the picture does not fill, whose crop is the picture whole and the Shell's to
@@ -2815,6 +2822,96 @@ fn the_source_client(source: HWND, fallback: (i32, i32)) -> (i32, i32) {
     }
 }
 
+/// **The area the film is drawn in, as the player itself says it is**: the window's client, or the
+/// area the player's own video output is configured for where the player answers one — and the second is
+/// not the first for a source whose output is a size behind its window (see `the_pictures_rectangle`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct PictureArea {
+    source: isize,
+    process: u32,
+    /// The live client the question was asked of, so a window that changed is a new question.
+    client: (i32, i32),
+    /// The area the output is configured for, in the client's own coordinates.
+    area: (i32, i32),
+}
+
+static PICTURE_AREA: Mutex<Option<PictureArea>> = Mutex::new(None);
+
+/// **Forget the area a film's player reported drawing.** The answer is one film's, like the shape it is
+/// asked for, so it goes where the shape goes: with the teardown, and with the adoption of another
+/// window (see `forget_the_shape_of_another_film`).
+fn forget_the_pictures_area() {
+    if let Ok(mut held) = PICTURE_AREA.lock() {
+        *held = None;
+    }
+}
+
+/// **What the crop is fitted into: the window's client, or the area the player says it drew the film
+/// into** — the rectangle a film of the source's shape is cropped inside (see `the_thumbnail_box`).
+///
+/// **The one thing a crop cannot guess is what the player drew.** A client is where a source *was
+/// placed*, and a player whose video output is a size behind that window draws the film into the
+/// top-left of a client it has outgrown: a crop fitted into the client is then the film's own pixels in
+/// a field of black, which is a preview that never fills its box. A window carried to a display of
+/// another scale is one way to make that permanent — mpv is handed a rectangle by the window system and
+/// its output stays the size it was configured for — and the answer to it is the same for every road:
+/// the crop follows what the player reports drawing, and the film's own shape supplies the margins.
+///
+/// **A player that answers nothing draws the client it was placed at**, and that is every player without
+/// a pipe, FFmpeg's player among them: the area is the live client, exactly as it was before this
+/// question existed.
+///
+/// **Asked once per client the window answers with, and never on a frame**: a property read is a pipe,
+/// and this is on the road a drag crosses. The answer is kept with the client it was asked about, so a
+/// window that has not changed asks nothing; a read that is in flight is one frame of the pair that
+/// already stands rather than a frame the loop waits for.
+fn the_pictures_area(source: HWND, process: u32, live: (i32, i32)) -> (i32, i32) {
+    if process == 0 || !mpv_ipc::answers_properties(process) {
+        return live;
+    }
+    let number = source.0 as isize;
+    if let Some(asked) = PICTURE_AREA.lock().ok().and_then(|held| *held) {
+        if asked.source == number && asked.process == process && asked.client == live {
+            return asked.area;
+        }
+    }
+    let Some(area) = the_outputs_area(process, live) else {
+        return live;
+    };
+    if let Ok(mut held) = PICTURE_AREA.lock() {
+        *held = Some(PictureArea {
+            source: number,
+            process,
+            client: live,
+            area,
+        });
+    }
+    area
+}
+
+/// `osd-dimensions`' `w`/`h` as the area the film is drawn in: the window the player's output is
+/// configured for, which is the same number as its client for a player that has caught up with its
+/// window.
+///
+/// **This is the answer that says what the player drew rather than where its window is**, and the film's
+/// own size is `video-params`' `dw`/`dh` — a different question, which is why that one places the source
+/// and this one crops it (see `the_players_picture_size`). The margins `osd-dimensions` carries as well
+/// are not needed here: they are the film's own shape fitted into this area, which is the fit the crop
+/// makes anyway (see `a_picture_fitted_to`).
+///
+/// A player with no output configured for a frame yet, an area with none in it, and an area the window
+/// has already grown past are all this question unanswered: the client is the area, as it always was.
+/// **Clamped into the client and never past it**, because a rect the surface the Shell samples does not
+/// have is the band of desktop a crop must never name (see `ThumbnailBox`).
+fn the_outputs_area(process: u32, live: (i32, i32)) -> Option<(i32, i32)> {
+    let answer = mpv_ipc::get_property(process, "osd-dimensions")?;
+    let (width, height) = (a_node_field(&answer, "w")?, a_node_field(&answer, "h")?);
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    Some((width.min(live.0.max(1)), height.min(live.1.max(1))))
+}
+
 /// **Give up the shape of the film before this one.** A [`SourceShape`] is the placement of one
 /// source window in one player, and it is invalidated with that film: teardown forgets the whole
 /// record, adoption of another window resets it (see `note_the_source`), and this is the check every
@@ -2836,6 +2933,7 @@ fn forget_the_shape_of_another_film(held: &mut Thumbnail) {
         return;
     };
     held.source = None;
+    forget_the_pictures_area();
     note_pin_trace!(
         "thumbnail source shape forgotten {:?}: it was placed for another film",
         HWND(shape.source as *mut _),
@@ -2873,13 +2971,14 @@ fn the_registration_wants(held: &Thumbnail, wanted: ThumbnailBox) -> bool {
 /// the Shell is sampling, so both are read here and the pair is traced whether it moved or not (see
 /// `note_the_thumbnail_pair`).
 ///
-/// **The film's shape is the placement's constant; the source's client is whatever the window has
-/// now.** The one placement fixed the shape and the box it asked for (see `place_the_source`), and the
-/// crop is built against the client the Shell is sampling rather than the box that was asked for:
-/// something outside this app resizing the source — Windows rescaling a player on a display change —
-/// is followed rather than assumed away, and the trace says so once (see `note_the_source_resized`).
-/// `cli` and `pic` are then one number by construction, and only the destination moves with the host's
-/// box.
+/// **The film's shape is the placement's constant; the area the crop is fitted into is whatever the
+/// player says it drew, and the window's client where it says nothing.** The one placement fixed the
+/// shape and the box it asked for (see `place_the_source`); the crop is fitted into the output the
+/// player reports, because a window something outside this app resized — Windows rescaling a player on
+/// a display change — is a client the player's own output may be a size behind, and cropping by the
+/// client then is the film's pixels in a field of black (see `the_pictures_area`). `cli` and `pic` are
+/// one number by construction, and the numbers a crop was built from are written when they disagree
+/// (see `note_the_crop_area`).
 fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     if held.registration != 0 && held.host != host.0 as isize {
         let registration = held.registration;
@@ -2914,19 +3013,18 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
     // given up here rather than used to crop the first frames of the one that followed it (see
     // `forget_the_shape_of_another_film`).
     forget_the_shape_of_another_film(held);
-    // **The one read of the source at this call, and the client the crop is cut by**: the player was
-    // placed once and nothing here resizes it, so a client that is not the placed one is a window
-    // something else moved under the pair — Windows rescales mpv on a display change and mpv takes the
-    // rectangle it is handed (see `video_launch::mpv_box_size`) — and cropping it by the placement is
-    // the top-left quarter of the film stretched into the band (measured: `cli 3840x2160 pic 1920x1080
-    // asked 1920x1080`, and no `thumbnail update` after it). Where the window answers nothing, the
-    // placed client is what holds, so a read that fails is the pair that already stands rather than a
-    // crop of a client no surface has (see `the_source_client`).
+    // **Where the crop is fitted: the window's client, or the area the player's own output is
+    // configured for where the player answers one.** A player placed once and never resized draws the
+    // whole of its client; one whose output is a size behind its window draws into the top-left of a
+    // client it has outgrown, and cropping by the client is then the film's own pixels in a field of
+    // black (see `the_pictures_area`). Where nothing answers, the placed client holds, so a read that
+    // fails is the pair that already stands rather than a crop of a client no surface has.
     let placed = held.source.map(|shape| shape.client);
-    let live = the_source_client(source, placed.unwrap_or(client));
-    note_the_source_resized(held.shown, live, placed);
+    let source_client = the_source_client(source, placed.unwrap_or(client));
+    let live = the_pictures_area(source, process, source_client);
     let shown = the_thumbnail_box(client, live, held.source.and_then(|shape| shape.aspect));
     let a_re_point = the_registration_wants(held, shown);
+    note_the_crop_area(live, source_client, placed);
     // **The crop the Shell samples is kept on the screen before anything is handed over**: a held
     // frame can need the source slid too, because a pin dragged to another monitor has the same pair
     // and a different work area (see `keep_the_crop_on_the_screen`).
@@ -2936,10 +3034,10 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
         // same question on every tick and is not what the heartbeat and the summary are about (see
         // `HeldFrames`).
         if pin_film_host::film_host() == Some(host) {
-            // **The source away from the box the one placement asked for is what is counted here**, which
+            // **The window away from the box the one placement asked for is what is counted here**, which
             // is a window another program resized and not a frame of this app's (see
-            // `note_the_source_resized`).
-            note_a_held_frame(placed.is_some_and(|placed| placed != live));
+            // `note_the_crop_area`).
+            note_a_held_frame(placed.is_some_and(|placed| placed != source_client));
         }
         return;
     }
@@ -3028,35 +3126,59 @@ fn settle_the_registration(held: &mut Thumbnail, host: HWND) {
 /// now stands — Windows rescaling mpv on a display change, whose suggested rectangle the player adopts
 /// (see `video_launch::mpv_box_size`).
 ///
-/// **One line per resize and none per frame**: the question is whether the source's client differs from
-/// the one the pair standing was cropped against, which is true on the frame the window moved and false
-/// on every frame after it — and a resize back to the placed box is a pair the crop follows the same
-/// way, so its line carries both numbers.
-fn note_the_source_resized(
-    shown: Option<ThumbnailBox>,
-    live: (i32, i32),
-    placed: Option<(i32, i32)>,
-) {
-    if !shown.is_some_and(|shown| shown.client != live) {
+/// **The numbers a crop was built from, when they are not all one number**: the area the crop is fitted
+/// into, the source window's own client, and the box the one placement asked for. A source at its
+/// placement whose player fills its window is one number three times and writes nothing; a window
+/// something else resized under the pair, and a player drawing into an area a size behind that window,
+/// are the states this line exists to make readable (see `the_pictures_area`).
+///
+/// **One line per state and none per frame**: a drag re-points the pair on every step, and its steps are
+/// the same three numbers — so the line is written on the change and not on the re-point.
+fn note_the_crop_area(area: (i32, i32), client: (i32, i32), placed: Option<(i32, i32)>) {
+    if area == client && placed.is_none_or(|placed| placed == client) {
         return;
     }
-    let (placed_width, placed_height) = placed.unwrap_or(live);
+    let state = CropState {
+        area,
+        client,
+        placed,
+    };
+    let Ok(mut last) = LAST_CROP_AREA.lock() else {
+        return;
+    };
+    if *last == Some(state) {
+        return;
+    }
+    *last = Some(state);
+    let (placed_width, placed_height) = placed.unwrap_or(client);
     note_pin_trace!(
-        "thumbnail source resized cli {}x{} placed {}x{}: the crop follows the window and the shape stays the film's",
-        live.0,
-        live.1,
+        "thumbnail crop area {}x{} of cli {}x{} placed {}x{}: the film is cropped where its player draws it",
+        area.0,
+        area.1,
+        client.0,
+        client.1,
         placed_width,
         placed_height,
     );
 }
 
+/// The numbers a crop was built from, as `note_the_crop_area` writes them (see there).
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CropState {
+    area: (i32, i32),
+    client: (i32, i32),
+    placed: Option<(i32, i32)>,
+}
+
+/// The last state `note_the_crop_area` wrote a line for (see there).
+static LAST_CROP_AREA: Mutex<Option<CropState>> = Mutex::new(None);
 /// The one line that makes a hole visible at a glance: the host the Shell is drawing into (its own box
 /// and where it stands), the host client the pair was built from, the source's live client (`cli`), the
 /// client the crop was built from (`pic`) and the exact rectangles handed over. **`host` and `box`
 /// disagree only where something stands on the host's client** — a border, a frame style — which is a
 /// picture that cannot line up with its pin's box, and **`cli` and `pic` are one number by
 /// construction**, because the crop is built from the client the window has now: a source resized by
-/// something that is not this app is a line of its own (see `note_the_source_resized`).
+/// something that is not this app is a line of its own (see `note_the_crop_area`).
 fn note_the_thumbnail_pair(host: HWND, client: (i32, i32), live: (i32, i32), shown: ThumbnailBox) {
     let (host_x, host_y, host_width, host_height) =
         unsafe { window_box(host) }.unwrap_or((0, 0, client.0, client.1));
@@ -3102,8 +3224,8 @@ struct HeldFrames {
     /// first held frame, which opens the first second and prints nothing itself.
     heartbeat: Option<Instant>,
     in_the_second: u32,
-    /// The frames held since the last summary, and whether any of them found the source's live client
-    /// away from the client the one placement asked for (see `note_the_source_resized`).
+    /// The frames held since the last summary, and whether any of them found the source's window away
+    /// from the box the one placement asked for (see `note_the_crop_area`).
     since_summary: u32,
     disagrees: bool,
 }
@@ -3642,11 +3764,11 @@ mod tests {
         );
     }
 
-    /// **A source something else resized is cropped where it is now, and a pair built for the placed
-    /// client is the corner of it**: mpv adopts the rectangle Windows suggests on a display change,
+    /// **A source something else resized is cropped where its player draws it, and a pair built for the
+    /// placed client is the corner of it**: mpv adopts the rectangle Windows suggests on a display change,
     /// so the doubled client is the same film twice as large — while the placed client's crop samples
     /// the top-left quarter of that surface, which is the pin that reads as zoomed in (see
-    /// `settle_the_registration` and `note_the_source_resized`).
+    /// `settle_the_registration` and `note_the_crop_area`).
     #[test]
     fn a_resized_source_is_cropped_by_the_client_it_has_now() {
         let box_ = (1920, 1080);
@@ -4348,6 +4470,73 @@ mod tests {
         stand_the_invisible_road_in(false);
         assert!(!the_source_is_invisible());
         stand_the_invisible_road_in(true);
+    }
+
+    /// **The crop is fitted into the area the player says it is drawing, not into the window's client**:
+    /// a player whose output is a size behind the window it draws in — the window system hands an mpv a
+    /// rectangle of its own on a display of another scale, and its video output stays configured for the
+    /// one before it — draws the film into the top-left of that client, and a crop fitted into the client
+    /// is the film's pixels in a field of black (see `the_pictures_area`). A player that answers nothing
+    /// is its client, and an answer the window has grown past is clamped into it.
+    #[test]
+    fn a_crop_is_fitted_into_the_area_the_player_says_it_draws() {
+        let _room = the_room_to_itself();
+        let pid = 0x5eed;
+        let source = HWND(0x5150 as *mut _);
+        mpv_ipc::remember_pipe(pid, "rhp-test-picture-area", false);
+        mpv_ipc::clear_reads();
+        forget_the_pictures_area();
+
+        // The window is 2560x1440 and the output is configured for 1280x720 of it: the film is that
+        // quarter of the surface, and it is what the crop is fitted into.
+        let client = (2560, 1440);
+        mpv_ipc::answer_a_read(
+            pid,
+            "osd-dimensions",
+            Some(
+                r#"{"w":1280,"h":720,"par":1.000000,"aspect":1.777778,"mt":0,"mb":0,"ml":0,"mr":0}"#,
+            ),
+        );
+        assert_eq!(the_pictures_area(source, pid, client), (1280, 720));
+        assert_eq!(
+            mpv_ipc::noted_reads(),
+            vec![format!("{pid}:osd-dimensions")],
+            "asked once for one client, and never on a frame"
+        );
+
+        // The same client again is the answer already standing, and one more ask is a pipe read a frame
+        // would be paying for.
+        assert_eq!(the_pictures_area(source, pid, client), (1280, 720));
+        assert_eq!(
+            mpv_ipc::noted_reads().len(),
+            1,
+            "one read, not one per frame"
+        );
+
+        // A player whose output has caught up with its window: the area is the client, so the crop is
+        // the film's shape fitted into it, exactly as it was before this question existed.
+        mpv_ipc::answer_a_read(
+            pid,
+            "osd-dimensions",
+            Some(
+                r#"{"w":1920,"h":1080,"par":1.000000,"aspect":1.777778,"mt":0,"mb":0,"ml":0,"mr":0}"#,
+            ),
+        );
+        assert_eq!(the_pictures_area(source, pid, (1920, 1080)), (1920, 1080));
+
+        // **An area the window has grown past is clamped into the client**: a source rect is a rect of
+        // the surface the Shell samples, and one it does not have is never asked for.
+        assert_eq!(the_pictures_area(source, pid, (1024, 576)), (1024, 576));
+
+        // And where the player answers nothing at all, the client is the area.
+        assert_eq!(the_pictures_area(source, pid + 1, client), client);
+        mpv_ipc::answer_a_read(pid, "osd-dimensions", None);
+        forget_the_pictures_area();
+        assert_eq!(the_pictures_area(source, pid, client), client);
+
+        mpv_ipc::forget_pipe(pid);
+        mpv_ipc::clear_reads();
+        forget_the_pictures_area();
     }
 
     /// **The film's own size is one read of the player's `video-params`**: `dw`/`dh` are the picture's
