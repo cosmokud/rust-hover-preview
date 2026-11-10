@@ -25,7 +25,8 @@ impl ItemResolver {
             item: None,
             probe: None,
             dialog_folder: None,
-            everything: None,
+            pane_folder: None,
+            list_view: None,
         };
         resolver.rebuild_automation_parts();
         resolver.rebuild_shell();
@@ -117,6 +118,7 @@ impl ItemResolver {
         self.window_views = None;
         self.item = None;
         self.dialog_folder = None;
+        self.pane_folder = None;
     }
 
     /// Drop a window's views, for a caller that has just seen the place they describe
@@ -134,6 +136,7 @@ impl ItemResolver {
     /// (see `file_dialog::dialog_folder`).
     pub(super) fn forget_dialog_folder(&mut self) {
         self.dialog_folder = None;
+        self.pane_folder = None;
     }
 
     /// The view of `frame` the pointer was last inside, out of the set kept for that frame.

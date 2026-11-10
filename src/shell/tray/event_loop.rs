@@ -30,11 +30,11 @@ use super::commands::{
     toggle_normalize_volume, toggle_pin_always_on_top, toggle_pin_enabled, toggle_pin_pause_audio,
     toggle_pin_pause_video, toggle_pin_shuffle, toggle_pin_update_enabled,
     toggle_pin_update_move_to_top, toggle_pin_update_on_hover, toggle_preview_enabled,
-    toggle_preview_type, toggle_prioritize_keyboard, toggle_remember_audio_volume,
-    toggle_remember_video_volume, toggle_render_html, toggle_silent_auto_update, toggle_startup,
-    toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
-    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
-    toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
+    toggle_preview_type, toggle_prioritize_keyboard, toggle_q_dir_previews,
+    toggle_remember_audio_volume, toggle_remember_video_volume, toggle_render_html,
+    toggle_silent_auto_update, toggle_startup, toggle_text_dont_preview_secrets,
+    toggle_text_show_extensionless, toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled,
+    toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
@@ -65,9 +65,9 @@ use super::ids::{
     ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
     ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP,
     ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
-    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
-    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
-    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_Q_DIR_PREVIEWS, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
+    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
+    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -237,6 +237,12 @@ unsafe extern "system" fn tray_window_proc(
                     // switch that stopped it (see `toggle_everything_previews`).
                     ID_TRAY_EVERYTHING_PREVIEWS => {
                         toggle_everything_previews();
+                    }
+                    // And of the fourth kind: whether a preview is made in a Q-Dir pane. Q-Dir's
+                    // windows are somebody else's and nothing here moves them, so what the switch
+                    // stops is the preview standing in one (see `toggle_q_dir_previews`).
+                    ID_TRAY_Q_DIR_PREVIEWS => {
+                        toggle_q_dir_previews();
                     }
                     // The `Restore Pin Mode` row between it and the `Pin Mode` submenu: a command
                     // rather than a switch, and one that writes nothing — the pin that is up is put

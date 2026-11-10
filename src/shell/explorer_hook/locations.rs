@@ -321,7 +321,7 @@ pub(super) fn anchored_view_context(
     // no Shell window, so the walk below finds nothing for it and would answer nothing about
     // a place the dialog goes on showing — and the place is what arms the folder-change gate, so
     // a folder picked inside the dialog would never be read as one (see `file_dialog::dialog_folder`).
-    if window.dialog {
+    if window.is(Listing::Dialog) {
         return Some(ActiveShellViewContext {
             // No view drew it: a dialog is not a Shell view, and answering with a handle here
             // would name a place the tick could keep after the dialog had moved on.
@@ -345,13 +345,30 @@ pub(super) fn anchored_view_context(
     // read as a place change and blink the preview (see `HoverLocation` and `hover_location_changed`).
     // The window is where the rows are drawn, which is one place for every row in it, and the file's own
     // path is what says whether the file changed.
-    if window.everything {
+    if window.is(Listing::Everything) {
         return Some(ActiveShellViewContext {
             // The frame rather than a view: it registers no Shell view, and the window the rows are
             // drawn in is the place a look is compared in.
             shell_view_hwnd: window.frame,
             location_url: None,
             folder_path: None,
+        });
+    }
+
+    // **A Q-Dir pane's place is the frame and the folder it is showing.** Unlike Everything, whose rows
+    // span folders, a pane is one folder: so the frame is a place that never changes and the folder is
+    // here the folder-change witness — a pane that navigates rewrites its address bar and the place has
+    // indeed changed (see `q_dir::pane_folder`).
+    if window.is(Listing::QDir) {
+        let list = the_q_dir_list_of(HWND(window.drawn_in as *mut core::ffi::c_void));
+        return Some(ActiveShellViewContext {
+            // The frame rather than a view: it registers no Shell view, and the frame is one place for
+            // every pane in it.
+            shell_view_hwnd: window.frame,
+            location_url: None,
+            folder_path: list
+                .and_then(|list| pane_folder(resolver, list))
+                .map(|folder| folder.to_string_lossy().to_string()),
         });
     }
 

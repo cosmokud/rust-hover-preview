@@ -98,9 +98,12 @@ pub(super) struct ItemResolver {
     /// The folder a Common Item Dialog was last read as showing, against the frame it was
     /// read from — see `file_dialog::dialog_folder`.
     pub(super) dialog_folder: Option<DialogFolderMemo>,
-    /// The scratch page in Everything's own process that its result list is read through, kept for
-    /// as long as it describes the list being read — see `everything::EverythingReads`.
-    pub(super) everything: Option<EverythingReads>,
+    /// The folder a Q-Dir pane was last read as showing, against **the list** it was read from — a frame
+    /// holds four panes — see `q_dir::pane_folder`.
+    pub(super) pane_folder: Option<DialogFolderMemo>,
+    /// The scratch page in the listing's own process that its list view is read through, kept for as
+    /// long as it describes the list being read — see `list_view::ListViewReads`.
+    pub(super) list_view: Option<ListViewReads>,
 }
 
 /// The folder one Common Item Dialog is showing, kept while it still describes it.
@@ -242,20 +245,57 @@ pub(super) struct ItemWindow {
     /// no Shell view is registered for the frame at all. So the item path branches on this
     /// before it takes a position (see `item_file_path`), and the place is read from the
     /// breadcrumb rather than from a view (see `anchored_view_context`).
-    pub(super) dialog: bool,
-    /// Whether the frame is voidtools Everything's result window — see
-    /// `explorer_hook::everything`.
+    pub(super) listing: Listing,
+}
+
+/// Which kind of listing an item is read in, decided once from the frame and the window the item is
+/// drawn in.
+///
+/// It is one value rather than a flag per kind, because every road that branches on the kind branches
+/// on it before it asks anything else: reading Everything's list or a Q-Dir pane through UI Automation
+/// is reported to hang the program, so the kind of the frame decides the road (see
+/// `uia_item_from_point`), the item path resolves the file out of the row's own cells, and the place is
+/// a window and no folder, or a frame and a pane's folder (see `anchored_view_context`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Listing {
+    /// Explorer's own folder window: the position of an item in a Shell view, which is what the rest of
+    /// this module was built on.
+    Shell,
+    /// A Common Item Dialog (see `file_dialog`).
+    Dialog,
+    /// voidtools Everything's results (see `everything`).
+    Everything,
+    /// A Q-Dir pane (see `q_dir`).
+    QDir,
+}
+
+impl Listing {
+    /// The kind of listing the item in `frame` — drawn in `drawn_in` — is read in.
     ///
-    /// **It is the one thing about that window every other route here cannot be asked**, and it is the
-    /// reason every road branches on it before it asks anything: reading an Everything list through UI
-    /// Automation is reported to hang the program and to leave it holding gigabytes, so the class of
-    /// the frame decides the road (see `uia_item_from_point`), the item path resolves the file out of
-    /// the row's own cells (see `item_file_path`), and the place is the window alone
-    /// (see `anchored_view_context`).
-    pub(super) everything: bool,
+    /// Three asks, made in the order the kinds are unlikely to be: Explorer's class is the one every
+    /// window of the desktop is compared against, and a window that is none of them is a window of
+    /// somebody else's program. Each of the settings is read beside its own class (see
+    /// `app::seam::a_listing_is_previewed`), so a switch turned off leaves the frame the window it was
+    /// before the kind was one.
+    pub(super) fn of(frame: HWND, _drawn_in: HWND) -> Self {
+        if crate::app::seam::a_dialog_is_previewed(frame) {
+            Self::Dialog
+        } else if crate::app::seam::an_everything_is_previewed(frame) {
+            Self::Everything
+        } else if crate::app::seam::a_q_dir_is_previewed(frame) {
+            Self::QDir
+        } else {
+            Self::Shell
+        }
+    }
 }
 
 impl ItemWindow {
+    /// Whether the item was read in this kind of listing — the one ask every road branches on.
+    pub(super) fn is(&self, listing: Listing) -> bool {
+        self.listing == listing
+    }
+
     /// The one view of a frame that drew the item, where the frame's views can be told
     /// apart by the window the item is in.
     ///

@@ -2,7 +2,7 @@ use super::*;
 
 /// The folder these tests keep their files in, made fresh: the app's own scratch under `%TEMP%`,
 /// never a folder on the machine that a run would be reading (see ARCHITECTURE.md, "Test isolation").
-fn a_folder_of_our_own(name: &str) -> PathBuf {
+pub(super) fn a_folder_of_our_own(name: &str) -> PathBuf {
     let folder = std::env::temp_dir().join(format!(
         "rust-hover-preview-everything-{}-{name}",
         std::process::id()
@@ -14,7 +14,7 @@ fn a_folder_of_our_own(name: &str) -> PathBuf {
 
 /// A file whose own first bytes say it is a picture, which is what every route here gates on: the
 /// name alone is not the kind (see `crate::formats::head::Facts`).
-fn a_picture(folder: &Path, name: &str) -> PathBuf {
+pub(super) fn a_picture(folder: &Path, name: &str) -> PathBuf {
     let path = folder.join(name);
     std::fs::write(&path, b"\x89PNG\x0d\x0a\x1a\x0a").expect("a picture");
     path

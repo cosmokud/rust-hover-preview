@@ -4,7 +4,6 @@
 
 - **Detach mode:** the pin mode window handed to a process of its own is done (**Detach Window**, and a run's previews drawn in a viewer process); what is left is the `--detach` road nothing calls any more, and the pin's own menu inside a window of its own.
 - Add preview integration for voidtools Everything search.
-- Add preview integration for third-party file managers (e.g., Q-Dir)
 - **File Format Support:**
   - More design & project files (`.xcf`, ...)
   - AutoCAD's `.dwg`, which f3d does not read (every other CAD and 3D name is the `[f3d]` list's)

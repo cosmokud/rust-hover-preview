@@ -33,8 +33,7 @@ pub(super) fn item_window_of(window: HWND) -> Option<ItemWindow> {
         Some(ItemWindow {
             frame: frame.0 as isize,
             drawn_in: window.0 as isize,
-            dialog: crate::app::seam::a_dialog_is_previewed(frame),
-            everything: crate::app::seam::an_everything_is_previewed(frame),
+            listing: Listing::of(frame, window),
         })
     }
 }
@@ -277,8 +276,15 @@ pub(super) fn item_file_path(
     // neither an `ItemIndex` nor a position in a view describes any of them — what the dialog
     // shows is a display name, and the folder it is showing is what turns that name into a
     // file (see `file_dialog::dialog_item_path`).
-    if window.dialog {
+    if window.is(Listing::Dialog) {
         return dialog_item_path(resolver, window, item);
+    }
+
+    // **A Q-Dir row answers before the position is asked for too.** No Shell view holds the item: the
+    // rows are a list of Q-Dir's own process, and what turns the row into a file is the folder the
+    // pane is showing (see `q_dir::item_path`).
+    if window.is(Listing::QDir) {
+        return q_dir::item_path(resolver, window, item);
     }
 
     // **An Everything row answers before the position is asked for too, because the position is not a
@@ -286,8 +292,8 @@ pub(super) fn item_file_path(
     // at that index; what the row draws is the file's path, and that is what turns it into a file (see
     // `everything::item_path`). It is one function for every road — the pointer's row, the keyboard's and
     // a walk by index — so all of them answer the same way.
-    if window.everything {
-        return item_path(resolver, window, item);
+    if window.is(Listing::Everything) {
+        return everything::item_path(resolver, window, item);
     }
 
     let index = item.index? - 1;
@@ -543,12 +549,16 @@ pub(super) fn get_file_under_cursor(
         .map(|window| window.drawn_in)
         .unwrap_or_default();
 
-    // **An Everything row is asked again on every tick**, which is the one place the answer below is not
-    // kept: the reads are 0.1 ms against the list itself, and what the memo is keyed by is the box the
-    // item is drawn in — so a query typed into Everything's search box puts another file at the same box
-    // under a parked pointer, and the memo would go on answering the file of the row that has gone (see
-    // `everything`).
-    if window.as_ref().is_some_and(|window| window.everything) {
+    // **A row of Everything or of a Q-Dir pane is asked again on every tick**, which is the one place the
+    // answer below is not kept: the reads are 0.1 ms against the list itself, and what the memo is keyed
+    // by is the box the item is drawn in — so a query typed into Everything's search box puts another
+    // file at the same box under a parked pointer, and the memo would go on answering the file of the row
+    // that has gone (see `everything` and `q_dir`). A pane that navigates puts another file at the same
+    // box the same way.
+    if window
+        .as_ref()
+        .is_some_and(|window| window.is(Listing::Everything) || window.is(Listing::QDir))
+    {
         let look = resolve_file_under_cursor(resolver, point, window.as_ref());
         resolver.remember_probe(point, look.path.clone());
         return look.path;

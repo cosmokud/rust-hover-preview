@@ -183,6 +183,14 @@ pub const DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED: bool = true;
 /// class the hook reads stays Everything's class, and it is the preview that is not made there (see
 /// `everything_class_matches` and `a_listing_is_previewed`).
 pub const DEFAULT_EVERYTHING_PREVIEWS: bool = true;
+/// Whether a preview is made where **Q-Dir** is showing its panes, hovered or walked with the keyboard.
+///
+/// It is on where the app starts, for the reason the two above are: a pane is a listing of files the
+/// user is looking through, and a row of it is a file as surely as a row of a folder view is. Off,
+/// Q-Dir's frame is no listing at all and the app behaves exactly as it did before one was — the class
+/// the hook reads stays Q-Dir's class, and it is the preview that is not made there (see
+/// `q_dir_class_matches` and `a_listing_is_previewed`).
+pub const DEFAULT_Q_DIR_PREVIEWS: bool = true;
 /// The key that turns previews on or off while File Explorer is in front. F7 by default,
 /// so the switch has a shortcut without taking a key another program may be using.
 pub const DEFAULT_TOGGLE_KEY: &str = "f7";

@@ -57,7 +57,7 @@ pub(crate) fn the_frame_of(hwnd: HWND) -> HWND {
 /// own class alone read a dialog as somebody else's program: the state dropped to
 /// `VisibleNotFocused`, the pointer was never probed, and a file the user was looking at in Chrome's
 /// `Ctrl`+`O` had no preview at all (see `app::seam::a_listing_is_previewed`, which is where the
-/// three kinds of listing are told apart).
+/// four kinds of listing are told apart).
 ///
 /// **The dialog half of that is the setting's**, and it is asked of the published fact rather than of
 /// the configuration for the reason everything here is: this is called from the keyboard hook, which
@@ -159,12 +159,12 @@ pub(crate) fn file_dialog_class_matches(hwnd: HWND) -> bool {
     }
 }
 
-// Three kinds of frame are a listing now — Explorer's folder window, a Common Item Dialog and
-// Everything's results — and they are three predicates rather than one union, because each is a
-// setting of its own where a preview is decided (`app::seam::a_listing_is_previewed`). Anything that
-// means "is this Explorer's own folder window" asks `explorer_class_matches`, which stays narrow:
-// neither of the others is an Explorer window, and counting one as one would move the window counts
-// the pace and the covered-window rule are read from.
+// Four kinds of frame are a listing now — Explorer's folder window, a Common Item Dialog,
+// Everything's results and a Q-Dir pane — and they are four predicates rather than one union, because
+// each is a setting of its own where a preview is decided (`app::seam::a_listing_is_previewed`).
+// Anything that means "is this Explorer's own folder window" asks `explorer_class_matches`, which stays
+// narrow: none of the others is an Explorer window, and counting one as one would move the window
+// counts the pace and the covered-window rule are read from.
 
 /// The class of voidtools Everything's frame, and of the frames of a second instance beside it.
 ///
@@ -202,6 +202,43 @@ pub(crate) fn a_frame_class_of_everything(class_name: &[u16]) -> bool {
 
     class_name.len() == THE_FRAME.len() && starts_with_ascii_ignore_case(class_name, THE_FRAME)
         || starts_with_ascii_ignore_case(class_name, AN_INSTANCE)
+}
+
+/// The class prefix of **Q-Dir**'s frame, and nothing after it.
+///
+/// Q-Dir draws one frame holding four panes, and its class is an ATL host's own: `ATL:` followed by the
+/// **address** of the window procedure that draws it. That address moves with ASLR and with every
+/// update, so the prefix is the whole of the class that is a fact — matching any part of the suffix
+/// would answer for one build of one program on one boot, and for nothing afterwards.
+pub(crate) fn q_dir_class_matches(hwnd: HWND) -> bool {
+    let frame = the_frame_of(hwnd);
+    if frame.is_invalid() {
+        return false;
+    }
+
+    unsafe {
+        let mut class_name = [0u16; 256];
+        let len = GetClassNameW(frame, &mut class_name);
+        len > 0 && a_frame_class_of_q_dir(&class_name[..len as usize])
+    }
+}
+
+/// Whether a window class is Q-Dir's frame — the `ATL:` prefix and an address after it, for the reason
+/// `q_dir_class_matches` gives.
+///
+/// The part after the colon is the address itself, so it is read as one: hex digits and long enough to
+/// be an address rather than the prefix a class of some other program's happens to start with.
+/// Allocation-free and one pass, because a `WH_MOUSE_LL` callback reaches this through
+/// `app::seam::a_listing_is_previewed` and may wait on nothing.
+pub(crate) fn a_frame_class_of_q_dir(class_name: &[u16]) -> bool {
+    const THE_PREFIX: &[u8] = b"atl:";
+    const THE_SHORTEST_ADDRESS: usize = 8;
+
+    class_name.len() >= THE_PREFIX.len() + THE_SHORTEST_ADDRESS
+        && starts_with_ascii_ignore_case(class_name, THE_PREFIX)
+        && class_name[THE_PREFIX.len()..]
+            .iter()
+            .all(|ch| *ch < 0x80 && (*ch as u8).is_ascii_hexdigit())
 }
 
 /// Whether a class name begins with an ASCII needle, compared one code unit at a time and without
@@ -564,6 +601,103 @@ mod tests {
                 "{not_the_frame:?} is not the frame a listing is drawn in"
             );
         }
+    }
+
+    /// **Q-Dir's frame is matched by the `ATL:` prefix alone**, because the rest of its class is the
+    /// address of the procedure that draws it — which moves with ASLR and with every update. Two
+    /// different addresses are therefore one program's frame, and the windows around a pane are not.
+    #[test]
+    fn a_q_dir_frame_is_a_listing_of_its_own_kind() {
+        let mut windows = WindowsOfTheTest::default();
+
+        // Safety: this test's own windows, made where no display is and shown never.
+        let (frame, list) = unsafe {
+            let frame = windows.a_window_named(w!("ATL:00000001401C5A80"), None);
+            let list = windows.a_window_named(w!("SysListView32"), Some(frame));
+            (frame, list)
+        };
+
+        assert!(q_dir_class_matches(frame), "Q-Dir's frame is a listing");
+        assert!(
+            q_dir_class_matches(list) && the_frame_of(list) == frame,
+            "and a click inside a pane's rows lands on a child of that frame"
+        );
+        assert!(
+            !explorer_class_matches(frame) && !file_dialog_class_matches(frame),
+            "and it is no Explorer window and no dialog: the counts and the pace stay Explorer's own"
+        );
+    }
+
+    /// The window classes that are Q-Dir's frame and the ones that are not, as the class name alone
+    /// answers it: two addresses of one program's procedure are both the frame, and a bare prefix, a
+    /// truncated address and every other listing's class are none.
+    #[test]
+    fn a_q_dir_frame_is_the_atl_prefix_of_its_class() {
+        for the_frame in [
+            "ATL:00000001401C5A80",
+            "ATL:0000000140999999",
+            "atl:00000001401c5a80",
+        ] {
+            assert!(
+                a_frame_class_of_q_dir(&the_frame.encode_utf16().collect::<Vec<_>>()),
+                "{the_frame:?} is the frame a pane is drawn in"
+            );
+        }
+
+        for not_the_frame in [
+            "ATL:",
+            "ATL:0000",
+            "CabinetWClass",
+            "EVERYTHING",
+            "#32770",
+            "WTL_XSplitterWindow",
+            "",
+        ] {
+            assert!(
+                !a_frame_class_of_q_dir(&not_the_frame.encode_utf16().collect::<Vec<_>>()),
+                "{not_the_frame:?} is not the frame a pane is drawn in"
+            );
+        }
+    }
+
+    /// **The class of a Q-Dir frame is not the setting either**, and the setting is what decides
+    /// whether a preview is made in it: `q_dir_class_matches` keeps answering whatever the switch says,
+    /// because it is asked from a `WH_MOUSE_LL` callback, which may take no lock.
+    #[test]
+    fn the_q_dir_gate_follows_the_published_fact_and_the_class_does_not() {
+        let mut windows = WindowsOfTheTest::default();
+        let was = crate::app::seam::q_dir_previews();
+
+        // Safety: this test's own windows, made where no display is and shown never.
+        let (frame, folder) = unsafe {
+            (
+                windows.a_window_named(w!("ATL:00000001401C5A80"), None),
+                windows.a_window_named(w!("CabinetWClass"), None),
+            )
+        };
+
+        crate::app::seam::publish_q_dir_previews(true);
+        assert!(
+            crate::app::seam::a_listing_is_previewed(frame),
+            "on, a Q-Dir pane is a listing a file is previewed in"
+        );
+
+        crate::app::seam::publish_q_dir_previews(false);
+        assert!(
+            !crate::app::seam::a_listing_is_previewed(frame),
+            "off, it is no listing at all — exactly as it was before Q-Dir was one"
+        );
+        assert!(
+            q_dir_class_matches(frame),
+            "and the class still answers for it: a hook callback may take no lock, and the class is \
+             the desktop's fact rather than the setting's"
+        );
+        assert!(
+            crate::app::seam::a_listing_is_previewed(folder),
+            "a folder view is Explorer's own and the switch is not about it"
+        );
+
+        crate::app::seam::publish_q_dir_previews(was);
     }
 
     /// **The class of a dialog is not the setting, and the setting is what decides whether a preview

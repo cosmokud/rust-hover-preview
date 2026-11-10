@@ -11,6 +11,10 @@
 //! - `everything` — the item question again, asked of voidtools Everything's result list: a
 //!   `SysListView32` of another process, whose rows are read out of Everything's own address
 //!   space because reading them through UI Automation is what must not be done.
+//! - `q_dir` — the same question asked of a Q-Dir pane: four lists per frame, each with its own
+//!   address bar for the folder a row is joined onto.
+//! - `list_view` — the reader both of those rows come through: one `SysListView32` of another
+//!   process, whose messages carry structs through a page in that process.
 //! - `resolver` — the UI Automation client, the Shell window collection, and the view that
 //!   answered last. What holds a COM object for the rest of this.
 //! - `view_sort` — how long the hook waits between looks, and the order a folder is listed
@@ -45,11 +49,13 @@ mod file_dialog;
 mod focus_items;
 mod hover_location;
 mod input;
+mod list_view;
 mod locations;
 mod main_loop;
 mod pin_front;
 mod pin_watch;
 mod probe_trace;
+mod q_dir;
 mod resolver;
 mod shell_views;
 mod ui_elements;
@@ -160,11 +166,13 @@ use file_dialog::*;
 use focus_items::*;
 use hover_location::*;
 use input::*;
+use list_view::*;
 use locations::*;
 use pin_front::*;
 use pin_watch::*;
 pub(crate) use probe_trace::note_pin_click;
 use probe_trace::*;
+use q_dir::*;
 use resolver::*;
 use shell_views::*;
 use ui_elements::*;

@@ -155,6 +155,25 @@ pub(in super::super) fn toggle_everything_previews() {
     refresh_preview();
 }
 
+/// Whether a preview is made where **Q-Dir** is showing its panes is a setting rather than a view of one,
+/// and it is read by the Explorer hook on its next tick like the two above (see `q_dir_previews`).
+///
+/// What it also does is tell the run's published fact, because the press road and the pin's own placement
+/// may take no lock and answer for a Q-Dir frame they find before any tick has been read (see
+/// `app::seam::Q_DIR_PREVIEWS`).
+pub(in super::super) fn toggle_q_dir_previews() {
+    let enabled = if let Ok(mut config) = CONFIG.lock() {
+        config.q_dir_previews = !config.q_dir_previews;
+        config.save();
+        config.q_dir_previews
+    } else {
+        return;
+    };
+
+    crate::app::seam::publish_q_dir_previews(enabled);
+    refresh_preview();
+}
+
 /// Whether a pin that is up is shown the file the user picks next is a setting rather than a
 /// view of one, and it is the one switch here that changes nothing that is already on screen:
 /// the pin keeps the file it is showing until the user picks another, and what the switch says

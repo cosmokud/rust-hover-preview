@@ -32,8 +32,16 @@ pub(super) fn selected_file_in_view(
     // **Everything's own list answers the point, before any automation is asked for it** — no walk is
     // made in that window at all (see `everything`) — and the row under the point is the item a click
     // there landed on, which is what a list answers as its selection.
-    if window.everything {
+    if window.is(Listing::Everything) {
         return row_at(resolver, window.frame, pointer.point)
+            .and_then(|row| item_file_path(resolver, &window, &row.item()));
+    }
+
+    // **A Q-Dir pane answers the same way, and from the pane the point is in**: the frame holds four
+    // panes, so the list is the one above the point's own window (see `q_dir`).
+    if window.is(Listing::QDir) {
+        let list = the_q_dir_list_under(pointer.point)?;
+        return row_at_in_list(resolver, list, pointer.point)
             .and_then(|row| item_file_path(resolver, &window, &row.item()));
     }
 
@@ -187,10 +195,10 @@ impl FocusedItemInfo {
         Some(ItemWindow {
             frame,
             drawn_in: self.item.native_window,
-            dialog: crate::app::seam::a_dialog_is_previewed(HWND(frame as *mut core::ffi::c_void)),
-            everything: crate::app::seam::an_everything_is_previewed(HWND(
-                frame as *mut core::ffi::c_void,
-            )),
+            listing: Listing::of(
+                HWND(frame as *mut core::ffi::c_void),
+                HWND(self.item.native_window as *mut core::ffi::c_void),
+            ),
         })
     }
 }
