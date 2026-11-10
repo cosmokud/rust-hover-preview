@@ -165,6 +165,15 @@ pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
 /// a menu opened mid-session can have windows on screen this app would have to close (see
 /// `silent_auto_update`).
 pub const DEFAULT_SILENT_AUTO_UPDATE: bool = false;
+/// Whether a preview is made where a **browse dialog** is showing — the Common Item Dialog every
+/// program draws for itself: Chrome's or Notepad's `Ctrl`+`O`, a `Save As`, a folder pick.
+///
+/// It is on where the app starts: the dialog is a listing the shell draws its own rows in, and a
+/// user choosing a file in one is looking at the same file a folder view shows. Off, it is no
+/// listing at all and the app behaves exactly as it did before the dialog was one — the class the
+/// hook reads stays a dialog's class, and it is the preview that is not made there (see
+/// `listing_class_matches` and `a_listing_is_previewed`).
+pub const DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED: bool = true;
 /// The key that turns previews on or off while File Explorer is in front. F7 by default,
 /// so the switch has a shortcut without taking a key another program may be using.
 pub const DEFAULT_TOGGLE_KEY: &str = "f7";

@@ -659,6 +659,57 @@ fn a_switch_of_the_updates_is_named_by_the_key_the_file_writes() {
     );
 }
 
+/// Whether a preview is made in a browse dialog is on where the app starts — a dialog is a listing the
+/// shell draws its own rows in — and a file that says nothing about it is read as that same on, so a
+/// file written before the switch existed keeps previewing in a dialog. Off is a value of the file's
+/// own, and it is a value the file writes back.
+#[test]
+fn the_browse_dialog_switch_is_on_until_the_file_says_otherwise() {
+    let config = AppConfig::default();
+    assert_eq!(
+        config.browse_dialog_preview_enabled,
+        DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED
+    );
+    assert!(
+        config.browse_dialog_preview_enabled,
+        "a fresh configuration previews a file where a browse dialog is showing"
+    );
+
+    let mut ini = written_file();
+    ini.set(
+        CONFIG_SECTION,
+        "browse_dialog_preview_enabled",
+        Some("false".to_string()),
+    );
+    let read = read_file(&mut ini);
+    assert!(
+        !read.browse_dialog_preview_enabled,
+        "`false` in the file is a dialog no preview is made in"
+    );
+
+    // And it is written back as the file said: the switch is a setting, so a save keeps it.
+    let file = super::persistence::ConfigFileAsItWas::take();
+    read.save();
+    assert_eq!(
+        fs::read_to_string(&file.path)
+            .expect("the file a save writes")
+            .lines()
+            .find(|line| line.starts_with("browse_dialog_preview_enabled")),
+        Some("browse_dialog_preview_enabled=false"),
+        "and a save writes the switch the way it is set"
+    );
+    assert!(
+        !AppConfig::load().browse_dialog_preview_enabled,
+        "which the next start reads back off the file"
+    );
+
+    // A file written before the switch existed says nothing about it, and saying nothing is the
+    // switch left where it starts.
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "preview_enabled", Some("true".to_string()));
+    assert!(read_file(&mut ini).browse_dialog_preview_enabled);
+}
+
 /// Whether an update found as the app starts is put on without asking is the user's to switch
 /// on: a fresh configuration checks for one and installs nothing, which is what a row above the
 /// `System` submenu is for.

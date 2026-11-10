@@ -57,13 +57,19 @@ pub(crate) fn the_frame_of(hwnd: HWND) -> HWND {
 /// own class alone read a dialog as somebody else's program: the state dropped to
 /// `VisibleNotFocused`, the pointer was never probed, and a file the user was looking at in Chrome's
 /// `Ctrl`+`O` had no preview at all (see `listing_class_matches`).
+///
+/// **The dialog half of that is the setting's**, and it is asked of the published fact rather than of
+/// the configuration for the reason everything here is: this is called from the keyboard hook, which
+/// may take no lock. Off, the answer is the one every caller had before a dialog was a listing at all —
+/// a dialog is no listing, and the roads that answer here stay quiet in it (see
+/// `app::seam::a_listing_is_previewed`).
 pub(crate) fn the_foreground_is_explorer() -> bool {
     unsafe {
         let foreground = GetForegroundWindow();
         if foreground.is_invalid() {
             return false;
         }
-        listing_class_matches(foreground)
+        crate::app::seam::a_listing_is_previewed(foreground)
     }
 }
 
@@ -448,5 +454,50 @@ mod tests {
             !listing_class_matches(desktop) && !listing_class_matches(taskbar),
             "and the rest of explorer.exe is not: no hover is over a file there"
         );
+    }
+
+    /// **The class of a dialog is not the setting, and the setting is what decides whether a preview
+    /// is made in one.** `listing_class_matches` keeps answering for a `#32770` file dialog whatever the
+    /// switch says — it is asked from a `WH_MOUSE_LL` callback, which may take no lock, and Explorer's
+    /// own reading of the desktop must not change under a setting — so the gate is `a_listing_is_previewed`,
+    /// which reads the published fact beside the class (see `app::seam::BROWSE_DIALOG_PREVIEWS`).
+    ///
+    /// Off, a dialog is the window it was before the feature: not a listing, and a folder view is
+    /// untouched by the switch — it is Explorer's own class, which the fact is never asked about.
+    #[test]
+    fn the_dialog_gate_follows_the_published_fact_and_the_class_does_not() {
+        let mut windows = WindowsOfTheTest::default();
+        let was = crate::app::seam::browse_dialog_previews();
+
+        // Safety: this test's own windows, made where no display is and shown never.
+        let (dialog, folder) = unsafe {
+            let dialog = windows.a_window_named(w!("#32770"), None);
+            let _ = windows.a_window_named(w!("DUIViewWndClassName"), Some(dialog));
+            let _ = windows.a_child_named(w!("Edit"), Some(dialog), Some(THE_NAME_EDIT_CONTROL_ID));
+            (dialog, windows.a_window_named(w!("CabinetWClass"), None))
+        };
+
+        crate::app::seam::publish_browse_dialog_previews(true);
+        assert!(
+            crate::app::seam::a_listing_is_previewed(dialog),
+            "on, a dialog is a listing a file is previewed in"
+        );
+
+        crate::app::seam::publish_browse_dialog_previews(false);
+        assert!(
+            !crate::app::seam::a_listing_is_previewed(dialog),
+            "off, it is no listing at all — exactly as it was before the dialog was one"
+        );
+        assert!(
+            listing_class_matches(dialog) && file_dialog_class_matches(dialog),
+            "and the class still answers for it: a hook callback may take no lock, and the class is \
+             the desktop's fact rather than the setting's"
+        );
+        assert!(
+            crate::app::seam::a_listing_is_previewed(folder),
+            "a folder view is Explorer's own and the switch is not about it"
+        );
+
+        crate::app::seam::publish_browse_dialog_previews(was);
     }
 }

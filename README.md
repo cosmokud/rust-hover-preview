@@ -10,7 +10,7 @@ Rust Hover Preview is a Windows 11 tray app inspired by QTTabBar and QuickLook. 
 
 ## Highlights
 
-- Mouse-hover and keyboard-navigation previews in Explorer, beside the cursor or the focused item and kept on screen.
+- Mouse-hover and keyboard-navigation previews in Explorer, and in a program's own Open or Save dialog, beside the cursor or the focused item and kept on screen.
 - Press the middle mouse button or `Space` (customizable) and a preview becomes a window of its own — captioned, movable, resizable, and there until you close it, always on top by default.
 - Supports images, videos, audios, ebooks, Office documents, design documents, text/code, archives, camera raw, vector drawings, fonts, and more.
 - Granular display scaling: Flexible sizing (fit-to-screen, percentage-based, or 25%–400% native scale) with independent scaling profiles for media vs. text, vectors, and documents.

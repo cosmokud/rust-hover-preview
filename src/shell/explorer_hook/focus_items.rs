@@ -119,6 +119,14 @@ pub(super) fn is_cursor_over_explorer_full(window: HWND) -> bool {
 /// one of the two classes — an `OpenProcess` and an image name for every window the pointer walked
 /// over — and it answered yes for every piece of the shell that is explorer.exe, which is the answer
 /// this test must never give.
+///
+/// **And the dialog half of it is the setting's**, asked of the run's published fact rather than of
+/// the configuration: `Preview Settings → General → Enable in Browse Dialogs` off, a dialog is no
+/// listing a preview is made in, and this answers no for it exactly as it did before one was (see
+/// `app::seam::a_listing_is_previewed`). The memo is keyed by the window alone and kept for a second
+/// (see `EXPLORER_WINDOW_CACHE_TTL_MS`), so a switch thrown off answers for a dialog it holds from
+/// the next tick rather than from this one — a dialog appears and goes with one keystroke anyway,
+/// which is why nothing here is cleared on the switch.
 pub(super) fn is_explorer_window(hwnd: HWND) -> bool {
     let hwnd_key = hwnd.0 as isize;
     if hwnd_key == 0 {
@@ -133,7 +141,7 @@ pub(super) fn is_explorer_window(hwnd: HWND) -> bool {
         }
     }
 
-    let is_explorer = crate::shell::window_classes::listing_class_matches(hwnd);
+    let is_explorer = crate::app::seam::a_listing_is_previewed(hwnd);
 
     if let Ok(mut cache) = EXPLORER_WINDOW_CACHE.lock() {
         if cache.len() >= 512 {
@@ -170,9 +178,7 @@ impl FocusedItemInfo {
         Some(ItemWindow {
             frame,
             drawn_in: self.item.native_window,
-            dialog: crate::shell::window_classes::file_dialog_class_matches(HWND(
-                frame as *mut core::ffi::c_void,
-            )),
+            dialog: crate::app::seam::a_dialog_is_previewed(HWND(frame as *mut core::ffi::c_void)),
         })
     }
 }

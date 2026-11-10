@@ -113,6 +113,28 @@ pub fn toggle_pin_always_on_top() {
     refresh_pin();
 }
 
+/// Whether a preview is made where a **browse dialog** is showing is a setting rather than a view of
+/// one, and it is read by the Explorer hook on its next tick like the pick switches above (see
+/// `browse_dialog_preview_enabled`).
+///
+/// What it also does is tell the run's published fact, because the press road and the pin's own
+/// placement may take no lock and answer for a dialog they find where neither the configuration nor
+/// a tick has been read: a switch thrown off with a pin standing in a dialog would otherwise leave
+/// the pin owing a front to a listing the app no longer answers for until the next tick noticed
+/// (see `app::seam::BROWSE_DIALOG_PREVIEWS`).
+pub(in super::super) fn toggle_browse_dialog_preview() {
+    let enabled = if let Ok(mut config) = CONFIG.lock() {
+        config.browse_dialog_preview_enabled = !config.browse_dialog_preview_enabled;
+        config.save();
+        config.browse_dialog_preview_enabled
+    } else {
+        return;
+    };
+
+    crate::app::seam::publish_browse_dialog_previews(enabled);
+    refresh_preview();
+}
+
 /// Whether a pin that is up is shown the file the user picks next is a setting rather than a
 /// view of one, and it is the one switch here that changes nothing that is already on screen:
 /// the pin keeps the file it is showing until the user picks another, and what the switch says

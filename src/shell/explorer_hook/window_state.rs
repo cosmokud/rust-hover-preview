@@ -27,9 +27,11 @@ pub(crate) fn is_foreground_explorer() -> bool {
     }
 }
 
-/// Whether the window in front is a listing this hook answers for — Explorer's folder window or a
-/// Common Item Dialog — asked of the class alone: one `GetForegroundWindow` and the class compares of
-/// `listing_class_matches`, with no lock and no allocation.
+/// Whether the window in front is a listing this hook answers for — Explorer's folder window, or a
+/// browse dialog while `Preview Settings → General → Enable in Browse Dialogs` is on — asked of the class
+/// alone: one `GetForegroundWindow` and the class compares of `listing_class_matches`, with no lock and
+/// no allocation. The setting is the published fact, which costs one atomic load and no lock either
+/// (see `app::seam::BROWSE_DIALOG_PREVIEWS`).
 ///
 /// The question the pin's own placement asks, and the one `is_foreground_explorer` is not: a pin is
 /// owed the front of its band where the window it was picked over is *either* kind, and a file picked
@@ -43,7 +45,7 @@ pub(crate) fn is_foreground_explorer() -> bool {
 pub(crate) fn the_front_is_a_listing() -> bool {
     unsafe {
         let foreground = GetForegroundWindow();
-        !foreground.is_invalid() && crate::shell::window_classes::listing_class_matches(foreground)
+        !foreground.is_invalid() && crate::app::seam::a_listing_is_previewed(foreground)
     }
 }
 
@@ -417,7 +419,7 @@ pub(crate) fn a_press_puts_us_behind(
 /// `explorer_hook::file_dialog`).
 pub(crate) fn the_pick_road_answers(window: HWND) -> bool {
     crate::app::seam::the_pin_follows_the_listing()
-        && crate::shell::window_classes::listing_class_matches(window)
+        && crate::app::seam::a_listing_is_previewed(window)
 }
 
 /// Whether the point a press landed on is inside any window of ours: the broad answer, and the one the

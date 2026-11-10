@@ -33,7 +33,7 @@ pub(super) fn item_window_of(window: HWND) -> Option<ItemWindow> {
         Some(ItemWindow {
             frame: frame.0 as isize,
             drawn_in: window.0 as isize,
-            dialog: crate::shell::window_classes::file_dialog_class_matches(frame),
+            dialog: crate::app::seam::a_dialog_is_previewed(frame),
         })
     }
 }

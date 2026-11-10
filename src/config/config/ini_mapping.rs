@@ -78,6 +78,11 @@ impl AppConfig {
             "preview_enabled",
             Some(self.preview_enabled.to_string()),
         );
+        ini.set(
+            CONFIG_SECTION,
+            "browse_dialog_preview_enabled",
+            Some(self.browse_dialog_preview_enabled.to_string()),
+        );
         ini.set(CONFIG_SECTION, "toggle_key", Some(self.toggle_key.clone()));
         ini.set(
             CONFIG_SECTION,
@@ -640,6 +645,13 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "preview_enabled") {
             self.preview_enabled = value;
+        }
+        // Whether a preview is made in a browse dialog. A file written before the switch existed
+        // has no key for it, so it is read as where it starts — on, the dialog being a listing the
+        // shell draws its own rows in (see `browse_dialog_preview_enabled`).
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "browse_dialog_preview_enabled")
+        {
+            self.browse_dialog_preview_enabled = value;
         }
         // The key that turns previews on or off from Explorer, read the way the trigger and
         // pin keys are: a name that is empty is nothing to bind, and an unreadable one is left

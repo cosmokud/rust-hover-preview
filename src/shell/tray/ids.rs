@@ -424,6 +424,14 @@ pub(super) const ID_TRAY_PIN_ALWAYS_ON_TOP: u16 = 1678;
 /// 1727 to 1729 — so no click on it is read as another submenu's row, and one click on another's is
 /// never read as this.
 pub(super) const ID_TRAY_PIN_RESTORE: u16 = 1727;
+/// The `Preview Settings → General` row: whether a preview is made where a **browse dialog** is
+/// showing — Chrome's or Notepad's `Ctrl`+`O`, a `Save As`, a folder pick (see
+/// `browse_dialog_preview_enabled`). On where the app starts.
+///
+/// It sits in the ids the `… TTL` ranges and the `Components → Install` range leave free — 1728,
+/// beside `Restore Pin Mode` and below the engine-idle ranges — so no click on it is read as
+/// another submenu's row, and it is inside no range a submenu's click is read against.
+pub(super) const ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED: u16 = 1728;
 /// The `Pin Mode → Update Preview → Move To Top` row: whether an update also brings a pin that was
 /// behind in front of the window covering it. It sits past every id the app hands out, beside the
 /// pin's other rows, where no click on it is read as another submenu's item.

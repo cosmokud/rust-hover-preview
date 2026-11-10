@@ -228,6 +228,13 @@ pub(super) fn dialog_item_path(
     window: &ItemWindow,
     item: &HoveredItem,
 ) -> Option<PathBuf> {
+    // The switch is read here as well as where the window was classified, because a tick that
+    // classified a dialog while it was on must answer nothing after it is turned off: `Preview Settings
+    // → General → Enable in Browse Dialogs` off means the dialog is no listing, and a preview made in it
+    // is the whole of what is refused (see `app::seam::a_dialog_is_previewed`).
+    if !crate::app::seam::browse_dialog_previews() {
+        return None;
+    }
     if let Some(path) = resolve_media_path_from_text(&item.name) {
         return Some(path);
     }
