@@ -70,13 +70,18 @@ const BROWSER_ARGUMENTS: &str = "--host-resolver-rules=\"MAP * ~NOTFOUND\"";
 /// navigation that is not coming (see `Host::settle`).
 const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Whether a viewer is on screen — revealed, so the pin's band is Chromium's rather than the static
-/// raster's. Read by the paint and zoom roads, which skip the band while it is set.
-static VIEWER_OPEN: AtomicBool = AtomicBool::new(false);
+/// The pins that hold a viewer which is on the screen — revealed, or suspended with its window off
+/// it — as the pin windows that own them.
+///
+/// A set of owners rather than one flag, because two pins are two documents: a pin whose viewer
+/// never arrived keeps painting its static raster, and what another pin's live viewer says about
+/// that pin's band is nothing at all (see `is_up_for`).
+static LIVE_OWNERS: Lazy<Mutex<Vec<isize>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-/// How many viewers the app has asked for and not yet let go of. The thread lives while it is not
-/// zero, and that is the whole lifetime rule: refcount, no TTL.
-static OPEN: AtomicUsize = AtomicUsize::new(0);
+/// Whether any viewer at all is on the screen, which is the fast path: a paint of a kind that is
+/// not a PDF — and of a PDF with no viewer — takes no lock, which is the shape `SHOWING` has for
+/// the hover page.
+static ANY_VIEWER_UP: AtomicBool = AtomicBool::new(false);
 
 /// The engine: the thread and the channel into it, begun by the first `open` and ended by the last
 /// `close`.
@@ -98,24 +103,72 @@ enum Command {
         owner: isize,
         area: Area,
     },
-    /// The newest box the pin's band has, published rather than queued per pointer move: a drag
-    /// asks on every move and only the last one is a box to be in (the same shape as the hover
-    /// engine's `PLACED`, for the same reason).
-    Place(Area),
-    Close(PathBuf),
+    /// The newest box **this pin's** band has, published rather than queued per pointer move: a
+    /// drag asks on every move and only the last one is a box to be in (the same shape as the hover
+    /// engine's `PLACED`, for the same reason). The owner is carried because two pins are two
+    /// boxes, and a box of one is no box of the other.
+    Place {
+        owner: isize,
+        area: Area,
+    },
+    /// One pin's viewer for one file, and never another pin's of the same name.
+    Close {
+        path: PathBuf,
+        owner: isize,
+    },
     Shutdown,
 }
 
-/// Whether a viewer stands in a pin's band, which is what stops the pin painting the raster it still
-/// holds underneath it.
-pub(crate) fn is_up() -> bool {
-    VIEWER_OPEN.load(Ordering::Acquire)
+/// Whether a viewer stands in **this pin's** band, which is what stops that pin painting the raster
+/// it still holds underneath it. Asked of the pin window rather than of the app: one pin's live
+/// viewer says nothing about another pin's band.
+pub(crate) fn is_up_for(owner: isize) -> bool {
+    if owner == 0 || !ANY_VIEWER_UP.load(Ordering::Acquire) {
+        return false;
+    }
+
+    LIVE_OWNERS
+        .lock()
+        .map(|owners| owners.contains(&owner))
+        .unwrap_or(false)
 }
 
-/// The one file asked for, and the window it was asked in. A viewer is asked for from the road that
-/// places a pin's band, which runs on every box change of that pin: the ask is answered once per
-/// file rather than once per placement (see `open`).
-static ASKED: Lazy<Mutex<Option<(PathBuf, isize)>>> = Lazy::new(|| Mutex::new(None));
+/// Publish the pins a viewer is on the screen for. Written by the viewer thread once a pass, in
+/// that order — the list first and the fast path after it — so a reader that sees the flag sees a
+/// list that already names its own pin.
+fn publish_the_live_owners(owners: Vec<isize>) {
+    if let Ok(mut live) = LIVE_OWNERS.lock() {
+        *live = owners.clone();
+    }
+
+    ANY_VIEWER_UP.store(!owners.is_empty(), Ordering::Release);
+}
+
+/// The asks outstanding, one per file per pin: a viewer is one per pin, and a second ask for the
+/// same file in the same pin is nothing. The list is also the refcount — the thread lives while it
+/// has an ask and ends with the last one — and that is the whole lifetime rule: no TTL.
+static ASKED: Lazy<Mutex<Vec<(PathBuf, isize)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Whether this ask is the first for this file in this pin, which is what makes it one owed viewer
+/// rather than another placement of the same one (see `open`).
+fn the_ask_is_the_first(asks: &mut Vec<(PathBuf, isize)>, path: &Path, owner: isize) -> bool {
+    if asks
+        .iter()
+        .any(|(asked, asked_owner)| asked == path && *asked_owner == owner)
+    {
+        return false;
+    }
+
+    asks.push((path.to_path_buf(), owner));
+    true
+}
+
+/// Let go of this file's ask in this pin, and answer how many asks are left: the same document
+/// pinned twice is two viewers, and one pin closing says nothing about the other (see `close`).
+fn let_go_of_the_ask(asks: &mut Vec<(PathBuf, isize)>, path: &Path, owner: isize) -> usize {
+    asks.retain(|(asked, asked_owner)| !(asked == path && *asked_owner == owner));
+    asks.len()
+}
 
 /// Ask for a viewer on `path`, in the pin `owner`, at `area`, counting one more viewer owed.
 ///
@@ -128,16 +181,15 @@ pub(crate) fn open(path: &Path, owner: isize, area: Area) -> bool {
         return false;
     }
 
-    if let Ok(mut asked) = ASKED.lock() {
-        if asked.as_ref() == Some(&(path.to_path_buf(), owner)) {
-            // Already this file in this window: what a later ask owes is the box, and that is
-            // `place`'s.
-            if OPEN.load(Ordering::Acquire) > 0 {
+    // The placement road asks on every box change, and one pin's placement asks nothing of another
+    // pin's file: the pair is what says whether a viewer is owed (see `the_ask_is_the_first`).
+    match ASKED.lock() {
+        Ok(mut asked) => {
+            if !the_ask_is_the_first(&mut asked, path, owner) {
                 return true;
             }
         }
-
-        *asked = Some((path.to_path_buf(), owner));
+        Err(_) => return false,
     }
 
     let mut engine = match ENGINE.lock() {
@@ -163,34 +215,37 @@ pub(crate) fn open(path: &Path, owner: isize, area: Area) -> bool {
             .is_ok()
     });
 
-    if taken {
-        OPEN.fetch_add(1, Ordering::AcqRel);
+    if !taken {
+        if let Ok(mut asked) = ASKED.lock() {
+            let_go_of_the_ask(&mut asked, path, owner);
+        }
     }
 
     taken
 }
 
-/// Move every viewer to `area` — the pin's content band, which is the whole of what a viewer is
-/// placed by.
-pub(crate) fn place(area: Area) {
-    if !is_up() {
+/// Move **this pin's** viewer to `area` — the pin's content band, which is the whole of what a
+/// viewer is placed by. A drag of one pin is no ask at all for the window of another (see `Place`).
+pub(crate) fn place(owner: isize, area: Area) {
+    if !is_up_for(owner) {
         return;
     }
 
     if let Ok(engine) = ENGINE.lock() {
         if let Some(engine) = engine.as_ref() {
-            let _ = engine.sender.send(Command::Place(area));
+            let _ = engine.sender.send(Command::Place { owner, area });
         }
     }
 }
 
-/// Let go of `path`'s viewer, and — where it was the last one owed — of the browser and the thread.
-pub(crate) fn close(path: &Path) {
-    if let Ok(mut asked) = ASKED.lock() {
-        if asked.as_ref().is_some_and(|(asked, _)| asked == path) {
-            *asked = None;
-        }
-    }
+/// Let go of **this pin's** viewer for `path`, and — where it was the last one owed — of the browser
+/// and the thread. The same document pinned twice is two viewers, and one pin closing says nothing
+/// about the other (see `Close`).
+pub(crate) fn close(path: &Path, owner: isize) {
+    let left = match ASKED.lock() {
+        Ok(mut asked) => let_go_of_the_ask(&mut asked, path, owner),
+        Err(_) => return,
+    };
 
     let mut engine = match ENGINE.lock() {
         Ok(engine) => engine,
@@ -201,10 +256,10 @@ pub(crate) fn close(path: &Path) {
         return;
     };
 
-    let _ = held.sender.send(Command::Close(path.to_path_buf()));
-
-    let left = OPEN.load(Ordering::Acquire).saturating_sub(1);
-    OPEN.store(left, Ordering::Release);
+    let _ = held.sender.send(Command::Close {
+        path: path.to_path_buf(),
+        owner,
+    });
 
     if left == 0 {
         // Dropping the channel is what ends the thread: it closes what it still holds — controller,
@@ -212,17 +267,13 @@ pub(crate) fn close(path: &Path) {
         if let Some(engine) = engine.take() {
             let _ = engine.sender.send(Command::Shutdown);
         }
-
-        VIEWER_OPEN.store(false, Ordering::Release);
     }
 }
 
 /// Let go of every viewer at once: the run is ending, or a pin went away without naming a file.
 pub(crate) fn close_all() {
-    OPEN.store(0, Ordering::Release);
-
     if let Ok(mut asked) = ASKED.lock() {
-        *asked = None;
+        asked.clear();
     }
 
     let mut engine = match ENGINE.lock() {
@@ -233,8 +284,6 @@ pub(crate) fn close_all() {
     if let Some(engine) = engine.take() {
         let _ = engine.sender.send(Command::Shutdown);
     }
-
-    VIEWER_OPEN.store(false, Ordering::Release);
 }
 
 /// The viewer's own lifecycle: the four states it can be in, and the call each transition owes.
@@ -542,7 +591,6 @@ impl Host {
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
 
-        VIEWER_OPEN.store(true, Ordering::Release);
         trace(&format!(
             "pdf: shown {} at {}x{}+{}+{}",
             self.path.display(),
@@ -659,7 +707,6 @@ impl Host {
             let _ = DestroyWindow(self.hwnd);
         }
 
-        VIEWER_OPEN.store(false, Ordering::Release);
         trace(&format!("pdf: closed {}", self.path.display()));
     }
 }
@@ -785,13 +832,21 @@ fn viewer_thread(commands: Receiver<Command>) {
                     hosts.push(host);
                 }
             }
-            Ok(Command::Place(area)) => {
-                for host in &mut hosts {
+            Ok(Command::Place { owner, area }) => {
+                // Only the pin the box belongs to: a drag of one pin is no box of another (see
+                // `Place`).
+                for host in hosts
+                    .iter_mut()
+                    .filter(|host| host.owner == HWND(owner as *mut _))
+                {
                     host.place(area);
                 }
             }
-            Ok(Command::Close(path)) => {
-                for host in hosts.iter_mut().filter(|host| host.path == path) {
+            Ok(Command::Close { path, owner }) => {
+                for host in hosts
+                    .iter_mut()
+                    .filter(|host| host.owner == HWND(owner as *mut _) && host.path == path)
+                {
                     host.close();
                 }
             }
@@ -805,6 +860,16 @@ fn viewer_thread(commands: Receiver<Command>) {
 
         hosts.retain(|host| !host.life.is_closed());
 
+        // What the paint and placement roads read, published from the state the pass just settled:
+        // the pins whose documents are on the screen, and no others.
+        publish_the_live_owners(
+            hosts
+                .iter()
+                .filter(|host| host.life.is_up())
+                .map(|host| host.owner.0 as isize)
+                .collect(),
+        );
+
         pump_messages();
     }
 
@@ -814,7 +879,7 @@ fn viewer_thread(commands: Receiver<Command>) {
 
     drop(environment);
 
-    VIEWER_OPEN.store(false, Ordering::Release);
+    publish_the_live_owners(Vec::new());
 
     unsafe {
         CoUninitialize();
@@ -948,6 +1013,67 @@ mod tests {
         assert_eq!(life.closed(), Step::Close);
         assert_eq!(life.closed(), Step::Nothing);
         assert!(life.is_closed());
+    }
+
+    /// A viewer is up for the pin that owns it and for no other: two pins are two documents, and a
+    /// pin whose window went off the screen is still that pin's viewer, suspended rather than gone.
+    #[test]
+    fn a_viewer_is_up_for_the_pin_that_owns_it_and_for_no_other() {
+        let (first, second) = (9_100_001, 9_100_002);
+
+        publish_the_live_owners(vec![first, second]);
+        assert!(is_up_for(first));
+        assert!(is_up_for(second));
+        assert!(!is_up_for(9_100_003), "a pin with no viewer of its own");
+
+        // The second pin put away: its viewer is suspended, so it is still on the screen for its
+        // own pin and says nothing about the first's.
+        publish_the_live_owners(vec![first]);
+        assert!(is_up_for(first));
+        assert!(
+            !is_up_for(second),
+            "a viewer let go of is not up for its pin"
+        );
+
+        // And the last one closed: nothing is up at all, which is what the paint's fast path reads.
+        publish_the_live_owners(Vec::new());
+        assert!(!is_up_for(first));
+        assert!(!ANY_VIEWER_UP.load(Ordering::Acquire));
+    }
+
+    /// An ask is one viewer per file per pin: the same document pinned twice is two viewers, a
+    /// second ask in the same pin is nothing, and one pin closing takes its own ask and no other.
+    #[test]
+    fn an_ask_is_one_viewer_per_file_per_pin() {
+        let mut asks = Vec::new();
+        let pdf = Path::new("a.pdf");
+        let other = Path::new("b.pdf");
+
+        assert!(the_ask_is_the_first(&mut asks, pdf, 11));
+        assert!(
+            !the_ask_is_the_first(&mut asks, pdf, 11),
+            "one viewer per pin"
+        );
+        assert!(
+            the_ask_is_the_first(&mut asks, pdf, 22),
+            "another pin, another viewer"
+        );
+        assert!(the_ask_is_the_first(&mut asks, other, 11));
+        assert_eq!(asks.len(), 3);
+
+        assert_eq!(let_go_of_the_ask(&mut asks, pdf, 11), 2);
+        assert!(
+            !asks.iter().any(|(path, owner)| path == pdf && *owner == 11),
+            "the pin that closed took its own ask"
+        );
+        assert!(asks.iter().any(|(path, owner)| path == pdf && *owner == 22));
+
+        let_go_of_the_ask(&mut asks, other, 11);
+        assert_eq!(
+            let_go_of_the_ask(&mut asks, pdf, 22),
+            0,
+            "the last ask ends the thread"
+        );
     }
 
     /// The notch a viewer is handed is the message Windows would have made: the delta in the high

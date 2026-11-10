@@ -354,7 +354,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                         // this window would compose there is a raster of page one underneath the
                         // document the user is working in (see `engines::pdf_viewer`).
                         && !(media.media_type == MediaType::Pdf
-                            && crate::engines::pdf_viewer::is_up())
+                            && crate::engines::pdf_viewer::is_up_for(hwnd.0 as isize))
                         // A model holds a stand-in frame of this app's and shows a picture of f3d's
                         // through the host, so what is composed here is nothing but the stand-in
                         // over the scene (see `a_models_band_is_a_hosts_picture`).
