@@ -1084,6 +1084,13 @@ pub fn run_preview_window() {
                 // field, whose characters are the `WM_CHAR` `TranslateMessage` only makes from a
                 // key-down nothing swallowed (see `key_input::publish_find_bar_up`).
                 crate::app::seam::publish_find_bar_up(pinned() && text_find::is_open());
+                // And whether the band's own search field holds the caret, published here beside it
+                // and for the same reason: the field is written on the press that focuses it, and the
+                // hook has to be told before the next key is typed into it (see
+                // `pin_playlist::search_has_focus`).
+                crate::app::seam::publish_playlist_search_up(
+                    pinned() && pin_playlist::search_has_focus(),
+                );
 
                 // A window dragged by an edge owes its media a layout at the box it ended up
                 // with: the window procedure owns the drag and asks for it here, because the

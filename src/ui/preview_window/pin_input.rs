@@ -1067,6 +1067,15 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         return true;
     }
 
+    // **A press the band did not take is the hand leaving its search field.** The block above answers a
+    // press on the band itself, and a press anywhere else on the pin is a caret moving out of the field
+    // — the query it typed stays applied, because the list under the press is the list it asked for (see
+    // `pin_playlist::blur_the_search`).
+    if pin_playlist::search_has_focus() {
+        pin_playlist::blur_the_search();
+        render_layered_preview(hwnd);
+    }
+
     if framed {
         let edge = {
             let Some(pinned) = pin_state() else {

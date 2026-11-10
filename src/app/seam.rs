@@ -116,6 +116,8 @@ pub(crate) struct ViewerFacts {
     /// `key_input::pin_win_chord`).
     pin_win_chords: [AtomicU32; PIN_WIN_CHORD_COUNT],
     pin_find_bar_up: AtomicBool,
+    /// Whether the caret is in the playlist band's search field (see `PIN_PLAYLIST_SEARCH_UP`).
+    pin_playlist_search_up: AtomicBool,
     pin_up: AtomicBool,
     pin_end_requested: AtomicBool,
     pin_menu_dismiss_requested: AtomicBool,
@@ -208,6 +210,7 @@ impl ViewerFacts {
             pin_key_presses: [const { AtomicU32::new(0) }; PIN_COMMAND_COUNT],
             pin_win_chords: [const { AtomicU32::new(0) }; PIN_WIN_CHORD_COUNT],
             pin_find_bar_up: AtomicBool::new(false),
+            pin_playlist_search_up: AtomicBool::new(false),
             pin_up: AtomicBool::new(false),
             pin_end_requested: AtomicBool::new(false),
             pin_menu_dismiss_requested: AtomicBool::new(false),
@@ -1723,6 +1726,26 @@ pub(crate) static PIN_KEY_COUNTED: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 pub(crate) fn pin_key_counted() -> u64 {
     PIN_KEY_COUNTED.load(Ordering::Relaxed)
+}
+
+/// Whether the playlist band's search field holds the pin's caret, published beside `PIN_FIND_BAR_UP`
+/// and for the same reason: the field is the playlist's, the playlist has a lock, and a
+/// `WH_KEYBOARD_LL` callback may take none. It changes what the hook may do for the same reason too —
+/// a key it swallowed never becomes the `WM_CHAR` a query is typed from.
+pub(crate) static PIN_PLAYLIST_SEARCH_UP: Fact<AtomicBool> =
+    Fact::of(|facts| &facts.pin_playlist_search_up);
+
+/// Whether the playlist band's search field is the one the keys are going to (see
+/// `PIN_PLAYLIST_SEARCH_UP`).
+pub(crate) fn the_playlist_search_is_up(block: &'static ViewerFacts) -> bool {
+    PIN_PLAYLIST_SEARCH_UP
+        .in_block(block)
+        .load(Ordering::Acquire)
+}
+
+/// Tell the hook whether the band's search field holds the caret.
+pub(crate) fn publish_playlist_search_up(focused: bool) {
+    PIN_PLAYLIST_SEARCH_UP.store(focused, Ordering::Release);
 }
 
 /// Whether a find bar is up over the standing pin's page, published beside the two handles and for

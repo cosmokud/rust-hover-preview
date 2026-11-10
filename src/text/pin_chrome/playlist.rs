@@ -14,7 +14,7 @@
 //! anything.
 
 use super::caption::fit_title;
-use super::primitives::{fill_box, ChromePalette};
+use super::primitives::{fill_box, measure_run, ChromePalette};
 use crate::readers::audio_track::{self, Probed};
 use crate::text::audio_preview;
 use crate::text::text_paint::{self, DibSurface};
@@ -50,6 +50,12 @@ pub(crate) struct PlaylistLayout {
     pub(crate) rows_top: i32,
     pub(crate) rows_bottom: i32,
     pub(crate) visible: i32,
+    /// The search field at the band's bottom: the rows end where it begins, and its own bottom is
+    /// held the pad off the window's last row so that it never meets the drag strip there.
+    pub(crate) search_top: i32,
+    pub(crate) search_bottom: i32,
+    pub(crate) search_left: i32,
+    pub(crate) search_right: i32,
     /// Where a row's name begins: past the pad, the stripe the shown row carries and a gap.
     pub(crate) text_left: i32,
     /// The last column a row's name may reach: the length is right-aligned in its column and drawn
@@ -68,10 +74,14 @@ pub(crate) struct PlaylistLayout {
 /// The rows a paint is handed, and the three a band draws one of them differently for.
 pub(crate) struct PlaylistBand<'a> {
     pub(crate) layout: PlaylistLayout,
-    /// The rows that fit, the first of them being the row number `first`.
+    /// The whole list the band was built from, and the positions into it the query lets through:
+    /// the band draws `shown` and never the rows it hides, so a scroll, a scrollbar and a row's
+    /// place are all counted in positions while `showing`, `picked` and the marquees stay rows.
     pub(crate) rows: &'a [PlaylistRow],
+    pub(crate) shown: &'a [usize],
+    /// The position the first row drawn is, which is what the scroll counts in.
     pub(crate) first: usize,
-    /// How many rows the whole list holds, which is what a scrollbar is measured against.
+    /// How many positions the list holds, which is what a scrollbar is measured against.
     pub(crate) total: usize,
     /// The row the pin is showing, which carries the accent stripe at its left edge.
     pub(crate) showing: Option<usize>,
@@ -82,6 +92,42 @@ pub(crate) struct PlaylistBand<'a> {
     /// which can be a name the column has no room for. A name on its way back to its resting place
     /// is still one of them (see `pin_playlist::set_the_marquee`).
     pub(crate) scrolled: &'a [(usize, i32)],
+    /// The query field at the band's bottom, and the line a band whose query hides every row says
+    /// instead of its rows.
+    pub(crate) search: Option<PlaylistSearch<'a>>,
+    pub(crate) note: Option<&'a str>,
+}
+
+/// The band's search field, as a paint reads it: the query, where its caret stands, and whether
+/// the field is the one the keys are going to.
+///
+/// Whether the text is the placeholder is the text's own answer — an empty query is what draws
+/// the placeholder — so there is nothing here to keep in step with it.
+pub(crate) struct PlaylistSearch<'a> {
+    pub(crate) text: &'a str,
+    /// A byte index on a character boundary, as the field keeps it (see `text_find_field::Field`).
+    pub(crate) caret: usize,
+    /// Whether the caret is drawn, and the bar with it.
+    pub(crate) focused: bool,
+}
+
+/// The rows a query lets through: a case-insensitive substring of the file's own name, in the order
+/// the walk gave them.
+///
+/// **Only the name**, never the facts line or the clock: those are what the file says about itself,
+/// and a hand looking for a track is naming a track. A query of nothing but spaces hides nothing,
+/// which is the one reading of an empty field a reader would not have asked for.
+pub(crate) fn playlist_shown(rows: &[PlaylistRow], query: &str) -> Vec<usize> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return (0..rows.len()).collect();
+    }
+
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row.name.to_lowercase().contains(&needle))
+        .map(|(at, _)| at)
+        .collect()
 }
 
 /// How tall a row is, in the display's own pixels: two lines of text and the pad above and below
@@ -127,8 +173,16 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let clock_gap = text_paint::scaled(CLOCK_GAP_PIXELS as i32, scale).max(0);
     let name_gap = text_paint::scaled(NAME_GAP_PIXELS as i32, scale).max(0);
 
+    let search = text_paint::scaled(SEARCH_PIXELS as i32, scale).max(0);
+
     let rows_top = pad.min(height);
-    let rows_bottom = (height - pad).max(rows_top);
+    // The field is a constant of the layout: a band taller or shorter than this one gives the rows
+    // above it away or takes them back, and the field itself neither moves nor changes size.
+    let rows_bottom = (height - pad - search).max(rows_top);
+    let search_top = rows_bottom;
+    let search_bottom = (search_top + search).min(height - pad).max(search_top);
+    let search_left = pad.min(width);
+    let search_right = (width - pad).max(search_left);
     let visible = ((rows_bottom - rows_top) / row_height).max(0);
     let scrolling = rows.saturating_sub(visible as usize) > 0;
     // The scrollbar is a mark on the window's own edge rather than a column of the band's: it is
@@ -161,6 +215,10 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
         rows_top,
         rows_bottom,
         visible,
+        search_top,
+        search_bottom,
+        search_left,
+        search_right,
         text_left,
         name_right: (drawn_left - name_gap).max(text_left),
         facts_right: (clock_left - clock_gap).max(text_left),
@@ -301,6 +359,43 @@ pub(crate) fn playlist_thumb_grab(
     (thumb_bottom - thumb_top) / 2
 }
 
+/// The rows the search field's own box runs between, in the band's coordinates.
+pub(crate) fn search_box(layout: &PlaylistLayout) -> (i32, i32) {
+    (layout.search_top, layout.search_bottom)
+}
+
+/// Whether a band-local point is the search field's rather than a row's or the band's.
+pub(crate) fn search_field_holds(layout: &PlaylistLayout, x: i32, y: i32) -> bool {
+    let (top, bottom) = search_box(layout);
+
+    (layout.search_left..layout.search_right).contains(&x) && (top..bottom).contains(&y)
+}
+
+/// The column the query's first character is drawn at, which is the pad inside the field's own box.
+fn search_text_left(layout: &PlaylistLayout, scale: f32) -> i32 {
+    layout.search_left + text_paint::scaled(PAD_PIXELS as i32, scale).max(0)
+}
+
+/// The place in the query a point of the field names: a press puts the caret between the characters
+/// it landed between, measured from the column the query is drawn at rather than from the box's edge.
+pub(crate) fn search_index_at(layout: &PlaylistLayout, text: &str, x: i32, scale: f32) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+
+    // shortcut: a query too wide for the field is cut at its right edge rather than scrolled under
+    // its caret; upgrade if a query long enough to lose its own caret shows up.
+    let Some(surface) = DibSurface::create(1, 1) else {
+        return text.len();
+    };
+    let columns = measure_run(&surface, &facts_style(), text, scale);
+    let character = super::find_bar::index_at_column(&columns, search_text_left(layout, scale), x);
+
+    text.char_indices()
+        .nth(character)
+        .map_or(text.len(), |(at, _)| at)
+}
+
 /// Whether a band-local point is the scrollbar's to answer rather than a row's.
 ///
 /// The band a press grabs it in is wider than the mark it paints: it runs from the last column the
@@ -405,15 +500,25 @@ pub(crate) fn paint_playlist(
     // The runs are drawn through GDI, which writes colour and leaves the alpha byte at zero (see
     // the module documentation of `pin_chrome`), so each run's own box is given its coverage back
     // once it has been drawn — the same sealing the caption does for its title.
-    let mut boxes = Vec::with_capacity(band.rows.len() * 6);
+    let mut boxes = Vec::new();
     let mut painter = text_paint::RunPainter::new(surface, scale);
     // The second line is a pixel under the first, so it is measured and drawn at the scale that
     // lands it there rather than at the band's own (see `facts_scale`).
     let small = facts_scale(scale);
     let mut small_painter = text_paint::RunPainter::new(surface, small);
 
-    for (step, row) in band.rows.iter().enumerate() {
-        let index = band.first + step;
+    // The rows drawn are the positions the query let through, and everything a row carries is its
+    // own index: a stripe and a wash are the row the pin shows and the row the hand picked, which
+    // the filter never renumbers.
+    let first = band.first.min(band.shown.len());
+    let last = (first + layout.visible.max(0) as usize).min(band.shown.len());
+    let drawn = band.shown.get(first..last).unwrap_or(&[]);
+    boxes.reserve(drawn.len() * 6);
+
+    for (step, index) in drawn.iter().copied().enumerate() {
+        let Some(row) = band.rows.get(index) else {
+            continue;
+        };
         let top = layout.rows_top + step as i32 * layout.row_height;
         let bottom = (top + layout.row_height).min(layout.rows_bottom);
         if bottom <= top {
@@ -568,6 +673,21 @@ pub(crate) fn paint_playlist(
         small_painter.forget_the_face();
     }
 
+    // A band whose query hides every row says so rather than drawing an empty room: the note is
+    // where the first row would have been, in the ink and the size of a row's own facts line.
+    if let Some(note) = band.note {
+        let run = RECT {
+            left: layout.text_left,
+            top: layout.rows_top
+                + ((layout.row_height - text_paint::scaled(FACTS_PIXELS as i32, small)).max(0) / 2),
+            right: layout.facts_right,
+            bottom: layout.rows_bottom,
+        };
+        small_painter.draw(note, layout.text_left, run, &facts_style, muted, page);
+        small_painter.forget_the_face();
+        boxes.push(run);
+    }
+
     // The scrollbar goes last, over the rows' right edge and out of their columns' way: the track
     // it runs in is the room the rows were held off the window's margin for.
     if let Some((left, right)) = layout.track {
@@ -601,6 +721,13 @@ pub(crate) fn paint_playlist(
         );
     }
 
+    // The search field over the last of it, in the room the layout kept for it.
+    if let Some(search) = band.search.as_ref() {
+        boxes.extend(paint_search(
+            surface, palette, &layout, search, scale, muted,
+        ));
+    }
+
     // GDI left the alpha byte of every run's box at zero, and the band is opaque: what it drew is
     // given its own coverage back before the band is carried across.
     for box_ in &boxes {
@@ -610,6 +737,97 @@ pub(crate) fn paint_playlist(
             }
         }
     }
+}
+
+/// The search field's own pixels: a faint box, the query from the pad inside it, the caret when it is
+/// focused, and the muted placeholder where the query is nothing.
+///
+/// Answers the boxes GDI wrote into, which the band's own seal gives their coverage back — a field
+/// drawn but not sealed is a hole in an opaque band, and a hole in an opaque band is a press that
+/// falls through to the listing behind the pin.
+fn paint_search(
+    surface: &DibSurface,
+    palette: &ChromePalette,
+    layout: &PlaylistLayout,
+    search: &PlaylistSearch,
+    scale: f32,
+    muted: [u8; 3],
+) -> Vec<RECT> {
+    let width = surface.width as i32;
+    let height = surface.height as i32;
+    if width <= 0 || height <= 0 {
+        return Vec::new();
+    }
+
+    let pixels = unsafe {
+        std::slice::from_raw_parts_mut(
+            surface.bits(),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+
+    let page = palette.background;
+    let field = RECT {
+        left: layout.search_left,
+        top: layout.search_top,
+        right: layout.search_right,
+        bottom: layout.search_bottom,
+    };
+    if field.right <= field.left || field.bottom <= field.top {
+        return Vec::new();
+    }
+
+    fill_box(
+        pixels,
+        width,
+        field,
+        text_paint::blend(page, palette.foreground, SEARCH_INK),
+        1.0,
+    );
+
+    let text_left = search_text_left(layout, scale);
+    let cell = text_paint::scaled(FACTS_PIXELS as i32, scale).max(1);
+    let run = RECT {
+        left: text_left,
+        top: layout.search_top + ((layout.search_bottom - layout.search_top - cell).max(0) / 2),
+        right: (layout.search_right - text_paint::scaled(PAD_PIXELS as i32, scale).max(0))
+            .max(text_left),
+        bottom: layout.search_bottom,
+    };
+
+    let mut painter = text_paint::RunPainter::new(surface, scale);
+    let style = facts_style();
+
+    if search.text.is_empty() {
+        painter.draw(PLACEHOLDER, text_left, run, &style, muted, page);
+    } else {
+        let cut = fit_title(surface, &style, search.text, run.right - run.left, scale);
+        painter.draw(&cut, text_left, run, &style, palette.foreground, page);
+    }
+    painter.forget_the_face();
+
+    if search.focused {
+        let caret = search.caret.min(search.text.len());
+        let carried = measure(surface, &style, &search.text[..caret], scale);
+        let bar = text_paint::scaled(CARET_PIXELS as i32, scale).max(1);
+        let at = (text_left + carried).clamp(run.left, (run.right - bar).max(run.left));
+
+        // The accent, which is the ink the clock and the card's own caret are drawn in.
+        fill_box(
+            pixels,
+            width,
+            RECT {
+                left: at,
+                top: run.top,
+                right: at + bar,
+                bottom: run.bottom,
+            },
+            palette.accent,
+            0.9,
+        );
+    }
+
+    vec![run]
 }
 
 /// One run, measured at the scale it is drawn at, without a box to draw it in: what a name's
@@ -716,6 +934,21 @@ pub(crate) fn playlist_row(path: &Path) -> PlaylistRow {
 
 /// How tall a row is in logical pixels: two lines of text and the pad above and below them.
 const ROW_PIXELS: f32 = 44.0;
+
+/// How tall the search field is, in logical pixels: a constant of the layout, so that a band dragged
+/// taller or shorter gives the rows above it what it took rather than stretching the field.
+const SEARCH_PIXELS: f32 = 34.0;
+
+/// What an empty field says, in the muted ink and nothing else: it is a note about what the field is
+/// for rather than a character it holds.
+const PLACEHOLDER: &str = "Search names";
+
+/// How wide the caret bar is.
+const CARET_PIXELS: f32 = 1.5;
+
+/// How far the field's own box stands off the band's page: enough that the two read as a box inside
+/// the band rather than as a band of two colours.
+const SEARCH_INK: f32 = 0.07;
 
 /// The pad the rows are held off every edge of the band by, and the room the drag handle at the
 /// band's bottom edge is drawn in — the pad is the wider of the two on purpose, so that no press
