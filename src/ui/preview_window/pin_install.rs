@@ -1606,6 +1606,7 @@ pub(super) fn relayout_pinned_media(
             path: path.to_path_buf(),
             answer: pin_media_load(path, width, height, dpi, scale, place),
             decoded: None,
+            place: None,
         }),
         None => None,
     }
@@ -1771,6 +1772,10 @@ pub(super) struct PinRelayout {
     /// pin has played to by the time it lands, and what it is short of is waited for rather than
     /// installed (see `take_pin_relayout`).
     pub(super) decoded: Option<MediaData>,
+    /// The frame a hand asked the picture to be taken to, where this ask is a seek rather than a
+    /// box: the answer lands on that frame whatever the pin has played to, since the place it was
+    /// asked for *is* the place the hand chose (see `seek_pinned_animation`).
+    pub(super) place: Option<usize>,
 }
 
 impl Drop for PinRelayout {
@@ -1782,6 +1787,28 @@ impl Drop for PinRelayout {
             media.cancel_background_work();
         }
     }
+}
+
+/// Land a picture that plays on the frame a hand asked for, our first one past it where the
+/// answer's own stream has already overtaken it.
+///
+/// The frame's wait begins at the landing rather than at the decode, because a seek is a hand
+/// asking for that frame *now*: the delay the file gives it is the delay a picture played at its
+/// own pace would have waited from the frame before, and the seek has just skipped it.
+pub(super) fn land_the_picture_on(media: MediaData, place: usize) -> MediaData {
+    let mut media = media;
+    if !media.media_type.is_animation() || media.frames.is_empty() {
+        return media;
+    }
+
+    media.current_frame = media
+        .frames
+        .iter()
+        .position(|frame| frame.file_index >= place)
+        .unwrap_or_else(|| media.frames.len().saturating_sub(1));
+    media.last_frame_time = Instant::now();
+
+    media
 }
 
 /// Take a relayout that has answered, install it, and answer whether a frame was installed.
@@ -1836,15 +1863,19 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     // The answer is the one to install once it holds the place the picture has played to, or one
     // past it — which is a frame skipped rather than a picture put back. Short of it, the frames on
     // screen are still the ones drawn for the box, and the answer waits for its own stream.
-    let caught_up = pending.decoded.as_ref().is_none_or(|decoded| {
-        !decoded.media_type.is_animation()
-            || wanted.is_none_or(|wanted| {
-                decoded
-                    .frames
-                    .iter()
-                    .any(|frame| frame.file_index >= wanted)
-            })
-    });
+    // A seek is answered as soon as it arrives: what it was asked for is the frame the hand chose
+    // rather than the place the pin has played to, and waiting for the pin's own place would hold
+    // a picture dragged backwards until its stream had decoded past where it already was.
+    let caught_up = pending.place.is_some()
+        || pending.decoded.as_ref().is_none_or(|decoded| {
+            !decoded.media_type.is_animation()
+                || wanted.is_none_or(|wanted| {
+                    decoded
+                        .frames
+                        .iter()
+                        .any(|frame| frame.file_index >= wanted)
+                })
+        });
     if !caught_up {
         return false;
     }
@@ -1852,6 +1883,7 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     let Some(mut pending) = relayout.take() else {
         return false;
     };
+    let place = pending.place;
     let Some(media) = pending.decoded.take() else {
         return false;
     };
@@ -1868,6 +1900,12 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
 
     let media = keep_text_place(media);
     let media = keep_animation_place(media);
+    // And a seek lands on the frame the hand chose: the answer's own first frame is that frame, or
+    // the nearest one past it, and the playhead is put on it with its wait begun now.
+    let media = match place {
+        Some(place) => land_the_picture_on(media, place),
+        None => media,
+    };
     let Ok(mut current) = CURRENT_MEDIA.lock() else {
         return false;
     };

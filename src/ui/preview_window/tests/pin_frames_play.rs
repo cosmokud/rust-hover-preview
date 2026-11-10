@@ -146,3 +146,45 @@ fn a_share_of_the_track_names_a_frame_of_the_file() {
     assert_eq!(one_frame.frames(), 1);
     assert_eq!(one_frame.index_at_share(1.0), 0);
 }
+
+/// A seek lands the picture on the frame the hand chose: the answer's first frame is that one, or
+/// the nearest past it where the answer's own stream has already overtaken the place, and a frame
+/// the answer does not hold is its newest rather than a picture put back to the first.
+#[test]
+fn a_seek_lands_the_picture_on_the_frame_a_hand_chose() {
+    let frames = |indices: &[usize]| {
+        let frame = |file_index: usize| {
+            let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 1000);
+            frame.file_index = file_index;
+            Arc::new(frame)
+        };
+        let mut media = static_image_media(frame(indices[0]), MediaType::AnimatedGif);
+        media.frames = indices.iter().copied().map(frame).collect();
+        media
+    };
+
+    // A decode begun part-way through a file answers the run from that place on.
+    let media = land_the_picture_on(frames(&[40, 41, 42]), 40);
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(40),
+        "the answer's own first frame is the one asked for"
+    );
+
+    // A stream that has run past the place answers the nearest frame past it rather than the one
+    // before: a picture played one frame too far is moved on, and one played a frame back is a
+    // picture put where the hand did not ask for it.
+    let media = land_the_picture_on(frames(&[38, 39, 40, 41]), 40);
+    assert_eq!(media.current_frame_of_file(), Some(40));
+
+    // And a place past everything the answer holds lands on the newest frame it has.
+    let media = land_the_picture_on(frames(&[10, 11]), 900);
+    assert_eq!(media.current_frame_of_file(), Some(11));
+
+    // A picture that does not play has no frame to land on, and is returned as it came.
+    let still = static_image_media(
+        Arc::new(ImageFrame::new(vec![0u8; 4], 1, 1, 0)),
+        MediaType::StaticImage,
+    );
+    assert!(!land_the_picture_on(still, 7).media_type.is_animation());
+}
