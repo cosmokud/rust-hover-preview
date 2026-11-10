@@ -787,7 +787,8 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     }
     // And a picture whose every frame costs a walk to reach — a GIF's and an animated WebP's — is
     // read once in the background, at the size this pin draws it, so that a hand on its track is
-    // shown whatever frame it names at once (see `pin_index`).
+    // shown whatever frame it names at once (see `pin_index`). A box change asks for it again on
+    // its own road, which is the one that knows the box the picture has been laid out at.
     if let (Some(total), Some(kind)) = (
         crate::formats::animation_frames::timeline(&path).map(|run| run.frames()),
         Some(media.media_type),
@@ -1953,19 +1954,6 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     // `pin_scrub`).
     if media.media_type.is_animation() {
         pin_scrub::remember(&pending.path, &media.frames);
-    }
-    // And the run the index read is the run of the box the window has *now*: a box change is a
-    // picture drawn at another size, and a run of the size it was is a run to read again (see
-    // `pin_index`).
-    if let Some(total) =
-        crate::formats::animation_frames::timeline(&pending.path).map(|run| run.frames())
-    {
-        pin_index::start(
-            &pending.path,
-            media.media_type,
-            total,
-            (media.current_width(), media.current_height()),
-        );
     }
     let Ok(mut current) = CURRENT_MEDIA.lock() else {
         return false;

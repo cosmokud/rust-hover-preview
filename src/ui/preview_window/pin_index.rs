@@ -28,6 +28,11 @@
 //! picture that is true rather than its detail, which is what a hand reading where in the file it
 //! is wants: the exact frame is decoded and installed when the hand lets go (see
 //! `settle_the_picture_on`), which is when the picture has to be right more than immediate.
+//!
+//! **And nothing is read for a picture the player already holds whole.** A short animation is
+//! decoded from start to finish by the player itself and every frame of it stays in hand, so a
+//! frame a hand names is already a playhead put down on that run (see `show_the_frame_of`) — a
+//! second run of the same frames would be the same picture held twice.
 
 use super::*;
 
@@ -99,6 +104,18 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
     let webp = matches!(kind, MediaType::AnimatedWebP);
     let gif = matches!(kind, MediaType::AnimatedGif);
     if !webp && !gif {
+        return;
+    }
+
+    // **A picture the media already holds whole is a picture with nothing to index** (see the
+    // module documentation): its frames are in hand, and a second run of them would be the same
+    // picture held twice.
+    let held_whole = CURRENT_MEDIA.lock().ok().is_some_and(|media| {
+        media.as_ref().is_some_and(|media| {
+            media.media_type == kind && media.is_fully_loaded() && media.frames.len() >= total
+        })
+    });
+    if held_whole {
         return;
     }
 
