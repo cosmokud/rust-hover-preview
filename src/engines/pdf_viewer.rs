@@ -25,6 +25,17 @@
 //! when `NavigationCompleted` says the document loaded. What is on screen until then — and what
 //! stays on screen for good where the engine or the navigation fails — is the static raster the pin
 //! was already showing, so a pin is never a white window.
+//!
+//! **And it is revealed at a box that came with it.** The box an ask is made with is the band that
+//! stood when the file was picked, and a pin taken up on another file moves its band after that: a
+//! document that arrived at the box it was created with is a second window standing beside its pin
+//! until the next box change snaps it in. So a viewer is `Arriving` until both the document has
+//! arrived *and* a box has been published for its pin since it was created (see `Life::navigated`),
+//! and the pin's roads keep publishing one while it is arriving (see `is_arriving_for`).
+//!
+//! **One pin holds one document.** A file asked for in a pin that was showing another takes the
+//! standing viewer down before the new one is made, so a walk of two files can never leave two
+//! windows in one band (see `Seat::replaced_by`).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -82,6 +93,13 @@ static LIVE_OWNERS: Lazy<Mutex<Vec<isize>>> = Lazy::new(|| Mutex::new(Vec::new()
 /// not a PDF — and of a PDF with no viewer — takes no lock, which is the shape `SHOWING` has for
 /// the hover page.
 static ANY_VIEWER_UP: AtomicBool = AtomicBool::new(false);
+
+/// The pins whose viewer is still on its way, beside the ones it is up for (see `is_arriving_for`).
+static ARRIVING_OWNERS: Lazy<Mutex<Vec<isize>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Whether any viewer at all is still on its way, for the same reason `ANY_VIEWER_UP` exists: a pin
+/// that is up and owes nothing pays one read rather than a lock.
+static ANY_VIEWER_ARRIVING: AtomicBool = AtomicBool::new(false);
 
 /// The engine: the thread and the channel into it, begun by the first `open` and ended by the last
 /// `close`.
@@ -144,6 +162,35 @@ fn publish_the_live_owners(owners: Vec<isize>) {
     ANY_VIEWER_UP.store(!owners.is_empty(), Ordering::Release);
 }
 
+/// Publish the pins whose viewer has not arrived yet, written the same way and in the same pass as
+/// the live list above.
+///
+/// **It is what keeps a reveal off a box change the user has to cause**: a pin in this list is one
+/// the preview loop publishes a box for on every tick, so the box a document arrives at is the one
+/// its pin has now rather than the one the ask was made with (see `is_arriving_for`).
+fn publish_the_arriving_owners(owners: Vec<isize>) {
+    let arriving = !owners.is_empty();
+
+    if let Ok(mut list) = ARRIVING_OWNERS.lock() {
+        *list = owners;
+    }
+
+    ANY_VIEWER_ARRIVING.store(arriving, Ordering::Release);
+}
+
+/// Whether this pin is still waiting for its viewer, which is what the loop asks before publishing
+/// a box for it (see `pin_lifecycle::place_pinned_siblings`).
+pub(crate) fn is_arriving_for(owner: isize) -> bool {
+    if owner == 0 || !ANY_VIEWER_ARRIVING.load(Ordering::Acquire) {
+        return false;
+    }
+
+    ARRIVING_OWNERS
+        .lock()
+        .map(|owners| owners.contains(&owner))
+        .unwrap_or(false)
+}
+
 /// The asks outstanding, one per file per pin: a viewer is one per pin, and a second ask for the
 /// same file in the same pin is nothing. The list is also the refcount — the thread lives while it
 /// has an ask and ends with the last one — and that is the whole lifetime rule: no TTL.
@@ -185,6 +232,11 @@ pub(crate) fn open(path: &Path, owner: isize, area: Area) -> bool {
     // pin's file: the pair is what says whether a viewer is owed (see `the_ask_is_the_first`).
     match ASKED.lock() {
         Ok(mut asked) => {
+            // **One pin holds one document**, so the ask for the file it was showing is the ask this
+            // one replaces: let go of here rather than left behind, where it would be a browser kept
+            // alive for a file nothing is showing (see `let_go_of_the_ask`).
+            asked.retain(|(asked_path, asked_owner)| *asked_owner != owner || asked_path == path);
+
             if !the_ask_is_the_first(&mut asked, path, owner) {
                 return true;
             }
@@ -227,7 +279,10 @@ pub(crate) fn open(path: &Path, owner: isize, area: Area) -> bool {
 /// Move **this pin's** viewer to `area` — the pin's content band, which is the whole of what a
 /// viewer is placed by. A drag of one pin is no ask at all for the window of another (see `Place`).
 pub(crate) fn place(owner: isize, area: Area) {
-    if !is_up_for(owner) {
+    // **A box is published for a viewer that is still arriving as well as for one that is up.** The
+    // rect a viewer is created with is never the rect it is shown at, so the box that answers an ask
+    // is the newest one its pin has rather than the one that came with the ask (see `Seat::place`).
+    if !a_viewer_is_owed(owner) {
         return;
     }
 
@@ -236,6 +291,16 @@ pub(crate) fn place(owner: isize, area: Area) {
             let _ = engine.sender.send(Command::Place { owner, area });
         }
     }
+}
+
+/// Whether this pin has a viewer owed or standing: an ask is what makes a box meaningful, and an ask
+/// outlives the arrival it is about (see `open` and `place`).
+fn a_viewer_is_owed(owner: isize) -> bool {
+    owner != 0
+        && ASKED
+            .lock()
+            .map(|asked| asked.iter().any(|(_, asked_owner)| *asked_owner == owner))
+            .unwrap_or(false)
 }
 
 /// Let go of **this pin's** viewer for `path`, and — where it was the last one owed — of the browser
@@ -323,19 +388,31 @@ enum Step {
 }
 
 impl Life {
-    /// A navigation that answered. Only a document that arrived is revealed.
-    fn navigated(&mut self, arrived: bool) -> Step {
+    /// A navigation that answered, and whether a box has arrived for this viewer since it was
+    /// created.
+    ///
+    /// **Only a document that arrived at a box of its pin's is revealed**, because the box a window
+    /// was created with is the band that stood before its pin was taken up on the file it is showing:
+    /// a viewer put up there is a second window standing beside the pin, and nothing but the next box
+    /// change — the user dragging the caption — moves it in. A document that arrived with no box yet
+    /// is still `Arriving`, which is a state the thread keeps publishing a box for (see
+    /// `is_arriving_for`).
+    fn navigated(&mut self, arrived: bool, placed: bool) -> Step {
         if *self != Life::Arriving {
             return Step::Nothing;
         }
 
-        if arrived {
-            *self = Life::Shown;
-            Step::Reveal
-        } else {
+        if !arrived {
             *self = Life::Closed;
-            Step::Close
+            return Step::Close;
         }
+
+        if !placed {
+            return Step::Nothing;
+        }
+
+        *self = Life::Shown;
+        Step::Reveal
     }
 
     /// What the document being on the screen decides, asked once a pass while it is up.
@@ -376,15 +453,58 @@ impl Life {
     }
 }
 
-/// One viewer: its window, the controller over it, and where it has got to.
-struct Host {
+/// What a viewer is apart from its window: the file it shows, the pin it stands in, the box that pin
+/// has published for it, and how far the document has got.
+///
+/// It is a value of its own because everything the thread decides about a viewer is decided about
+/// this, and none of it is a question about a window: a file asked for replaces the one its pin was
+/// showing, a box is kept until the document arrives, and the reveal waits for both (see `Life`).
+/// That is also what lets a walk of two documents be read as a list (see `a_walk_of_two_pdfs`).
+struct Seat {
     path: PathBuf,
+    owner: isize,
+    life: Life,
+    /// The newest box published for this viewer's pin.
+    area: Area,
+    /// Whether a `Place` has arrived **since this viewer was created**.
+    placed: bool,
+    /// What `NavigationCompleted` said, kept rather than re-read: it is one message (see `Host`).
+    arrived: bool,
+}
+
+impl Seat {
+    fn create(path: &Path, owner: isize, area: Area) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            owner,
+            life: Life::Arriving,
+            area,
+            placed: false,
+            arrived: false,
+        }
+    }
+
+    /// The newest box this pin has. A box that arrives before the document does is the box it arrives
+    /// in, which is the whole of what makes a reveal placement-atomic (see `Life::navigated`).
+    fn place(&mut self, area: Area) {
+        self.area = area;
+        self.placed = true;
+    }
+
+    /// Whether this viewer is the one a file asked for in its pin replaces: **one pin holds one
+    /// document**, so the file a walk has just left is taken down before the one it steps onto is
+    /// made (see `Command::Open`).
+    fn replaced_by(&self, path: &Path, owner: isize) -> bool {
+        self.owner == owner && self.path != path
+    }
+}
+
+/// One viewer: the seat above, its window, the controller over it, and where it has got to.
+struct Host {
+    seat: Seat,
     hwnd: HWND,
-    owner: HWND,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
-    life: Life,
-    area: Area,
     deadline: Instant,
     /// What `NavigationCompleted` said, sent by the handler on this same thread and taken by the
     /// thread's own pass (see `settle`).
@@ -402,7 +522,7 @@ impl Host {
     ) -> Option<Self> {
         register_class();
 
-        let owner = HWND(owner as *mut _);
+        let owner_window = HWND(owner as *mut _);
         let deadline = Instant::now() + NAVIGATION_TIMEOUT;
 
         // The window is created hidden and revealed only by a document that arrived: a window put
@@ -418,7 +538,7 @@ impl Host {
                 area.y,
                 area.width,
                 area.height,
-                owner,
+                owner_window,
                 None,
                 None,
                 None,
@@ -494,58 +614,67 @@ impl Host {
         trace(&format!("pdf: navigating to {}", path.display()));
 
         Some(Self {
-            path: path.to_path_buf(),
+            seat: Seat::create(path, owner, area),
             hwnd,
-            owner,
             controller,
             webview,
-            life: Life::Arriving,
-            area,
             deadline,
             answer,
             suspended: false,
         })
     }
 
-    /// What this viewer is owed on this pass: a document that arrived, one that did not answer in
-    /// time, and the suspension the point of the user's attention decides.
+    /// What this viewer is owed on this pass: the document that arrived at a box of its pin's, the
+    /// navigation that is not coming, and the suspension the pin's place on the screen decides.
     fn settle(&mut self) {
-        if self.life.is_arriving() {
-            match self.answer.try_recv() {
-                Ok(arrived) => match self.life.navigated(arrived) {
-                    Step::Reveal => self.reveal(),
-                    Step::Close => {
-                        trace(&format!("pdf: nothing arrived for {}", self.path.display()));
-                        self.close();
-                        return;
-                    }
-                    _ => {}
-                },
-                Err(mpsc::TryRecvError::Empty) => {
-                    if Instant::now() >= self.deadline {
+        if self.seat.life.is_arriving() {
+            if !self.seat.arrived {
+                match self.answer.try_recv() {
+                    Ok(arrived) => self.seat.arrived = arrived,
+                    Err(mpsc::TryRecvError::Empty) if Instant::now() >= self.deadline => {
                         trace(&format!(
                             "pdf: gave up on {} after {} s",
-                            self.path.display(),
+                            self.seat.path.display(),
                             NAVIGATION_TIMEOUT.as_secs()
                         ));
                         self.close();
                         return;
                     }
+                    // A document still on its way is owed nothing yet: the box it is waiting for is
+                    // the pin's own to publish (see `is_arriving_for`).
+                    Err(mpsc::TryRecvError::Empty) => return,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        self.close();
+                        return;
+                    }
                 }
-                Err(mpsc::TryRecvError::Disconnected) => {
+            }
+
+            match self
+                .seat
+                .life
+                .navigated(self.seat.arrived, self.seat.placed)
+            {
+                Step::Reveal => self.reveal(),
+                Step::Close => {
+                    trace(&format!(
+                        "pdf: nothing arrived for {}",
+                        self.seat.path.display()
+                    ));
                     self.close();
                     return;
                 }
+                _ => {}
             }
         }
 
-        if !self.life.is_up() {
+        if !self.seat.life.is_up() {
             return;
         }
 
         let running = self.the_document_is_on_the_screen();
 
-        match self.life.settle(running) {
+        match self.seat.life.settle(running) {
             Step::Suspend => self.suspend(),
             Step::Resume => self.wake(),
             _ => {}
@@ -569,35 +698,51 @@ impl Host {
         // depend on whether the Shell hides an owned window with its owner.
         unsafe {
             IsWindowVisible(self.hwnd).as_bool()
-                && IsWindowVisible(self.owner).as_bool()
-                && !IsIconic(self.owner).as_bool()
+                && IsWindowVisible(self.owner()).as_bool()
+                && !IsIconic(self.owner()).as_bool()
         }
     }
 
-    fn reveal(&mut self) {
-        self.set_bounds();
+    /// The pin this viewer stands in, as the window that owns it.
+    fn owner(&self) -> HWND {
+        HWND(self.seat.owner as *mut _)
+    }
 
+    /// Put the window at the box its pin has published, which is the only box it is ever shown at.
+    fn put_the_window(&self) {
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
                 HWND::default(),
-                self.area.x,
-                self.area.y,
-                self.area.width,
-                self.area.height,
+                self.seat.area.x,
+                self.seat.area.y,
+                self.seat.area.width,
+                self.seat.area.height,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
+        }
+    }
+
+    fn reveal(&mut self) {
+        // **The box first and the controller's own after it.** The client is what a page is laid out
+        // at, so a controller told its bounds before the window moved is a page at the box before it,
+        // and the document would be laid out twice (see `set_bounds`).
+        self.put_the_window();
+
+        unsafe {
             let _ = self.controller.SetIsVisible(true);
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
 
+        self.set_bounds();
+
         trace(&format!(
             "pdf: shown {} at {}x{}+{}+{}",
-            self.path.display(),
-            self.area.width,
-            self.area.height,
-            self.area.x,
-            self.area.y
+            self.seat.path.display(),
+            self.seat.area.width,
+            self.seat.area.height,
+            self.seat.area.x,
+            self.seat.area.y
         ));
     }
 
@@ -621,25 +766,14 @@ impl Host {
     }
 
     fn place(&mut self, area: Area) {
-        self.area = area;
+        self.seat.place(area);
 
-        if !self.life.is_up() {
+        if !self.seat.life.is_up() {
             // A box asked for before the document arrived is the one it arrives in (see `reveal`).
             return;
         }
 
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                HWND::default(),
-                area.x,
-                area.y,
-                area.width,
-                area.height,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-        }
-
+        self.put_the_window();
         self.set_bounds();
     }
 
@@ -673,7 +807,7 @@ impl Host {
         }
 
         self.suspended = true;
-        trace(&format!("pdf: suspended {}", self.path.display()));
+        trace(&format!("pdf: suspended {}", self.seat.path.display()));
     }
 
     fn wake(&mut self) {
@@ -694,11 +828,11 @@ impl Host {
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
 
-        trace(&format!("pdf: resumed {}", self.path.display()));
+        trace(&format!("pdf: resumed {}", self.seat.path.display()));
     }
 
     fn close(&mut self) {
-        if self.life.closed() == Step::Nothing {
+        if self.seat.life.closed() == Step::Nothing {
             return;
         }
 
@@ -707,7 +841,7 @@ impl Host {
             let _ = DestroyWindow(self.hwnd);
         }
 
-        trace(&format!("pdf: closed {}", self.path.display()));
+        trace(&format!("pdf: closed {}", self.seat.path.display()));
     }
 }
 
@@ -793,6 +927,19 @@ fn viewer_thread(commands: Receiver<Command>) {
         match commands.recv_timeout(wait) {
             Ok(Command::Shutdown) => break,
             Ok(Command::Open { path, owner, area }) => {
+                // **The pin's other document goes before this one is made.** A walk asks for the file
+                // it steps onto in the pin that was showing the file it stepped off, and one pin holds
+                // one document: the outgoing window is destroyed here, before the incoming one exists
+                // to be revealed, so a walk can never leave two windows standing in one band (see
+                // `Seat::replaced_by` and `Command::Close`).
+                for host in hosts
+                    .iter_mut()
+                    .filter(|host| host.seat.replaced_by(&path, owner))
+                {
+                    host.close();
+                }
+                hosts.retain(|host| !host.seat.life.is_closed());
+
                 if environment.is_none() {
                     // The browser the runtime starts is this app's child whatever engine asked for
                     // it: one begun here is written down like the hover engine's, so a run that
@@ -834,18 +981,16 @@ fn viewer_thread(commands: Receiver<Command>) {
             }
             Ok(Command::Place { owner, area }) => {
                 // Only the pin the box belongs to: a drag of one pin is no box of another (see
-                // `Place`).
-                for host in hosts
-                    .iter_mut()
-                    .filter(|host| host.owner == HWND(owner as *mut _))
-                {
+                // `Place`). An arriving viewer is given the box rather than moved to it (see
+                // `Seat::place`).
+                for host in hosts.iter_mut().filter(|host| host.seat.owner == owner) {
                     host.place(area);
                 }
             }
             Ok(Command::Close { path, owner }) => {
                 for host in hosts
                     .iter_mut()
-                    .filter(|host| host.owner == HWND(owner as *mut _) && host.path == path)
+                    .filter(|host| host.seat.owner == owner && host.seat.path == path)
                 {
                     host.close();
                 }
@@ -858,15 +1003,23 @@ fn viewer_thread(commands: Receiver<Command>) {
             host.settle();
         }
 
-        hosts.retain(|host| !host.life.is_closed());
+        hosts.retain(|host| !host.seat.life.is_closed());
 
         // What the paint and placement roads read, published from the state the pass just settled:
-        // the pins whose documents are on the screen, and no others.
+        // the pins whose documents are on the screen and the pins still waiting for one, and no
+        // others.
         publish_the_live_owners(
             hosts
                 .iter()
-                .filter(|host| host.life.is_up())
-                .map(|host| host.owner.0 as isize)
+                .filter(|host| host.seat.life.is_up())
+                .map(|host| host.seat.owner)
+                .collect(),
+        );
+        publish_the_arriving_owners(
+            hosts
+                .iter()
+                .filter(|host| host.seat.life.is_arriving())
+                .map(|host| host.seat.owner)
                 .collect(),
         );
 
@@ -880,6 +1033,7 @@ fn viewer_thread(commands: Receiver<Command>) {
     drop(environment);
 
     publish_the_live_owners(Vec::new());
+    publish_the_arriving_owners(Vec::new());
 
     unsafe {
         CoUninitialize();
@@ -936,6 +1090,30 @@ unsafe fn class_is_the_viewers(window: HWND) -> bool {
     name == VIEWER_CLASS.as_wide()
 }
 
+/// Whether `window` is a document's: a viewer's own window, or Chromium's child of one.
+///
+/// **The root above the window is what answers it.** Chromium's furniture — the find box, the page,
+/// the scrollbar — is a tree of children whose classes are Chromium's, and a child of a viewer is the
+/// document's exactly as the viewer is. So a key typed into a document's search box, and a press
+/// anywhere in the document, are answered by the browser and claimed by nothing of this app's: our
+/// chrome claims input only on its own strips, the caption row and the frame margin (see
+/// `key_input::key_hook_proc` and `pin_input::press_the_pin`).
+///
+/// One atomic read before the two calls, because it is asked for every key typed on the desktop, and
+/// the calls are what a desktop with no live viewer never pays for.
+pub(crate) fn a_documents_window(window: HWND) -> bool {
+    if window.is_invalid() || !ANY_VIEWER_UP.load(Ordering::Acquire) {
+        return false;
+    }
+
+    unsafe {
+        let root = GetAncestor(window, GA_ROOT);
+        let root = if root.is_invalid() { window } else { root };
+
+        class_is_the_viewers(root)
+    }
+}
+
 /// Post one wheel notch to `window`, which is Chromium's, at `point` in screen coordinates.
 ///
 /// The message is the one Windows would have handed the viewer had the keyboard been in it: a notch
@@ -962,29 +1140,47 @@ fn a_notch_lparam(point: POINT) -> isize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::UI::WindowsAndMessaging::WS_CHILD;
 
-    /// The road a pin's PDF is on may not become a white window: a viewer that never arrived is
-    /// closed, and the pin's static raster is what stays on screen.
-    #[test]
-    fn a_viewer_that_never_arrives_is_closed_and_never_revealed() {
-        let mut life = Life::Arriving;
+    /// The viewers' published lists are one set for the whole process, so the tests that write them
+    /// run one at a time (see `publish_the_live_owners`).
+    static THE_VIEWERS_ROOM: Mutex<()> = Mutex::new(());
 
-        assert_eq!(life.navigated(false), Step::Close);
-        assert!(life.is_closed());
-        assert!(!life.is_up());
-
-        let mut life = Life::Arriving;
-        assert_eq!(life.navigated(false), Step::Close);
-        assert!(life.is_closed());
+    fn the_viewers_room() -> std::sync::MutexGuard<'static, ()> {
+        THE_VIEWERS_ROOM
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
     }
 
-    /// It is revealed exactly once, and only by a document that arrived.
+    /// The road a pin's PDF is on may not become a white window: a viewer that never arrived is
+    /// closed, and the pin's static raster is what stays on screen — with or without a box of its
+    /// pin's in hand.
     #[test]
-    fn a_viewer_is_revealed_once_by_a_document_that_arrived() {
+    fn a_viewer_that_never_arrives_is_closed_and_never_revealed() {
+        for placed in [false, true] {
+            let mut life = Life::Arriving;
+
+            assert_eq!(life.navigated(false, placed), Step::Close);
+            assert!(life.is_closed());
+            assert!(!life.is_up());
+        }
+    }
+
+    /// It is revealed exactly once, and only by a document that arrived **at a box its pin published
+    /// after the viewer was created**: the box it was created with is the band that stood before the
+    /// pin was taken up on this file, and a window put up there is a second window beside the pin.
+    #[test]
+    fn a_viewer_is_revealed_once_by_a_document_that_arrived_at_a_box() {
         let mut life = Life::Arriving;
 
-        assert_eq!(life.navigated(true), Step::Reveal);
-        assert_eq!(life.navigated(true), Step::Nothing);
+        assert_eq!(
+            life.navigated(true, false),
+            Step::Nothing,
+            "a document that arrived with no box of its pin's is not one to show"
+        );
+        assert!(!life.is_up(), "and it is still arriving");
+        assert_eq!(life.navigated(true, true), Step::Reveal);
+        assert_eq!(life.navigated(true, true), Step::Nothing);
         assert!(life.is_up());
     }
 
@@ -993,7 +1189,7 @@ mod tests {
     #[test]
     fn a_viewer_the_user_leaves_is_suspended_and_the_one_they_return_to_is_resumed() {
         let mut life = Life::Arriving;
-        let _ = life.navigated(true);
+        let _ = life.navigated(true, true);
 
         assert_eq!(life.settle(false), Step::Suspend);
         assert_eq!(life.settle(false), Step::Nothing);
@@ -1019,6 +1215,7 @@ mod tests {
     /// pin whose window went off the screen is still that pin's viewer, suspended rather than gone.
     #[test]
     fn a_viewer_is_up_for_the_pin_that_owns_it_and_for_no_other() {
+        let _room = the_viewers_room();
         let (first, second) = (9_100_001, 9_100_002);
 
         publish_the_live_owners(vec![first, second]);
@@ -1074,6 +1271,180 @@ mod tests {
             0,
             "the last ask ends the thread"
         );
+    }
+
+    /// **Two PDFs walked in one pin leave one viewer, standing in the inset band.**
+    ///
+    /// The ask that steps onto the second file names the band that stood when it was made, and the pin
+    /// is taken up at the box of the document it shows now *after* that: a viewer revealed at the box it
+    /// was created with is a window of its own beside the pin until a box change snaps it in. So the box
+    /// a document arrives at is the last one its pin published, the file a walk left is taken down before
+    /// the one it stepped onto is made, and exactly one viewer is left (see `Life::navigated`,
+    /// `Seat::place` and `Seat::replaced_by`).
+    #[test]
+    fn a_walk_of_two_pdfs_leaves_one_viewer_in_the_band() {
+        let pin = 9_100_011;
+        // The band of the page the pin was showing, and the band of the page it shows now: the second
+        // is what the pin publishes once it is taken up on the file the walk stepped onto.
+        let the_band_before = Area {
+            x: 100,
+            y: 140,
+            width: 400,
+            height: 300,
+        };
+        let the_inset_band = Area {
+            x: 108,
+            y: 148,
+            width: 384,
+            height: 284,
+        };
+
+        // What the thread's `Command::Open` answers, in that order: the pin's other document goes, this
+        // one is created at the box the ask named.
+        fn open(seats: &mut Vec<Seat>, path: &str, owner: isize, area: Area) {
+            seats.retain(|seat| !seat.replaced_by(Path::new(path), owner));
+            seats.push(Seat::create(Path::new(path), owner, area));
+        }
+
+        // What the pass answers once the document has arrived and the box has come with it.
+        fn arrive(seat: &mut Seat) -> Step {
+            seat.arrived = true;
+            seat.life.navigated(seat.arrived, seat.placed)
+        }
+
+        let mut seats = Vec::new();
+
+        // **A document that arrived before its pin's box did is not shown**: the box it was created with
+        // is the band of the file before it.
+        open(&mut seats, "a.pdf", pin, the_band_before);
+        assert_eq!(
+            arrive(&mut seats[0]),
+            Step::Nothing,
+            "a viewer is never revealed at the rect it was created with"
+        );
+        assert!(!seats[0].life.is_up());
+        seats[0].place(the_inset_band);
+        assert_eq!(arrive(&mut seats[0]), Step::Reveal);
+        assert_eq!(
+            seats[0].area, the_inset_band,
+            "the box it arrived at is its pin's"
+        );
+
+        // And the walk: another file in the same pin, at the band that stood when it was asked for.
+        open(&mut seats, "b.pdf", pin, the_band_before);
+        assert_eq!(
+            seats.len(),
+            1,
+            "the file the walk left is gone before this one is made"
+        );
+        assert_eq!(seats[0].path, Path::new("b.pdf"));
+
+        seats[0].place(the_inset_band);
+        assert_eq!(arrive(&mut seats[0]), Step::Reveal);
+        assert_eq!(
+            seats[0].area, the_inset_band,
+            "the viewer stands in the band the pin has now"
+        );
+        assert!(seats[0].life.is_up());
+
+        // Another pin's document is another document, and no file of this pin's takes it down.
+        let other = Seat::create(Path::new("b.pdf"), 9_100_012, the_inset_band);
+        assert!(!other.replaced_by(Path::new("c.pdf"), pin));
+        assert!(!other.replaced_by(Path::new("b.pdf"), other.owner));
+        assert!(other.replaced_by(Path::new("c.pdf"), other.owner));
+    }
+
+    /// **Our chrome claims input only on its own strips.** A viewer's window — or Chromium's own child
+    /// of it, its find box and its page included — is the document's, and the app claims nothing it is
+    /// sent there; a window of the pin's own, and a desktop with no viewer on it, are what they always
+    /// were (see `a_documents_window`).
+    #[test]
+    fn a_viewer_window_and_its_chromium_child_are_the_documents() {
+        let _room = the_viewers_room();
+        register_class();
+
+        unsafe {
+            // A viewer, a child of it of another class — what Chromium's own furniture is, at whatever
+            // class a browser spells it — and a window of the pin's own.
+            let viewer = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                VIEWER_CLASS,
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                320,
+                240,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("a viewer window");
+            let chromium = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_CHILD,
+                0,
+                0,
+                100,
+                100,
+                viewer,
+                None,
+                None,
+                None,
+            )
+            .expect("a child of the viewer");
+            let pin = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                320,
+                240,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("a window of the pin's own");
+
+            // A desktop with no viewer up claims nothing, whatever the window is.
+            publish_the_live_owners(Vec::new());
+            assert!(
+                !a_documents_window(viewer),
+                "with no viewer up there is no document"
+            );
+            assert!(!a_documents_window(chromium));
+
+            publish_the_live_owners(vec![9_100_012]);
+            assert!(
+                a_documents_window(viewer),
+                "a viewer's window is the document's"
+            );
+            assert!(
+                a_documents_window(chromium),
+                "and Chromium's child of it is the document's too: a key typed into its search box \
+                 is a key typed into the document"
+            );
+            assert!(
+                !a_documents_window(pin),
+                "a window of the pin's own is the pin's, which is what carries it and resizes it"
+            );
+            assert!(
+                !a_documents_window(HWND::default()),
+                "and no window at all is nobody's"
+            );
+
+            publish_the_live_owners(Vec::new());
+
+            let _ = DestroyWindow(chromium);
+            let _ = DestroyWindow(viewer);
+            let _ = DestroyWindow(pin);
+        }
     }
 
     /// The notch a viewer is handed is the message Windows would have made: the delta in the high

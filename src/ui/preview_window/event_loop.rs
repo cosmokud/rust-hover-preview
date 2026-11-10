@@ -3878,6 +3878,17 @@ pub fn run_preview_window() {
                 place_pinned_siblings();
             }
 
+            // **A document that has not arrived yet is owed its pin's band on every tick.** The box a
+            // viewer is asked for is the band that stood when the ask was made, and a pin taken up on
+            // another file moves its band after that: the document is put up where its pin is now
+            // rather than where the file before it stood, and it never waits for a box change the user
+            // has to cause (see `engines::pdf_viewer` and `pin_lifecycle::place_pinned_siblings`).
+            if the_bands_pdf_viewer_is_owed()
+                && crate::engines::pdf_viewer::is_arriving_for(pinned_window().0 as isize)
+            {
+                place_pinned_siblings();
+            }
+
             // A pin that has just answered a pick keeps answering for the front of its band for a
             // moment after it: the click is this loop's before it is the listing's, and the window the
             // listing is in is activated after it — which is that window being put over the pin again
