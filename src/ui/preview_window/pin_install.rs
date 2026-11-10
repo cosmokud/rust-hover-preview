@@ -901,6 +901,10 @@ impl PinLoad {
             update.dpi,
             PreviewScale::FitToScreen,
             0,
+            // A take-up is the first ask of a pin that has just been built: there is nothing of its
+            // own for this to supersede, so the flag it carries is never set (see the ask slot, which
+            // is where a superseded decode is actually stopped).
+            Arc::new(AtomicBool::new(false)),
         );
 
         PinLoad {
@@ -993,6 +997,7 @@ pub(super) fn pin_media_load(
     dpi: u32,
     scale: PreviewScale,
     resume_at: usize,
+    cancel: Arc<AtomicBool>,
 ) -> Receiver<Option<MediaData>> {
     let (answer, answers) = channel();
     let path = path.to_path_buf();
@@ -1021,7 +1026,7 @@ pub(super) fn pin_media_load(
                 scale,
                 dpi,
                 reader_size,
-                Arc::new(AtomicBool::new(false)),
+                Arc::clone(&cancel),
                 resume_at,
             )
         }))
@@ -1626,12 +1631,16 @@ pub(super) fn relayout_pinned_media(
         // put an unbounded stretch of unpumped loop in front of a window the hand was
         // still dragging; it is now answered a tick or more later by `take_pin_relayout`,
         // and the band is filled from the frame that is there until it lands.
-        Some(_) => Some(PinRelayout {
-            path: path.to_path_buf(),
-            answer: pin_media_load(path, width, height, dpi, scale, place),
-            decoded: None,
-            place: None,
-        }),
+        Some(_) => {
+            let cancel = Arc::new(AtomicBool::new(false));
+            Some(PinRelayout {
+                path: path.to_path_buf(),
+                answer: pin_media_load(path, width, height, dpi, scale, place, Arc::clone(&cancel)),
+                cancel,
+                decoded: None,
+                place: None,
+            })
+        }
         None => None,
     }
 }
@@ -1791,6 +1800,12 @@ pub(super) struct PinRelayout {
     pub(super) path: PathBuf,
     /// Where the answer arrives, asked for at the place the pin was at when the box changed.
     pub(super) answer: Receiver<Option<MediaData>>,
+    /// The decode's own stop flag: the answer sitting on a channel is a decode already done, and a
+    /// decode still running is told to stop here when the ask it belongs to is put down — a drag
+    /// that sweeps a long picture asks for a new decode per column of the track, and one left
+    /// walking the file for a place nobody is asking about any more is a walk the whole seek waits
+    /// behind (see `ask_for_a_pin_relayout`).
+    pub(super) cancel: Arc<AtomicBool>,
     /// The answer, once it has arrived, kept here while it is behind the pin: the decode began at
     /// the place the box change found the pin at, so it is a frame or three short of the place the
     /// pin has played to by the time it lands, and what it is short of is waited for rather than
@@ -1807,6 +1822,9 @@ impl Drop for PinRelayout {
     /// asked for one of its own, or the pin is gone. Its frames are a thread of this app's, so it is
     /// told to stop here rather than left decoding for a window that no longer wants them.
     fn drop(&mut self) {
+        // A decode still in flight is stopped where it stands, and one that has answered has its
+        // stream stopped: either way nothing is left walking a file for a place nobody asked for.
+        self.cancel.store(true, Ordering::Release);
         if let Some(media) = self.decoded.as_mut() {
             media.cancel_background_work();
         }

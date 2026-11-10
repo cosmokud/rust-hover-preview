@@ -1690,6 +1690,7 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
 
         let mut relayout = Some(PinRelayout {
             path: path.clone(),
+            cancel: Arc::new(AtomicBool::new(false)),
             answer: answers,
             decoded: None,
             place: None,
@@ -1760,6 +1761,7 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
     answer.send(Some(behind)).ok();
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
+        cancel: Arc::new(AtomicBool::new(false)),
         answer: answers,
         decoded: None,
         place: None,
@@ -1839,6 +1841,7 @@ fn a_box_change_waits_for_its_answer_to_reach_the_place_the_pin_has_played_to() 
     // it is drawn over, whatever box it was decoded for.
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
+        cancel: Arc::new(AtomicBool::new(false)),
         answer: answer_from(5, 7),
         decoded: None,
         place: None,
@@ -1860,6 +1863,7 @@ fn a_box_change_waits_for_its_answer_to_reach_the_place_the_pin_has_played_to() 
     // Its own stream decodes its way up to that place, and then it is the frame installed.
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
+        cancel: Arc::new(AtomicBool::new(false)),
         answer: answer_from(5, 9),
         decoded: None,
         place: None,
@@ -1933,6 +1937,7 @@ fn a_released_playhead_is_carried_as_exactly_as_a_held_one() {
 
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
+        cancel: Arc::new(AtomicBool::new(false)),
         answer: answers,
         decoded: None,
         place: None,

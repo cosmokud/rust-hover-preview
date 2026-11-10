@@ -2122,13 +2122,23 @@ pub(super) fn seek_pinned_animation(
         .unwrap_or(96);
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
-    let answer = pin_media_load(path, width, height, dpi, PreviewScale::FitToScreen, frame);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let answer = pin_media_load(
+        path,
+        width,
+        height,
+        dpi,
+        PreviewScale::FitToScreen,
+        frame,
+        Arc::clone(&cancel),
+    );
     // The ask is written down on the loop's own slot rather than started here, for the reason every
     // other relayout is: the decode runs on a thread of its own and the tick that asked for it must
     // not wait for it (see `PIN_RELAYOUT_ASK`).
     ask_for_a_pin_relayout(PinRelayout {
         path: path.to_path_buf(),
         answer,
+        cancel,
         decoded: None,
         place: Some(frame),
     });
