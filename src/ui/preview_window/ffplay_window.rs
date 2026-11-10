@@ -837,6 +837,48 @@ pub(super) enum BeforeTheShow {
 /// nothing and today's road answers it (see `style_the_window_before_the_show`).
 const A_FILMS_WINDOW_CLASS: &str = "mpv";
 
+/// The class name FFmpeg's player gives the window it draws a film in: **SDL's own, and never `mpv`'s**.
+///
+/// **It is why every ffplay hover pays a frame the size of the film.** The eager pass below is the
+/// only thing in this app that looks at a player's window *before* the player shows it, and it looked
+/// for `mpv` under a pid running `ffplay.exe`: SDL names that window `SDL_app`, so the pass found
+/// nothing, the ordinary pass — which refuses a window nobody has shown — could not see it either
+/// until it was already on the glass, and a 3840x2160 film's window stood at its own size for the
+/// 350–410ms the launch and the adoption take before the host covered it.
+///
+/// **Measured on the ffplay this app launches (9.0.2, SDL2)**: the window exists hidden at 640x480
+/// 50–70ms into the launch, is styled while hidden at 195–285ms, and is shown by the player at
+/// 250–340ms as a 2560x1440 window. `STARTUPINFO`'s `SW_HIDE` is ignored by it, so hiding it has to be
+/// this app's call rather than the launch's (see `hide_the_ffplays_window_before_the_show`).
+const SDL_FILMS_WINDOW_CLASS: &str = "SDL_app";
+
+/// The class a *film's* window wears for the player this app last began: **mpv's for mpv and SDL's for
+/// FFmpeg's player**, because the two engines name it differently and a pass that names the wrong one
+/// finds nothing at all (see `SDL_FILMS_WINDOW_CLASS`).
+///
+/// It is asked of `VIDEO_PROCESS_IMAGE`, which every launch writes before the process's window exists
+/// (see `note_player_process` and `note_player_started`), so the answer is the player being begun and
+/// not the one before it. A viewer's own window is found by its own thread and its own class (see
+/// `f3d_player`), so this answers for the two engines that draw a film and for nothing else.
+fn a_films_window_class() -> &'static str {
+    films_window_class_for(video_process_image())
+}
+
+/// The class a film's window wears for `image`, as a question about that name alone — which is the whole of
+/// the pick, written out where a test can hold it without standing a player in a record the whole process
+/// shares (see `a_films_window_class`).
+///
+/// **A name that is neither is `mpv`'s**, which is the class this pass searched for before FFmpeg's player
+/// was on this road at all: a machine playing films through a viewer of its own is no film of this app's,
+/// and the pass finding nothing there is the answer it always gave.
+fn films_window_class_for(image: &str) -> &'static str {
+    if image == FFPLAY_IMAGE_NAME {
+        SDL_FILMS_WINDOW_CLASS
+    } else {
+        A_FILMS_WINDOW_CLASS
+    }
+}
+
 /// What the eager enumeration carries: which process, and the film's window where one was found.
 struct TheFilmsWindowSearch {
     target_pid: u32,
@@ -867,7 +909,7 @@ unsafe extern "system" fn the_films_window_callback(
     let named = GetClassNameW(hwnd, &mut class);
     if named <= 0
         || !String::from_utf16_lossy(&class[..named as usize])
-            .eq_ignore_ascii_case(A_FILMS_WINDOW_CLASS)
+            .eq_ignore_ascii_case(a_films_window_class())
     {
         return windows::Win32::Foundation::BOOL(1);
     }
@@ -1644,6 +1686,32 @@ mod tests {
         }
     }
 
+    /// **The class the eager pass searches for is the class of the player this app began**, and that is the
+    /// whole of why a 4K ffplay hover was a 4K frame on the glass: the pass searched `mpv` under a pid
+    /// running FFmpeg's player, found nothing, and the ordinary pass cannot see a window nobody has shown
+    /// (see `films_window_class_for` and `SDL_FILMS_WINDOW_CLASS`).
+    ///
+    /// mpv's own answer is held beside it, because this must not become a pass that stopped finding mpv's
+    /// window while it learned to find SDL's: the two engines are two names and the road is one.
+    #[test]
+    fn the_eager_pass_searches_for_the_class_the_player_it_began_names_its_window_with() {
+        assert_eq!(
+            films_window_class_for(FFPLAY_IMAGE_NAME),
+            "SDL_app",
+            "FFmpeg's player names its film's window with SDL's own class"
+        );
+        assert_eq!(
+            films_window_class_for(MPV_IMAGE_NAME),
+            "mpv",
+            "and mpv names its own `mpv`, which is the class this pass has always searched for"
+        );
+        assert_eq!(
+            films_window_class_for("f3d.exe"),
+            "mpv",
+            "a viewer is found by its own thread and its own class, so a third name is no name of a              film's window here and the pass is answered with the one it always had"
+        );
+    }
+
     /// A pid with no window of its own is a engine that has not made one yet, which is the answer the
     /// monitor keeps looking on rather than a race it has lost (see `style_the_window_before_the_show`).
     #[test]
@@ -1660,11 +1728,28 @@ mod tests {
         );
     }
 
+    /// The player the test's own window is a film's for: **the class a film's window is searched for is
+    /// asked of the player this app last began** (see `a_films_window_class`), so a window made here has
+    /// to wear the class of one of the two engines or nothing is found at all.
+    ///
+    /// `MPV_IMAGE_NAME` is stood in, and the record is put back as it was at the end of the test, because
+    /// that record is one for the whole process (see `PIN_TESTS_ONE_AT_A_TIME`).
+    fn stand_mpv_as_the_player() -> &'static str {
+        let was = video_process_image();
+        note_player_process(VIDEO_PID.load(Ordering::SeqCst), MPV_IMAGE_NAME);
+        was
+    }
+
     /// A window of the class a film's window has, made by this process and left where no display is:
     /// what the passes that style a player before its show are asked about, and what the caller
     /// destroys. `shown` is the other half of the question — a player shows its own window the moment
     /// it has configured it, so a pass either catches the window before that or finds it already
     /// listed.
+    ///
+    /// **It wears mpv's class, which is the one `stand_mpv_as_the_player` makes the pass search for.**
+    /// FFmpeg's player's `SDL_app` is the same window under the other name (see
+    /// `SDL_FILMS_WINDOW_CLASS`), and a test of the pass does not need both: the pick between the two
+    /// names is `a_films_window_class`'s, and it is held below.
     ///
     /// Safety: the window is the caller's to destroy.
     unsafe fn a_film_window_of_the_tests_own(shown: bool) -> HWND {
@@ -1730,6 +1815,7 @@ mod tests {
         use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
         unsafe {
+            let was = stand_mpv_as_the_player();
             let hwnd = a_film_window_of_the_tests_own(false);
             let noactivate = WS_EX_NOACTIVATE.0 as isize;
             let toolwindow = WS_EX_TOOLWINDOW.0 as isize;
@@ -1759,6 +1845,7 @@ mod tests {
             );
 
             let _ = DestroyWindow(hwnd);
+            note_player_process(VIDEO_PID.load(Ordering::SeqCst), was);
         }
     }
 
@@ -1786,6 +1873,7 @@ mod tests {
             )
         };
 
+        let was = stand_mpv_as_the_player();
         for shown_first in [false, true] {
             forget_the_window_to_unlist();
             let window = unsafe { a_film_window_of_the_tests_own(shown_first) };
@@ -1823,6 +1911,7 @@ mod tests {
             let _ = unsafe { DestroyWindow(window) };
         }
         forget_the_window_to_unlist();
+        note_player_process(VIDEO_PID.load(Ordering::SeqCst), was);
     }
 
     /// A process begun for a test to suspend: it makes no window and plays nothing, and its own thirty
