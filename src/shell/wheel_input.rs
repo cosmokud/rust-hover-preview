@@ -40,6 +40,7 @@ use crate::app::seam::{
     TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION, TEXT_SIZE_REGION,
 };
 use crate::app::seam::{post_a_notch_to_the_model, wake_preview_loop};
+use crate::engines::pdf_viewer::a_documents_window;
 use crate::shell::explorer_hook::{
     a_press_puts_us_behind, a_window_of_ours_stands, our_window_stands_over_everything,
     press_is_inside_ours, the_pick_road_answers, window_class_of,
@@ -209,10 +210,18 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
                 note_a_press(info.pt);
             }
             WM_MBUTTONDOWN | WM_MBUTTONUP => {
-                crate::shell::key_input::note_mouse_button(
-                    0x04, // VK_MBUTTON
-                    wparam.0 == WM_MBUTTONDOWN as usize,
-                );
+                // Safety: the desktop passes the event's own `MSLLHOOKSTRUCT` in `lParam` of an
+                // `HC_ACTION` call, and it outlives this callback.
+                let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+                // **A button pressed in a document is the document's.** Our chrome claims input only
+                // on its own strips, so a middle click in Chromium's page turns nothing of ours —
+                // nothing counted and no pin raised or lowered (see `a_documents_window`).
+                if !a_documents_window(unsafe { WindowFromPoint(info.pt) }) {
+                    crate::shell::key_input::note_mouse_button(
+                        0x04, // VK_MBUTTON
+                        wparam.0 == WM_MBUTTONDOWN as usize,
+                    );
+                }
             }
             WM_XBUTTONDOWN | WM_XBUTTONUP => {
                 // The button id is the high word of mouseData, the same place a notch's delta
@@ -223,7 +232,7 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
                     2 => 0x06, // VK_XBUTTON2
                     _ => 0,
                 };
-                if vk != 0 {
+                if vk != 0 && !a_documents_window(unsafe { WindowFromPoint(info.pt) }) {
                     crate::shell::key_input::note_mouse_button(
                         vk,
                         wparam.0 == WM_XBUTTONDOWN as usize,

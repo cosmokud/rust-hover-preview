@@ -34,6 +34,7 @@
 
 #[cfg(test)]
 use crate::app::seam::PIN_KEY_COUNTED;
+use crate::engines::pdf_viewer::a_documents_window;
 use crate::shell::explorer_hook::{a_win_key_is_down, the_shift_key_is_down};
 use crate::CONFIG;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -65,6 +66,40 @@ pub(crate) use crate::app::seam::TOGGLE_PRESSES;
 
 /// The same bits for the preview shortcut's own chords.
 static TOGGLE_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
+
+/// Let go of the edges a key had left down before the caret went into a document.
+///
+/// **A release a document is sent is a release this hook never sees**, and a main key left marked down
+/// is a pin key that counts nothing the next time it is pressed where we do see it: the same loss
+/// `pin_toggle_held_after` answers for the toggle's own flag. Nothing here counts anything — a release
+/// never does (see `the_pin_answers_key`).
+fn let_the_document_have_the_key(vk: i32, message: u32) {
+    if !matches!(message, WM_KEYUP | WM_SYSKEYUP) {
+        return;
+    }
+
+    let nothing = || false;
+    let _ = note_key_edge(
+        &PIN_CHORDS,
+        &PIN_MAIN_DOWN,
+        Presses::InEveryViewer,
+        vk,
+        false,
+        nothing,
+    );
+    let _ = note_key_edge(
+        &TOGGLE_CHORDS,
+        &TOGGLE_MAIN_DOWN,
+        Presses::Once(&TOGGLE_PRESSES),
+        vk,
+        false,
+        nothing,
+    );
+
+    // And the pin's own play/pause flag, which the caret's loss is the only release of (see
+    // `pin_toggle_held_after`).
+    PIN_KEY_DOWN.store(false, Ordering::Release);
+}
 
 /// The keys a standing pin answers, as the commands they mean, and the two questions asked of that
 /// table — which command a virtual key is, and whether a message about one is a message the pin's own
@@ -617,6 +652,16 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
     let event = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
     let vk = event.vkCode as i32;
     let message = wparam.0 as u32;
+
+    // **A document's window is the document's.** While a pinned PDF's viewer — or Chromium's own
+    // child of it, the search box included — is the window the user is typing in, nothing here is
+    // claimed at all: no pin key, no preview shortcut, no key of the pin's table, no Win chord,
+    // nothing swallowed and nothing counted. Our chrome claims input only on its own strips, and a
+    // document's window is none of it (see `a_documents_window`).
+    if a_documents_window(GetForegroundWindow()) {
+        let_the_document_have_the_key(vk, message);
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
 
     // The preview shortcut, answered only while Explorer is in front. The key is still passed
     // on whatever happens: another program's F7 is that program's, and one pressed in Explorer
