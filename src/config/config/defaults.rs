@@ -15,6 +15,13 @@ use super::setting_types::{OfficeEngine, VideoEngine};
 pub(super) const CONFIG_SECTION: &str = "settings";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
+/// The top a pinned animation's FPS slider opens at unless the file says otherwise:
+/// the fastest pace a picture that plays is offered by this app's own control.
+pub const DEFAULT_ANIMATED_FPS_MAX: u32 = 360;
+/// The ceiling a hand-edited `animated_fps_max` is reduced to. Past a display's own
+/// refresh there is nothing a frame a second more can be seen at, and the figure
+/// leaves room for a file whose own pace is read out on the way up to it.
+pub const MAX_ANIMATED_FPS_MAX: u32 = 960;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
 /// never makes a sound the pointer did not ask for.
 pub const DEFAULT_VIDEO_VOLUME: u32 = 0;
@@ -417,6 +424,13 @@ pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
         1..=MAX_WEBP_PLAYBACK_FPS => value,
         _ => MAX_WEBP_PLAYBACK_FPS,
     }
+}
+
+/// The top of a pinned animation's FPS slider: `1` is left as it is, because a picture
+/// held on one frame a second is a thing a hand can ask for, and anything past the
+/// ceiling is reduced to it rather refused.
+pub fn sanitize_animated_fps_max(value: u32) -> u32 {
+    value.clamp(1, MAX_ANIMATED_FPS_MAX)
 }
 
 /// The decoded-image cache size in megabytes. `0` is a cache that is switched

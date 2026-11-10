@@ -526,6 +526,7 @@ pub(super) fn load_pdf_first_page(
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
     })
 }
 
@@ -573,6 +574,7 @@ pub(super) fn load_office_preview(
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
     })
 }
 
@@ -637,6 +639,7 @@ pub(super) fn load_text_preview(
         loading_start: None,
         text_state: state,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
     })
 }
 
@@ -673,6 +676,7 @@ pub(super) fn load_archive_preview(
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
     })
 }
 
@@ -764,5 +768,6 @@ pub(super) fn load_video_thumbnail(
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
     })
 }

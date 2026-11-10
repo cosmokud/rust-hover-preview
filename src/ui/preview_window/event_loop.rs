@@ -3778,6 +3778,10 @@ pub fn run_preview_window() {
             // decode of the file being held over, for a window that is about to be shown
             // something else. The answer waits in the slot until the hold is over and the path
             // check has an honest question to refuse it with (see `PinSwapHold`).
+            // A seek asked for on a picture's own bar is answered the way a box change's is: the ask a
+            // hand made is put into the slot the loop holds its relayout in, where nothing else is
+            // already decoding (see `take_the_seek_a_hand_asked_for`).
+            take_the_seek_a_hand_asked_for(&mut pin_relayout);
             if pin_swap_hold.is_none() && take_pin_relayout(&mut pin_relayout) {
                 // A frame that has just been laid out again is a frame the window has not drawn: what
                 // is on screen is the one before it, scaled into the box the new one was decoded for.
@@ -4626,8 +4630,10 @@ pub fn run_preview_window() {
                         // A window given another box has had its media laid out again under it, and
                         // a volume popup floating over that media belongs to the box it was opened
                         // in: it is put away rather than left over a picture that has moved out from
-                        // under it.
+                        // under it. The pace's panel is the same panel on the same strip and goes the
+                        // same way (see `close_pin_fps`).
                         close_pin_volume();
+                        close_pin_fps();
 
                         let card = AudioCardClock {
                             started: audio_started,

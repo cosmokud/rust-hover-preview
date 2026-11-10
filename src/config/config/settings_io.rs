@@ -248,6 +248,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "text_scroll_far_edge_grace_pixels",
             "ttc_face",
             "webp_playback_fps",
+            "animated_fps_max",
             "min_reader",
         ],
     ),

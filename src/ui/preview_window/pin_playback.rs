@@ -1244,6 +1244,18 @@ pub(super) fn update_pin_transport(change: impl FnOnce(&mut PinTransport)) {
     with_pin(|pin| change(&mut pin.transport));
 }
 
+/// Write an answer about a picture that plays its own pace back into the pin, if there is still one
+/// (see `PinFps`).
+pub(super) fn update_pin_fps(change: impl FnOnce(&mut PinFps)) {
+    with_pin(|pin| change(&mut pin.fps));
+}
+
+/// The pace a pinned picture that plays is held at, and how many frames a second the slider opens
+/// at: the pin's own where there is one, and the tray's ceiling where there is not.
+pub(super) fn pin_fps_pace() -> Option<u32> {
+    pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.fps.pace()))
+}
+
 /// Hold a pinned sound where it stands, or set it going again: what a Space in a window the
 /// keyboard is in is, and the only pause a sound's card has (see `pinned_key_command`).
 ///
@@ -1816,4 +1828,84 @@ pub(super) fn drain_pin_box_request() {
 /// aim in it to answer (see `pinned_transport_press`).
 pub(super) fn seek_press_arms(seeking: Option<f64>) -> bool {
     seeking.is_some()
+}
+
+/// Where the playhead of a picture that plays is drawn, as seconds of its own run.
+///
+/// A hand on the bar names a share of the file, and the picture's own playhead is the frame it is
+/// on — read out of the file's first frame, which is the run the bar's two ends span (see
+/// `animation_frames`). Both are turned into seconds of the run so that the bar and its two watches
+/// are one answer, and a drag under a hand is the share it names rather than a second of anything.
+pub(super) fn pin_frame_playhead(seeking: Option<f64>) -> Option<f64> {
+    let (path, _) = pinned_media_owner()?;
+    let timeline = crate::formats::animation_frames::timeline(&path)?;
+    if seeking.is_some() {
+        return seeking.map(|share| timeline.seconds() * share.clamp(0.0, 1.0));
+    }
+
+    // The frame on screen, as the run places it: a media whose playhead is between two frames is
+    // drawn at the frame it is holding rather than at the millisecond it landed on.
+    let frame = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media
+            .as_ref()
+            .and_then(|media| media.current_frame_of_file())
+    })?;
+
+    Some(timeline.begins_at(frame))
+}
+
+/// The frame a transport bar dragged to `share` of its length lands on, for a picture that plays.
+///
+/// It is a place in the file rather than a second of a player: the bar's two ends are the file's
+/// first frame and its last, and what lies between them is the run of frames the container's own
+/// walk answered (see `animation_frames`). A file whose timeline was not walked — one too large to
+/// read under the budget, or one whose blocks ran out mid-frame — arms nothing, and the press is
+/// given back rather than held for a seek that has nowhere to land.
+pub(super) fn pin_frame_share(share: f64) -> Option<usize> {
+    let (path, _) = pinned_media_owner()?;
+    let timeline = crate::formats::animation_frames::timeline(&path)?;
+    (timeline.frames() > 1).then(|| timeline.index_at_share(share))
+}
+
+/// How many frames the picture on screen plays, for a seek that has to be told which of them is
+/// the last.
+pub(super) fn animation_total() -> Option<usize> {
+    let (path, _) = pinned_media_owner()?;
+
+    crate::formats::animation_frames::timeline(&path).map(|timeline| timeline.frames())
+}
+
+/// Take a pinned picture that plays to `frame`, which is a decode of this app's begun at that
+/// frame rather than a player relaunched.
+///
+/// **It is the relayout road's own answer, and nothing new.** A decode begun part-way through a
+/// file answers the frames from that place on, each carrying its own index in the file (see
+/// `ImageFrame::file_index`), and the pin installs it exactly as a box change's answer is installed
+/// — `keep_animation_place` landing the playhead on the place the answer names (see `PinRelayout`
+/// and `pin_media_load`). So a scrub is one ask of a box the window already has, for a place in the
+/// file a hand chose, and the frames before it are decoded by the stream that follows.
+///
+/// The throttle is the one `PinRelayout` already keeps: only the newest ask is held, and the
+/// answer that asks nothing more is installed. A drag across a long GIF is therefore one decode in
+/// flight at a time rather a decode per pixel under the hand.
+pub(super) fn seek_pinned_animation(
+    path: &Path,
+    content: ScreenRegion,
+    frame: usize,
+    _total: usize,
+) {
+    let dpi = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.dpi))
+        .unwrap_or(96);
+    let width = (content.2 - content.0).max(1) as u32;
+    let height = (content.3 - content.1).max(1) as u32;
+    let answer = pin_media_load(path, width, height, dpi, PreviewScale::FitToScreen, frame);
+    // The ask is written down on the loop's own slot rather than started here, for the reason every
+    // other relayout is: the decode runs on a thread of its own and the tick that asked for it must
+    // not wait for it (see `PIN_RELAYOUT_ASK`).
+    ask_for_a_pin_relayout(PinRelayout {
+        path: path.to_path_buf(),
+        answer,
+        decoded: None,
+    });
 }

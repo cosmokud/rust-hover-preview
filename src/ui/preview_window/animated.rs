@@ -122,6 +122,7 @@ pub(super) fn load_animated_gif(
             loading_start: None,
             text_state: None,
             audio_scale: None,
+            animation: AnimationPlayback::detected(path),
         });
     }
 
@@ -259,6 +260,7 @@ pub(super) fn load_animated_gif(
         loading_start: Some(Instant::now()),
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::detected(path),
     })
 }
 
@@ -403,6 +405,7 @@ pub(super) fn load_animated_apng(
             loading_start: None,
             text_state: None,
             audio_scale: None,
+            animation: AnimationPlayback::detected(path),
         });
     }
 
@@ -531,6 +534,7 @@ pub(super) fn load_animated_apng(
         loading_start: Some(Instant::now()),
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::detected(path),
     })
 }
 
@@ -692,6 +696,7 @@ pub(super) fn load_animated_webp(
             loading_start: None,
             text_state: None,
             audio_scale: None,
+            animation: AnimationPlayback::detected(path),
         });
     }
 
@@ -828,6 +833,7 @@ pub(super) fn load_animated_webp(
         loading_start: Some(Instant::now()),
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::detected(path),
     })
 }
 
@@ -887,6 +893,7 @@ pub(super) fn load_animated_heif(
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::detected(path),
     })
 }
 
@@ -988,5 +995,6 @@ pub(super) fn load_animated_jxl(
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::detected(path),
     })
 }

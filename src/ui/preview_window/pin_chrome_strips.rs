@@ -74,6 +74,10 @@ unsafe extern "system" fn the_default_answer(
 static CAPTION_STRIP: AtomicIsize = AtomicIsize::new(0);
 static TRANSPORT_STRIP: AtomicIsize = AtomicIsize::new(0);
 static VOLUME_STRIP: AtomicIsize = AtomicIsize::new(0);
+/// The strip a pinned picture's FPS popup rides in, made for the volume panel's own reason: the
+/// pace's panel floats over a band of whatever draws the picture, and a panel painted into the
+/// pin's own surface would be under a hosted film (see `pin_chrome_strips`).
+static FPS_STRIP: AtomicIsize = AtomicIsize::new(0);
 static STRIP_CLASS_REGISTERED: Once = Once::new();
 
 /// The caption's popup, for a pin whose band is a page the Shell composes into the pin, and the pin
@@ -96,6 +100,12 @@ pub(super) fn volume_strip() -> Option<HWND> {
     (hwnd != 0).then_some(HWND(hwnd as *mut _))
 }
 
+/// The strip the pace's popup is carried in (see `FPS_STRIP`).
+pub(super) fn fps_strip() -> Option<HWND> {
+    let hwnd = FPS_STRIP.load(Ordering::SeqCst);
+    (hwnd != 0).then_some(HWND(hwnd as *mut _))
+}
+
 /// What a strip is carried by, read out of the pin in one look: the box the strips are placed at,
 /// and whether each strip is the chrome the pin is painting now. It is the same read the paint
 /// makes (`pinned_paint`), so what a strip is shown at is what the chrome is drawn at, and what a
@@ -111,6 +121,8 @@ struct TheStripsState {
     bar: bool,
     /// The footprint the volume popup is drawn in, or nothing while it is closed.
     volume: Option<RECT>,
+    /// The footprint the pace's popup is drawn in, or nothing while it is closed (see `PinFps`).
+    fps: Option<RECT>,
     /// Whether the caption rides in the popup of its own rather than in a child strip (see
     /// `the_caption_popup_at`).
     over_a_page: bool,
@@ -134,6 +146,10 @@ fn the_strips_state() -> Option<TheStripsState> {
         pinned_volume_panel(pin).map(|popup| pin_chrome::volume_popup_bounds(&popup, width, height))
     });
     let volume = volume.flatten();
+    let fps = pin.fps.open.then(|| {
+        pinned_fps_panel(pin).map(|popup| pin_chrome::volume_popup_bounds(&popup, width, height))
+    });
+    let fps = fps.flatten();
 
     // **A page the pin draws is a picture the Shell composes into the pin, over the pin's own content
     // and its children with it** (see `pin_page_thumbnail`), so a caption in a child strip of that pin
@@ -152,6 +168,7 @@ fn the_strips_state() -> Option<TheStripsState> {
         caption,
         bar,
         volume,
+        fps,
         over_a_page,
     })
 }
@@ -453,6 +470,11 @@ pub(super) unsafe fn take_the_strips_up(parent: HWND) {
             VOLUME_STRIP.store(strip.0 as isize, Ordering::SeqCst);
         }
     }
+    if !fps_strip().is_some_and(|strip| unsafe { IsWindow(strip) }.as_bool()) {
+        if let Some(strip) = make(w!("fps strip")) {
+            FPS_STRIP.store(strip.0 as isize, Ordering::SeqCst);
+        }
+    }
 }
 
 /// Put the strips back over the host a take-up has just made: making it puts it on top of them,
@@ -462,9 +484,14 @@ pub(super) unsafe fn take_the_strips_up(parent: HWND) {
 /// take-up made them in: the popup stands nearest the top, the transport under it, and the caption
 /// under that.
 pub(super) unsafe fn raise_the_chrome_strips_over_the_host() {
-    for strip in [caption_strip(), transport_strip(), volume_strip()]
-        .into_iter()
-        .flatten()
+    for strip in [
+        caption_strip(),
+        transport_strip(),
+        volume_strip(),
+        fps_strip(),
+    ]
+    .into_iter()
+    .flatten()
     {
         if unsafe { IsWindow(strip) }.as_bool() {
             let _ = SetWindowPos(
@@ -499,12 +526,16 @@ pub(super) unsafe fn take_the_strips_down() {
     if let Some(volume) = volume_strip() {
         let _ = DestroyWindow(volume);
     }
+    if let Some(fps) = fps_strip() {
+        let _ = DestroyWindow(fps);
+    }
     if let Some(popup) = caption_popup() {
         let _ = DestroyWindow(popup);
     }
     CAPTION_STRIP.store(0, Ordering::SeqCst);
     TRANSPORT_STRIP.store(0, Ordering::SeqCst);
     VOLUME_STRIP.store(0, Ordering::SeqCst);
+    FPS_STRIP.store(0, Ordering::SeqCst);
     CAPTION_POPUP.store(0, Ordering::SeqCst);
     CAPTION_POPUP_OWNER.store(0, Ordering::SeqCst);
 }
@@ -577,6 +608,20 @@ pub(super) unsafe fn place_the_chrome_strips() {
                 volume.top + row,
                 (volume.right - volume.left).max(1),
                 (volume.bottom - volume.top).max(1),
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    if let Some(fps) = state.fps {
+        if let Some(strip) = fps_strip() {
+            let _ = SetWindowPos(
+                strip,
+                HWND::default(),
+                fps.left,
+                fps.top + row,
+                (fps.right - fps.left).max(1),
+                (fps.bottom - fps.top).max(1),
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
@@ -721,6 +766,9 @@ pub(super) unsafe fn sync_the_chrome_strips() {
     let (Some(transport), Some(volume)) = (transport_strip(), volume_strip()) else {
         return;
     };
+    let Some(fps) = fps_strip() else {
+        return;
+    };
     let carrying_the_popup = state.over_a_page;
     let caption = if carrying_the_popup {
         if let Some(child) = caption_strip() {
@@ -788,6 +836,22 @@ pub(super) unsafe fn sync_the_chrome_strips() {
                 state.volume.is_some(),
                 None,
             );
+        }
+    });
+
+    let fps_wanted = state
+        .fps
+        .map(|rect| {
+            (
+                (rect.right - rect.left).max(1) as u32,
+                (rect.bottom - rect.top).max(1) as u32,
+            )
+        })
+        .unwrap_or((1, 1));
+    FPS_SURFACE.with(|cell| {
+        let surface = cell.borrow();
+        unsafe {
+            set_the_strip_at(fps, surface.as_ref(), fps_wanted, state.fps.is_some(), None);
         }
     });
 }

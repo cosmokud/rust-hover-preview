@@ -521,6 +521,7 @@ fn a_transport_part_point(part: pin_chrome::TransportPart) -> (i32, i32) {
                 bar.height,
                 bar.dpi,
                 bar.live,
+                bar.animated,
             ) == Some(part)
         })
         .unwrap_or_else(|| panic!("this bar draws no {part:?} to press"))

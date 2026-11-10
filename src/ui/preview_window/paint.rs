@@ -605,6 +605,11 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 pressed: paint.transport.pressed,
                 volume: paint.volume.level,
                 volume_open: paint.volume.open,
+                animated: paint.transport_animated,
+                // A picture that plays is taken to a frame rather than a second, so the bar's
+                // playhead is the share of the run the hand let go on while it is being dragged,
+                // and the frame the picture is on otherwise.
+                fps_open: paint.fps.open,
             };
 
             TRANSPORT_SURFACE.with(|cell| {
@@ -693,6 +698,74 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                             paint.volume.dragging,
                         );
                     }
+                });
+            }
+        }
+    }
+
+    // The FPS popup, drawn over the media above the button it came out of: the panel and groove the
+    // volume panel is, a knob at the pace the picture is being held at, and that number written over
+    // it (see `paint_fps_popup` and `PinFps`).
+    if let (true, Some(popup)) = (paint.fps.open, paint.fps_popup.as_ref()) {
+        if let Some(palette) = pin_chrome::ChromePalette::current() {
+            let bounds = pin_chrome::volume_popup_bounds(popup, width, height);
+            let wanted = (
+                (bounds.right - bounds.left).max(0) as u32,
+                (bounds.bottom - bounds.top).max(0) as u32,
+            );
+            if wanted.0 > 0 && wanted.1 > 0 {
+                let shifted = pin_chrome::VolumePopup {
+                    panel: RECT {
+                        left: popup.panel.left - bounds.left,
+                        top: popup.panel.top - bounds.top,
+                        right: popup.panel.right - bounds.left,
+                        bottom: popup.panel.bottom - bounds.top,
+                    },
+                    track: RECT {
+                        left: popup.track.left - bounds.left,
+                        top: popup.track.top - bounds.top,
+                        right: popup.track.right - bounds.left,
+                        bottom: popup.track.bottom - bounds.top,
+                    },
+                };
+
+                FPS_SURFACE.with(|cell| {
+                    let mut surface = cell.borrow_mut();
+                    if surface
+                        .as_ref()
+                        .map(|surface| (surface.width, surface.height))
+                        != Some(wanted)
+                    {
+                        *surface = DibSurface::create(wanted.0, wanted.1);
+                    }
+                    let Some(surface) = surface.as_ref() else {
+                        return;
+                    };
+
+                    let stride = wanted.0 as usize * 4;
+                    let bits = surface.bits();
+                    let whole = std::slice::from_raw_parts_mut(bits, stride * wanted.1 as usize);
+                    whole.fill(0);
+                    pin_chrome::paint_fps_popup(
+                        whole,
+                        wanted.0 as i32,
+                        &palette,
+                        &shifted,
+                        paint.fps.pace(),
+                        current_animated_fps_max(),
+                        paint.fps.dragging,
+                    );
+
+                    // The number over the groove's own top, in the strip's text: the pace a hand set
+                    // is the whole of what the panel is for, and a slider without it would be a level
+                    // read off a groove with no figure beside it.
+                    pin_chrome::paint_fps_popup_text(
+                        surface,
+                        &palette,
+                        &shifted,
+                        paint.fps.pace(),
+                        paint.dpi,
+                    );
                 });
             }
         }
@@ -914,6 +987,15 @@ pub(super) struct PinnedPaint {
     /// Whether the bar's controls do anything for the engine playing this file (see
     /// `PinnedPreview::transport_live`).
     pub(super) transport_live: bool,
+    /// Whether the bar is one a picture that plays carries, which is what its own seek and its
+    /// FPS button answer to (see `PinnedPreview::transport_animated`).
+    pub(super) transport_animated: bool,
+    /// The pace a picture that plays is held at, and whether its slider is up (see `PinFps`).
+    pub(super) fps: PinFps,
+    /// Where the FPS popup goes, or nothing while it is closed: asked of the pin rather than
+    /// recomputed at paint, so that the panel drawn is the panel a press is answered against (see
+    /// `pinned_fps_geometry`).
+    pub(super) fps_popup: Option<pin_chrome::VolumePopup>,
     pub(super) playing: bool,
     pub(super) position: Option<f64>,
     pub(super) duration: Option<f64>,
@@ -985,6 +1067,8 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
                 && pin_chrome::caption_fits(width, pin.dpi, pin.frame != PinFrame::None),
             bar: pin.chrome.bar,
             dpi: pin.dpi,
+            // The file, kept for the walk a picture that plays places its playhead against: the
+            // timeline is held under the file's own version, so this is a cache read per paint.
             title: pin
                 .path
                 .file_name()
@@ -1013,6 +1097,9 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             playing: false,
             transport: pin.transport,
             volume: pin.volume,
+            transport_animated: pin.transport_animated,
+            fps: pin.fps,
+            fps_popup: None,
             volume_popup: None,
             find_bar: None,
             transport_live: pin.transport_live,
@@ -1024,16 +1111,26 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
     // while it is up — and because a panel placed from the pin's own numbers is the same panel
     // every press and every drag is answered against (see `pinned_volume_geometry`).
     paint.volume_popup = pinned_volume_geometry();
+    // And the pace's own panel, asked the same way and for the same reason (see `pinned_fps_geometry`).
+    paint.fps_popup = pinned_fps_geometry();
 
     // The find bar over a pinned page, asked the same way and for the same reason: it is placed from
     // the window's bands and the page's own box, so the card painted is the card a press answers (see
     // `text_find::find_bar`).
     paint.find_bar = text_find::find_bar();
 
-    // Where the bar is drawn: where the pointer has dragged it while a drag is going, and
-    // where the file really is otherwise (see `PinTransport`).
+    // Where the bar is drawn: where the pointer has dragged it while a drag is going, and where
+    // the file really is otherwise (see `PinTransport`).
+    //
+    // A picture that plays is measured against its own run of frames rather than a player behind
+    // it: a hand on its track names a share of that run, and where the picture stands otherwise is
+    // the frame it is on, placed by the walk the container's own blocks answered (see
+    // `animation_frames` and `pin_frame_playhead`).
     let transport = paint.transport;
-    paint.position = transport.seeking.or_else(|| pin_playhead(&transport));
+    paint.position = match paint.transport_animated {
+        true => pin_frame_playhead(paint.fps.seeking),
+        false => transport.seeking.or_else(|| pin_playhead(&transport)),
+    };
     paint.duration = pin_duration(&transport);
     paint.playing = pin_is_playing(&transport);
 
