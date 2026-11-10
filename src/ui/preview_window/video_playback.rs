@@ -913,8 +913,29 @@ fn start_video_playback_where(
     );
     let width_arg = asked_width.to_string();
     let height_arg = asked_height.to_string();
-    let left_arg = x.to_string();
-    let top_arg = y.to_string();
+    // **A film kept for a host is begun where no display is, and its size is the film's own.**
+    //
+    // **The size is not the artifact; the *place* the player shows it at is.** FFmpeg's player shows
+    // its own window the moment it has configured its output — 250–340ms into a launch, measured, at
+    // the film's own size — and this app cannot reach it before that through `STARTUPINFO`
+    // (`SW_HIDE` is ignored by SDL) or through layering (`WS_EX_LAYERED` at alpha 1 is taken on a
+    // window nobody has shown and reads back as nothing, so the window is drawn at full opacity
+    // anyway). What it can do is choose where the window is born: begun at `OFF_THE_SCREEN`, the
+    // window its player shows is a window of no display's, and the one move later puts it on the box
+    // the one placement names — after the source has been adopted and has drawn (see
+    // `pin_film_thumbnail::bring_the_parked_source_to_its_box`).
+    //
+    // **The film is still born at its own size, and that is deliberate** (see
+    // `pin_film_thumbnail::the_box_a_source_is_born_at`): the picture is never pixelated by being
+    // drawn smaller than it is, and no resize happens under the Shell afterwards. Parking changes
+    // where the window stands and nothing about what it is. The one clamp the box gets is the work
+    // area of the display the film is watched on, exactly as before.
+    let (left_arg, top_arg) = if kept_for_a_host {
+        let (parked_x, parked_y) = pin_film_thumbnail::the_source_launch_origin((x, y));
+        (parked_x.to_string(), parked_y.to_string())
+    } else {
+        (x.to_string(), y.to_string())
+    };
     // **A stream is piped only where someone reads it, and read wherever it is piped.** That is one
     // decision, taken once below and used for both halves — the way the mpv launch takes it — so an
     // ordinary launch is given `null` and begins no thread, and only a launch with a use for a line is
