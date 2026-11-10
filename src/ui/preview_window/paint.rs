@@ -219,6 +219,18 @@ pub(super) fn a_pages_band_is_hit_testable(media: MediaType, runs: bool) -> bool
     media.is_engine() && !runs
 }
 
+/// Whether a pinned document's band is Chromium's in the middle and this app's around it: a PDF
+/// whose viewer stands in *this pin* has the whole of its band handed to the browser, and what is
+/// left of it for this window is the margin the viewer is inset by (see
+/// `PIN_DOCUMENT_MARGIN_PIXELS`).
+///
+/// Asked of the pin rather than of the kind, because a kind says nothing about what arrived: a
+/// viewer that never came up leaves the band this app's, and a pin whose viewer failed keeps
+/// painting the raster it was taken up with (see `engines::pdf_viewer::is_up_for`).
+pub(super) fn a_documents_band_is_the_viewers(media: MediaType, owner: isize) -> bool {
+    media == MediaType::Pdf && crate::engines::pdf_viewer::is_up_for(owner)
+}
+
 /// Whether the chrome's own rows of a pinned window are the pin's claim rather than its chrome:
 /// they always are where they are not the media's own. The strips carry the chrome on every road,
 /// so the bitmap owes those rows only the least pixel a press can land on — the same one part in
@@ -253,7 +265,10 @@ pub(super) fn chrome_rows_are_hit_testable(overlay: bool) -> bool {
 /// for an engine's page, be *clicked*: hit testing of a layered window is answered by the
 /// shape of its pixels, so a band of transparent ones is a band the page keeps for itself.
 /// A film is the one band that is painted instead, the least a pixel can be, because a
-/// press on a picture is the pin's own (see `film_band_is_hit_testable`).
+/// press on a picture is the pin's own (see `film_band_is_hit_testable`). A pinned document's
+/// band is the fourth, and the one painted *whole*: Chromium's viewer stands in the middle of
+/// it and the margin the viewer is inset by is the pin's own frame (see
+/// `a_documents_band_is_the_viewers` and `PIN_DOCUMENT_MARGIN_PIXELS`).
 pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock, taken only where a resize step is being
     // measured (see `pin_resize_probe`).
@@ -285,6 +300,15 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // The pin's own rows, which stand in the surface at the row the paint gave them: the rest of the
     // surface is the slack, and it is left transparent (see `the_slack_a_resize_paints_with`).
     let out = &mut whole[padding as usize * stride..(padding as usize + height as usize) * stride];
+
+    // The palette the chrome is drawn in — and the frame a pinned document's band is filled with,
+    // which is the caption's own colour — read once for the paint, and not at all where neither is
+    // drawn.
+    let palette = if paint.caption || (paint.transport_height > 0 && paint.bar) {
+        pin_chrome::ChromePalette::current()
+    } else {
+        None
+    };
 
     // The media band. A frame of the band's own size is composed into it row for row; one that is
     // not — which is a window whose edge is under the hand — is sampled into it, so the band is
@@ -352,9 +376,8 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                         && !matches!(media.media_type, MediaType::Video)
                         // A pinned PDF's band is Chromium's while its viewer stands in it: what
                         // this window would compose there is a raster of page one underneath the
-                        // document the user is working in (see `engines::pdf_viewer`).
-                        && !(media.media_type == MediaType::Pdf
-                            && crate::engines::pdf_viewer::is_up_for(hwnd.0 as isize))
+                        // document the user is working in (see `a_documents_band_is_the_viewers`).
+                        && !a_documents_band_is_the_viewers(media.media_type, hwnd.0 as isize)
                         // A model holds a stand-in frame of this app's and shows a picture of f3d's
                         // through the host, so what is composed here is nothing but the stand-in
                         // over the scene (see `a_models_band_is_a_hosts_picture`).
@@ -440,6 +463,37 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // the pixel, and the picture itself is the Shell's thumbnail of the page (see
                     // `a_pages_band_is_hit_testable` and `pin_page_thumbnail`).
                     fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
+                } else if a_documents_band_is_the_viewers(media.media_type, hwnd.0 as isize) {
+                    // **A pinned document's band is Chromium's in the middle and this app's around
+                    // it.** The viewer stands in the band inset by the pin's own margin, and the
+                    // rows and columns that margin leaves are painted here rather than left
+                    // transparent: a transparent pixel of a layered window is a press that falls
+                    // through to the desktop, so the frame would be the one part of the pin a hand
+                    // could neither resize nor carry, and it would read as a hole between the
+                    // caption and the document (see `PIN_DOCUMENT_MARGIN_PIXELS`). It is filled in
+                    // the caption's own colour, which makes it the document's frame.
+                    //
+                    // What is filled is the whole band and not the frame alone: the rows and
+                    // columns under the viewer are the viewer's to draw, and the browser's window
+                    // composites over this one — filling them costs a fill of the band and saves
+                    // the four spans a frame-shaped fill would walk.
+                    match palette.as_ref().map(|palette| palette.background) {
+                        Some(background) => fill_band_opaque_with(
+                            out,
+                            band_width,
+                            band_top.max(0) as u32,
+                            band_height,
+                            background,
+                        ),
+                        // No theme at all is no chrome anywhere in this app, and a band is still
+                        // owed its claim on the pixel (see `fill_band_hit_testable`).
+                        None => fill_band_hit_testable(
+                            out,
+                            band_width,
+                            band_top.max(0) as u32,
+                            band_height,
+                        ),
+                    }
                 } else if film_band_is_hit_testable(media.media_type)
                     || a_models_band_is_a_hosts_picture(media.media_type)
                 {
@@ -538,14 +592,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // about one at a time, so a hand at one end of a window does not bring out what is at the
     // other end of it (see `PinChrome`). The bitmap carries none of it: the strips composite over
     // the rows, and what stands in them is the pin's own claim (see `chrome_rows_are_hit_testable`).
-    // The palette both strips are drawn in is read once for the paint, and not at all where neither
-    // is drawn. The caption, for the window's first rows.
-    let palette = if paint.caption || (paint.transport_height > 0 && paint.bar) {
-        pin_chrome::ChromePalette::current()
-    } else {
-        None
-    };
-
+    // The caption, for the window's first rows.
     if paint.caption {
         if let Some(palette) = palette.as_ref() {
             let caption = pin_chrome::Caption {

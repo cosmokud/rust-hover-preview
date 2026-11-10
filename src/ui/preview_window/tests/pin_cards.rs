@@ -2242,18 +2242,16 @@ fn a_sound_has_no_transport_strip_and_no_caption() {
 
 #[test]
 fn the_chrome_is_drawn_over_the_media_of_the_kinds_this_app_draws_itself() {
-    // A picture, a texture, an animation, a drawing, a page of a document or a book, and
-    // either video there is — the one the media engine decodes and the one FFmpeg's player
-    // plays: the band of every one of them is this app's to paint a strip of chrome over
-    // (the player's own window stands behind the pin's for as long as any strip is showing,
-    // see `pin_overlay_chrome`).
+    // A picture, a texture, an animation, a drawing, and either video there is — the one the media
+    // engine decodes and the one FFmpeg's player plays: the band of every one of them is this app's
+    // to paint a strip of chrome over (the player's own window stands behind the pin's for as long
+    // as any strip is showing, see `pin_overlay_chrome`).
     for kind in [
         MediaType::StaticImage,
         MediaType::Dds,
         MediaType::AnimatedGif,
         MediaType::Design,
         MediaType::Vector,
-        MediaType::Pdf,
         MediaType::NativeVideo,
         MediaType::Video,
     ] {
@@ -2262,9 +2260,17 @@ fn the_chrome_is_drawn_over_the_media_of_the_kinds_this_app_draws_itself() {
     }
 
     // The kinds that keep their chrome in bands around the media: a page that is laid out to
-    // whatever box it is given, a sound's card, and a page of HTML the browser runs — the last
-    // of which is a window standing in front of the pin rather than a picture under its chrome.
-    for kind in [MediaType::Text, MediaType::Archive, MediaType::Audio] {
+    // whatever box it is given, a sound's card, a page of HTML the browser runs — the last of which
+    // is a window standing in front of the pin rather than a picture under its chrome — and a
+    // pinned PDF, whose band is Chromium's viewer: chrome painted over that band is chrome under a
+    // live window of somebody else's, and a layered window's pixels can never come out above one
+    // (see `pin_frame`, which is what answers a document's frame and so its bands).
+    for kind in [
+        MediaType::Text,
+        MediaType::Archive,
+        MediaType::Audio,
+        MediaType::Pdf,
+    ] {
         assert!(!pin_overlay_chrome(Some(kind), false), "{kind:?}");
         assert!(!pin_overlay_chrome(Some(kind), true), "{kind:?}");
     }

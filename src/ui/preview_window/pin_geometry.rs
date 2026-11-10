@@ -25,6 +25,15 @@ pub(super) const PIN_RESIZE_CORNER_EXTRA_PIXELS: f32 = 4.0;
 /// smaller body than this, whichever edge is being dragged, so a window cannot be shrunk to
 /// something with no room left to grab.
 pub(super) const PIN_MIN_MEDIA_PIXELS: f32 = 48.0;
+/// The pin's own pixels kept around a pinned document's viewer, on every side of it: the frame
+/// that stands between Chromium's window and the window's own edges.
+///
+/// It is the width of the resize band, so there is no piece of the frame that is not an edge: a
+/// press anywhere in it begins a resize rather than falling through to the desktop, and the caption
+/// above it is the one place a hand carries the window by (see `the_documents_area` and
+/// `pin_resize_edge`). Its pixels are the caption's own colour, so what it reads as is a document's
+/// frame rather than a hole around one (see `render_pinned_preview_at`).
+pub(super) const PIN_DOCUMENT_MARGIN_PIXELS: f32 = 8.0;
 /// How often a pinned window with a transport bar is painted again while its file plays: the
 /// playhead is a thing that moves on its own, and a quarter of a second is what a sound's card is
 /// repainted at for the same reason (see `AUDIO_CARD_REPAINT`).
@@ -67,7 +76,13 @@ pub(super) fn pin_frame(kind: Option<MediaType>) -> PinFrame {
         // a relaunch at the end of the drag to render it sharply at the size it settled on.
         Some(MediaType::Audio) => PinFrame::None,
         Some(MediaType::Video) | Some(MediaType::NativeVideo) => PinFrame::Shaped,
-        Some(MediaType::Text) | Some(MediaType::Archive) => PinFrame::Free,
+        // **A document is poured into its box rather than scaled into it**, whatever draws it: a
+        // PDF's pages are fitted by Chromium's viewer at whatever box the viewer is handed, exactly
+        // as a page of text is poured by this app, so its edges move one at a time. It is also what
+        // gives a PDF its strips — the caption becomes a band above the viewer rather than chrome
+        // painted over a page, which is the one road a viewer standing in the band leaves (see
+        // `pin_overlay_chrome`).
+        Some(MediaType::Pdf) | Some(MediaType::Text) | Some(MediaType::Archive) => PinFrame::Free,
         _ => PinFrame::Shaped,
     }
 }

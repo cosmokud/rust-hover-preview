@@ -115,6 +115,25 @@ pub(super) fn fill_band_opaque(out: &mut [u8], width: u32, origin_y: u32, height
     fill_band(out, width, origin_y, height, [0, 0, 0, 255]);
 }
 
+/// Paint a band of a layered window one flat opaque colour of the chrome's: the frame a pinned
+/// document is given around the viewer standing in it, which is chrome rather than a picture (see
+/// `PIN_DOCUMENT_MARGIN_PIXELS` and `render_pinned_preview_at`).
+///
+/// Opaque rather than the least a pixel can be, because this band is seen: what a compositor puts on
+/// screen for it is the colour itself, and the claim on the pixel — which is the other half of why
+/// it is filled at all, a transparent margin being a press that falls through to the desktop — comes
+/// with the alpha. The colour arrives in the order the palette writes it and is laid down
+/// premultiplied, which at an alpha of 255 is the colour itself.
+pub(super) fn fill_band_opaque_with(
+    out: &mut [u8],
+    width: u32,
+    origin_y: u32,
+    height: u32,
+    rgb: [u8; 3],
+) {
+    fill_band(out, width, origin_y, height, [rgb[2], rgb[1], rgb[0], 255]);
+}
+
 /// Paint a band of a layered window the least a pixel can be and still be this window's.
 ///
 /// A transparent band is a band Windows hands to whatever stands behind the window, which is the

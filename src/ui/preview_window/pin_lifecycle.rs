@@ -3116,13 +3116,24 @@ pub(super) unsafe fn foreground_is_the_desktop(window: HWND) -> bool {
 /// resized — and not once a tick: the tick has its own, slower re-assertion for the player's
 /// window, and a browser that is told the same bounds it already has every sixteen milliseconds
 /// is work nobody asked for.
-/// The band a sibling window stands in, as the engine's own box (see `place_pinned_siblings`).
-pub(super) fn the_band_area(content: ScreenRegion) -> crate::engines::webview_preview::Area {
+/// The box a pinned document's viewer is given: the pin's content band less the margin of the
+/// pin's own pixels kept around it (see `PIN_DOCUMENT_MARGIN_PIXELS`).
+///
+/// The margin is the whole of what keeps the pin a pin around a document: the viewer covers neither
+/// the window's edges, so a press on one is still a press on an edge, nor the caption above it. The
+/// band it is taken out of is the media's own box, so what the pin paints is the band and the
+/// margin is what is seen of it (see `render_pinned_preview_at`).
+pub(super) fn the_documents_area(
+    content: ScreenRegion,
+    dpi: u32,
+) -> crate::engines::webview_preview::Area {
+    let margin = logical_px(dpi, PIN_DOCUMENT_MARGIN_PIXELS).max(1);
+
     crate::engines::webview_preview::Area {
-        x: content.0,
-        y: content.1,
-        width: (content.2 - content.0).max(1),
-        height: (content.3 - content.1).max(1),
+        x: content.0 + margin,
+        y: content.1 + margin,
+        width: (content.2 - content.0 - 2 * margin).max(1),
+        height: (content.3 - content.1 - 2 * margin).max(1),
     }
 }
 
@@ -3146,6 +3157,7 @@ pub(super) fn open_the_pins_pdf_viewer(
     kind: Option<MediaType>,
     path: &Path,
     content: ScreenRegion,
+    dpi: u32,
 ) {
     if kind != Some(MediaType::Pdf) {
         return;
@@ -3157,7 +3169,7 @@ pub(super) fn open_the_pins_pdf_viewer(
         return;
     }
 
-    crate::engines::pdf_viewer::open(path, window.0 as isize, the_band_area(content));
+    crate::engines::pdf_viewer::open(path, window.0 as isize, the_documents_area(content, dpi));
 }
 
 pub(super) fn place_pinned_siblings() {
@@ -3168,9 +3180,14 @@ pub(super) fn place_pinned_siblings() {
     // **A pinned PDF's band is Chromium's, and this is the one road that knows both the window the
     // pin stands in and the box it stands in**: a take-up, a swap, a walk, a maximize, a display
     // change all arrive here, and the module answers one ask per file (see `open_the_pins_pdf_viewer`).
+    // The box is the band *less* the margin the pin keeps around the document, and it is asked for
+    // on every one of those roads rather than once: a viewer at a stale box is a viewer over the
+    // pin's own frame (see `the_documents_area`).
+    let document_dpi = dpi_at(content.0, content.1);
+
     if the_bands_pdf_viewer_is_owed() {
         if let Some((path, _)) = pinned_media_owner() {
-            open_the_pins_pdf_viewer(Some(MediaType::Pdf), &path, content);
+            open_the_pins_pdf_viewer(Some(MediaType::Pdf), &path, content, document_dpi);
         }
     }
 
@@ -3178,7 +3195,10 @@ pub(super) fn place_pinned_siblings() {
     // one pin is no box of another (see `engines::pdf_viewer::Place`).
     let owner = pinned_window();
     if !owner.is_invalid() {
-        crate::engines::pdf_viewer::place(owner.0 as isize, the_band_area(content));
+        crate::engines::pdf_viewer::place(
+            owner.0 as isize,
+            the_documents_area(content, document_dpi),
+        );
     }
 
     let kind = CURRENT_MEDIA
