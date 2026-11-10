@@ -120,6 +120,12 @@ pub(crate) struct PlaylistSearch<'a> {
     pub(crate) caret: usize,
     /// Whether the caret is drawn, and the bar with it.
     pub(crate) focused: bool,
+    /// How much of the field is in sight, from `0.0` — parked out of the band's bottom edge — to
+    /// `1.0`, whole. It is the one thing the band's own animation draws with: the field is carried
+    /// down by the share of its height that is out and clipped to the strip the layout kept for it,
+    /// so what a hand sees is a pill sliding under the window's edge rather than one blinking away
+    /// (see `pin_playlist::advance_the_search`).
+    pub(crate) slide: f32,
 }
 
 /// The rows a query lets through: a case-insensitive substring of the file's own name, in the order
@@ -788,15 +794,32 @@ fn paint_search(
     };
 
     let page = palette.background;
+    // **The field is carried down by the share of it that is out of sight, and the strip it lives in
+    // is not.** The pill is drawn in full at the row its slide puts it at, and everything of it that
+    // has gone past the band's own last row of that strip is painted back to the band's page after:
+    // what a hand sees is a pill sliding under the window's edge and being cut there, which is the
+    // parking animation — a pill that faded or blinked would be one that disappeared where it stood
+    // (see `pin_playlist::advance_the_search`).
+    let out = ((1.0 - search.slide.clamp(0.0, 1.0))
+        * (layout.search_bottom - layout.search_top) as f32)
+        .round() as i32;
     let field = RECT {
         left: layout.search_left,
-        top: layout.search_top,
+        top: layout.search_top + out,
         right: layout.search_right,
-        bottom: layout.search_bottom,
+        bottom: layout.search_bottom + out,
     };
     if field.right <= field.left || field.bottom <= field.top {
         return Vec::new();
     }
+    // The strip the layout kept for the field, which is the whole of it a hand may see: the rows above
+    // it and the drag handle below it are not the field's to paint over.
+    let strip = RECT {
+        left: 0,
+        top: layout.search_top,
+        right: width,
+        bottom: layout.search_bottom.min(height),
+    };
 
     // **The pill.** The plate is the band's own page lifted a little toward its ink, so that the field
     // reads as a surface in the band rather than as a band of two colours, and it is rounded to half
@@ -822,7 +845,7 @@ fn paint_search(
     // **The mark**: the ring and the handle of a magnifier, drawn as the two strokes it is rather than
     // as a glyph, because a glyph of a face the theme chose is a mark whose weight the theme decided
     // (see `paint_search_mark`).
-    let centre_y = (layout.search_top + layout.search_bottom) as f32 / 2.0;
+    let centre_y = (field.top + field.bottom) as f32 / 2.0;
     paint_search_mark(
         pixels,
         width,
@@ -850,10 +873,10 @@ fn paint_search(
     let top = centre_y as i32 - cell / 2;
     let run = RECT {
         left: text_left,
-        top: top.max(layout.search_top + edge),
+        top: top.max(field.top + edge),
         right: (layout.search_right - text_paint::scaled(SEARCH_PAD_PIXELS as i32, scale).max(0))
             .max(text_left),
-        bottom: (top + cell).min(layout.search_bottom - edge),
+        bottom: (top + cell).min(field.bottom - edge),
     };
 
     let mut painter = text_paint::RunPainter::new(surface, small);
@@ -900,6 +923,18 @@ fn paint_search(
             palette.accent,
             0.9,
         );
+    }
+
+    // **Whatever the pill has taken below the strip is given back to the band's page**, and the strip's
+    // own row is where the cut falls: the two rows under it are the band's pad, which nothing else in
+    // this paint writes on, so the page is what belongs there.
+    let below = RECT {
+        top: strip.bottom,
+        bottom: (field.bottom).min(height),
+        ..strip
+    };
+    if below.bottom > below.top {
+        fill_box(pixels, width, below, page, 1.0);
     }
 
     vec![run]
