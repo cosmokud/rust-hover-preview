@@ -12,10 +12,10 @@ use super::defaults::{
     DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH,
     DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
     DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER,
-    DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_REMEMBER_AUDIO_VOLUME,
-    DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
-    DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE, DEFAULT_SPINNER_DELAY_MS,
-    DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_Q_DIR_PREVIEWS,
+    DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML,
+    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE,
+    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS,
     DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
     DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES,
@@ -70,6 +70,14 @@ pub struct AppConfig {
     /// hook callback may take no lock, and the setting is published and read where a preview is
     /// decided instead (see `app::seam::EVERYTHING_PREVIEWS`).
     pub everything_previews: bool,
+    /// Whether a preview is made where **Q-Dir** is showing its panes (see the `Preview Settings →
+    /// General → Enable in Q-Dir` row and `DEFAULT_Q_DIR_PREVIEWS`).
+    ///
+    /// Off, a Q-Dir frame is no listing the app answers for and every road reads it as the window it
+    /// was before the feature: the class predicate stays Q-Dir's own, because a hook callback may take
+    /// no lock, and the setting is published and read where a preview is decided instead (see
+    /// `app::seam::Q_DIR_PREVIEWS`).
+    pub q_dir_previews: bool,
     /// The key that turns previews on or off while File Explorer is the foreground window,
     /// by the same spellings the trigger and pin keys accept.
     pub toggle_key: String,
@@ -751,6 +759,7 @@ impl Default for AppConfig {
             preview_enabled: true,
             browse_dialog_preview_enabled: DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED,
             everything_previews: DEFAULT_EVERYTHING_PREVIEWS,
+            q_dir_previews: DEFAULT_Q_DIR_PREVIEWS,
             toggle_key: DEFAULT_TOGGLE_KEY.to_string(),
             trigger_key: "alt".to_string(),
             trigger_key_mode: TriggerKeyMode::Disable,

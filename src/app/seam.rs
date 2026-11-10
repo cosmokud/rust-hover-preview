@@ -301,6 +301,9 @@ pub(crate) struct SeamFacts {
     /// Whether voidtools Everything's result window is a listing the app previews a file in (see
     /// `EVERYTHING_PREVIEWS`), for the same reason.
     everything_previews: AtomicBool,
+    /// Whether a Q-Dir pane is a listing the app previews a file in (see `Q_DIR_PREVIEWS`), for the same
+    /// reason.
+    q_dir_previews: AtomicBool,
 }
 
 // Safety: every field is an atomic or a block of them, and the two rings are written through their own
@@ -320,6 +323,7 @@ impl SeamFacts {
             wheel_ticks: AtomicU64::new(0),
             browse_dialog_previews: AtomicBool::new(true),
             everything_previews: AtomicBool::new(true),
+            q_dir_previews: AtomicBool::new(true),
         }
     }
 
@@ -3097,10 +3101,20 @@ pub(crate) fn browse_dialog_previews() -> bool {
 /// rather than in `window_classes` because that module is the class alone: it is asked from a low-level
 /// callback, and a setting is the one thing there cannot be asked there. Each kind of frame is gated by
 /// its own published fact, so one switch thrown off never silences another kind.
+/// Whether a window is one a file is previewed in: Explorer's own folder window, or a browse dialog
+/// while the setting says those are listings too (see `BROWSE_DIALOG_PREVIEWS`) — or voidtools
+/// Everything's result window while that setting says the same of it — or a Q-Dir pane while its own
+/// switch is on (see `Q_DIR_PREVIEWS`).
+///
+/// It is the four class predicates with the settings read beside three of them, and it is a function here
+/// rather than in `window_classes` because that module is the class alone: it is asked from a low-level
+/// callback, and a setting is the one thing there cannot be asked there. Each kind of frame is gated by
+/// its own published fact, so one switch thrown off never silences another kind.
 pub(crate) fn a_listing_is_previewed(hwnd: HWND) -> bool {
     crate::shell::window_classes::explorer_class_matches(hwnd)
         || a_dialog_is_previewed(hwnd)
         || an_everything_is_previewed(hwnd)
+        || a_q_dir_is_previewed(hwnd)
 }
 
 /// Whether `hwnd` is a browse dialog the app previews in right now — the dialog half of
@@ -3142,6 +3156,35 @@ pub(crate) fn everything_previews() -> bool {
 /// a listing" (see `explorer_hook::everything`, which is the only road that may read that window).
 pub(crate) fn an_everything_is_previewed(hwnd: HWND) -> bool {
     everything_previews() && crate::shell::window_classes::everything_class_matches(hwnd)
+}
+
+/// Whether a preview is made where **Q-Dir** is showing its panes (`Preview Settings → General → Enable
+/// in Q-Dir`), published for every road that may take no lock.
+///
+/// **The class of a window is not this question**, for the reason `BROWSE_DIALOG_PREVIEWS` gives:
+/// `window_classes::q_dir_class_matches` answers on facts of the desktop alone, because the low-level
+/// hooks call it and a callback may wait on nothing, and whether a preview is made there is the setting.
+///
+/// Q-Dir's frame is never Explorer's own (see `explorer_class_matches`), so this silences nothing a folder
+/// view answers for.
+pub(crate) static Q_DIR_PREVIEWS: RunFact<AtomicBool> = RunFact::of(|facts| &facts.q_dir_previews);
+
+/// Tell every road that may take no lock whether a Q-Dir pane is a listing the app answers for (see
+/// `Q_DIR_PREVIEWS`).
+pub(crate) fn publish_q_dir_previews(enabled: bool) {
+    Q_DIR_PREVIEWS.store(enabled, Ordering::Release);
+}
+
+/// Whether a Q-Dir pane is a listing the app answers for, as it was last published (see
+/// `Q_DIR_PREVIEWS`).
+pub(crate) fn q_dir_previews() -> bool {
+    Q_DIR_PREVIEWS.load(Ordering::Acquire)
+}
+
+/// Whether `hwnd` is Q-Dir's frame, and one the app previews in right now — the Q-Dir half of
+/// `a_listing_is_previewed` (see `explorer_hook::q_dir`, which is the only road that may read its panes).
+pub(crate) fn a_q_dir_is_previewed(hwnd: HWND) -> bool {
+    q_dir_previews() && crate::shell::window_classes::q_dir_class_matches(hwnd)
 }
 
 /// The keys a standing pin answers, as the commands they mean.

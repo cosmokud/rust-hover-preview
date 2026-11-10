@@ -88,6 +88,11 @@ impl AppConfig {
             "everything_previews",
             Some(self.everything_previews.to_string()),
         );
+        ini.set(
+            CONFIG_SECTION,
+            "q_dir_previews",
+            Some(self.q_dir_previews.to_string()),
+        );
         ini.set(CONFIG_SECTION, "toggle_key", Some(self.toggle_key.clone()));
         ini.set(
             CONFIG_SECTION,
@@ -663,6 +668,11 @@ impl AppConfig {
         // listing of files like any other (see `everything_previews`).
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "everything_previews") {
             self.everything_previews = value;
+        }
+        // Whether a preview is made in a Q-Dir pane, read the same way: no key in a file written
+        // before the switch existed is where it starts (see `q_dir_previews`).
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "q_dir_previews") {
+            self.q_dir_previews = value;
         }
         // The key that turns previews on or off from Explorer, read the way the trigger and
         // pin keys are: a name that is empty is nothing to bind, and an unreadable one is left

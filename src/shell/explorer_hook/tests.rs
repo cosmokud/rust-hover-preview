@@ -6,4 +6,5 @@ mod everything;
 mod file_dialog;
 mod picks;
 mod presses;
+mod q_dir;
 mod view;

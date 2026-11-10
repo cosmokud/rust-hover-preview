@@ -439,6 +439,13 @@ pub(super) const ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED: u16 = 1728;
 /// ranges and the `Components → Install` range leave free — so no click on it is read as another
 /// submenu's row, and it is inside no range a submenu's click is read against.
 pub(super) const ID_TRAY_EVERYTHING_PREVIEWS: u16 = 1729;
+/// The `Preview Settings → General` row below those two: whether a preview is made where **Q-Dir** is
+/// showing its panes (see `q_dir_previews`). On where the app starts.
+///
+/// It takes the id past the `Components → Install` range, which starts at 1730 and is 7 long —
+/// 1737 — so no click on it is read as another submenu's row, and it is inside no range a submenu's
+/// click is read against.
+pub(super) const ID_TRAY_Q_DIR_PREVIEWS: u16 = 1737;
 /// The `Pin Mode → Update Preview → Move To Top` row: whether an update also brings a pin that was
 /// behind in front of the window covering it. It sits past every id the app hands out, beside the
 /// pin's other rows, where no click on it is read as another submenu's item.

@@ -90,6 +90,13 @@ pub(super) fn uia_item_from_point(
         return row_at(resolver, frame, point).map(|row| row.item());
     }
 
+    // **A Q-Dir pane answers the same way, and its own chrome is never walked either**: the pane's
+    // `#32770`/`ATL:` chain is what closes over the list, and a walk of it answers the pane rather than
+    // the row under the pointer.
+    if let Some(list) = the_q_dir_list_under(point) {
+        return row_at_in_list(resolver, list, point).map(|row| row.item());
+    }
+
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
     note_probe(&PROBE_ITEM_WALKS);
@@ -117,6 +124,13 @@ pub(super) fn uia_item_from_point(
 pub(super) fn uia_item_from_focus(resolver: &mut ItemResolver) -> Option<HoveredItem> {
     if let Some(frame) = the_everything_frame_of(unsafe { GetForegroundWindow() }) {
         return focused_row(resolver, frame).map(|row| row.item());
+    }
+
+    // **The pane's own list says which of its rows the keyboard is on.** No focused element is asked for
+    // in a Q-Dir frame for the same reason as in Everything's: the walk would climb the pane's own
+    // `#32770`/`ATL:` chrome rather than the row (see the note above).
+    if let Some(list) = the_q_dir_list_of(unsafe { GetForegroundWindow() }) {
+        return focused_row_in_list(resolver, list).map(|row| row.item());
     }
 
     let automation = resolver.automation.as_ref()?;

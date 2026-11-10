@@ -758,6 +758,50 @@ fn the_everything_switch_is_on_until_the_file_says_otherwise() {
     assert!(read_file(&mut ini).everything_previews);
 }
 
+/// Whether a preview is made in a **Q-Dir** pane is on where the app starts — a pane is a listing of files
+/// like any other — and a file that says nothing about it is read as that same on, so a file written before
+/// the switch existed keeps previewing in Q-Dir. Off is a value of the file's own, and it is a value the
+/// file writes back.
+#[test]
+fn the_q_dir_switch_is_on_until_the_file_says_otherwise() {
+    let config = AppConfig::default();
+    assert_eq!(config.q_dir_previews, DEFAULT_Q_DIR_PREVIEWS);
+    assert!(
+        config.q_dir_previews,
+        "a fresh configuration previews a file where Q-Dir is showing its panes"
+    );
+
+    let mut ini = written_file();
+    ini.set(CONFIG_SECTION, "q_dir_previews", Some("false".to_string()));
+    let read = read_file(&mut ini);
+    assert!(
+        !read.q_dir_previews,
+        "`false` in the file is a Q-Dir pane no preview is made in"
+    );
+
+    // And it is written back as the file said: the switch is a setting, so a save keeps it.
+    let file = super::persistence::ConfigFileAsItWas::take();
+    read.save();
+    assert_eq!(
+        fs::read_to_string(&file.path)
+            .expect("the file a save writes")
+            .lines()
+            .find(|line| line.starts_with("q_dir_previews")),
+        Some("q_dir_previews=false"),
+        "and a save writes the switch the way it is set"
+    );
+    assert!(
+        !AppConfig::load().q_dir_previews,
+        "which the next start reads back off the file"
+    );
+
+    // A file written before the switch existed says nothing about it, and saying nothing is the
+    // switch left where it starts.
+    let mut ini = Ini::new();
+    ini.set(CONFIG_SECTION, "preview_enabled", Some("true".to_string()));
+    assert!(read_file(&mut ini).q_dir_previews);
+}
+
 /// Whether an update found as the app starts is put on without asking is the user's to switch
 /// on: a fresh configuration checks for one and installs nothing, which is what a row above the
 /// `System` submenu is for.
