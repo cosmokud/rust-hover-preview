@@ -1524,6 +1524,27 @@ pub(crate) fn take_pin_playlist_delta() -> i32 {
     PIN_PLAYLIST_DELTA.swap(0, Ordering::AcqRel)
 }
 
+/// How many presses the desktop has handed to a window that is not ours since the run began.
+///
+/// **A pin takes no activation, so a click on another window is not something a pin is sent.** The low
+/// level mouse hook is the one place this app sees one, and it counts it here: what a pin's search field
+/// asks is whether the count has moved since it last looked, because a hand that has pressed something
+/// else has named something else and the caret it was holding is ended by that (see
+/// `pin_playlist::the_tick_is_owed_a_repaint`, and `note_a_press_elsewhere` below).
+static PRESSES_ELSEWHERE: AtomicU64 = AtomicU64::new(0);
+
+/// Note a press the desktop handed to a window that is not ours (see `PRESSES_ELSEWHERE`).
+///
+/// The hook is on every press on the desktop, so this is one atomic and nothing else.
+pub(crate) fn note_a_press_elsewhere() {
+    PRESSES_ELSEWHERE.fetch_add(1, Ordering::AcqRel);
+}
+
+/// How many presses elsewhere have been counted so far (see `PRESSES_ELSEWHERE`).
+pub(crate) fn presses_elsewhere() -> u64 {
+    PRESSES_ELSEWHERE.load(Ordering::Acquire)
+}
+
 /// Wheel notches a pin's volume control has been given since this was last called, in
 /// wheel units (120 to a notch). Signed, up being louder.
 pub(crate) fn take_pin_volume_delta() -> i32 {
