@@ -3795,6 +3795,180 @@ fn a_press_beside_the_field_blurs_it_and_leaves_the_query_it_typed() {
     stand_pin(previous_pin);
 }
 
+/// **A press in the field is not only a place the caret goes.** Carried across the text it takes a
+/// range, the wash under it says so (see `pin_chrome::paint_search`), and the keys that cut text take
+/// that range rather than the character beside the caret.
+#[test]
+fn a_press_carried_across_the_field_selects_the_range_it_crosses() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of two sounds for a range the bands own field takes");
+    let sounds = [
+        folder.join("a first mixdown.mp3"),
+        folder.join("a last take.mp3"),
+    ];
+
+    let mut pin = sound_pin();
+    pin.path = sounds[0].clone();
+    pin_playlist::toggle(&pin);
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    // A field a hand has reached for, since a field parked under the band's edge is a field nothing
+    // can press.
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
+    let field = (field_top + field_bottom) / 2;
+    assert!(
+        unsafe { pin_playlist::hover(40, field) },
+        "the hand reaches for the field"
+    );
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
+
+    assert!(unsafe { pin_playlist::press(HWND::default(), 100, field, false) });
+    assert!(unsafe { pin_playlist::release(HWND::default()) });
+    for character in "mixdown".chars() {
+        pin_playlist::type_into_the_search(character);
+    }
+    assert_eq!(
+        pin_playlist::the_selection_in_hand(),
+        None,
+        "a caret with nothing selected is no range"
+    );
+
+    // The press places the caret, and the drag that follows carries the caret away from the anchor
+    // the press left: the two ends of a selection, and no edit of the query. The two columns are the
+    // field's own — before the query's first character and a character or two into it — because a
+    // press past the end of the run names the end of it either way.
+    let (text_left, _) = pin_playlist::the_field_text_columns().expect("a field on screen");
+    assert!(unsafe { pin_playlist::press(HWND::default(), text_left + 1, field, false) });
+    assert!(unsafe { pin_playlist::drag(HWND::default(), text_left + 12, field) });
+    let selected = pin_playlist::the_selection_in_hand().expect("a range the hand crossed");
+    assert!(selected.0 < selected.1, "a drag carries the two ends apart");
+    assert_eq!(
+        pin_playlist::the_query_in_hand().map(|(query, _)| query),
+        Some("mixdown".to_string()),
+        "and a drag over the text is a selection rather than an edit of it"
+    );
+    assert!(unsafe { pin_playlist::release(HWND::default()) });
+
+    // The keys that cut text take the range the wash showed, rather than the one character beside
+    // the caret they would have taken with nothing selected.
+    assert!(
+        pin_playlist::key_while_the_search_has_focus(VK_BACK.0 as i32),
+        "the field has the caret, so `Backspace` is its"
+    );
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some((
+            format!("{}{}", &"mixdown"[..selected.0], &"mixdown"[selected.1..]),
+            true
+        )),
+        "the highlighted characters are the ones a backspace takes"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **The × at the field's right empties the query rather than the field.** The list comes back whole,
+/// the caret stays where the hand is holding it and the pill stays in sight: a field that parked
+/// itself under the press that cleared it is a field the hand has to reach for twice.
+#[test]
+fn a_press_on_the_fields_clear_button_empties_it_and_leaves_the_field_in_sight() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of three sounds for the clear button of the bands field");
+    let sounds = [
+        folder.join("a first mixdown.mp3"),
+        folder.join("an interlude.mp3"),
+        folder.join("a last mixdown.mp3"),
+    ];
+
+    let mut pin = sound_pin();
+    pin.path = sounds[0].clone();
+    pin_playlist::toggle(&pin);
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
+    let field = (field_top + field_bottom) / 2;
+    assert!(unsafe { pin_playlist::hover(40, field) });
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
+
+    assert!(unsafe { pin_playlist::press(HWND::default(), 100, field, false) });
+    assert!(unsafe { pin_playlist::release(HWND::default()) });
+    pin_playlist::type_into_the_search('m');
+    assert_eq!(
+        pin_playlist::the_rows_in_sight(),
+        vec![0, 2],
+        "the query hides the row it does not name"
+    );
+
+    let (left, right) = pin_playlist::the_clear_button_columns().expect("a field on screen");
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), (left + right) / 2, field, false) },
+        "a press on the × is the field's rather than a row's"
+    );
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some((String::new(), true)),
+        "the query is put back to nothing and the caret stays in the field"
+    );
+    assert_eq!(
+        pin_playlist::the_rows_in_sight(),
+        vec![0, 1, 2],
+        "which is the whole walk again"
+    );
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((1.0, true)),
+        "and the field the hand is on is still in sight whole"
+    );
+    assert!(
+        !unsafe { pin_playlist::release(HWND::default()) },
+        "a press that cleared the query took no pointer, so there is no release to give back"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
 /// A band of twelve sounds with the pin stood on the first of them, which is the only list a test of
 /// the band's own scroll can count rows on: a folder of the disk's own is a folder a test cannot see
 /// the whole of.

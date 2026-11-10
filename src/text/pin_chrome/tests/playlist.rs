@@ -1,7 +1,8 @@
 use super::super::playlist::{
     clock_origin, facts_style, playlist_edge_at, playlist_row, playlist_scroll_at,
     playlist_scroll_max, playlist_shown, playlist_step_pick, playlist_thumb, playlist_thumb_grab,
-    playlist_track_holds, search_field_holds, search_index_at, PlaylistEdge, PlaylistSearch,
+    playlist_track_holds, search_close_holds, search_field_holds, search_index_at, PlaylistEdge,
+    PlaylistSearch,
 };
 use super::*;
 use crate::readers::audio_track::{self, Player, Track};
@@ -810,6 +811,53 @@ fn a_point_of_the_field_is_the_fields_and_the_rows_above_it_are_not() {
     assert!(!search_field_holds(&layout, 200, bottom));
 }
 
+/// **The clear button is the field's right-hand mark and the query stops before it.** The pill is a
+/// field and a control in one, so the × that puts the query back to nothing is held the same pad off
+/// the right edge that the magnifier keeps off the left, and the last column the query may reach is
+/// the gap before it — a press on the × clears the field, and a press in the text sets a caret in it.
+#[test]
+fn the_clear_button_stands_at_the_fields_right_and_the_query_stops_before_it() {
+    let layout = playlist_layout(400, 240, SCALE, 0);
+    let (top, bottom) = (layout.search_top, layout.search_bottom);
+
+    assert!(
+        layout.search_close_left > layout.search_text_right,
+        "the × stands past the last column the query may reach"
+    );
+    assert!(
+        layout.search_close_right < layout.search_right,
+        "and it is held inside the pill's own pad"
+    );
+    assert_eq!(
+        layout.search_right - layout.search_close_right,
+        layout.search_mark - layout.search_left,
+        "the × keeps the magnifier's own pad off the pill's right edge"
+    );
+
+    let middle = (layout.search_close_left + layout.search_close_right) / 2;
+    assert!(
+        search_close_holds(&layout, middle, top),
+        "the × is the clear button's"
+    );
+    assert!(
+        search_close_holds(&layout, layout.search_right - 1, bottom - 1),
+        "and the pad between it and the pill's edge is the button's too, rather than a mark a hand has to hit"
+    );
+    assert!(
+        !search_close_holds(&layout, layout.search_close_left - 1, top),
+        "the query's own columns are not the button's"
+    );
+    assert!(
+        !search_close_holds(&layout, middle, top - 1),
+        "and no row above the field is"
+    );
+    assert!(!search_close_holds(&layout, middle, bottom));
+    assert!(
+        search_field_holds(&layout, middle, top),
+        "a press on the × is still a press on the field it stands in"
+    );
+}
+
 /// A paint of a band of no rows, so that the field's own pixels are the only ones inside its box.
 fn a_band_of_the_field(search: PlaylistSearch) -> (DibSurface, RECT) {
     let palette = ChromePalette::current().expect("a theme to paint in");
@@ -885,6 +933,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         focused: false,
         caret_lit: true,
         slide: 1.0,
+        selection: None,
     });
     let placeholder = inked(&empty, box_);
     assert!(
@@ -898,6 +947,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         focused: true,
         caret_lit: true,
         slide: 1.0,
+        selection: None,
     });
     assert!(
         inked(&focused, box_) > placeholder,
@@ -928,6 +978,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         focused: true,
         caret_lit: true,
         slide: 1.0,
+        selection: None,
     });
     assert!(
         inked(&typed, box_) > 0,
@@ -1051,6 +1102,7 @@ fn the_field_is_a_pill_rather_than_a_box() {
         focused: false,
         caret_lit: true,
         slide: 1.0,
+        selection: None,
     });
     let pixels = field_pixels(&surface);
     let at = |x: i32, y: i32| pixels[y as usize * surface.width as usize + x as usize];
@@ -1119,6 +1171,7 @@ fn the_field_draws_its_mark_at_its_left_and_sets_the_query_after_it() {
         focused: false,
         caret_lit: true,
         slide: 1.0,
+        selection: None,
     });
     let pixels = field_pixels(&surface);
     let width = surface.width as usize;
@@ -1168,6 +1221,123 @@ fn the_field_draws_its_mark_at_its_left_and_sets_the_query_after_it() {
     );
 }
 
+/// The × at the field's right is drawn, and it is drawn in the muted ink the magnifier beside it is
+/// drawn in rather than in the query's own brightness — a control about the text is not text of its
+/// own, and the query is the one bright thing in the field.
+///
+/// The query is painted too, and the same question is asked of it: nothing of a query is inked under
+/// the ×, which is what the layout's own last column for it keeps.
+#[test]
+fn the_field_draws_its_clear_button_in_the_muted_ink_at_its_right() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let page = palette.background;
+    let plate = text_paint::blend(page, palette.foreground, 0.07);
+    let muted = text_paint::blend(page, palette.foreground, 0.45);
+
+    let layout = playlist_layout(400, 240, SCALE, 0);
+    let (left, right) = (layout.search_close_left, layout.search_close_right);
+    assert!(right > left, "the field keeps a square for its ×");
+
+    // What the button's own square carries, over and above the plate the pill is filled with.
+    let button_ink = |text: &str| {
+        let (surface, box_) = a_band_of_the_field(PlaylistSearch {
+            text,
+            caret: text.len(),
+            selection: None,
+            focused: false,
+            caret_lit: true,
+            slide: 1.0,
+        });
+        let pixels = field_pixels(&surface);
+        let width = surface.width as usize;
+
+        (box_.top..box_.bottom)
+            .flat_map(|y| (left..right).map(move |x| (x, y)))
+            .map(|(x, y)| pixels[y as usize * width + x as usize])
+            .filter(|at| *at != page && *at != plate)
+            .collect::<Vec<_>>()
+    };
+
+    let inked = button_ink("");
+    assert!(
+        !inked.is_empty(),
+        "the field draws its clear button whether the query is something or nothing"
+    );
+    assert!(
+        inked.contains(&muted),
+        "and the × is inked in the muted gray the magnifier beside it is drawn in"
+    );
+
+    // The query is painted to the last column the layout gives it, and none of it reaches the button:
+    // the × is a control a hand presses rather than a mark drawn over the text beside it.
+    for at in button_ink("a query with room to spare in the field") {
+        assert_ne!(
+            at, palette.foreground,
+            "the query's own ink is not drawn under the ×"
+        );
+    }
+}
+
+/// **A selection is washed between its two ends**, in the ink the find bar washes its own query with,
+/// and it is the field's only while the field holds the caret: a wash the keys have walked away from
+/// is a range nothing on the window acts on.
+///
+/// The query painted here is a run of spaces, so that the field's own plate is the only thing under the
+/// wash and the count below is the wash's and nothing else's — a glyph's antialiasing has no ink to
+/// land in a range of nothing.
+#[test]
+fn a_selection_is_washed_between_its_two_ends() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let page = palette.background;
+    let plate = text_paint::blend(page, palette.foreground, 0.07);
+    let wash = text_paint::blend(plate, palette.foreground, 0.25);
+
+    // The columns of the field a paint washes, which is what a selection is: the two ends name a range
+    // and the wash fills the columns between them rather than the run's whole box.
+    let washed = |selection: Option<(usize, usize)>, focused: bool| {
+        let (surface, _) = a_band_of_the_field(PlaylistSearch {
+            text: "     ",
+            caret: 5,
+            selection,
+            focused,
+            caret_lit: false,
+            slide: 1.0,
+        });
+        let pixels = field_pixels(&surface);
+        let width = surface.width as usize;
+
+        (0..surface.width as i32)
+            .filter(|x| {
+                (0..surface.height as i32).any(|y| pixels[y as usize * width + *x as usize] == wash)
+            })
+            .count()
+    };
+
+    assert_eq!(
+        washed(None, true),
+        0,
+        "a caret with nothing selected washes nothing"
+    );
+    assert_eq!(
+        washed(Some((5, 5)), true),
+        0,
+        "and neither does a range of nothing"
+    );
+
+    let range = washed(Some((1, 3)), true);
+    let whole = washed(Some((0, 5)), true);
+    assert!(range > 0, "a selection is washed between its two ends");
+    assert!(
+        whole > range,
+        "and the wider range is washed wider: the wash is the range's, not the run's"
+    );
+    assert_eq!(
+        washed(Some((0, 5)), false),
+        0,
+        "a field the keys have left washes nothing at all"
+    );
+}
+
 /// The caret is the size of the face the query is set in rather than the height of the line box: a
 /// bar taller than the characters it stands between reads as a column of the field, not as a place
 /// the next character lands.
@@ -1183,6 +1353,7 @@ fn the_caret_is_the_height_of_the_letter_it_stands_between() {
         focused: true,
         caret_lit: true,
         slide: 1.0,
+        selection: None,
     })
     .0;
     let without = a_band_of_the_field(PlaylistSearch {
@@ -1191,6 +1362,7 @@ fn the_caret_is_the_height_of_the_letter_it_stands_between() {
         focused: false,
         caret_lit: true,
         slide: 1.0,
+        selection: None,
     })
     .0;
     let painted = field_pixels(&with);
@@ -1237,6 +1409,7 @@ fn the_caret_is_drawn_only_in_the_half_of_its_blink_it_is_lit_in() {
             focused,
             caret_lit,
             slide: 1.0,
+            selection: None,
         });
 
         field_pixels(&surface)
@@ -1304,6 +1477,7 @@ fn the_field_border_runs_the_whole_straight_part_of_the_pill() {
             focused,
             caret_lit: true,
             slide: 1.0,
+            selection: None,
         });
         let pixels = field_pixels(&surface);
         let width = surface.width as usize;
@@ -1415,6 +1589,7 @@ fn the_room_under_the_last_row_is_a_row_peeking_and_the_pill_floats_over_the_row
                     focused: false,
                     caret_lit: true,
                     slide,
+                    selection: None,
                 }),
                 note: None,
             },

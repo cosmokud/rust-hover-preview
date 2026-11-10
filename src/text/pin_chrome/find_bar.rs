@@ -1024,7 +1024,7 @@ pub(crate) fn paint_find_bar(
 /// The character index of a byte index: a caret is a place in a UTF-8 string, and a column is a place
 /// among its characters, so a paint or a press walks the one to name the other. A byte index that has
 /// somehow landed inside a character is read as the boundary before it rather than panicking.
-fn char_index(text: &str, byte: usize) -> usize {
+pub(super) fn char_index(text: &str, byte: usize) -> usize {
     text.char_indices().take_while(|(at, _)| *at < byte).count()
 }
 
