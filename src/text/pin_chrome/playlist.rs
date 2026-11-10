@@ -166,6 +166,19 @@ pub(crate) fn playlist_reach(scale: f32) -> i32 {
     text_paint::scaled(REACH_PIXELS as i32, scale).max(0)
 }
 
+/// The row the strip a band keeps for its search field begins at, in the band's own rows: the field is
+/// the last thing at the band's bottom, and every row above it is the band's own.
+///
+/// It is asked without a layout of its own because it is the answer a pointer is measured against
+/// before there is a band to lay one out for — a hand asks for the field at the strip it lives in, and
+/// never at a row of the list above it (see `pin_playlist::hover_at_the_band`).
+pub(crate) fn search_strip_top(height: i32, scale: f32) -> i32 {
+    let pad = text_paint::scaled(PAD_PIXELS as i32, scale).max(0);
+    let search = text_paint::scaled(SEARCH_PIXELS as i32, scale).max(0);
+
+    (height - pad - search).max(pad.min(height))
+}
+
 /// The top row the search pill has at the share of it that is in sight: the whole strip down to the
 /// band's own last row for a field parked under it, and the strip's own top for one in sight whole.
 ///
@@ -223,7 +236,7 @@ pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) 
     let rows_top = pad.min(height);
     // The field is a constant of the layout: a band taller or shorter than this one gives the rows
     // above it away or takes them back, and the field itself neither moves nor changes size.
-    let rows_bottom = (height - pad - search).max(rows_top);
+    let rows_bottom = search_strip_top(height, scale);
     let search_top = rows_bottom;
     let search_bottom = (search_top + search).min(height - pad).max(search_top);
     let search_left = pad.min(width);
