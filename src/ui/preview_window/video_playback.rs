@@ -909,7 +909,7 @@ fn start_video_playback_where(
     let (asked_width, asked_height) = pin_film_thumbnail::the_box_a_source_is_born_at(
         path,
         kept_for_a_host,
-        (width.max(1), height.max(1)),
+        (x, y, width.max(1), height.max(1)),
     );
     let width_arg = asked_width.to_string();
     let height_arg = asked_height.to_string();
@@ -1140,8 +1140,11 @@ fn start_mpv_video_playback(
     // it costs a film drawn over the preview is nothing: that one is born at the preview's box and
     // never placed at all. **The size is the probe's, not an argument the player is handed**: mpv
     // answers for its own film only once it has opened it, and by then its window is already drawing.
-    let (born_width, born_height) =
-        pin_film_thumbnail::the_box_a_source_is_born_at(path, behind_the_host, (width, height));
+    let (born_width, born_height) = pin_film_thumbnail::the_box_a_source_is_born_at(
+        path,
+        behind_the_host,
+        (x, y, width, height),
+    );
 
     // **The box is named on the scale of the display mpv's window is created on, which is the
     // primary's** — that is the size Windows scales to the display the film is moved to, and
@@ -1209,7 +1212,9 @@ fn start_mpv_video_playback(
     // shortcut: a normalised hover's level is the file's own until the gain can be a per-file ask
     // over the pipe; upgrade when it can.
     if for_a_hover && !hold && start == 0.0 {
-        if let Some(served) = mpv_resident::serve(path, volume, behind_the_host) {
+        if let Some(served) =
+            mpv_resident::serve(path, volume, behind_the_host, (x, y, width, height))
+        {
             let pid = served.player.id();
             if hover_host.is_some() {
                 hover_film_host::note_hover_film_host_player(pid, path);
