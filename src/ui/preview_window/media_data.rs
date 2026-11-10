@@ -287,6 +287,47 @@ impl MediaData {
             .unwrap_or(0)
     }
 
+    /// The frame of this media nearest `index` in the file, with where it is: what a hand is shown
+    /// while the frame it named is still being decoded (see `show_the_frame_of_the_file`).
+    pub(super) fn nearest_frame_to(&self, index: usize) -> Option<(usize, Arc<ImageFrame>)> {
+        self.frames
+            .iter()
+            .map(|frame| (frame.file_index.abs_diff(index), frame.file_index, frame))
+            .min_by_key(|(distance, file_index, _)| (*distance, *file_index))
+            .map(|(_, file_index, frame)| (file_index, Arc::clone(frame)))
+    }
+
+    /// This same picture showing only `frame`, as a picture that does not play: what a hand on a
+    /// track is shown of a frame this media does not carry.
+    ///
+    /// Nothing of the stream travels with it. It is a frame drawn while a drag lasts — the drag
+    /// holds the picture, and the decode it asks for installs the file's own run again when it
+    /// answers (see `take_the_picture_to_frame`) — so keeping a queue that nothing reads would be a
+    /// decoder left walking a file nobody is watching.
+    pub(super) fn showing_only(&self, frame: Arc<ImageFrame>) -> MediaData {
+        MediaData {
+            frames: vec![frame],
+            shared_frames: None,
+            all_frames_loaded: Some(Arc::new(AtomicBool::new(true))),
+            current_frame: 0,
+            last_frame_time: Instant::now(),
+            media_type: self.media_type,
+            stream_cancel: None,
+            video_process: None,
+            loading_start: None,
+            text_state: None,
+            audio_scale: self.audio_scale,
+            animation: self.animation,
+        }
+    }
+
+    /// Whether what is on screen is a frame put there by a hand on a track rather than a run of this
+    /// file: the picture is one frame of the scrub's own making, and a release has to install the
+    /// file again for it to play on (see `settle_the_picture_on`).
+    pub(super) fn a_frame_shown_from_the_scrub(&self) -> bool {
+        self.shared_frames.is_none() && self.frames.len() == 1
+    }
+
     /// Put the playhead on the frame the file carries `index` at, answering whether that frame is
     /// one of those in hand.
     ///

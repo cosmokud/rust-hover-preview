@@ -141,6 +141,7 @@ mod pin_playback;
 mod pin_playlist;
 mod pin_real_window;
 mod pin_resize_probe;
+mod pin_scrub;
 mod pin_swap;
 mod pin_taskbar;
 mod pin_taskbar_buttons;

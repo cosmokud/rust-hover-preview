@@ -1805,6 +1805,8 @@ pub(super) fn reconcile_swap_take_up() {
     // file that is up now: the take-up builds the pin whole and the drag went with it, and a hold
     // left standing is a picture that never plays again (see `hold_the_picture_on_its_frame`).
     hold_the_picture_on_its_frame(false);
+    // The frames a drag was served from belonged to the file that was up (see `pin_scrub`).
+    pin_scrub::forget();
 
     if pending_pinned_relaunch().is_some() {
         let _ = reap_superseded_relaunch();
@@ -1922,25 +1924,117 @@ pub(super) fn picture_is_held_on_its_frame() -> bool {
 }
 
 /// Take the picture on screen to `frame` of its own file, which is the frame a hand on the track
-/// named.
+/// named, answering whether that is the frame now on screen.
 ///
-/// It is a playhead put down on a frame where the picture has the frame in hand, and a decode asked
-/// for at it otherwise: a picture watched through to a compressed release, or one begun at a place
-/// and still streaming, is a file whose frames are not all here, and a hand that dragged to a frame
-/// nothing holds is a picture only a decode can put there (see `MediaData::show_the_frame` and
-/// `seek_pinned_animation`).
-pub(super) fn take_the_picture_to_frame(frame: usize) {
-    let held = CURRENT_MEDIA
-        .lock()
-        .ok()
-        .and_then(|mut media| media.as_mut().map(|media| media.show_the_frame(frame)));
-    if held == Some(true) {
-        return;
+/// Three answers, in the order they are cheap:
+///
+/// * a frame the media has in hand is a playhead put down on it — the stream decoded it already;
+/// * a frame this pin has decoded before is that frame shown (see `pin_scrub`), which is what makes
+///   a hand that comes back to where it has been instant rather than a second walk through the file;
+/// * and a frame that is nowhere in hand is the **nearest** one that is, so that a hand on the track
+///   is shown where the file is going instead of a picture left standing where it was.
+///
+/// A `false` is the caller's cue to ask the file for the frame: this is the showing, not the decode
+/// (see `take_the_picture_to_frame`).
+pub(super) fn show_the_frame_of_the_file(frame: usize) -> bool {
+    // The pin's own lock is asked for *before* the media's and let go of before it is taken: a
+    // reader that holds the media's lock and asks the pin's is the deadlock `toggle_pinned_playback`
+    // is written down for, since that road takes them the other way round (see `pin_scrub`, which
+    // is keyed by the file this names).
+    let Some((path, _)) = pinned_media_owner() else {
+        return false;
+    };
+
+    show_the_frame_of(&path, frame)
+}
+
+/// The same answer for a caller that already has the file in hand, which is the whole of what the
+/// question is about: the frames of that file, held by this media or by the run the scrub kept.
+pub(super) fn show_the_frame_of(path: &Path, frame: usize) -> bool {
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return false;
+    };
+    let Some(media) = media.as_mut() else {
+        return false;
+    };
+
+    if media.show_the_frame(frame) {
+        return true;
     }
 
+    if let Some(held) = pin_scrub::at(path, frame) {
+        media.cancel_background_work();
+        let shown = media.showing_only(held);
+        *media = shown;
+        return true;
+    }
+
+    // The nearest frame that is in hand, of the two places one can be: this media's own run, and the
+    // run this pin has decoded before. A frame of the media's own run is a playhead put down on it,
+    // which keeps the run — the stream it came from is still the picture, and replacing it for a
+    // place it already holds would throw away the frames beside it.
+    let run = media.nearest_frame_to(frame);
+    let scrubbed = pin_scrub::nearest(path, frame);
+
+    let nearest = match (run, scrubbed) {
+        (Some((at, _)), Some((held, _))) if at.abs_diff(frame) <= held.abs_diff(frame) => {
+            Some((at, None))
+        }
+        (_, Some((at, held))) => Some((at, Some(held))),
+        (Some((at, _)), None) => Some((at, None)),
+        (None, None) => None,
+    };
+    let Some((at, shown_from_the_scrub)) = nearest else {
+        return false;
+    };
+
+    match shown_from_the_scrub {
+        Some(held) => {
+            if media.current_frame_of_file() == Some(at) {
+                return at == frame;
+            }
+            media.cancel_background_work();
+            let shown = media.showing_only(held);
+            *media = shown;
+        }
+        None => {
+            media.show_the_frame(at);
+        }
+    }
+
+    at == frame
+}
+
+/// Ask the file for `frame` of the picture that plays: a decode of this app's begun at that frame,
+/// held on the loop's own slot so that a hand that keeps moving asks for the frame it is on rather
+/// than for every frame it passed (see `seek_pinned_animation`).
+pub(super) fn ask_for_the_frame(frame: usize) {
     if let (Some((path, content, _, _)), Some(total)) = (pinned_playback_state(), animation_total())
     {
         seek_pinned_animation(&path, content, frame, total);
+    }
+}
+
+/// Take the picture on screen to `frame` of its own file, asking the file for it where it is not
+/// already there (see `show_the_frame_of_the_file`).
+pub(super) fn take_the_picture_to_frame(frame: usize) {
+    if !show_the_frame_of_the_file(frame) {
+        ask_for_the_frame(frame);
+    }
+}
+
+/// Let go of a picture a hand has been dragging: the frame it was left on is the frame it plays on
+/// from, which means the file's own run installed again where the drag showed a single frame of its
+/// own (see `MediaData::a_frame_shown_from_the_scrub`).
+pub(super) fn settle_the_picture_on(frame: usize) {
+    let shown_from_the_scrub = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(MediaData::a_frame_shown_from_the_scrub))
+        .unwrap_or(true);
+
+    if shown_from_the_scrub {
+        ask_for_the_frame(frame);
     }
 }
 
