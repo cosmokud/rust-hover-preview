@@ -1827,8 +1827,16 @@ fn a_box_change_waits_for_its_answer_to_reach_the_place_the_pin_has_played_to() 
 
     let answer_from = |from: usize, to: usize| {
         let (answer, answers) = channel();
-        let mut decoded = static_image_media(frame(from), MediaType::AnimatedGif);
-        decoded.frames = (from..to).map(frame).collect();
+        // The answer is decoded for the box the window has been taken to, which is what a box change
+        // asks a picture for: one no bigger than the frame in hand is dropped rather than installed
+        // (see `take_pin_relayout`).
+        let wider = |file_index: usize| {
+            let mut frame = ImageFrame::new(vec![0u8; (80 * 60 * 4) as usize], 80, 60, 0);
+            frame.file_index = file_index;
+            Arc::new(frame)
+        };
+        let mut decoded = static_image_media(wider(from), MediaType::AnimatedGif);
+        decoded.frames = (from..to).map(wider).collect();
         answer.send(Some(decoded)).ok();
         answers
     };
@@ -1966,6 +1974,79 @@ fn a_released_playhead_is_carried_as_exactly_as_a_held_one() {
     stand_pin(previous_pin);
 }
 
+/// **A box change that asks for a decode no bigger than the frame the pin is already showing is
+/// asked for and dropped rather than installed.** A playing frame is laid out at the file's own
+/// pixels, so a window taken past those pixels — maximized, or carried to the other display — is a
+/// box the frames in hand already fill: what comes back is the same file's frames at the same size,
+/// decoded from the place the change was made as it always is, and landing them put the picture back
+/// to that place and started the stream over from there. That is the snap back a few frames, and the
+/// stall while the stream decodes up to where it was, seen the first time a pin was maximized on
+/// either display. The band stretches the frame already playing into the box, as it does for every
+/// other step of a resize (see `take_pin_relayout`).
+#[test]
+fn a_box_change_whose_decode_is_no_bigger_than_the_frame_in_hand_is_dropped() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let frame = |width: u32, height: u32, file_index: usize| {
+        let mut frame = ImageFrame::new(vec![0u8; (width * height * 4) as usize], width, height, 0);
+        frame.file_index = file_index;
+        Arc::new(frame)
+    };
+    let place = || {
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media
+                .as_ref()
+                .map(|media| (media.current_frame, media.current_frame_of_file()))
+        })
+    };
+
+    let path = PathBuf::from("a-playing-frame-at-its-own-pixels.gif");
+    let mut pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
+    pin.path = path.clone();
+    stand_pin(Some(pin));
+
+    // The pin is playing a file decoded at its own pixels, part-way through it.
+    let mut playing = static_image_media(frame(800, 600, 3), MediaType::AnimatedGif);
+    playing.frames = (3..6).map(|index| frame(800, 600, index)).collect();
+    playing.current_frame = 1;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(playing);
+    }
+
+    // The answer a box change asks for: the same file's frames, at the same size.
+    let (answer, answers) = channel();
+    let mut decoded = static_image_media(frame(800, 600, 4), MediaType::AnimatedGif);
+    decoded.frames = (4..7).map(|index| frame(800, 600, index)).collect();
+    answer.send(Some(decoded)).ok();
+
+    let mut relayout = Some(PinRelayout {
+        path: path.clone(),
+        answer: answers,
+        decoded: None,
+    });
+    assert!(
+        !take_pin_relayout(&mut relayout),
+        "an answer no bigger than the frame in hand is not installed"
+    );
+    assert!(
+        relayout.is_none(),
+        "and it is let go of rather than waited on: there is nothing for its stream to reach"
+    );
+    assert_eq!(
+        place(),
+        Some((1, Some(4))),
+        "so the pin goes on showing the frame it had, at the size it had, rather than the place the \
+         decode was asked from"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+    stand_pin(previous_pin);
+}
+
 /// **A Win+Shift arrow carries the window and never resizes it**, and the display it is carried to may
 /// refuse: a box wider or taller than the display it is going to is left where it is rather than pulled to
 /// fit, because the pin's media is drawn at the box it was laid out at and a box another display made it is
@@ -2045,5 +2126,103 @@ fn right_of_bounds() -> ScreenBounds {
         top: first.top,
         right: first.right + (first.right - first.left),
         bottom: first.bottom,
+    }
+}
+
+/// **A box change no longer decodes a playing frame above the file's own pixels**, which is what an
+/// animation maximized on a large display showed as slow motion: a `.webp` pinned on one display,
+/// dragged to a bigger one, maximized — the decoder asked for millions of invented pixels a frame
+/// could not keep up with its own authored delay, and the playhead advanced at the decode's rate.
+/// A zoom is the other road that reads its own pixels, and the answer there was already this one.
+///
+/// The kinds are the ones a box gives another *size* to and a frame of which is not composited by
+/// somebody else: a film is a player's window whatever its box, so no scale here reaches it.
+#[test]
+fn a_road_lays_an_animation_out_at_its_own_pixels_and_a_page_out_at_its_box() {
+    let animations = [
+        MediaType::AnimatedGif,
+        MediaType::AnimatedApng,
+        MediaType::AnimatedWebP,
+        MediaType::AnimatedHeif,
+        MediaType::AnimatedJxl,
+    ];
+    let laid_out_for_the_box = [
+        MediaType::StaticImage,
+        MediaType::Dds,
+        MediaType::Pdf,
+        MediaType::Office,
+        MediaType::Text,
+        MediaType::Archive,
+        MediaType::Peazip,
+        MediaType::Design,
+        MediaType::Magick,
+        MediaType::Libre,
+        MediaType::Calibre,
+        MediaType::Comic,
+        MediaType::NativeVideo,
+        MediaType::Audio,
+    ];
+
+    for kind in animations {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::Zoom, Some(kind)),
+            PreviewScale::Percent(100),
+            "a wheel turned past the window is the picture laid out for its own pixels, whatever it \
+             is — and a frame that plays is not even decoded for it"
+        );
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::BoxChange, Some(kind)),
+            PreviewScale::Percent(100),
+            "a box change of a frame that plays is its own pixels too, so a window maximized on a \
+             display bigger than the file stretches the frame it holds rather than decoding one \
+             larger than anything the file has"
+        );
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::TakeUp, Some(kind)),
+            PreviewScale::FitToScreen,
+            "a take-up is a file laid out for the display it arrives on, as every kind's is"
+        );
+    }
+
+    for kind in laid_out_for_the_box {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::BoxChange, Some(kind)),
+            PreviewScale::FitToScreen,
+            "a still picture, a page, a listing, a card or a film is laid out for the box its \
+             window is at, exactly as it was"
+        );
+    }
+
+    // And a film is placed by its player rather than decoded here at all, so the scale is never asked
+    // of it — the two kinds the browser draws answer the same for the same reason.
+    for kind in [
+        MediaType::Video,
+        MediaType::EngineSvg,
+        MediaType::EngineFont,
+    ] {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::BoxChange, Some(kind)),
+            PreviewScale::FitToScreen,
+            "{kind:?} is drawn in a window of its own, and a box change moves that window"
+        );
+    }
+
+    // A zoom reads its own pixels whatever the road is asked of, which is the rule a box change has
+    // now been brought into line with for the one kind a decode is paid per frame for.
+    for kind in laid_out_for_the_box {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(PinRelayoutRoad::Zoom, Some(kind)),
+            PreviewScale::Percent(100),
+            "a wheel past the window lays {kind:?} out for its own pixels"
+        );
+    }
+
+    // No media at all is a pin that has nothing on screen yet: the room is the only answer there is.
+    for road in [PinRelayoutRoad::TakeUp, PinRelayoutRoad::BoxChange] {
+        assert_eq!(
+            the_scale_a_road_lays_out_at(road, None),
+            PreviewScale::FitToScreen,
+            "a pin with no media yet is laid out for the room rather than for pixels nothing has"
+        );
     }
 }

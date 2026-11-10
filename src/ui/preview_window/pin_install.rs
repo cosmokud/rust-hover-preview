@@ -1429,25 +1429,12 @@ pub(super) fn relayout_pinned_media(
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
 
-    // What the box is a box *of*, which is the one thing the road decides besides the kind: a window
-    // given another box is laid out in that box, and a picture the wheel has taken past its window is
-    // laid out for its own pixels instead.
-    //
-    // A zoom past the size the file holds has nothing left to decode — the pixels are one for one
-    // already, and every one past them would be an invention — and a zoom *under* that size is a picture
-    // that would be decoded larger than the file it came from if the room were the whole of the
-    // question. `Percent(100)` is exactly that pair: the fit of the file into the box, and never a scale
-    // above one (see `scale_in_room`).
-    let scale = match road {
-        PinRelayoutRoad::Zoom => PreviewScale::Percent(100),
-        PinRelayoutRoad::TakeUp | PinRelayoutRoad::BoxChange => PreviewScale::FitToScreen,
-    };
-
     // What is on screen, read in one look: what it is decides which arm answers below, how big its
     // frame is decides whether this box owes it anything at all (see `box_is_covered`), and the place
     // its playhead is at is where a decode asked for here begins — read once, at the ask, because a
     // decode that lands is the place the *next* ask carries from the media installed by it (see
-    // `pin_media_load`).
+    // `pin_media_load`). It is read before the scale because the scale is a question about the kind
+    // as well as the road.
     let (kind, held, place) = CURRENT_MEDIA
         .lock()
         .ok()
@@ -1461,6 +1448,10 @@ pub(super) fn relayout_pinned_media(
             })
         })
         .unwrap_or((None, None, 0));
+
+    // What the box is a box *of*, which the road and the kind decide between them (see
+    // `the_scale_a_road_lays_out_at`).
+    let scale = the_scale_a_road_lays_out_at(road, kind);
 
     // Only a box change carries the place: a take-up is a file this window has not stood on, and a
     // zoom is the one road a picture that plays takes without a decode at all (see `PinRelayoutRoad`).
@@ -1652,6 +1643,37 @@ fn box_is_covered(
             .is_some_and(|(held_width, held_height)| held_width >= width && held_height >= height)
 }
 
+/// The scale a relayout decodes at, read off the road that asked for it and the kind it is asked of.
+///
+/// **An animation's frames are paid for per frame**, so a decode past the file's own pixels is
+/// pixels it does not have bought at a price the file's authored delay cannot cover: the decoder
+/// streams a frame at a time through a queue with a bound on it (`ANIMATION_QUEUE_FRAMES`,
+/// `ANIMATION_RETAINED_BYTES`), and a window maximized on a large display asks it to invent
+/// millions per frame, so the playhead advances at the rate the decode keeps rather than at the
+/// delay the file wrote — an animation in slow motion, half speed above all on a high-DPI display.
+/// A box a frame is stretched into costs nothing: the band stretches the frame the pin already
+/// holds into whatever box the window is (see `compose_media_into_band`), which is the answer a
+/// still picture is drawn from while its decode is in flight. And it is the same sentence
+/// `PinRelayoutRoad::Zoom` already says, for the same reason.
+///
+/// `Percent(100)` is that pair for both roads: the fit, capped at a factor of one, so a box smaller
+/// than the file still shrinks it and a bigger one never enlarges it (see `scale_in_room`). Every
+/// other kind keeps the room the road gives it: a take-up is a file laid out for the display, and a
+/// box change of a page, a still picture, a listing, a card, a film or a sound is one laid out for
+/// the box its window is at.
+pub(super) fn the_scale_a_road_lays_out_at(
+    road: PinRelayoutRoad,
+    kind: Option<MediaType>,
+) -> PreviewScale {
+    match road {
+        PinRelayoutRoad::Zoom => PreviewScale::Percent(100),
+        PinRelayoutRoad::BoxChange if kind.is_some_and(|kind| kind.is_animation()) => {
+            PreviewScale::Percent(100)
+        }
+        PinRelayoutRoad::TakeUp | PinRelayoutRoad::BoxChange => PreviewScale::FitToScreen,
+    }
+}
+
 /// Which of the roads asked for a relayout, for the kinds of media whose answer differs and for the one
 /// size it is asked at.
 ///
@@ -1761,13 +1783,30 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
         }
     }
 
-    // The place the pin has played to while this was out. A frame that has not been answered for a
-    // place at all — a picture that does not play, a pin with no media — has nothing to catch up to.
-    let wanted = CURRENT_MEDIA.lock().ok().and_then(|media| {
-        media
-            .as_ref()
-            .and_then(|media| media.current_frame_of_file())
-    });
+    // The answer's own stream is filled in here, once a tick, while it waits: a decode is handed over
+    // as soon as it has its startup frames (see `load_animated_gif`), so an answer that lands after the
+    // pin has played on is behind the place below and only its own stream can reach it — and nothing
+    // else pumps it, the frames being nobody's until they are installed.
+    if let Some(decoded) = pending.decoded.as_mut() {
+        decoded.sync_shared_frames();
+    }
+
+    // The place the pin has played to while this was out, and the size of the frame it is showing
+    // — both read in one look, before either lock below is taken. A frame that has not been answered
+    // for a place at all — a picture that does not play, a pin with no media — has nothing to catch up
+    // to.
+    let (wanted, held) = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| {
+            media.as_ref().map(|media| {
+                (
+                    media.current_frame_of_file(),
+                    Some((media.current_width(), media.current_height())),
+                )
+            })
+        })
+        .unwrap_or((None, None));
 
     // The answer is the one to install once it holds the place the picture has played to, or one
     // past it — which is a frame skipped rather than a picture put back. Short of it, the frames on
@@ -1797,6 +1836,23 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     // a window that is no longer there, and its frame must not be installed over whatever is
     // there now — and its frames are told to stop, nobody wanting them.
     if pinned_path().as_deref() != Some(pending.path.as_path()) {
+        let mut media = media;
+        media.cancel_background_work();
+        return false;
+    }
+
+    // **An answer no bigger than the frame in hand is dropped rather than installed**, and that is
+    // what a box change asks of a picture that plays: the decode is at the file's own pixels (see
+    // `the_scale_a_road_lays_out_at`), so a window taken past those pixels — maximized, or carried to
+    // the other display — asks for frames it already has. Installing them put the picture back to the
+    // place the decode began at and started the file's stream over from there, which is the picture
+    // snapping back a few frames and stalling while the stream decodes its way up again. The band
+    // stretches the frames already playing into the box, which is the answer a resized video is given.
+    let adds_nothing = media.media_type.is_animation()
+        && held.is_some_and(|(held_width, held_height)| {
+            media.current_width() <= held_width && media.current_height() <= held_height
+        });
+    if adds_nothing {
         let mut media = media;
         media.cancel_background_work();
         return false;
