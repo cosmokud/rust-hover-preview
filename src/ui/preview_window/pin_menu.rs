@@ -629,10 +629,21 @@ fn set_pin_audio_end_of_file(end_of_file: PinEndOfFile) {
 
 /// The check the `Shuffle` row carries, turned over where it is pressed: the row answers on
 /// the spot rather than opening a flyout of its own (see `pinned_menu_press`).
+///
+/// **The band's rows are the walk's order, and that order is drawn by the setting this press just
+/// turned over**: a band left drawing the order from before it is a list the first **Next** does not
+/// walk, because a walk asking for a shuffle the order in hand was not drawn with spawns another (see
+/// `answer_pin_job`). So the walk is asked again, the way the band's own turn-over asks it — as a
+/// message rather than from here, because this is the card's press and the pin's lock is held across
+/// it (see `pin_walk::ask_the_walk_again`).
 fn toggle_pin_audio_shuffle() {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_mode_audio_shuffle = !config.pin_mode_audio_shuffle;
         config.save();
+    }
+
+    if pin_playlist::the_band_is_open() {
+        send_preview(PreviewMessage::PinWalkAgain);
     }
 }
 
