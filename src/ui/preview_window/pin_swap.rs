@@ -845,6 +845,13 @@ pub(super) struct PinInstallable {
 /// at another document is a question about the *new* file's kind, and is asked where that kind
 /// is known.
 pub(super) fn take_down_pinned_media() {
+    // **A pinned PDF's viewer goes with the media it was drawing**, for the reason the film's host
+    // and the page's registration go below: the file replacing this one paints the same band, and a
+    // browser left standing over it is a document nobody asked for (see `engines::pdf_viewer`).
+    if let Some(path) = pinned_path() {
+        crate::engines::pdf_viewer::close(&path);
+    }
+
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         if let Some(ref mut existing) = *current {
             existing.cancel_background_work();

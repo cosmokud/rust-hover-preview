@@ -20,7 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::api::{
     drop_placement, is_wanted, note_document_failed, page_runs, publish, publish_rect, wanted_area,
-    Area, Placement, Wanted, BROWSER_PID, HOST_HWND, LAST_TIMINGS, RUNNING_DOCUMENT,
+    Area, Placement, Wanted, BROWSER_ARGUMENTS, BROWSER_PID, HOST_HWND, LAST_TIMINGS,
+    RUNNING_DOCUMENT,
 };
 use super::engine::trace;
 use super::environment::{
@@ -117,7 +118,7 @@ impl Host {
         let deadline = Instant::now() + HOST_CREATION_TIMEOUT;
 
         let started = Instant::now();
-        let environment = create_environment(&folder, deadline);
+        let environment = create_environment(&folder, deadline, BROWSER_ARGUMENTS);
         trace(&format!(
             "host: environment {:?} in {} ms",
             environment.is_some(),

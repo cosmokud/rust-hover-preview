@@ -52,7 +52,11 @@ pub(crate) use api::{
     browser_pid, can_draw, draws, is_available, is_behind, is_showing, page_runs, screen_rect,
     showing_hwnd, showing_path, take_failure_notice, the_shown_page_runs, Area,
 };
-pub(crate) use environment::{clear_stale_profiles, stale_profile_pids};
+pub(crate) use engine::trace;
+pub(crate) use environment::{
+    a_pins_profile_folder, clear_stale_profiles, create_controller, create_environment, file_url,
+    stale_profile_pids, wide,
+};
 pub(crate) use pages::{hide, hide_html_preview, place, raise, show, shutdown, wanted_here};
 
 // What the tests below and the pinned-preview tests elsewhere reach for, out of the five
@@ -64,7 +68,7 @@ use api::{drop_placement, take_placement, ENGINE, PLACED, PLACE_ASKED};
 #[cfg(test)]
 use api::{last_timings, page_runs_under, runtime_version};
 #[cfg(test)]
-use environment::{ex_style_for, file_url, mouse_activate_answers};
+use environment::{ex_style_for, mouse_activate_answers};
 #[cfg(test)]
 use pages::{
     ask_place, box_change, escape_attribute, font_page, frame_html, frame_page, html_page,

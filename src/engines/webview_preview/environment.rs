@@ -19,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
-use super::api::{BROWSER_ARGUMENTS, RUNNING_DOCUMENT, WEBVIEW_CLASS};
+use super::api::{RUNNING_DOCUMENT, WEBVIEW_CLASS};
 use super::engine::trace;
 
 use crate::app::engine_processes;
@@ -189,6 +189,15 @@ pub(crate) fn stale_profile_pids() -> Vec<u32> {
     engine_processes::stale_run_pids(&profile_root())
 }
 
+/// The folder a *pin's* PDF viewer keeps its state in: a folder of its own under the run's own
+/// root, because one folder is one browser at a time and the hover engine already holds the run's
+/// (see `user_data_folder`). It is named for the run it belongs to, so the sweep that ends a crashed
+/// run's browsers and clears its folders reaches it by the same road (`app::engine_processes::stale_run_pids`,
+/// `clear_stale_profiles`).
+pub(crate) fn a_pins_profile_folder() -> PathBuf {
+    profile_root().join(format!("{}-pin", std::process::id()))
+}
+
 /// The folder the per-run folders live in.
 ///
 /// A test build keeps its runs' folders in one of the tests' own, never the machine's:
@@ -234,7 +243,11 @@ pub(crate) fn clear_stale_profiles() {
     };
 
     for entry in entries.flatten() {
-        if entry.file_name() == std::ffi::OsStr::new(&ours) {
+        // This run's own folders are its own however they are suffixed: `1234` is the hover engine's
+        // and `1234-pin` is a pin's viewer's (see `a_pins_profile_folder`).
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if name == ours || name.starts_with(&format!("{ours}-")) {
             continue;
         }
 
@@ -244,9 +257,10 @@ pub(crate) fn clear_stale_profiles() {
     }
 }
 
-pub(super) fn create_environment(
+pub(crate) fn create_environment(
     user_data_folder: &Path,
     deadline: Instant,
+    arguments: &str,
 ) -> Option<ICoreWebView2Environment> {
     let folder = wide(&user_data_folder.to_string_lossy());
     let (sender, receiver) = mpsc::channel();
@@ -258,7 +272,7 @@ pub(super) fn create_environment(
     // browser would otherwise break it without a line of anything being written.
     let options = CoreWebView2EnvironmentOptions::default();
     unsafe {
-        options.set_additional_browser_arguments(BROWSER_ARGUMENTS.to_string());
+        options.set_additional_browser_arguments(arguments.to_string());
     }
     let options: ICoreWebView2EnvironmentOptions = options.into();
 
@@ -304,7 +318,7 @@ pub(super) fn remaining(deadline: Instant) -> Duration {
     deadline.saturating_duration_since(Instant::now())
 }
 
-pub(super) fn create_controller(
+pub(crate) fn create_controller(
     environment: ICoreWebView2Environment,
     hwnd: HWND,
     deadline: Instant,
@@ -432,7 +446,7 @@ pub(super) fn background_color(background: TransparentBackground) -> COREWEBVIEW
 /// becomes `file://server/share`, a drive becomes `file:///C:/…`. The characters that
 /// would end the path early — a space, a hash, a question mark, a percent — are escaped;
 /// anything else is left as it is written.
-pub(super) fn file_url(path: &Path) -> Option<String> {
+pub(crate) fn file_url(path: &Path) -> Option<String> {
     if !path.is_absolute() {
         return None;
     }
@@ -458,6 +472,6 @@ pub(super) fn file_url(path: &Path) -> Option<String> {
     Some(url)
 }
 
-pub(super) fn wide(text: &str) -> Vec<u16> {
+pub(crate) fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }

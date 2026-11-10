@@ -364,6 +364,23 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
             }
         }
 
+        // **A pinned PDF scrolls itself.** A notch over a PDF viewer is Chromium's — the document
+        // moves, `Ctrl` and a notch zoom it, and the listing behind it does not move at all — so it
+        // is posted to the browser's own window under the point and counted by nothing this app
+        // reads as a hover seam: a notch counted here as well would re-resolve the listing under a
+        // pin the user is working in. It is asked last, after every region this app published,
+        // because a viewer's band is a window rather than a box a pin published (see
+        // `engines::pdf_viewer::the_window_under`, which is a class name rather than a table
+        // because this callback may take no lock).
+        if (wparam.0 == WM_MOUSEWHEEL as usize || wparam.0 == WM_MOUSEHWHEEL as usize)
+            && notches != 0
+        {
+            if let Some(window) = crate::engines::pdf_viewer::the_window_under(info.pt) {
+                crate::engines::pdf_viewer::post_a_notch(window, wparam.0 as u32, notches, info.pt);
+                return LRESULT(1);
+            }
+        }
+
         crate::app::seam::count_a_wheel_notch();
     }
 
