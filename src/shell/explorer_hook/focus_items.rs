@@ -27,10 +27,19 @@ pub(super) fn selected_file_in_view(
     resolver: &mut ItemResolver,
     pointer: &PointerTick,
 ) -> Option<PathBuf> {
+    let window = item_window_of(pointer.window)?;
+
+    // **Everything's own list answers the point, before any automation is asked for it** — no walk is
+    // made in that window at all (see `everything`) — and the row under the point is the item a click
+    // there landed on, which is what a list answers as its selection.
+    if window.everything {
+        return row_at(resolver, window.frame, pointer.point)
+            .and_then(|row| item_file_path(resolver, &window, &row.item()));
+    }
+
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
     let walker = resolver.walker.as_ref()?;
-    let window = item_window_of(pointer.window)?;
 
     let mut element =
         unsafe { automation.ElementFromPointBuildCache(pointer.point, cache) }.ok()?;
@@ -179,6 +188,9 @@ impl FocusedItemInfo {
             frame,
             drawn_in: self.item.native_window,
             dialog: crate::app::seam::a_dialog_is_previewed(HWND(frame as *mut core::ffi::c_void)),
+            everything: crate::shell::window_classes::everything_class_matches(HWND(
+                frame as *mut core::ffi::c_void,
+            )),
         })
     }
 }
@@ -312,7 +324,7 @@ pub(super) fn selected_item_of_focused_list(
 }
 
 /// The item Explorer says holds the keyboard focus, as the view reports it.
-pub(super) fn get_focused_explorer_item(resolver: &ItemResolver) -> Option<FocusedItemInfo> {
+pub(super) fn get_focused_explorer_item(resolver: &mut ItemResolver) -> Option<FocusedItemInfo> {
     // Only works when Explorer is the foreground window
     let foreground = unsafe { GetForegroundWindow() };
     if foreground.is_invalid() || !is_explorer_window(foreground) {

@@ -3060,7 +3060,7 @@ pub(crate) fn the_pin_key_is_down() -> bool {
 /// Whether a preview is made where a **browse dialog** is showing (`Preview Settings → General → Enable
 /// in Browse Dialogs`), published for every road that may take no lock.
 ///
-/// **The class of a window is not this question.** `window_classes::listing_class_matches` answers
+/// **The class of a window is not this question.** `window_classes::file_dialog_class_matches` answers
 /// whether a frame is a `#32770` file dialog on facts of the desktop alone, because the low-level hooks
 /// call it and a callback may wait on nothing; whether a preview is *made* there is the setting, and
 /// the setting is asked where a preview is decided (see `a_listing_is_previewed`, and through it
@@ -3086,14 +3086,17 @@ pub(crate) fn browse_dialog_previews() -> bool {
 }
 
 /// Whether a window is one a file is previewed in: Explorer's own folder window, or a browse dialog
-/// while the setting says those are listings too (see `BROWSE_DIALOG_PREVIEWS`).
+/// while the setting says those are listings too (see `BROWSE_DIALOG_PREVIEWS`) — or voidtools
+/// Everything's result window while that setting says the same of it.
 ///
-/// It is `listing_class_matches` with the setting read beside the class, and it is a function here rather
-/// than in `window_classes` because that module is the class alone: it is asked from a low-level callback,
-/// and the setting is the one thing there cannot be asked there.
+/// It is the three class predicates with the settings read beside two of them, and it is a function here
+/// rather than in `window_classes` because that module is the class alone: it is asked from a low-level
+/// callback, and a setting is the one thing there cannot be asked there. Each kind of frame is gated by
+/// its own published fact, so one switch thrown off never silences another kind.
 pub(crate) fn a_listing_is_previewed(hwnd: HWND) -> bool {
     crate::shell::window_classes::explorer_class_matches(hwnd)
-        || (browse_dialog_previews() && crate::shell::window_classes::listing_class_matches(hwnd))
+        || a_dialog_is_previewed(hwnd)
+        || crate::shell::window_classes::everything_class_matches(hwnd)
 }
 
 /// Whether `hwnd` is a browse dialog the app previews in right now — the dialog half of

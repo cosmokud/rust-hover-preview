@@ -56,7 +56,8 @@ pub(crate) fn the_frame_of(hwnd: HWND) -> HWND {
 /// back in, and the state machine's active path is the one that asks where the pointer is. Explorer's
 /// own class alone read a dialog as somebody else's program: the state dropped to
 /// `VisibleNotFocused`, the pointer was never probed, and a file the user was looking at in Chrome's
-/// `Ctrl`+`O` had no preview at all (see `listing_class_matches`).
+/// `Ctrl`+`O` had no preview at all (see `app::seam::a_listing_is_previewed`, which is where the
+/// three kinds of listing are told apart).
 ///
 /// **The dialog half of that is the setting's**, and it is asked of the published fact rather than of
 /// the configuration for the reason everything here is: this is called from the keyboard hook, which
@@ -129,7 +130,7 @@ pub(crate) const THE_NAME_EDIT_CONTROL_ID: i32 = 1148;
 /// would put a hover over anything a program asks the user.
 ///
 /// One class compare and two window lookups, with no lock and no allocation: a `WH_MOUSE_LL` callback
-/// calls this (see `listing_class_matches`), so nothing here may wait on anything. It is not memoized
+/// reaches this through `app::seam::a_listing_is_previewed`, so nothing here may wait on anything. It is not memoized
 /// here for the same reason the Explorer classes are not: the ask is cheap enough that a hook call
 /// paying for a lock to save it would cost more than the lookups, and the hook's own cached form of
 /// the question is the memo (`is_explorer_window`).
@@ -158,16 +159,59 @@ pub(crate) fn file_dialog_class_matches(hwnd: HWND) -> bool {
     }
 }
 
-/// Whether a window is part of a **listing**: Explorer's folder window, or a Common Item Dialog.
+// Three kinds of frame are a listing now — Explorer's folder window, a Common Item Dialog and
+// Everything's results — and they are three predicates rather than one union, because each is a
+// setting of its own where a preview is decided (`app::seam::a_listing_is_previewed`). Anything that
+// means "is this Explorer's own folder window" asks `explorer_class_matches`, which stays narrow:
+// neither of the others is an Explorer window, and counting one as one would move the window counts
+// the pace and the covered-window rule are read from.
+
+/// The class of voidtools Everything's frame, and of the frames of a second instance beside it.
 ///
-/// This is the one question the hook, the pick road and the pin's own placement ask of a window —
-/// "is the user working in a file listing here" — and they ask it of two kinds of frame now that
-/// both exist (see `explorer_class_matches` and `file_dialog_class_matches`). Anything that means
-/// "is this Explorer's own folder window" keeps asking `explorer_class_matches`, which stays narrow:
-/// a dialog is no Explorer window and counting one as one would move the window counts the pace and
-/// the covered-window rule are read from.
-pub(crate) fn listing_class_matches(hwnd: HWND) -> bool {
-    explorer_class_matches(hwnd) || file_dialog_class_matches(hwnd)
+/// The bare name is 1.5.0.1423b's own; an instance that is not the first is reported to carry the
+/// instance in brackets after it (`EVERYTHING_(1.5a)`), which is read here as the same class because
+/// a frame is a frame — and the bracket is what keeps the rest of that program's windows out, since
+/// every one of them puts something plainer after the same letters: `EVERYTHING_TASKBAR_NOTIFICATION`
+/// is its IPC window and `EVERYTHING_RESULT_LIST_FOCUS` a hidden stand-in for the rows' focus, and
+/// neither of them is a window a listing is drawn in.
+pub(crate) fn everything_class_matches(hwnd: HWND) -> bool {
+    let frame = the_frame_of(hwnd);
+    if frame.is_invalid() {
+        return false;
+    }
+
+    unsafe {
+        let mut class_name = [0u16; 256];
+        let len = GetClassNameW(frame, &mut class_name);
+        len > 0 && a_frame_class_of_everything(&class_name[..len as usize])
+    }
+}
+
+/// Whether a window class is Everything's frame — see `everything_class_matches` for why the two
+/// forms are read as one class and why the bracket is what tells them from the program's others.
+///
+/// Allocation-free and one pass, because a `WH_MOUSE_LL` callback reaches this through
+/// `app::seam::a_listing_is_previewed` and may wait on nothing.
+pub(crate) fn a_frame_class_of_everything(class_name: &[u16]) -> bool {
+    const THE_FRAME: &[u8] = b"everything";
+    const AN_INSTANCE: &[u8] = b"everything_(";
+
+    if class_name.len() < THE_FRAME.len() {
+        return false;
+    }
+
+    class_name.len() == THE_FRAME.len() && starts_with_ascii_ignore_case(class_name, THE_FRAME)
+        || starts_with_ascii_ignore_case(class_name, AN_INSTANCE)
+}
+
+/// Whether a class name begins with an ASCII needle, compared one code unit at a time and without
+/// allocating: a `u16` outside ASCII can never match a byte of it.
+pub(crate) fn starts_with_ascii_ignore_case(haystack: &[u16], needle: &[u8]) -> bool {
+    haystack.len() >= needle.len()
+        && haystack
+            .iter()
+            .zip(needle)
+            .all(|(ch, byte)| *ch < 0x80 && (*ch as u8).eq_ignore_ascii_case(byte))
 }
 
 /// Allocation-free equivalent of lowercasing the class name and searching for an ASCII needle. A
@@ -393,10 +437,6 @@ mod tests {
             file_dialog_class_matches(dialog),
             "a dialog with a name field and the shell's rows in it is a file listing"
         );
-        assert!(
-            listing_class_matches(dialog),
-            "and a listing, which is the question every caller actually asks"
-        );
         for child in [rows_host, name_edit] {
             assert!(
                 file_dialog_class_matches(child),
@@ -418,8 +458,8 @@ mod tests {
             "and a property sheet is tabs rather than rows"
         );
         assert!(
-            !listing_class_matches(message_box) && !listing_class_matches(property_sheet),
-            "neither is a listing: a hover there would be a hover over a program's own window"
+            !everything_class_matches(message_box) && !everything_class_matches(property_sheet),
+            "and neither is any other kind of listing either: a hover there would be a hover over a program's own window"
         );
 
         // **A dialog is a listing and never an Explorer window.** The window counts, the pace and
@@ -431,10 +471,10 @@ mod tests {
         );
     }
 
-    /// The two classes a window can be a listing in are still told apart by the answer the counts
-    /// are read from, and the frames of the rest of the desktop are the same answer they always were.
+    /// The three classes a window can be a listing in are told apart by the answer the counts are read
+    /// from, and the frames of the rest of the desktop are the same answer they always were.
     #[test]
-    fn the_desktop_is_no_listing_of_either_kind() {
+    fn the_desktop_is_no_listing_of_any_kind() {
         let mut windows = WindowsOfTheTest::default();
 
         // Safety: this test's own windows, made where no display is and shown never.
@@ -447,13 +487,83 @@ mod tests {
         };
 
         assert!(
-            listing_class_matches(folder),
+            explorer_class_matches(folder),
             "Explorer's own frame is a listing, as it always was"
         );
         assert!(
-            !listing_class_matches(desktop) && !listing_class_matches(taskbar),
-            "and the rest of explorer.exe is not: no hover is over a file there"
+            !file_dialog_class_matches(folder) && !everything_class_matches(folder),
+            "and it is only that kind of listing"
         );
+        for window in [desktop, taskbar] {
+            assert!(
+                !explorer_class_matches(window)
+                    && !file_dialog_class_matches(window)
+                    && !everything_class_matches(window),
+                "the rest of explorer.exe is no listing at all: no hover is over a file there"
+            );
+        }
+    }
+
+    /// **Everything's frame is a listing and never an Explorer window**, and the frames around it in
+    /// that program's own process are neither: its IPC window and the hidden stand-in its rows take
+    /// their focus from carry the same letters, and reading either as a listing would put a hover over
+    /// a window no row is ever drawn in.
+    #[test]
+    fn an_everything_frame_is_a_listing_of_its_own_kind() {
+        let mut windows = WindowsOfTheTest::default();
+
+        // Safety: this test's own windows, made where no display is and shown never.
+        let (frame, list, ipc, focus_stand_in) = unsafe {
+            let frame = windows.a_window_named(w!("EVERYTHING"), None);
+            let list = windows.a_window_named(w!("SysListView32"), Some(frame));
+            (
+                frame,
+                list,
+                windows.a_window_named(w!("EVERYTHING_TASKBAR_NOTIFICATION"), None),
+                windows.a_window_named(w!("EVERYTHING_RESULT_LIST_FOCUS"), Some(frame)),
+            )
+        };
+
+        assert!(
+            everything_class_matches(frame),
+            "Everything's frame is the window its rows are drawn in"
+        );
+        assert!(
+            everything_class_matches(list) && the_frame_of(list) == frame,
+            "and a click inside its rows lands on a child of that frame"
+        );
+        assert!(
+            everything_class_matches(focus_stand_in),
+            "a hidden stand-in drawn in the frame is part of it, as any child of a listing is"
+        );
+        assert!(
+            !everything_class_matches(ipc),
+            "and the program's own IPC window carries the same letters and is nobody's frame"
+        );
+        assert!(
+            !explorer_class_matches(frame) && !file_dialog_class_matches(frame),
+            "and it is no Explorer window and no dialog: the counts and the pace stay Explorer's own"
+        );
+
+        // A second instance's frame, which is the same name with the instance in brackets after it.
+        assert!(a_frame_class_of_everything(
+            &"EVERYTHING_(1.5a)".encode_utf16().collect::<Vec<_>>()
+        ));
+        assert!(a_frame_class_of_everything(
+            &"everything".encode_utf16().collect::<Vec<_>>()
+        ));
+        for not_the_frame in [
+            "EVERYTHING_TASKBAR_NOTIFICATION",
+            "EVERYTHING_RESULT_LIST_FOCUS",
+            "EVERYTHIN",
+            "CabinetWClass",
+            "",
+        ] {
+            assert!(
+                !a_frame_class_of_everything(&not_the_frame.encode_utf16().collect::<Vec<_>>()),
+                "{not_the_frame:?} is not the frame a listing is drawn in"
+            );
+        }
     }
 
     /// **The class of a dialog is not the setting, and the setting is what decides whether a preview
@@ -489,7 +599,7 @@ mod tests {
             "off, it is no listing at all — exactly as it was before the dialog was one"
         );
         assert!(
-            listing_class_matches(dialog) && file_dialog_class_matches(dialog),
+            file_dialog_class_matches(dialog),
             "and the class still answers for it: a hook callback may take no lock, and the class is \
              the desktop's fact rather than the setting's"
         );

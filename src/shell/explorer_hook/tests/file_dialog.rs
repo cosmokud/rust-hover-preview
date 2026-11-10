@@ -68,6 +68,7 @@ fn a_name_that_is_a_whole_path_is_the_file_it_names() {
         frame: 0,
         drawn_in: 0,
         dialog: true,
+        everything: false,
     };
     let item = a_dialog_item(&picture.to_string_lossy());
 

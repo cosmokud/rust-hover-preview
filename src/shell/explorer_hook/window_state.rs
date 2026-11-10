@@ -27,11 +27,11 @@ pub(crate) fn is_foreground_explorer() -> bool {
     }
 }
 
-/// Whether the window in front is a listing this hook answers for — Explorer's folder window, or a
-/// browse dialog while `Preview Settings → General → Enable in Browse Dialogs` is on — asked of the class
-/// alone: one `GetForegroundWindow` and the class compares of `listing_class_matches`, with no lock and
-/// no allocation. The setting is the published fact, which costs one atomic load and no lock either
-/// (see `app::seam::BROWSE_DIALOG_PREVIEWS`).
+/// Whether the window in front is a listing this hook answers for — Explorer's folder window, a browse
+/// dialog while `Preview Settings → General → Enable in Browse Dialogs` is on, or Everything's results
+/// while `… → Enable in Everything` is — asked of the class alone: one `GetForegroundWindow` and the class
+/// compares of the three class predicates, with no lock and no allocation. Each setting is its own
+/// published fact, which costs one atomic load and no lock either (see `app::seam::a_listing_is_previewed`).
 ///
 /// The question the pin's own placement asks, and the one `is_foreground_explorer` is not: a pin is
 /// owed the front of its band where the window it was picked over is *either* kind, and a file picked
@@ -308,12 +308,13 @@ pub(super) fn get_explorer_state() -> ExplorerState {
         return ExplorerState::ActiveFocus;
     }
 
-    // **A Common Item Dialog is a listing and is nobody's Explorer window**, so it falls through to the
-    // counts rather than to the answer above: the walk does not count it — counting it would move the
-    // pace and the covered-window rule, which are Explorer's own — and a run with no folder window open
-    // would read `NoExplorerWindows` and stop asking where the pointer is while the user picks a file in
-    // Chrome's `Ctrl`+`O`. So the fact is handed to the rule, which is where the row it answers for is
-    // decided (see `listing_class_matches` and `explorer_state_from_counts`).
+    // **A Common Item Dialog and Everything's result window are listings and are nobody's Explorer
+    // windows**, so they fall through to the counts rather than to the answer above: the walk does not
+    // count them — counting them would move the pace and the covered-window rule, which are Explorer's
+    // own — and a run with no folder window open would read `NoExplorerWindows` and stop asking where the
+    // pointer is while the user picks a file in Chrome's `Ctrl`+`O` or hovers a row in Everything. So the
+    // fact is handed to the rule, which is where the row it answers for is decided (see
+    // `is_explorer_window` and `explorer_state_from_counts`).
     let foreground_is_a_listing = !foreground.is_invalid() && is_explorer_window(foreground);
 
     // Everything past here is about the Explorer windows themselves: how many there
@@ -413,7 +414,7 @@ pub(crate) fn a_press_puts_us_behind(
 ///
 /// Asked of the class of the frame the press landed in rather than of the process behind it, and with no
 /// lock and no allocation, because this is a low-level callback and every press on the machine waits for
-/// it (see `window_classes::listing_class_matches`). A Common Item Dialog is a listing a pick can be made
+/// it (see `window_classes::explorer_class_matches`). A Common Item Dialog is a listing a pick can be made
 /// in exactly as a folder window is — the pin is standing beside the file the user is choosing in a
 /// program's Open dialog, and the press that chooses it is the press that hands it over (see
 /// `explorer_hook::file_dialog`).
@@ -742,7 +743,7 @@ pub(super) fn window_is_gone(window: Option<HWND>) -> bool {
 /// on: Explorer's folder window, or a Common Item Dialog some other program put up. Neither number
 /// describes that arrangement — a dialog is no Explorer window, and a run with none open is one whose
 /// counts would say there is nothing to look at while the user is picking a file (see
-/// `listing_class_matches` and `get_explorer_state`).
+/// `a_listing_is_previewed` and `get_explorer_state`).
 ///
 /// A foreground that is no listing leaves the rows it had, because what it is instead is not something
 /// this loop can act on: where Explorer is reachable beside it the pointer may still cross to that

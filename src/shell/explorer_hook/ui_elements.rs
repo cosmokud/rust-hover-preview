@@ -69,15 +69,27 @@ pub(super) fn is_valid_file_path(s: &str) -> bool {
 /// The item the pointer is over, as the view's accessibility provider reports it,
 /// or nothing when the pointer is over no item at all.
 ///
+/// **Everything answers first, and the automation client is not asked at all where the point is in its
+/// window.** Reading that list through UI Automation is reported to hang Everything and to leave it
+/// holding gigabytes, so the class of the frame the point is in decides the road — a `WindowFromPoint`
+/// and two class compares, taken before the client in hand is even looked at — and the row comes back
+/// from the list's own messages instead (see `everything`). It is here rather than in each caller
+/// because this is where every item walk starts: the pointer road, the click road's row and the
+/// region a preview is kept off all arrive through this one function.
+///
 /// `measure_content` asks the walk for the item's own text as well, which a preview
 /// is placed from. A plain probe passes `false`: it answers which file the pointer is
 /// on, and a preview that keeps off that file's item asks for the text when it is
 /// about to be shown — see `avoid_box_under_cursor`.
 pub(super) fn uia_item_from_point(
-    resolver: &ItemResolver,
+    resolver: &mut ItemResolver,
     point: POINT,
     measure_content: bool,
 ) -> Option<HoveredItem> {
+    if let Some(frame) = the_everything_frame_of(unsafe { WindowFromPoint(point) }) {
+        return row_at(resolver, frame, point).map(|row| row.item());
+    }
+
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
     note_probe(&PROBE_ITEM_WALKS);
@@ -97,7 +109,16 @@ pub(super) fn uia_item_from_point(
 
 /// The item the keyboard is on: the element Explorer says holds the focus, or the
 /// item of that element's list when the view reports the list itself as focused.
-pub(super) fn uia_item_from_focus(resolver: &ItemResolver) -> Option<HoveredItem> {
+///
+/// **Everything answers first, and no focused element is asked for there** — the list says which of
+/// its rows the keyboard is on itself, and asking its accessibility tree is the thing that must never
+/// be done (see `everything` and `uia_item_from_point`). The row it names is the focused one, or the
+/// selected one where nothing is focused.
+pub(super) fn uia_item_from_focus(resolver: &mut ItemResolver) -> Option<HoveredItem> {
+    if let Some(frame) = the_everything_frame_of(unsafe { GetForegroundWindow() }) {
+        return focused_row(resolver, frame).map(|row| row.item());
+    }
+
     let automation = resolver.automation.as_ref()?;
     let cache = resolver.cache.as_ref()?;
     note_probe(&PROBE_ITEM_WALKS);

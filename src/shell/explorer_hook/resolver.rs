@@ -25,6 +25,7 @@ impl ItemResolver {
             item: None,
             probe: None,
             dialog_folder: None,
+            everything: None,
         };
         resolver.rebuild_automation_parts();
         resolver.rebuild_shell();

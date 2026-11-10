@@ -34,6 +34,7 @@ pub(super) fn item_window_of(window: HWND) -> Option<ItemWindow> {
             frame: frame.0 as isize,
             drawn_in: window.0 as isize,
             dialog: crate::app::seam::a_dialog_is_previewed(frame),
+            everything: crate::shell::window_classes::everything_class_matches(frame),
         })
     }
 }
@@ -278,6 +279,15 @@ pub(super) fn item_file_path(
     // file (see `file_dialog::dialog_item_path`).
     if window.dialog {
         return dialog_item_path(resolver, window, item);
+    }
+
+    // **An Everything row answers before the position is asked for too, because the position is not a
+    // view's.** The list belongs to Everything rather than to the Shell, so no Shell view holds the item
+    // at that index; what the row draws is the file's path, and that is what turns it into a file (see
+    // `everything::item_path`). It is one function for every road — the pointer's row, the keyboard's and
+    // a walk by index — so all of them answer the same way.
+    if window.everything {
+        return item_path(resolver, window, item);
     }
 
     let index = item.index? - 1;
@@ -533,6 +543,17 @@ pub(super) fn get_file_under_cursor(
         .map(|window| window.drawn_in)
         .unwrap_or_default();
 
+    // **An Everything row is asked again on every tick**, which is the one place the answer below is not
+    // kept: the reads are 0.1 ms against the list itself, and what the memo is keyed by is the box the
+    // item is drawn in — so a query typed into Everything's search box puts another file at the same box
+    // under a parked pointer, and the memo would go on answering the file of the row that has gone (see
+    // `everything`).
+    if window.as_ref().is_some_and(|window| window.everything) {
+        let look = resolve_file_under_cursor(resolver, point, window.as_ref());
+        resolver.remember_probe(point, look.path.clone());
+        return look.path;
+    }
+
     if let Some(answer) = resolver.item_under(point, drawn_in) {
         note_probe(&PROBE_ITEM_MEMO_HITS);
         return answer;
@@ -558,6 +579,13 @@ pub(super) fn get_file_under_cursor(
 /// to still be the one under it (see `AnsweredItem`), and a look that found no item at all
 /// answers for neither. The window is handed in rather than read here, because the caller
 /// reads it before the answer it is holding is asked about.
+///
+/// **An Everything window is answered by its own list rather than by that walk**, and it is
+/// answered there because the walk may never be made in one (see `everything`, and
+/// `uia_item_from_point`, which is where the branch is taken): the item, its box on the screen
+/// and the file its cells name all come back from the list's own messages, and everything below
+/// — the box published for the preview, the second look that says the item has not moved, the
+/// file read out of the row — is the answer it would have given for a view.
 pub(super) fn resolve_file_under_cursor(
     resolver: &mut ItemResolver,
     point: POINT,
@@ -632,7 +660,7 @@ pub(super) fn resolve_file_under_cursor(
 /// is asked here so that a pointer merely sweeping over a list pays nothing for it. A
 /// walk that finds no item at all leaves the preview placed as it always was.
 pub(super) fn avoid_box_under_cursor(
-    resolver: &ItemResolver,
+    resolver: &mut ItemResolver,
     point: POINT,
 ) -> Option<((i32, i32, i32, i32), bool)> {
     // Read before the walk as well as inside `avoid_box`: with the setting off there
