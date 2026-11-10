@@ -702,9 +702,11 @@ fn what_a_kind_is_framed_by_follows_what_is_inside_it() {
     assert_eq!(pin_frame(Some(MediaType::AnimatedGif)), PinFrame::Shaped);
     assert_eq!(pin_frame(Some(MediaType::NativeVideo)), PinFrame::Shaped);
     assert_eq!(pin_frame(Some(MediaType::Video)), PinFrame::Shaped);
-    assert_eq!(pin_frame(Some(MediaType::Pdf)), PinFrame::Shaped);
 
-    // A page of text is poured into whatever box it is given, at any shape.
+    // A page of text is poured into whatever box it is given, at any shape — and a document is
+    // the same kind of thing, whoever draws it: Chromium's viewer fits a PDF's pages to the box it
+    // stands in, so a PDF's edges move one at a time as well (see `pin_frame`).
+    assert_eq!(pin_frame(Some(MediaType::Pdf)), PinFrame::Free);
     assert_eq!(pin_frame(Some(MediaType::Text)), PinFrame::Free);
     assert_eq!(pin_frame(Some(MediaType::Archive)), PinFrame::Free);
 
@@ -1903,5 +1905,211 @@ fn every_spawn_hides_the_pins_chrome_and_a_step_carries_the_pointers() {
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = previous_media;
+    }
+}
+
+/// **A pinned document keeps its chrome in strips and its viewer inset inside them.**
+///
+/// The band is Chromium's while the viewer stands in it, and a layered window's pixels can never
+/// come out above a live window of somebody else's: a caption painted over that band is a caption
+/// *under* the document, of which only the pieces outside the viewer's rectangle are ever seen. So
+/// a PDF's frame is `Free` — a document is poured into whatever box it is handed, which is what puts
+/// its chrome in bands — and the viewer is inset by a margin of the pin's own pixels, which is the
+/// frame the pin is carried and resized by (see `pin_frame`, `the_documents_area` and
+/// `PIN_DOCUMENT_MARGIN_PIXELS`).
+#[test]
+fn a_pinned_document_keeps_its_chrome_in_strips_and_its_viewer_inset() {
+    let overlay = pin_overlay_chrome(Some(MediaType::Pdf), false);
+
+    assert!(
+        !overlay,
+        "a document's chrome is in bands around its viewer rather than over it"
+    );
+    assert_eq!(pin_frame(Some(MediaType::Pdf)), PinFrame::Free);
+    assert!(
+        !pin_hides_chrome(Some(MediaType::Pdf), false),
+        "so the caption never comes and goes: it is the window's title bar, its buttons and all"
+    );
+    assert!(
+        chrome_rows_are_hit_testable(overlay),
+        "and its rows are the pin's claim, which is what a press on the caption and its buttons \
+         is answered by"
+    );
+
+    // The viewer's box is the band less the margin on every side, at whatever scale the display is.
+    let band = (100, 200, 500, 620);
+    for dpi in [96, 120, 144, 192] {
+        let margin = logical_px(dpi, PIN_DOCUMENT_MARGIN_PIXELS);
+        let area = the_documents_area(band, dpi);
+
+        assert_eq!(
+            (area.x, area.y),
+            (band.0 + margin, band.1 + margin),
+            "at {dpi} dpi"
+        );
+        assert_eq!(area.width, band.2 - band.0 - 2 * margin, "at {dpi} dpi");
+        assert_eq!(area.height, band.3 - band.1 - 2 * margin, "at {dpi} dpi");
+    }
+
+    // And that margin is the resize band, so there is no piece of the frame that is not an edge: a
+    // hand anywhere in it resizes the pin, and the caption above it is the one place it is carried
+    // by (see `pin_resize_edge` and `pinned_press`).
+    let dpi = 96;
+    let (width, height) = (400, 400);
+    let margin = logical_px(dpi, PIN_DOCUMENT_MARGIN_PIXELS);
+    assert!(
+        margin >= logical_px(dpi, PIN_RESIZE_BORDER_PIXELS).max(2),
+        "the margin is at least the band a press on an edge is found in: {margin} wide"
+    );
+
+    let middle = height / 2;
+    for x in [0, margin - 1] {
+        let edge = pin_resize_edge((width, height), dpi, x, middle).expect("the left margin");
+        assert!(edge.left && !edge.right, "column {x} is the left edge");
+    }
+    for x in [width - margin, width - 1] {
+        let edge = pin_resize_edge((width, height), dpi, x, middle).expect("the right margin");
+        assert!(edge.right && !edge.left, "column {x} is the right edge");
+    }
+    for y in [height - margin, height - 1] {
+        let edge = pin_resize_edge((width, height), dpi, width / 2, y).expect("the bottom margin");
+        assert!(edge.bottom && !edge.top, "row {y} is the bottom edge");
+    }
+}
+
+/// **A document is taken up at the box its page was fitted into, and the window grows by its
+/// caption around it.**
+///
+/// The box the hover laid page one out in is the box the document is taken up at — a document has no
+/// shape of its own to fit into the box the way a picture's is fitted, so nothing about the frame
+/// changes the size it arrives at (see `pin_frame`) — and what the pin adds is the band above it that
+/// the caption stands in, which is the whole of what a strips-mode pin is.
+#[test]
+fn a_document_is_taken_up_at_the_boxes_page_and_a_caption_above_it() {
+    let _room = the_room_to_itself();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(320, 240);
+        media.media_type = MediaType::Pdf;
+        *current = Some(media);
+    }
+
+    let fitted = (100, 80, 420, 320);
+    let document = take_up_pinned_window(&PathBuf::from("document.pdf"), fitted);
+
+    assert!(!document.overlay, "a document's chrome is in bands");
+    assert_eq!(document.frame, PinFrame::Free);
+    assert_eq!(
+        (
+            document.content.2 - document.content.0,
+            document.content.3 - document.content.1
+        ),
+        (fitted.2 - fitted.0, fitted.3 - fitted.1),
+        "the page is taken up at the box its hover fitted it into"
+    );
+
+    let window = document.window_box();
+    assert_eq!(
+        (window.2 - window.0, window.3 - window.1),
+        (
+            document.content.2 - document.content.0,
+            document.content.3 - document.content.1 + document.caption
+        ),
+        "and the window around it is that box with the caption's band above it"
+    );
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// **The raster is the fallback, and it lands on the band the strips leave rather than on the whole
+/// window.**
+///
+/// A document whose viewer has not arrived — or never does — is a pin drawing page one the way it
+/// was taken up: the page fills the media's own rows, below the caption, and the caption's rows stay
+/// the pin's own claim (see `pinned_band_rows` and `render_pinned_preview_at`). A page fitted into
+/// the whole window instead would be a page drawn under its own caption, which is the overlay
+/// answered for a kind whose chrome is in strips now.
+#[test]
+fn a_pinned_documents_raster_fills_the_band_the_strips_leave() {
+    let _room = the_room_to_itself();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let page = [200u8, 200, 200, 255];
+    let content = (100, 80, 220, 300);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.dpi = 96;
+    pin.frame = PinFrame::Free;
+    pin.overlay = false;
+    pin.zoom = None;
+    pin.transport_bar = false;
+    let caption = pin.caption;
+    stand_pin(Some(pin));
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(static_image_media(
+            Arc::new(ImageFrame::new(page.repeat(120 * 220), 120, 220, 0)),
+            MediaType::Pdf,
+        ));
+    }
+
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { render_pinned_preview_at(hwnd, content.0, content.1) };
+
+    let (width, height) = the_pins_window_size();
+    let painted = the_painted_surface(hwnd, width, height);
+    for row in 0..caption as usize {
+        assert_eq!(
+            surface_pixel(&painted, (width as u32, height as u32), row, 0),
+            [1, 1, 1, 1],
+            "row {row} is the caption's band, and a press on it is the pin's"
+        );
+    }
+    for row in [caption as usize, height as usize - 1] {
+        assert_eq!(
+            surface_pixel(&painted, (width as u32, height as u32), row, 0),
+            page,
+            "row {row} is the page's: the raster lands on the media's rows and not the window's"
+        );
+    }
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// The frame a pinned document is given around its viewer is painted rather than left transparent:
+/// it is the caption's own colour, opaque, over the band's rows and no others — which is both what
+/// makes it read as a document's frame and what claims the press on it (see
+/// `fill_band_opaque_with` and `PIN_DOCUMENT_MARGIN_PIXELS`).
+#[test]
+fn a_documents_frame_is_painted_in_the_chromes_colour() {
+    let (width, height) = (4u32, 6u32);
+    let (origin_y, band_height) = (1u32, 3u32);
+    let mut out = vec![0u8; (width * height * 4) as usize];
+
+    // Three different channels, so the order the colour lands in is asserted rather than assumed.
+    fill_band_opaque_with(&mut out, width, origin_y, band_height, [10, 20, 30]);
+
+    for row in 0..height as usize {
+        let in_band = row >= origin_y as usize && row < (origin_y + band_height) as usize;
+        for column in 0..width as usize {
+            assert_eq!(
+                surface_pixel(&out, (width, height), row, column),
+                if in_band {
+                    [30, 20, 10, 255]
+                } else {
+                    [0, 0, 0, 0]
+                },
+                "row {row} column {column}: the band is the chrome's colour and opaque, and every \
+                 row outside it is left as the caller left it"
+            );
+        }
     }
 }
