@@ -1,7 +1,7 @@
 use super::super::playlist::{
     clock_origin, facts_style, playlist_edge_at, playlist_row, playlist_scroll_at,
-    playlist_scroll_max, playlist_step_pick, playlist_thumb, playlist_thumb_grab,
-    playlist_track_holds, PlaylistEdge,
+    playlist_scroll_max, playlist_shown, playlist_step_pick, playlist_thumb, playlist_thumb_grab,
+    playlist_track_holds, search_field_holds, search_index_at, PlaylistEdge, PlaylistSearch,
 };
 use super::*;
 use crate::readers::audio_track::{self, Player, Track};
@@ -193,7 +193,12 @@ fn the_thumb_is_the_share_the_band_shows() {
         top, layout.rows_top,
         "a band at its first row has its thumb at the top of the track"
     );
-    assert_eq!(bottom - top, room * layout.visible / 40);
+    // The thumb is the share of the rows the band shows, and never thinner than half a row — a bar
+    // a hand cannot see is a bar a hand cannot carry (see `playlist_thumb`).
+    assert_eq!(
+        bottom - top,
+        (room * layout.visible / 40).max(layout.row_height / 2)
+    );
 
     let (_, bottom) = playlist_thumb(
         &layout,
@@ -402,7 +407,7 @@ fn a_name_too_wide_for_its_row_has_a_travel() {
 #[test]
 fn the_band_claims_its_whole_box_and_stripes_the_row_it_shows() {
     let palette = ChromePalette::current().expect("a theme to paint in");
-    let (width, height) = (240u32, 140u32);
+    let (width, height) = (240u32, 240u32);
     let surface = DibSurface::create(width, height).expect("a surface");
     let layout = playlist_layout(width as i32, height as i32, SCALE, 2);
     let rows = [a_row("one"), a_row("two")];
@@ -413,11 +418,14 @@ fn the_band_claims_its_whole_box_and_stripes_the_row_it_shows() {
         &PlaylistBand {
             layout,
             rows: &rows,
+            shown: &[0, 1],
             first: 0,
             total: 2,
             showing: Some(1),
             picked: None,
             scrolled: &[],
+            search: None,
+            note: None,
         },
         SCALE,
     );
@@ -600,7 +608,7 @@ fn a_stepped_row_is_scrolled_back_into_sight() {
 #[test]
 fn a_row_is_drawn_exactly_as_the_row_above_it() {
     let palette = ChromePalette::current().expect("a theme to paint in");
-    let (width, height) = (400u32, 140u32);
+    let (width, height) = (400u32, 150u32);
     let surface = DibSurface::create(width, height).expect("a surface");
     let layout = playlist_layout(width as i32, height as i32, SCALE, 2);
     assert_eq!(layout.visible, 2, "two rows in the room of two");
@@ -618,11 +626,14 @@ fn a_row_is_drawn_exactly_as_the_row_above_it() {
         &PlaylistBand {
             layout,
             rows: &rows,
+            shown: &[0, 1],
             first: 0,
             total: 2,
             showing: None,
             picked: None,
             scrolled: &[],
+            search: None,
+            note: None,
         },
         SCALE,
     );
@@ -641,4 +652,316 @@ fn a_row_is_drawn_exactly_as_the_row_above_it() {
         "the second row is drawn away from the first, so a face one painter selected is the face \
          the other drew in"
     );
+}
+
+/// The search field is a constant of the layout: it sits at the band's bottom whatever band it is
+/// given, and a band taller or shorter than another gives the rows above it what it took rather than
+/// stretching the field. A field that moved with the band would be a field the hand had to find again
+/// on every drag of the height.
+#[test]
+fn the_search_field_sits_at_the_bands_bottom_whatever_its_height() {
+    let tall = playlist_layout(400, 400, SCALE, 40);
+    let short = playlist_layout(400, 240, SCALE, 40);
+
+    let height = tall.search_bottom - tall.search_top;
+    assert!(height > 0, "a band always draws the field it was given");
+    assert_eq!(
+        short.search_bottom - short.search_top,
+        height,
+        "the field is the same number of pixels in a band of any height"
+    );
+
+    for layout in [tall, short] {
+        assert_eq!(
+            layout.search_top, layout.rows_bottom,
+            "the rows end where the field begins, so nothing is drawn under both"
+        );
+        assert_eq!(
+            layout.search_left, layout.rows_top,
+            "the field spans the band's inner width: the pad off the left, as the rows are"
+        );
+        assert_eq!(
+            (layout.search_left, layout.search_right),
+            (short.search_left, short.search_right),
+            "and neither band is narrower than the other"
+        );
+    }
+
+    assert_eq!(
+        tall.search_bottom,
+        tall.rows_bottom + height,
+        "the field's own bottom is its top grown by the one constant"
+    );
+    assert_eq!(
+        tall.search_bottom - short.search_bottom,
+        400 - 240,
+        "the field is anchored to the band's bottom rather than to its top"
+    );
+
+    // The rows are the room the field leaves: every pixel a band is dragged taller is a pixel the
+    // rows above the field are taller by.
+    let rows = |layout: &PlaylistLayout| layout.rows_bottom - layout.rows_top;
+    assert_eq!(
+        rows(&tall) - rows(&short),
+        400 - 240,
+        "a band dragged a hundred and sixty pixels taller gives the rows that many"
+    );
+
+    // A band too short for even one row still has its field: the rows are nothing and the field is
+    // the field.
+    // The field and one pad above and below it, and not a pixel more.
+    let squeezed = playlist_layout(400, height + 2 * short.rows_top, SCALE, 40);
+    assert_eq!(squeezed.visible, 0, "no row fits above the field there");
+    assert_eq!(
+        squeezed.search_bottom - squeezed.search_top,
+        height,
+        "and the field it draws is the one every other band draws"
+    );
+
+    // The bottom of the band is the window's own drag handle, and the field is held clear of it: a
+    // press on the field is a caret and never a height being pulled.
+    let top = 300;
+    let band = squeezed.search_bottom + squeezed.rows_top;
+    for y in squeezed.search_top..squeezed.search_bottom {
+        assert_eq!(
+            playlist_edge_at(top, band, SCALE, top + y),
+            None,
+            "the field's row {y} is no drag of the window's bottom edge"
+        );
+    }
+    assert_eq!(
+        playlist_edge_at(top, band, SCALE, top + band - 1),
+        Some(PlaylistEdge::Bottom),
+        "and the window's last rows are the band's edge, below the field"
+    );
+}
+
+/// A point of the field is the field's, from the pad it begins at to the pad it ends short of — and a
+/// point above it is the rows', which is what keeps a press on a row off the field.
+#[test]
+fn a_point_of_the_field_is_the_fields_and_the_rows_above_it_are_not() {
+    let layout = playlist_layout(400, 240, SCALE, 40);
+    let (top, bottom) = (layout.search_top, layout.search_bottom);
+
+    assert!(search_field_holds(&layout, layout.search_left, top));
+    assert!(search_field_holds(
+        &layout,
+        layout.search_right - 1,
+        bottom - 1
+    ));
+    assert!(
+        !search_field_holds(&layout, layout.search_left - 1, top),
+        "left of the pad the band is the rows'"
+    );
+    assert!(
+        !search_field_holds(&layout, layout.width - 1, top),
+        "and right of the pad it is the scrollbar's"
+    );
+    assert!(!search_field_holds(&layout, 200, top - 1));
+    assert!(!search_field_holds(&layout, 200, bottom));
+}
+
+/// A paint of a band of no rows, so that the field's own pixels are the only ones inside its box.
+fn a_band_of_the_field(search: PlaylistSearch) -> (DibSurface, RECT) {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let (width, height) = (400u32, 240u32);
+    let surface = DibSurface::create(width, height).expect("a surface");
+    let layout = playlist_layout(width as i32, height as i32, SCALE, 0);
+    let rows: [PlaylistRow; 0] = [];
+
+    paint_playlist(
+        &surface,
+        &palette,
+        &PlaylistBand {
+            layout,
+            rows: &rows,
+            shown: &[],
+            first: 0,
+            total: 0,
+            showing: None,
+            picked: None,
+            scrolled: &[],
+            search: Some(search),
+            note: None,
+        },
+        SCALE,
+    );
+
+    let box_ = RECT {
+        left: layout.search_left,
+        top: layout.search_top,
+        right: layout.search_right,
+        bottom: layout.search_bottom,
+    };
+
+    (surface, box_)
+}
+
+/// The field draws the placeholder where the query is nothing, the query where it is something, and
+/// the caret only while it has the focus — and every pixel of it is opaque, because the band is and a
+/// layered window is hit-tested by the shape of its pixels.
+#[test]
+fn the_field_draws_its_placeholder_its_query_and_its_caret() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let page = palette.background;
+    // The field's own fill: what a field with nothing in it draws and nothing else does.
+    let fill = text_paint::blend(page, palette.foreground, 0.07);
+
+    let pixels_of = |surface: &DibSurface| unsafe {
+        std::slice::from_raw_parts(
+            surface.bits(),
+            surface.width as usize * surface.height as usize * 4,
+        )
+    };
+    let ink = |pixels: &[u8], width: usize, x: i32, y: i32| {
+        let at = (y as usize * width + x as usize) * 4;
+        [pixels[at + 2], pixels[at + 1], pixels[at]]
+    };
+    // How much of the field was inked by something that is neither its own fill nor the page under it.
+    let inked = |surface: &DibSurface, box_: RECT| {
+        let pixels = pixels_of(surface);
+        let width = surface.width as usize;
+        (box_.top..box_.bottom)
+            .flat_map(|y| (box_.left..box_.right).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                let at = ink(pixels, width, *x, *y);
+                at != page && at != fill
+            })
+            .count()
+    };
+
+    let (empty, box_) = a_band_of_the_field(PlaylistSearch {
+        text: "",
+        caret: 0,
+        focused: false,
+    });
+    let placeholder = inked(&empty, box_);
+    assert!(
+        placeholder > 0,
+        "an empty field says what it is for rather than drawing nothing"
+    );
+
+    let (focused, box_) = a_band_of_the_field(PlaylistSearch {
+        text: "",
+        caret: 0,
+        focused: true,
+    });
+    assert!(
+        inked(&focused, box_) > placeholder,
+        "a focused field draws a caret the unfocused one has none of"
+    );
+    // The caret is a bar rather than a mark: it inks a column of the field's text down the whole
+    // height of a run, which is what tells it from the placeholder's glyphs beside it.
+    let pixels = pixels_of(&focused);
+    let column = (box_.left..box_.right)
+        .filter(|x| {
+            (box_.top..box_.bottom)
+                .filter(|y| {
+                    let at = ink(pixels, focused.width as usize, *x, *y);
+                    at != page && at != fill
+                })
+                .count()
+                >= 10
+        })
+        .count();
+    assert!(
+        column > 0,
+        "a focused field draws a caret bar the unfocused one has none of"
+    );
+
+    let (typed, box_) = a_band_of_the_field(PlaylistSearch {
+        text: "mixdown",
+        caret: 4,
+        focused: true,
+    });
+    assert!(
+        inked(&typed, box_) > 0,
+        "a query in the field is inked inside it"
+    );
+
+    for surface in [&empty, &focused, &typed] {
+        let pixels = pixels_of(surface);
+        for y in box_.top..box_.bottom {
+            for x in box_.left..box_.right {
+                assert_eq!(
+                    pixels[(y as usize * surface.width as usize + x as usize) * 4 + 3],
+                    255,
+                    "the field's pixel at ({x}, {y}) is not opaque"
+                );
+            }
+        }
+    }
+}
+
+/// The place a press on the field names: before the first character at its own left edge, after the
+/// last at its right — the two ends of a query of any length.
+#[test]
+fn a_press_on_the_field_names_a_place_in_the_query() {
+    let layout = playlist_layout(400, 240, SCALE, 0);
+
+    assert_eq!(
+        search_index_at(&layout, "", layout.search_left, SCALE),
+        0,
+        "an empty field has one place in it"
+    );
+    assert_eq!(
+        search_index_at(&layout, "mixdown", layout.search_left, SCALE),
+        0,
+        "a press at the field's left edge is before the first character"
+    );
+    assert_eq!(
+        search_index_at(&layout, "mixdown", layout.search_right, SCALE),
+        "mixdown".len(),
+        "and a press at its right edge is after the last"
+    );
+}
+
+/// The rows a query lets through are a case-insensitive substring of the file's own name and never a
+/// word of its facts line: a hand looking for a track is naming a track, not a format or a rate.
+#[test]
+fn the_query_lets_through_the_names_that_hold_it_and_keeps_their_order() {
+    let rows = [
+        a_row("First Mixdown"),
+        a_row("second take"),
+        a_row("MIXDOWN live"),
+        a_row("an outro"),
+    ];
+    let names = |query: &str| {
+        playlist_shown(&rows, query)
+            .into_iter()
+            .map(|at| rows[at].name.clone())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        names(""),
+        vec!["First Mixdown", "second take", "MIXDOWN live", "an outro"],
+        "an empty query hides nothing and reorders nothing"
+    );
+    assert_eq!(
+        names("   "),
+        vec!["First Mixdown", "second take", "MIXDOWN live", "an outro"],
+        "and a query of nothing but spaces is an empty query"
+    );
+    assert_eq!(
+        names("mixdown"),
+        vec!["First Mixdown", "MIXDOWN live"],
+        "the match ignores case, and the rows keep the order the walk gave them"
+    );
+    assert_eq!(
+        names("SECOND"),
+        vec!["second take"],
+        "and the other way round as well"
+    );
+    assert_eq!(
+        names("mix"),
+        vec!["First Mixdown", "MIXDOWN live"],
+        "a substring anywhere in the name is a match"
+    );
+    assert!(
+        names("mp3").is_empty(),
+        "the format is a fact of the file and not its name"
+    );
+    assert!(names("4.2 MB").is_empty(), "and so is the room it takes");
+    assert!(names("nothing here").is_empty());
 }

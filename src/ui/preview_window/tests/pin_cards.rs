@@ -3515,3 +3515,257 @@ fn a_sounds_always_on_top_button_is_the_pins_own_and_not_a_file_under_it() {
 
     stand_pin(previous_pin);
 }
+
+/// A band's search field is the pin's own field, and the three things a hand does with it are one
+/// answer each: a press inside it puts the caret there and picks no row, a character typed into it
+/// hides the rows its query does not name, and `Esc` gives the whole list back and lets the caret go.
+///
+/// The pin is stood on a walk of three sounds rather than on a folder of the disk's own, because the
+/// rows are what a query filters and a folder a test cannot see the whole of is a folder it cannot
+/// assert on.
+#[test]
+fn a_query_in_the_bands_field_hides_the_rows_it_does_not_name() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of three sounds for the bands own search");
+    let sounds = [
+        folder.join("a first mixdown.mp3"),
+        folder.join("an interlude.mp3"),
+        folder.join("a last mixdown.mp3"),
+    ];
+
+    let mut pin = sound_pin();
+    pin.path = sounds[1].clone();
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let window = pin.window_size();
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[1].clone(),
+        from: sounds[1].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+    assert_eq!(
+        pin_playlist::the_rows_in_sight(),
+        vec![0, 1, 2],
+        "a band with no query draws the whole walk"
+    );
+
+    // The field's own box, in the window's rows: it is inside the band and nowhere else.
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
+    assert!(
+        field_top >= band_top && field_bottom <= window.1,
+        "the field is drawn inside the window the band is in"
+    );
+    let field = (field_top + field_bottom) / 2;
+
+    // A press on the field is the caret's and picks nothing.
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
+        Some(None),
+        "the band holds no pick before the hand has pressed anything"
+    );
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), 100, field, false) },
+        "a press on the field is the band's rather than the card's"
+    );
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some((String::new(), true)),
+        "the press put the caret in an empty field and focused it"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
+        Some(None),
+        "and a press on the field picks no row of the list"
+    );
+
+    // Typed through the road `WM_CHAR` answers the field down: the rows the query does not name are
+    // hidden, and the row the pin is showing is one of those that go.
+    pin_playlist::type_into_the_search('m');
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some(("m".to_string(), true)),
+        "the character is the query's"
+    );
+    assert_eq!(
+        pin_playlist::the_rows_in_sight(),
+        vec![0, 2],
+        "only the names that hold the query are drawn"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, _, scroll)| scroll),
+        Some(0),
+        "and the band is scrolled to the first row it still draws"
+    );
+
+    // A row the query hides is a row the pick cannot be on, so the arrows step the positions the
+    // query lets through: the row the pin is showing is one of those it hides, so the first press
+    // starts on the band's first row in sight and lands one past it.
+    assert!(
+        pin_playlist::step_the_pick(1),
+        "the band takes the arrow over it"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
+        Some(Some(2)),
+        "the walk's third row, which is the second of the two the query lets through"
+    );
+    assert!(
+        pin_playlist::step_the_pick(1),
+        "and a second one is still the band's"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
+        Some(Some(2)),
+        "which holds on the last row in sight rather than stepping onto one the query hides"
+    );
+
+    // `Esc` gives the whole list back and takes the caret out of the field.
+    assert!(
+        pin_playlist::key_while_the_search_has_focus(VK_ESCAPE.0 as i32),
+        "the field has the caret, so `Esc` is its"
+    );
+    assert_eq!(
+        pin_playlist::the_rows_in_sight(),
+        vec![0, 1, 2],
+        "the query was emptied and the whole walk is drawn again"
+    );
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some((String::new(), false)),
+        "and the field let the caret go"
+    );
+    assert!(
+        !pin_playlist::key_while_the_search_has_focus(VK_BACK.0 as i32),
+        "so the keys are the pin's again"
+    );
+
+    // And the window's own box is the one it was: the field is inside the band rather than rows the
+    // window grew for it.
+    let (_, after) =
+        pin_playlist::pin_playlist_band(pin_state().expect("the pin").pin().expect("the pin"))
+            .expect("the band");
+    assert_eq!(
+        after, band_height,
+        "the band's height is the height it was given, query or no query"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// A press anywhere on the pin that is not the field is the hand leaving it: the query it typed stays
+/// applied — the list under the press is the list it asked for — and the caret goes, so the keys are
+/// the pin's again.
+///
+/// And the field itself does not move or change size for it: it is a constant of the layout rather than
+/// a box the query grows.
+#[test]
+fn a_press_beside_the_field_blurs_it_and_leaves_the_query_it_typed() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of two sounds for a blur of the bands own search");
+    let sounds = [folder.join("a shown.mp3"), folder.join("an interlude.mp3")];
+
+    let mut pin = sound_pin();
+    pin.path = sounds[0].clone();
+    pin_playlist::toggle(&pin);
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
+    let field = (field_top + field_bottom) / 2;
+    assert!(unsafe { pin_playlist::press(HWND::default(), 100, field, false) });
+
+    pin_playlist::type_into_the_search('i');
+    assert_eq!(
+        pin_playlist::the_rows_in_sight(),
+        vec![1],
+        "the row the query does not name is hidden"
+    );
+
+    // A press on the card above the band is not the band's at all, and it is still the press that
+    // takes the caret out of the field.
+    let band_top = pin_state()
+        .and_then(|pinned| pinned.pin().and_then(pin_playlist::pin_playlist_band))
+        .map(|(top, _)| top)
+        .expect("the band");
+    assert!(
+        !unsafe { pin_playlist::press(HWND::default(), 100, band_top - 1, false) },
+        "a press above the band is the card's"
+    );
+    pin_playlist::blur_the_search();
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some(("i".to_string(), false)),
+        "the query is the one the hand typed and the caret has gone"
+    );
+    assert_eq!(
+        pin_playlist::the_rows_in_sight(),
+        vec![1],
+        "and the list under the press is the list the query asked for"
+    );
+
+    // The field's box is the same box, whatever the band's own height has become.
+    let field_rows = pin_playlist::the_field_rows().expect("the field");
+    let edge = pin_state()
+        .and_then(|pinned| pinned.pin().and_then(pin_playlist::pin_playlist_band))
+        .map(|(top, height)| (top, top + height))
+        .expect("the band");
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), 100, edge.1 - 1, false) },
+        "a press on the band's bottom edge is the drag that sets its height"
+    );
+    assert!(
+        unsafe { pin_playlist::drag(HWND::default(), 100, edge.1 + 40) },
+        "and the drag that follows it is the band's"
+    );
+    assert!(unsafe { pin_playlist::release(HWND::default()) });
+
+    // The drag was taken one row above the band's last and carried forty rows past it, so the band
+    // grew by the whole of that travel and the field — its last rows — moved with it.
+    let grown = pin_playlist::the_field_rows().expect("the field");
+    assert_eq!(
+        grown.1 - field_rows.1,
+        41,
+        "the field's bottom moved with the band's last rows"
+    );
+    assert_eq!(
+        grown.1 - grown.0,
+        field_rows.1 - field_rows.0,
+        "and the field itself is the same height it was"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}

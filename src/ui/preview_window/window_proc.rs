@@ -420,6 +420,31 @@ pub(super) unsafe extern "system" fn window_proc(
                 return LRESULT(0);
             }
 
+            // **And the band's own search field is the second text field a pin carries.** It is asked
+            // of the same table for the same reason, and it answers the keys it names — a backspace, a
+            // delete, the two arrows, the two ends, `Esc` and `Enter` — while a key it does not name is
+            // the pin's, so the arrows that step the list still do (see
+            // `pin_playlist::key_while_the_search_has_focus`). The characters are the `WM_CHAR` below,
+            // which exists only because the hook stood down for them (see
+            // `key_input::publish_find_bar_up` and `app::seam::PIN_PLAYLIST_SEARCH_UP`).
+            if pin_playlist::key_while_the_search_has_focus(wparam.0 as i32) {
+                render_layered_preview(hwnd);
+                return LRESULT(0);
+            }
+
+            // **`Ctrl`+`F` over a band that is up is the band's search field.** The chord is answered
+            // here rather than as a command of the pin's, because it is a caret moving into a field and
+            // not a walk of the folder: the command road ends in a `PinCommand`, and none of the pin's
+            // commands names a caret. It is swallowed whole, so the character the loop would have
+            // translated from it never reaches the field it has just focused.
+            if wparam.0 as i32 == VK_F.0 as i32
+                && text_selection::control_is_down()
+                && pin_playlist::focus_the_search()
+            {
+                render_layered_preview(hwnd);
+                return LRESULT(0);
+            }
+
             if let Some(command) = pinned_key_message_command(
                 msg,
                 wparam.0 as i32,
@@ -564,6 +589,18 @@ pub(super) unsafe extern "system" fn window_proc(
             if text_find::is_open() {
                 if let Some(character) = text_find::typed_character(wparam.0) {
                     text_find::note(FindEdit::Typed(character));
+                }
+                return LRESULT(0);
+            }
+
+            // And a character is the band's search field's while that has the caret: the field is the
+            // second text field this window carries, and its query is typed from the same messages the
+            // page's is — dropped where the code unit is half a character the field does not hold (see
+            // `pin_playlist::type_into_the_search`).
+            if pin_playlist::search_has_focus() {
+                if let Some(character) = text_find::typed_character(wparam.0) {
+                    pin_playlist::type_into_the_search(character);
+                    render_layered_preview(hwnd);
                 }
                 return LRESULT(0);
             }

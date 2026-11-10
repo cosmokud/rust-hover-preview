@@ -88,6 +88,15 @@ struct PinPlaylist {
     /// list, so a press answered in rows is answered in files.
     rows: Vec<pin_chrome::PlaylistRow>,
     order: Vec<PathBuf>,
+    /// The positions into `rows` the search's query lets through: the drawing, the scroll, the
+    /// scrollbar and a press all count in these, while `showing`, `picked`, `hovered` and the
+    /// marquees stay the rows' own indices, which the filter never renumbers (see
+    /// `position_of_row` and `row_at_position`).
+    shown: Vec<usize>,
+    /// The search field at the band's bottom: the query, its caret and whether the keys are going to
+    /// it. It filters the rows by their own name, and nothing of a row's facts line or its length.
+    query: text_find_field::Field,
+    search_focused: bool,
     /// The file the pin was showing when the rows were last reconciled, and the row it is on: kept
     /// so that a walk step moves the stripe without rebuilding every row's facts.
     path: Option<PathBuf>,
@@ -157,7 +166,70 @@ impl PinPlaylist {
         let showing_moved = showing != self.showing;
         self.showing = showing;
         self.path = Some(path);
+
+        // The rows are new, so the positions the query lets through are new: a filter worked out over
+        // the list it replaced is a band drawn from rows nothing is holding any more. Nothing of what
+        // the hand has picked or the pin is showing survives a row that is no longer drawn.
+        self.refresh_the_shown();
         (moved, showing_moved)
+    }
+
+    /// The positions the query lets through, worked out afresh from the rows in hand, and everything
+    /// that names a row given up where that row is gone from them.
+    ///
+    /// **It is the one place the filter is applied**, so a query, a row's own facts landing and a walk
+    /// that moved are one rule rather than three: the scroll is reset to the first position the query
+    /// leaves, because the scroll counts in positions and the ones it was counting have changed.
+    fn refresh_the_shown(&mut self) {
+        self.shown = pin_chrome::playlist_shown(&self.rows, self.query.text());
+
+        let held = |row: Option<usize>| row.filter(|row| self.shown.contains(row));
+        self.hovered = held(self.hovered);
+        self.picked = held(self.picked);
+        self.marquees
+            .retain(|marquee| self.shown.contains(&marquee.row));
+        self.scroll = 0;
+    }
+
+    /// The field's own edits, run in the one place so that the filter, the paints and the keys are all
+    /// told the same thing by the same change: the band is dirtied where the query moved, as it is for
+    /// every other move of its own (see `the_box_has_moved`).
+    fn edit_the_query(&mut self, edit: impl FnOnce(&mut text_find_field::Field)) {
+        let before = self.query.text().to_string();
+        edit(&mut self.query);
+        if self.query.text() == before {
+            return;
+        }
+
+        self.refresh_the_shown();
+        the_box_has_moved();
+    }
+
+    /// Put the query back to nothing, which is the whole list again: what `Esc` over the field asks.
+    fn clear_the_query(&mut self) {
+        self.edit_the_query(|query| query.clear());
+    }
+
+    /// Where a row stands among the positions the query lets through, or nothing where it is one of
+    /// the rows the query hides.
+    fn position_of_row(&self, row: usize) -> Option<usize> {
+        self.shown.iter().position(|shown| *shown == row)
+    }
+
+    /// The row a position of the drawn list is, or nothing where the list is shorter than that.
+    fn row_at_position(&self, position: usize) -> Option<usize> {
+        self.shown.get(position).copied()
+    }
+
+    /// The rows the band draws, which is the whole walk whatever the query is: a paint slices the
+    /// positions out of them rather than being handed a list that is not the walk's (see
+    /// `paint_the_band`).
+    fn the_search(&self, focused: bool) -> pin_chrome::PlaylistSearch<'_> {
+        pin_chrome::PlaylistSearch {
+            text: self.query.text(),
+            caret: self.query.caret(),
+            focused,
+        }
     }
 
     /// The names the band's rows travel, set up when a row becomes one the band travels rather than
@@ -204,10 +276,12 @@ impl PinPlaylist {
     }
 
     /// The names the band is travelling as the paint reads them: which row, and how far its name has
-    /// been carried — nothing at all for a band with no marquee.
+    /// been carried — nothing at all for a band with no marquee, and nothing for a row the query has
+    /// hidden, since a row the band does not draw is a name it has no reason to carry.
     fn scrolled(&self) -> Vec<(usize, i32)> {
         self.marquees
             .iter()
+            .filter(|marquee| self.shown.contains(&marquee.row))
             .map(|marquee| (marquee.row, marquee.scroll.offset()))
             .collect()
     }
@@ -293,6 +367,15 @@ pub(super) fn toggle(pin: &PinnedPreview) {
     send_preview(PreviewMessage::PinWalkAgain);
 
     if !open {
+        // **A band put away is a list the next opening starts fresh.** The query a band was filtered
+        // by, the caret it held and the pick its own rows had are this opening's and not the next
+        // one's: a band reopened onto half a folder the hand was looking at last night is a list with
+        // rows nothing on the screen explains the absence of.
+        if let Ok(mut playlist) = THE_PLAYLIST.lock() {
+            playlist.search_focused = false;
+            playlist.query.clear();
+            playlist.refresh_the_shown();
+        }
         return;
     }
 
@@ -414,7 +497,8 @@ pub(super) fn refresh_the_rows() -> bool {
     if showing_moved {
         if let Some((_, height, width, scale)) = the_band_of_the_pin() {
             if let Ok(mut playlist) = THE_PLAYLIST.lock() {
-                let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
+                let layout =
+                    pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
                 playlist.set_the_marquee(&layout, scale);
             }
         }
@@ -481,9 +565,9 @@ fn step_the_notches(notches: i32) -> bool {
         return false;
     };
 
-    let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
+    let layout = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
     let rows = (notches * pin_chrome::PLAYLIST_WHEEL_ROWS) / WHEEL_DELTA;
-    let max = pin_chrome::playlist_scroll_max(playlist.rows.len(), layout.visible.max(0) as usize);
+    let max = pin_chrome::playlist_scroll_max(playlist.shown.len(), layout.visible.max(0) as usize);
     // A notch up is the list come back toward its first row, which is the wheel's own reading of
     // the two everywhere else in the app.
     let scrolled = (playlist.scroll as i32 - rows).clamp(0, max as i32) as usize;
@@ -507,15 +591,24 @@ pub(super) fn step_the_pick(direction: i32) -> bool {
         return true;
     };
 
-    let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
-    let Some((picked, scroll)) = pin_chrome::playlist_step_pick(
-        playlist.picked,
-        playlist.showing,
+    let layout = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
+    // The step is a step of the positions the query lets through, and the row it lands on is the row
+    // the pick is written in: a filter renumbers neither of the two.
+    let Some((position, scroll)) = pin_chrome::playlist_step_pick(
+        playlist
+            .picked
+            .and_then(|row| playlist.position_of_row(row)),
+        playlist
+            .showing
+            .and_then(|row| playlist.position_of_row(row)),
         playlist.scroll,
-        playlist.rows.len(),
+        playlist.shown.len(),
         layout.visible.max(0) as usize,
         direction,
     ) else {
+        return true;
+    };
+    let Some(picked) = playlist.row_at_position(position) else {
         return true;
     };
 
@@ -569,6 +662,155 @@ pub(super) fn play_the_pick() -> bool {
 pub(super) fn the_band_in_hand() -> Option<(Option<usize>, Option<usize>, usize)> {
     let playlist = THE_PLAYLIST.lock().ok()?;
     Some((playlist.hovered, playlist.picked, playlist.scroll))
+}
+
+/// The query the band's search field holds, as a test reads it.
+#[cfg(test)]
+pub(super) fn the_query_in_hand() -> Option<(String, bool)> {
+    let playlist = THE_PLAYLIST.lock().ok()?;
+    Some((playlist.query.text().to_string(), playlist.search_focused))
+}
+
+/// The rows the query lets through, as a test reads them: the row indices, in the order the band draws
+/// them.
+#[cfg(test)]
+pub(super) fn the_rows_in_sight() -> Vec<usize> {
+    THE_PLAYLIST
+        .lock()
+        .map(|playlist| playlist.shown.clone())
+        .unwrap_or_default()
+}
+
+/// Whether the band's search field holds the caret, which is what the hook is told once a tick (see
+/// `crate::app::seam::publish_playlist_search_up`).
+pub(super) fn search_has_focus() -> bool {
+    THE_PLAYLIST
+        .lock()
+        .map(|playlist| playlist.search_focused)
+        .unwrap_or(false)
+}
+
+/// Let the search field go, which a press anywhere else on the pin asks for: the query stays, because
+/// it is what the band is filtered by — a hand that has gone to the transport bar has not asked for the
+/// list it can see to come back (see `pin_input::pinned_press_on`).
+pub(super) fn blur_the_search() {
+    if let Ok(mut playlist) = THE_PLAYLIST.lock() {
+        playlist.search_focused = false;
+    }
+}
+
+/// The field's own box, top and bottom, in the window's rows — the number a test keeps from changing
+/// under a query or a drag.
+#[cfg(test)]
+pub(super) fn the_field_rows() -> Option<(i32, i32)> {
+    let (top, height, width, scale) = the_band_of_the_pin()?;
+    let rows = THE_PLAYLIST
+        .lock()
+        .map(|playlist| playlist.shown.len())
+        .unwrap_or_default();
+    let layout = pin_chrome::playlist_layout(width, height, scale, rows);
+
+    Some((top + layout.search_top, top + layout.search_bottom))
+}
+
+/// Type a character into the band's search field, which is the road `WM_CHAR` answers it down — the
+/// field's own edit, the filter run over it, and the band owed the paint it asks for.
+pub(super) fn type_into_the_search(character: char) {
+    if let Ok(mut playlist) = THE_PLAYLIST.lock() {
+        playlist.edit_the_query(|query| query.insert(character));
+    }
+}
+
+/// Answer one key of the field's own, when the field has the caret: `Backspace`, `Delete`, the two
+/// arrows, the two ends, and the two keys that leave it. It answers whether the field took the key,
+/// which is the whole of what keeps it off the pin's own key table — and a key it does not name is the
+/// pin's, so `↑`/`↓` over a field that has the caret still step the list under it.
+pub(super) fn key_while_the_search_has_focus(vk: i32) -> bool {
+    if !search_has_focus() {
+        return false;
+    }
+
+    let held = text_find::Modifiers::polled();
+    // `Esc` empties the query and `Enter` only leaves it: the two ways out of a field of a list that
+    // is being filtered under it, and the query outlives both of them.
+    if vk == VK_ESCAPE.0 as i32 {
+        if let Ok(mut playlist) = THE_PLAYLIST.lock() {
+            playlist.clear_the_query();
+            playlist.search_focused = false;
+        }
+        return true;
+    }
+    if vk == VK_RETURN.0 as i32 {
+        if let Ok(mut playlist) = THE_PLAYLIST.lock() {
+            playlist.search_focused = false;
+        }
+        return true;
+    }
+
+    // **The field's table is the find bar's**, asked of the same rule: two query fields on two surfaces
+    // of one app are one editor's widget, and a backspace that moved the caret one way in one and
+    // another way in the other is a field a hand has to learn twice. Everything the bar answers that a
+    // list's field has no use for — its history, its steps, its switches — is left to the pin.
+    let Some(edit) = text_find::key_edit_with(vk, held) else {
+        return false;
+    };
+    let takes = matches!(
+        edit,
+        FindEdit::Backspace
+            | FindEdit::DeleteForward
+            | FindEdit::DeleteWordLeft
+            | FindEdit::DeleteWordRight
+            | FindEdit::Move(..)
+            | FindEdit::SelectAll
+            | FindEdit::Paste
+    );
+    if !takes {
+        return false;
+    }
+
+    let Ok(mut playlist) = THE_PLAYLIST.lock() else {
+        return true;
+    };
+    match edit {
+        FindEdit::Backspace => playlist.edit_the_query(|query| query.backspace()),
+        FindEdit::DeleteForward => playlist.edit_the_query(|query| query.delete()),
+        FindEdit::DeleteWordLeft => playlist.edit_the_query(|query| query.delete_word_left()),
+        FindEdit::DeleteWordRight => playlist.edit_the_query(|query| query.delete_word_right()),
+        FindEdit::SelectAll => playlist.query.select_all(),
+        // The clipboard's text as the field's `paste` tidies it, taken from the keyboard's own road:
+        // what a `WM_CHAR` cannot carry is a run of text, and a paste is the one run a query gets
+        // that no key typed (see `text_find_field::sanitize_pasted`).
+        FindEdit::Paste => {
+            if let Some(pasted) = unsafe { text_selection::clipboard_text(HWND::default()) } {
+                playlist.edit_the_query(|query| query.paste(&pasted));
+            }
+        }
+        FindEdit::Move(motion, extend) => {
+            // A caret move changes no query, so it is not the filter's and owes the band no paint.
+            playlist.query.move_caret(motion, extend);
+        }
+        _ => {}
+    }
+
+    true
+}
+
+/// Focus the band's search field, which is what `Ctrl`+`F` over a pin with its band up asks: the caret
+/// goes to the end of the query that is there, where the next character typed lands.
+pub(super) fn focus_the_search() -> bool {
+    // A band that is down has no field on screen to put a caret in.
+    if the_band_of_the_pin().is_none() {
+        return false;
+    }
+
+    let Ok(mut playlist) = THE_PLAYLIST.lock() else {
+        return false;
+    };
+    playlist.search_focused = true;
+    let end = playlist.query.text().len();
+    playlist.query.place_caret(end, false);
+
+    true
 }
 
 /// The rows a name is travelling across, as the row and how far its name has been carried — nothing
@@ -684,9 +926,12 @@ fn set_the_hover(band: (i32, i32, f32), local: Option<i32>) -> bool {
         return false;
     };
 
-    let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
+    let layout = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
+    // A hover is a position of the drawn list, and the row the hand is on is the row that position
+    // names: the marquees and the stripe are rows, the scroll and the pointer are positions.
     let hovered = local.and_then(|y| {
-        pin_chrome::playlist_row_at(&layout, playlist.scroll, playlist.rows.len(), y)
+        pin_chrome::playlist_row_at(&layout, playlist.scroll, playlist.shown.len(), y)
+            .and_then(|position| playlist.row_at_position(position))
     });
 
     let changed = playlist.hovered != hovered;
@@ -745,44 +990,64 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
         let Ok(mut playlist) = THE_PLAYLIST.lock() else {
             return true;
         };
-        let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
+        let layout = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
 
-        // **The scrollbar, before the rows it stands beside.** The bar is a mark on the window's own
-        // right edge and a press on it carries the list rather than picking the row it happens to be
-        // level with — and a press that is not on the thumb takes hold of the middle of it, which is
-        // the one gesture a bar answers by jumping to where the hand landed (see
-        // `pin_chrome::playlist_thumb_grab`).
-        if pin_chrome::playlist_track_holds(&layout, x, local) {
-            let grab = pin_chrome::playlist_thumb_grab(
-                &layout,
-                playlist.scroll,
-                playlist.rows.len(),
-                local,
-            );
-            // The pointer is taken for the bar, as it is for the band's own edge: a hand carrying the
-            // thumb out of the window would otherwise stop being followed the moment it left it.
-            let _ = SetCapture(hwnd);
-            playlist.pressed = true;
-            playlist.thumb = Some(grab);
-            playlist.scroll =
-                pin_chrome::playlist_scroll_at(&layout, playlist.rows.len(), local - grab);
+        // **The search field first, and it picks nothing.** A press on it is the caret's and the keys',
+        // and the field stands where a row cannot: the press is put down before the scrollbar and the
+        // rows are asked, or the field's own bottom row would be a row of a list that is not under it.
+        if pin_chrome::search_field_holds(&layout, x, local) {
+            playlist.search_focused = true;
+            let at = pin_chrome::search_index_at(&layout, playlist.query.text(), x, scale);
+            playlist.query.place_caret(at, false);
             None
         } else {
-            let Some(index) =
-                pin_chrome::playlist_row_at(&layout, playlist.scroll, playlist.rows.len(), local)
-            else {
-                // The pad between two rows and the room below the last of them are the band's own: a
-                // press there picks nothing and is still not a press the card answers.
-                return true;
-            };
+            // A press anywhere else on the band is the hand leaving the field, and the query it typed
+            // stays: it is what the band is filtered by until `Esc` or the next press on the field.
+            playlist.search_focused = false;
 
-            playlist.pressed = true;
-            playlist.picked = Some(index);
-            playlist.set_the_marquee(&layout, scale);
+            // **The scrollbar, before the rows it stands beside.** The bar is a mark on the window's own
+            // right edge and a press on it carries the list rather than picking the row it happens to be
+            // level with — and a press that is not on the thumb takes hold of the middle of it, which is
+            // the one gesture a bar answers by jumping to where the hand landed (see
+            // `pin_chrome::playlist_thumb_grab`).
+            if pin_chrome::playlist_track_holds(&layout, x, local) {
+                let grab = pin_chrome::playlist_thumb_grab(
+                    &layout,
+                    playlist.scroll,
+                    playlist.shown.len(),
+                    local,
+                );
+                // The pointer is taken for the bar, as it is for the band's own edge: a hand carrying the
+                // thumb out of the window would otherwise stop being followed the moment it left it.
+                let _ = SetCapture(hwnd);
+                playlist.pressed = true;
+                playlist.thumb = Some(grab);
+                playlist.scroll =
+                    pin_chrome::playlist_scroll_at(&layout, playlist.shown.len(), local - grab);
+                None
+            } else {
+                let Some(position) = pin_chrome::playlist_row_at(
+                    &layout,
+                    playlist.scroll,
+                    playlist.shown.len(),
+                    local,
+                ) else {
+                    // The pad between two rows and the room below the last of them are the band's own: a
+                    // press there picks nothing and is still not a press the card answers.
+                    return true;
+                };
+                let Some(index) = playlist.row_at_position(position) else {
+                    return true;
+                };
 
-            double_click
-                .then(|| playlist.order.get(index).cloned())
-                .flatten()
+                playlist.pressed = true;
+                playlist.picked = Some(index);
+                playlist.set_the_marquee(&layout, scale);
+
+                double_click
+                    .then(|| playlist.order.get(index).cloned())
+                    .flatten()
+            }
         }
     };
 
@@ -816,8 +1081,9 @@ pub(super) unsafe fn drag(hwnd: HWND, x: i32, y: i32) -> bool {
         let Ok(mut playlist) = THE_PLAYLIST.lock() else {
             return true;
         };
-        let layout = pin_chrome::playlist_layout(width, height, scale, playlist.rows.len());
-        let scrolled = pin_chrome::playlist_scroll_at(&layout, playlist.rows.len(), y - top - grab);
+        let layout = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
+        let scrolled =
+            pin_chrome::playlist_scroll_at(&layout, playlist.shown.len(), y - top - grab);
 
         if scrolled != playlist.scroll {
             playlist.scroll = scrolled;
@@ -1008,21 +1274,29 @@ pub(super) unsafe fn paint_the_band(
     let Ok(playlist) = THE_PLAYLIST.lock() else {
         return;
     };
-    let layout = pin_chrome::playlist_layout(width, paint.playlist, scale, playlist.rows.len());
-    let first = playlist.scroll.min(playlist.rows.len());
-    let last = (first + layout.visible.max(0) as usize).min(playlist.rows.len());
+    // The layout and the scroll are counted in the positions the query lets through, while every row
+    // the band draws is asked for by its own index: the filter hides rows and renumbers nothing.
+    let layout = pin_chrome::playlist_layout(width, paint.playlist, scale, playlist.shown.len());
+    let first = playlist.scroll.min(playlist.shown.len());
+    let search = playlist.the_search(playlist.search_focused);
+    // A query that hides every row is the band saying so rather than an empty room: an empty walk
+    // says nothing at all, because there is nothing there to have been hidden.
+    let note = (playlist.shown.is_empty() && !playlist.rows.is_empty()).then_some(NO_MATCHES);
     // The names travelling, as the rows and how far each has been carried: the paint is handed them
     // beside the rows rather than told which row the hand is on, because a row the band has let go of
     // is still on its way back to its resting place (see `set_the_marquee`).
     let scrolled = playlist.scrolled();
     let band = pin_chrome::PlaylistBand {
         layout,
-        rows: &playlist.rows[first..last],
+        rows: &playlist.rows,
+        shown: &playlist.shown,
         first,
-        total: playlist.rows.len(),
+        total: playlist.shown.len(),
         showing: playlist.showing,
         picked: playlist.picked,
         scrolled: &scrolled,
+        search: Some(search),
+        note,
     };
 
     pin_chrome::paint_playlist(surface, &palette, &band, scale);
@@ -1046,6 +1320,9 @@ pub(super) unsafe fn paint_the_band(
         out[to..to + count].copy_from_slice(&source[from..from + count]);
     }
 }
+
+/// What the band says where a query has hidden every row, in the muted ink a facts line is drawn in.
+const NO_MATCHES: &str = "No names match";
 
 /// The share of the display a band opens at when nothing is remembered, and the most it may ever
 /// be: a band is for reading a folder's worth of names, and a band that has taken the whole screen
