@@ -1723,15 +1723,21 @@ fn a_notch_aims_the_picture_and_leaves_it_where_it_is() {
     stand_pin(previous);
 }
 
-/// A page is taken up as a picture the wheel zooms, because a page is a frame this window draws like
-/// any other: what rasterized it — a renderer, a converter, a comic's own reader — is nothing a notch
-/// or a box change asks (see `box_is_covered`), and the view it arrives with is its picture filling
-/// the window the take-up just laid it out in.
+/// A page this app rasterizes is taken up as a picture the wheel zooms, because such a page is a
+/// frame this window draws like any other: what rasterized it — a renderer, a converter, a comic's
+/// own reader — is nothing a notch or a box change asks (see `box_is_covered`), and the view it
+/// arrives with is its picture filling the window the take-up just laid it out in.
 ///
 /// What the take-up must keep refusing is here beside it, because the difference is the whole of what
 /// the gate is for: a document the engine draws is a window of somebody else's behind the band, a
 /// film is a player's frames arriving one at a time rather than a picture this window holds, and a
 /// card is a layout painted at the box rather than a picture rasterized into it.
+///
+/// **A pinned PDF is refused for the first of those reasons**, and it is the one refusal this gate
+/// answers by *who draws the file* rather than by what the file is: the band of a pinned PDF is
+/// Chromium's own viewer, and the wheel over it belongs to the document — a scroll, and `Ctrl` with a
+/// notch for the document's own zoom (see `is_zoomable_picture` and "The two PDF roads"). A notch
+/// counted for this app there would grow and move the pin's window around a page that never moved.
 #[test]
 fn a_page_is_a_picture_the_wheel_zooms_and_a_card_or_an_engines_window_is_not() {
     let _room = the_room_to_itself();
@@ -1751,7 +1757,6 @@ fn a_page_is_a_picture_the_wheel_zooms_and_a_card_or_an_engines_window_is_not() 
 
     for kind in [
         MediaType::StaticImage,
-        MediaType::Pdf,
         MediaType::Comic,
         MediaType::Calibre,
         MediaType::Libre,
@@ -1775,6 +1780,9 @@ fn a_page_is_a_picture_the_wheel_zooms_and_a_card_or_an_engines_window_is_not() 
         MediaType::Archive,
         MediaType::Peazip,
         MediaType::Audio,
+        // The band of a pinned PDF is Chromium's viewer, so the wheel over it is the document's and
+        // there is no view of this app's for a notch to write (see `is_zoomable_picture`).
+        MediaType::Pdf,
     ] {
         let pin = stood(kind);
         assert_eq!(

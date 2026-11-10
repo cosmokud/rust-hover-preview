@@ -356,7 +356,22 @@ pub(super) fn pin_keyboard_wanted_back(claimed: bool, has_focus: bool) -> bool {
 /// applies to it unchanged — including the rule that the claim is written on the *answer* rather
 /// than on the asking, so a refusal by the foreground lock leaves the pin holding nothing and
 /// asking again on the next tick rather than stuck believing it holds a keyboard it was never given.
+///
+/// **And a document standing in the pin's band is the window the keyboard is for.** A pinned PDF's
+/// band is Chromium's, and the controller is asked for the caret the moment the document is revealed
+/// (`engines::pdf_viewer::Host::take_the_caret`), so that a wheel over the page is the document's and
+/// `Ctrl` with it is the document's own zoom. Asking the pin's window for the keyboard back then is
+/// this app taking it off the page it just put it in — a document no wheel scrolls and every key
+/// typed into it eaten by the pin's own table. So a document's band answers nothing here.
 pub(super) unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
+    let owner = pinned_window();
+    if !owner.is_invalid()
+        && current_media_type_try()
+            .is_some_and(|kind| a_documents_band_is_the_viewers(kind, owner.0 as isize))
+    {
+        return false;
+    }
+
     if !pin_keyboard_wanted_back(pin_window::pin_claims_the_keyboard(), pin_is_focused()) {
         return false;
     }
