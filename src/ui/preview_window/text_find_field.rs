@@ -102,7 +102,8 @@ impl Field {
     }
 
     /// Select the whole of the query, which is what `Ctrl`+`A` asks and what `Ctrl`+`F` over a bar
-    /// that is already up asks as well (see `text_find::open_text_find`).
+    /// that is already up asks as well (see `text_find::open_text_find`), and what a second press on
+    /// the word a double press picked asks for the line it stands in (see `select_word`).
     pub(super) fn select_all(&mut self) {
         self.anchor = 0;
         self.caret = self.text.len();
@@ -157,6 +158,25 @@ impl Field {
         self.caret = self.text.len();
         self.typing = false;
         true
+    }
+
+    /// Take the word `at` stands on, as a double press asks for it — or the whole of the query where
+    /// that word is already the selection, which is a second double press on a word a hand has just
+    /// picked: the query is one line, so the line an editor widens a word's selection to is the whole
+    /// of it (see `word_at`, and `pin_playlist::press`).
+    ///
+    /// The two ends are placed through `place_caret`, so the range is a pair of character boundaries
+    /// whatever bytes the word is made of, and nothing is written down for undo: picking a word is a
+    /// selection rather than an edit, which is the same rule `select_all` keeps.
+    pub(super) fn select_word(&mut self, at: usize) {
+        let (start, end) = self.word_at(at);
+        if self.selection() == Some((start, end)) {
+            self.select_all();
+            return;
+        }
+
+        self.place_caret(start, false);
+        self.place_caret(end, true);
     }
 
     /// Put the caret at `at`, or with `extend` keep the anchor where it is and grow the selection

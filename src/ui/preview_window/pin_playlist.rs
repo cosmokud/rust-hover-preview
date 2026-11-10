@@ -1419,6 +1419,11 @@ fn set_the_hover(band: (i32, i32, f32), local: Option<i32>, near: bool) -> bool 
 /// **It is asked before anything the card owns** — its buttons, its bar, its walk — because the band
 /// is the pin's own rows and none of it is the card's: a band answered by the card's arms is a band a
 /// press picks nothing in and a double press swaps nothing with (see `pinned_press_on`).
+/// **A press in the search field is a press in a text field**, and the second of a pair takes the word
+/// it landed on rather than the character under the pointer — and a second pair on that word takes the
+/// whole of the query, which is the line an editor widens it to (see `text_find_field::Field::
+/// select_word`). The rest of the field's own gestures are the selection drag (`drag`) and the × that
+/// puts the query back to nothing.
 pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bool {
     let Some((top, height, width, scale)) = the_band_of_the_pin() else {
         return false;
@@ -1485,13 +1490,24 @@ pub(super) unsafe fn press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bo
                 playlist.clear_the_query();
                 playlist.retarget_the_search();
             } else {
-                // The press places the caret and takes the pointer, and the drag that follows carries the
-                // caret away from the anchor this press leaves — the two ends of a selection (see `drag`).
                 let at = pin_chrome::search_index_at(&layout, playlist.query.text(), x, scale);
-                playlist.query.place_caret(at, false);
-                let _ = SetCapture(hwnd);
-                playlist.pressed = true;
-                playlist.selecting = true;
+                if double_click {
+                    // **A second press takes the word it landed on**, and a second pair on the word already
+                    // taken takes the whole of the query — the line an editor widens a word to, and a query
+                    // is one line (see `text_find_field::Field::select_word`). Nothing is carried from it:
+                    // a word is picked whole, and the pointer that picked it has nothing left to drag.
+                    playlist.query.select_word(at);
+                    playlist
+                        .blink
+                        .restart(Instant::now(), text_find::caret_blink());
+                } else {
+                    // The press places the caret and takes the pointer, and the drag that follows carries the
+                    // caret away from the anchor this press leaves — the two ends of a selection (see `drag`).
+                    playlist.query.place_caret(at, false);
+                    let _ = SetCapture(hwnd);
+                    playlist.pressed = true;
+                    playlist.selecting = true;
+                }
             }
             None
         } else {

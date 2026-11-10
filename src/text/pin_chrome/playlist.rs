@@ -1330,10 +1330,14 @@ const PLACEHOLDER: &str = "Search names";
 /// characters and is read as the place the next one lands rather than as a mark of its own.
 const CARET_PIXELS: f32 = 1.5;
 
-/// The clear button's cross: how wide the × is drawn by, and the stroke it is drawn at — the find
-/// bar's own close mark to the pixel, so that the two fields of one app carry one button rather than
-/// one button drawn two ways.
-const SEARCH_CLOSE_PIXELS: f32 = 10.0;
+/// The clear button's cross: how wide the × is drawn by, and the stroke it is drawn at.
+///
+/// **It is a pixel narrower than the mark at the field's other end.** The magnifier's square is
+/// `SEARCH_MARK_PIXELS` across and what it inks of it is eight pixels, so a cross of eight would be a
+/// mark the size of the magnifier beside it — and the × is the button a hand presses by mistake, so
+/// it is drawn a pixel under it rather than level with it. The stroke is the find bar's own, which is
+/// the cross this app already draws at a caption's close button.
+const SEARCH_CLOSE_PIXELS: f32 = 7.0;
 const SEARCH_CLOSE_STROKE: f32 = 1.6;
 
 /// The search mark's square, and the two gaps the pill keeps around it: its own pad off the left edge
