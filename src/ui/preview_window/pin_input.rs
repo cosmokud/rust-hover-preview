@@ -221,7 +221,7 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
 
     // And the playlist band under a pinned sound's card, where a row a hand has come to is a name
     // that starts travelling across it (see `pin_playlist::hover`).
-    let playlist_changed = pin_playlist::hover(y);
+    let playlist_changed = pin_playlist::hover(x, y);
 
     if hovered_changed
         || chrome_changed

@@ -1408,7 +1408,7 @@ fn a_row_the_hand_is_on_survives_the_tick_that_reads_the_pointer() {
     pin_playlist::refresh_the_rows();
 
     assert!(
-        unsafe { pin_playlist::hover(band_top + row) },
+        unsafe { pin_playlist::hover(40, band_top + row) },
         "a row a hand has come to is a change"
     );
     assert_eq!(
@@ -1536,7 +1536,7 @@ fn a_row_the_hand_is_on_is_a_row_of_the_window_at_any_scale() {
     pin_playlist::refresh_the_rows();
 
     assert!(
-        unsafe { pin_playlist::hover(band_top + row) },
+        unsafe { pin_playlist::hover(40, band_top + row) },
         "a row a hand has come to is a change"
     );
     let carried = pin_playlist::the_marquees_in_hand();
@@ -1636,7 +1636,7 @@ fn a_name_the_band_lets_go_of_parks_before_it_stops() {
 
     // The band's second row: the one name of the three the column has no room for.
     assert!(
-        unsafe { pin_playlist::hover(band_top + row_height + row_height / 2) },
+        unsafe { pin_playlist::hover(40, band_top + row_height + row_height / 2) },
         "a row a hand has come to is a change"
     );
     assert_eq!(
@@ -1666,7 +1666,7 @@ fn a_name_the_band_lets_go_of_parks_before_it_stops() {
     // The hand leaves the band, and the name it was carrying is not stopped where it stands: it is
     // still the band's to carry, and it is on its way back to its resting place.
     assert!(
-        unsafe { pin_playlist::hover(band_top - 1) },
+        unsafe { pin_playlist::hover(40, band_top - 1) },
         "a hand above the band is on no row of it"
     );
     assert_eq!(
@@ -1795,7 +1795,7 @@ fn a_return_plays_the_row_a_sounds_band_has_picked() {
         .expect("the band")
         .0;
     assert!(
-        unsafe { pin_playlist::hover(band_top + 4) },
+        unsafe { pin_playlist::hover(40, band_top + 4) },
         "the hand reaches into the band"
     );
     assert!(
@@ -3585,7 +3585,7 @@ fn a_query_in_the_bands_field_hides_the_rows_it_does_not_name() {
     // A press on the field is the caret's and picks nothing — and it is a press on a field a hand has
     // reached into the band for, since a field parked under the edge is a field nothing can press.
     assert!(
-        unsafe { pin_playlist::hover(band_top + 4) },
+        unsafe { pin_playlist::hover(40, band_top + 4) },
         "the hand reaches into the band"
     );
     for _ in 0..14 {
@@ -3862,7 +3862,7 @@ fn the_bands_field_slides_in_with_the_pointer_and_parks_when_it_goes() {
     // A pointer inside the band is a hand reaching for it: the target moves, and the paint that
     // follows travels toward it rather than landing on it.
     assert!(
-        unsafe { pin_playlist::hover(band_top + band_height / 2) },
+        unsafe { pin_playlist::hover(40, band_top + band_height / 2) },
         "a pointer in the band is the band's own"
     );
     assert_eq!(
@@ -3882,7 +3882,7 @@ fn the_bands_field_slides_in_with_the_pointer_and_parks_when_it_goes() {
 
     // A pointer that has left the band lets it go, and it travels back the same way.
     assert!(
-        unsafe { pin_playlist::hover(0) },
+        unsafe { pin_playlist::hover(40, 0) },
         "a pointer over the card is the band's answer that it is in it no longer"
     );
     let (held, wanted) = pin_playlist::the_search_slide().expect("the field");
@@ -3908,11 +3908,13 @@ fn the_bands_field_slides_in_with_the_pointer_and_parks_when_it_goes() {
     stand_pin(previous_pin);
 }
 
-/// **A field a hand has named is a field the band keeps**: the caret holds it in sight whatever the
-/// pointer does, and so does a query that is hiding rows — a list with rows missing and no field to
-/// explain it is a list the hand cannot get back.
+/// **A caret belongs to the hand that reached for the field, and a query outlives them both.** A
+/// pointer that has walked away from a field it pressed is a pointer no key is going to be typed
+/// from: the caret goes with it, and a field with nothing in it parks — the one state that used to
+/// hold a band open with no pointer near it and nothing in the field. What a query keeps is its own:
+/// a list with rows missing and no field to explain it is a list the hand cannot get back.
 #[test]
-fn a_focused_field_and_a_query_hold_the_band_open_with_no_pointer_at_all() {
+fn a_caret_goes_with_the_pointer_and_a_query_holds_the_field_open_alone() {
     let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
@@ -3945,7 +3947,7 @@ fn a_focused_field_and_a_query_hold_the_band_open_with_no_pointer_at_all() {
         pin_playlist::pin_playlist_band(pin_state().expect("the pin").pin().expect("the pin"))
             .expect("the band");
     assert!(
-        unsafe { pin_playlist::hover(band_top + 4) },
+        unsafe { pin_playlist::hover(40, band_top + 4) },
         "the hand reaches in"
     );
     for _ in 0..14 {
@@ -3962,25 +3964,31 @@ fn a_focused_field_and_a_query_hold_the_band_open_with_no_pointer_at_all() {
         pin_playlist::press(HWND::default(), 100, (field_top + field_bottom) / 2, false)
     });
     // **The pointer leaves the band**, which the tick that finds the cursor outside it is what says: a
-    // move the window is sent and the cursor the tick reads are one answer (see `set_the_hover`).
-    // Whether the band changed for it is not the question — the caret is what says it did not.
-    pin_playlist::the_pointer_has_left_the_band();
-    assert_eq!(
-        pin_playlist::the_search_slide(),
-        Some((1.0, true)),
-        "a caret is a field the band cannot put away"
-    );
-
-    // `Esc` lets the caret go, and with the query empty the field parks.
+    // move the window is sent and the cursor the tick reads are one answer (see `set_the_hover`). The
+    // caret is the pointer's, so it goes with it.
     assert!(
-        pin_playlist::key_while_the_search_has_focus(VK_ESCAPE.0 as i32),
-        "the field has the caret, so `Esc` is its"
+        pin_playlist::the_pointer_has_left_the_band(),
+        "a caret let go of is a field that changed"
     );
-    pin_playlist::blur_the_search();
+    assert_eq!(
+        pin_playlist::the_query_in_hand().map(|(_, focused)| focused),
+        Some(false),
+        "the caret is the pointer's, and the pointer has gone"
+    );
     assert_eq!(
         pin_playlist::the_search_slide(),
         Some((1.0, false)),
-        "the caret has gone, so the field is wanted by nothing and starts back"
+        "and with no query in it the field is wanted by nothing: it starts back"
+    );
+
+    // And it parks, which is the state a hand that has walked away comes back to.
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((0.0, false)),
+        "a field nothing is reaching for rests at nothing"
     );
 
     // **A query holds it open by itself**, with no pointer and no caret: it is what is hiding rows.
@@ -3994,6 +4002,68 @@ fn a_focused_field_and_a_query_hold_the_band_open_with_no_pointer_at_all() {
         pin_playlist::the_query_in_hand(),
         Some(("m".to_string(), false)),
         "and the caret it was typed with is gone, which is the state the field is held in"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **A hand that is only near the band is reaching for its field.** The field stands on the band's last
+/// row, which is the window's own bottom edge, so the gesture a hand makes for it arrives from under
+/// that edge or from beside it: those pixels are the field's too, and a field that waited for the
+/// pointer to be inside the band is one that comes up a row too late.
+///
+/// What they are not is a row of the band. The row a name travels for, and the row a press picks, are
+/// the pointer's inside the band's own rect and nowhere else — the reach is the field's alone.
+#[test]
+fn a_pointer_near_the_band_reaches_for_its_field_and_is_on_no_row_of_it() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    let reach = pin_chrome::playlist_reach(pin.dpi as f32 / 96.0);
+    stand_pin(Some(pin));
+    pin_playlist::refresh_the_rows();
+
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((0.0, false)),
+        "the field is parked before the pointer comes near it"
+    );
+
+    // Four pixels under the window's own last row, which is the band's: a hand at the field rather
+    // than in a row of the list.
+    assert!(
+        unsafe { pin_playlist::hover(40, band_top + band_height + 4) },
+        "a pointer beside the band is a change the band owes a paint for"
+    );
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((0.0, true)),
+        "the field is wanted by a hand that is only reaching for it"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(hovered, _, _)| hovered),
+        Some(None),
+        "and the hand is on no row of the band, which is its own rect and nothing beside it"
+    );
+
+    // Past the reach the band is nobody's: a pointer that is not coming at the field leaves it.
+    assert!(
+        unsafe { pin_playlist::hover(40, band_top + band_height + reach + 1) },
+        "a pointer past the reach is a change of its own"
+    );
+    assert_eq!(
+        pin_playlist::the_search_slide().map(|(_, wanted)| wanted),
+        Some(false),
+        "and the field is wanted by nothing out there"
     );
 
     let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));

@@ -54,8 +54,8 @@ pub(crate) use menu::{
 };
 pub(crate) use page_marks::paint_text_caret;
 pub(crate) use playlist::{
-    name_travel, paint_playlist, playlist_edge_at, playlist_layout, playlist_row, playlist_row_at,
-    playlist_row_height, playlist_scroll_at, playlist_scroll_max, playlist_shown,
+    name_travel, paint_playlist, playlist_edge_at, playlist_layout, playlist_reach, playlist_row,
+    playlist_row_at, playlist_row_height, playlist_scroll_at, playlist_scroll_max, playlist_shown,
     playlist_step_pick, playlist_thumb_grab, playlist_track_holds, search_field_holds,
     search_index_at, PlaylistBand, PlaylistEdge, PlaylistLayout, PlaylistRow, PlaylistSearch,
     WHEEL_ROWS as PLAYLIST_WHEEL_ROWS,

@@ -153,6 +153,31 @@ pub(crate) fn playlist_row_height(scale: f32) -> i32 {
     text_paint::scaled(ROW_PIXELS as i32, scale).max(1)
 }
 
+/// How far outside the band a pointer still counts as reaching for the band's field, in the
+/// display's own pixels.
+///
+/// **The field is at the band's own bottom edge, so a hand arrives at it from under the window or
+/// from beside it rather than through the rows on top of it.** A band that answered only inside its
+/// own box is a band whose field appears once the pointer has already crossed the last row, and the
+/// gesture a hand makes for a field at the bottom of a window is one that lands a few pixels short.
+/// This is that shortfall: the reach the field answers to, and nothing else — the row a name travels
+/// for is still only ever the pointer's inside the band's own rect (see `pin_playlist::set_the_hover`).
+pub(crate) fn playlist_reach(scale: f32) -> i32 {
+    text_paint::scaled(REACH_PIXELS as i32, scale).max(0)
+}
+
+/// The top row the search pill has at the share of it that is in sight: the whole strip down to the
+/// band's own last row for a field parked under it, and the strip's own top for one in sight whole.
+///
+/// It is the line a row peeking under the field is cut against, so that the pill takes the row back as
+/// it comes up rather than a band of page standing under it (see `paint_playlist` and `paint_search`).
+fn search_field_top(layout: &PlaylistLayout, slide: f32) -> i32 {
+    let out = ((1.0 - slide.clamp(0.0, 1.0)) * (layout.search_bottom - layout.search_top) as f32)
+        .round() as i32;
+
+    layout.search_top + out
+}
+
 /// The box a row's first line is set in, and its second: the two are centred in the row together,
 /// so a band at any scale keeps the pair on the middle of its row rather than on its top.
 fn line_boxes(layout: &PlaylistLayout, row_top: i32, scale: f32) -> (RECT, RECT) {
@@ -540,14 +565,46 @@ pub(crate) fn paint_playlist(
     let first = band.first.min(band.shown.len());
     let last = (first + layout.visible.max(0) as usize).min(band.shown.len());
     let drawn = band.shown.get(first..last).unwrap_or(&[]);
-    boxes.reserve(drawn.len() * 6);
 
-    for (step, index) in drawn.iter().copied().enumerate() {
+    // The rows drawn are the positions the query let through, and everything a row carries is its
+    // own index: a stripe and a wash are the row the pin shows and the row the hand picked, which
+    // the filter never renumbers.
+    let mut places: Vec<(usize, i32, i32)> = drawn
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(step, index)| {
+            let top = layout.rows_top + step as i32 * layout.row_height;
+            let bottom = (top + layout.row_height).min(layout.rows_bottom);
+            (index, top, bottom)
+        })
+        .collect();
+
+    // **The room under the last whole row is a row peeking rather than a band of empty page.** The
+    // rows above the field are whole ones, so what is left between the last of them and the field's
+    // strip is a row's own top — and a page there is a band that reads as a list which has ended
+    // above its own field. The next row is drawn into it, cut where the pill has come up to, which is
+    // how the strip looks like a list scrolled under a field rather than a hole in it, and how a pill
+    // on its way up covers the row as it comes (see `search_field_top`).
+    let peek_floor = match band.search.as_ref() {
+        Some(search) => search_field_top(&layout, search.slide),
+        None => height,
+    }
+    .min(height);
+    if let Some(index) = band.shown.get(last).copied() {
+        let top = layout.rows_top + (last - first) as i32 * layout.row_height;
+        let bottom = (top + layout.row_height).min(peek_floor);
+        if bottom > top {
+            places.push((index, top, bottom));
+        }
+    }
+
+    boxes.reserve(places.len() * 6);
+
+    for (index, top, bottom) in places {
         let Some(row) = band.rows.get(index) else {
             continue;
         };
-        let top = layout.rows_top + step as i32 * layout.row_height;
-        let bottom = (top + layout.row_height).min(layout.rows_bottom);
         if bottom <= top {
             continue;
         }
@@ -579,7 +636,13 @@ pub(crate) fn paint_playlist(
             );
         }
 
-        let (name_box, facts_box) = line_boxes(&layout, top, scale);
+        // **A row is cut where the row is**, which for the rows that fit is their own bottom and for
+        // the row peeking under the field is the pill's top: the two lines keep their place inside
+        // the row, so a row cut short shows the part of itself that is not under the field yet. A box
+        // cut to nothing draws nothing at all, which is a row the pill has come up over.
+        let (mut name_box, mut facts_box) = line_boxes(&layout, top, scale);
+        name_box.bottom = name_box.bottom.min(bottom).max(name_box.top);
+        facts_box.bottom = facts_box.bottom.min(bottom).max(facts_box.top);
 
         // A name the left column has room for is drawn once, cut with an ellipsis where it has
         // none — while a name the band is travelling is drawn whole and moved under the column
@@ -800,14 +863,12 @@ fn paint_search(
     // what a hand sees is a pill sliding under the window's edge and being cut there, which is the
     // parking animation — a pill that faded or blinked would be one that disappeared where it stood
     // (see `pin_playlist::advance_the_search`).
-    let out = ((1.0 - search.slide.clamp(0.0, 1.0))
-        * (layout.search_bottom - layout.search_top) as f32)
-        .round() as i32;
+    let field_top = search_field_top(layout, search.slide);
     let field = RECT {
         left: layout.search_left,
-        top: layout.search_top + out,
+        top: field_top,
         right: layout.search_right,
-        bottom: layout.search_bottom + out,
+        bottom: field_top + (layout.search_bottom - layout.search_top),
     };
     if field.right <= field.left || field.bottom <= field.top {
         return Vec::new();
@@ -1128,6 +1189,11 @@ const SEARCH_EDGE_PIXELS: f32 = 1.0;
 /// band's bottom edge is drawn in — the pad is the wider of the two on purpose, so that no press
 /// on a row is ever a press on the handle.
 const PAD_PIXELS: f32 = 10.0;
+
+/// How far outside the band a pointer still counts as reaching for the band's field, in logical
+/// pixels: the shortfall of a hand that comes at the field from under the window's own bottom edge
+/// or from beside it, rather than through the rows above it (see `playlist_reach`).
+const REACH_PIXELS: f32 = 16.0;
 
 /// The room the accent stripe of the row the pin is showing takes at a row's left edge.
 const STRIPE_PIXELS: f32 = 3.0;

@@ -1268,3 +1268,90 @@ fn a_press_on_the_field_is_measured_at_the_size_the_query_is_drawn() {
         "which is a column past the mark, not the pill's own edge"
     );
 }
+
+/// **The room under the last whole row is a row peeking rather than a band of empty page.** The rows
+/// above the field are whole ones, so what is left between the last of them and the field's strip is a
+/// row's own top: a page there is a band that reads as a list which ended above its own field. The next
+/// row is drawn into it, and it is cut where the pill has come up to — so the pill takes the row back
+/// as it slides rather than a strip of page standing under a field in sight.
+///
+/// The band here is a height that leaves the rows flush with the strip (`leftover` is nothing), which
+/// is the shape the two are drawn against: the row under the field is the whole of the strip when the
+/// field is parked, and none of it when the pill is in it.
+#[test]
+fn the_strip_under_the_rows_is_a_row_peeking_and_the_pill_takes_it_back() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let foreground = palette.foreground;
+
+    let rows: Vec<PlaylistRow> = (0..6)
+        .map(|at| PlaylistRow {
+            name: format!("track {at}"),
+            facts: vec![Fact {
+                text: "a reading".to_string(),
+                kind: FactKind::Reading,
+            }],
+            clock: None,
+        })
+        .collect();
+    let shown: Vec<usize> = (0..rows.len()).collect();
+
+    let (width, height) = (400u32, 220u32);
+    let layout = playlist_layout(width as i32, height as i32, SCALE, rows.len());
+    let leftover = layout.rows_bottom - (layout.rows_top + layout.visible * layout.row_height);
+    assert_eq!(
+        leftover, 0,
+        "a band whose rows end flush with the field's strip is the one this test is drawn against"
+    );
+    assert!(
+        rows.len() > layout.visible as usize,
+        "there is a row after the last one that fits, which is the one that peeks"
+    );
+
+    let paint = |slide: f32| {
+        let surface = DibSurface::create(width, height).expect("a surface");
+        paint_playlist(
+            &surface,
+            &palette,
+            &PlaylistBand {
+                layout,
+                rows: &rows,
+                shown: &shown,
+                first: 0,
+                total: rows.len(),
+                showing: None,
+                picked: None,
+                scrolled: &[],
+                search: Some(PlaylistSearch {
+                    text: "",
+                    caret: 0,
+                    focused: false,
+                    slide,
+                }),
+                note: None,
+            },
+            SCALE,
+        );
+
+        field_pixels(&surface)
+    };
+
+    // The strip's own rows, inside the columns a row's name is drawn in: the band's ink there is a
+    // row's and the field's own ink is its plate, its edge, its mark and its placeholder — the query is
+    // empty, so no character of it is drawn.
+    let row_ink = |pixels: &[[u8; 3]]| {
+        (layout.search_top..layout.search_bottom)
+            .flat_map(|y| (layout.text_left..layout.name_right).map(move |x| (x, y)))
+            .filter(|(x, y)| pixels[*y as usize * width as usize + *x as usize] == foreground)
+            .count()
+    };
+
+    assert!(
+        row_ink(&paint(0.0)) > 0,
+        "a parked field leaves the next row drawn in the strip below the last whole one"
+    );
+    assert_eq!(
+        row_ink(&paint(1.0)),
+        0,
+        "and a pill in sight is drawn in a strip of its own: no row of the band reaches into it"
+    );
+}
