@@ -334,11 +334,18 @@ impl MediaType {
     /// It is the kinds whose frame is a picture rather than a layout: still ones, the five
     /// animation kinds whose next frame is another picture of the same file, a texture, the picture
     /// a design document or a vector drawing is previewed from, the picture an image converter
-    /// developed, and a page — a PDF, a comic's plate, a book's, and the page a document previewer
-    /// or a render engine drew. A page is the file rasterized at whatever box it is asked for, so a
-    /// zoom past the box it is drawn at is the same file laid out again at the size the picture is
-    /// drawn at, sharp as the source allows, rather than a stretched copy of the last frame (see
-    /// `box_is_covered` and `PinRelayoutRoad::Zoom`).
+    /// developed, and a page this app rasterizes — a comic's plate, a book's, and the page a
+    /// document previewer or a render engine drew. A page is the file rasterized at whatever box it
+    /// is asked for, so a zoom past the box it is drawn at is the same file laid out again at the
+    /// size the picture is drawn at, sharp as the source allows, rather than a stretched copy of the
+    /// last frame (see `box_is_covered` and `PinRelayoutRoad::Zoom`).
+    ///
+    /// **A PDF is deliberately not one of these, and that is a question about who draws it.** A
+    /// pinned PDF's band is Chromium's own viewer (`engines::pdf_viewer`), and the wheel over it is
+    /// the document's — a scroll, and `Ctrl` with a notch for the document's own zoom — so a notch
+    /// this app counted instead would be a pin's window growing and moving around a page that never
+    /// moved at all (see `PIN_ZOOM_REGION` and "The two PDF roads"). Nothing else about a PDF
+    /// changes here: the raster the pin is taken up on is still page one.
     ///
     /// A video is the other refusal, and for the opposite reason: its picture is sharp at any size
     /// too, but it belongs to a player of somebody else's, whose window is under the band rather
@@ -356,7 +363,6 @@ impl MediaType {
                 | Self::Design
                 | Self::Vector
                 | Self::Magick
-                | Self::Pdf
                 | Self::Comic
                 | Self::Office
                 | Self::Libre

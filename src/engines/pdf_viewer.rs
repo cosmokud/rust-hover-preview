@@ -36,6 +36,14 @@
 //! **One pin holds one document.** A file asked for in a pin that was showing another takes the
 //! standing viewer down before the new one is made, so a walk of two files can never leave two
 //! windows in one band (see `Seat::replaced_by`).
+//!
+//! **And the document holds the caret, because the wheel is the document's.** A viewer is a window
+//! the keyboard is not in until something puts it there, and a wheel turned over a window that is
+//! not the one the caret is in is delivered elsewhere — so the controller is asked for the focus at
+//! the reveal and at every resume (`Host::take_the_caret`), and from then on a notch over the page
+//! scrolls it rather than being posted here and there by the seam. The seam's posting is what a
+//! desktop without that focus falls back on, and the pin publishes no wheel box of its own for a
+//! document at all (see ARCHITECTURE.md, "The two PDF roads").
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -46,6 +54,7 @@ use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment, ICoreWebView2_3,
+    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
 };
 use webview2_com::NavigationCompletedEventHandler;
 use windows::core::{w, Interface, PCWSTR};
@@ -736,6 +745,14 @@ impl Host {
 
         self.set_bounds();
 
+        // **And the caret goes into the document, which is what the wheel then belongs to.** A notch
+        // is delivered to the window the keyboard is in, and a viewer nobody has clicked into is not
+        // that window: the pin's chrome around it is, so a wheel turned over the page would scroll
+        // nothing while the counter it shares with a hover went on ticking — a listing re-resolved
+        // under a pin the user is reading in. Chromium is asked for the caret once the document is
+        // on the screen, and from then on the wheel is the document's (see `take_the_caret`).
+        self.take_the_caret();
+
         trace(&format!(
             "pdf: shown {} at {}x{}+{}+{}",
             self.seat.path.display(),
@@ -744,6 +761,23 @@ impl Host {
             self.seat.area.x,
             self.seat.area.y
         ));
+    }
+
+    /// Ask Chromium for the caret, so that the document is the window the wheel and the keys are in.
+    ///
+    /// **The controller's focus is what Windows' own focus follows**, so this is the one call that
+    /// makes a page scrolled by a wheel turned over it: a mouse message goes to the window the pointer
+    /// is over, but Chromium's own page only takes it once its controller holds the focus. Asking for
+    /// it is what this app's chrome had otherwise taken on the press that raised the pin.
+    ///
+    /// The foreground window is left to Windows: a viewer is owned by a pin and the pin is the window
+    /// the user put there, so raising the viewer over the desktop is not this road's to do.
+    fn take_the_caret(&self) {
+        unsafe {
+            let _ = self
+                .controller
+                .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        }
     }
 
     /// The controller's own box, which is the window's client: a page is laid out at the size it is
@@ -827,6 +861,11 @@ impl Host {
             let _ = self.controller.SetIsVisible(true);
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
         }
+
+        // The caret goes back into the document with the document, for the same reason `reveal` asks
+        // for it: a resumed viewer whose focus was left in the pin's chrome is a page no wheel
+        // scrolls.
+        self.take_the_caret();
 
         trace(&format!("pdf: resumed {}", self.seat.path.display()));
     }
