@@ -929,6 +929,10 @@ pub(super) fn pin_screen_is_settled(media: Option<MediaType>, engine_draws: bool
 /// longer existed. Every reason but `Reason::Hung` is this road, and the bubble is taken down
 /// here because the loop's own take-down does not know about it.
 pub(super) fn end_pin_state(reason: Reason) -> PreviewMessage {
+    // A pin's PDF viewer is a browser of its own and outlives no pin: one left running behind a
+    // window that has gone is a document nobody can reach (see `engines::pdf_viewer`).
+    crate::engines::pdf_viewer::close_all();
+
     let owed = end_pin(reason, &Win32PinWindow);
 
     // **Cleared after the teardown, not before it.** The teardown asks which window the pin stands in
@@ -3112,10 +3116,46 @@ pub(super) unsafe fn foreground_is_the_desktop(window: HWND) -> bool {
 /// resized — and not once a tick: the tick has its own, slower re-assertion for the player's
 /// window, and a browser that is told the same bounds it already has every sixteen milliseconds
 /// is work nobody asked for.
+/// The band a sibling window stands in, as the engine's own box (see `place_pinned_siblings`).
+pub(super) fn the_band_area(content: ScreenRegion) -> crate::engines::webview_preview::Area {
+    crate::engines::webview_preview::Area {
+        x: content.0,
+        y: content.1,
+        width: (content.2 - content.0).max(1),
+        height: (content.3 - content.1).max(1),
+    }
+}
+
+/// **A pinned PDF is worked in rather than looked at**, so its band is handed to Chromium's own
+/// viewer at the take-up and every box change after it: what stands on screen until the document
+/// arrives — and for good where it never does — is the static raster the pin already holds (see
+/// `engines::pdf_viewer`).
+pub(super) fn open_the_pins_pdf_viewer(
+    kind: Option<MediaType>,
+    path: &Path,
+    content: ScreenRegion,
+) {
+    if kind != Some(MediaType::Pdf) {
+        return;
+    }
+
+    let window = pinned_window();
+
+    if window.is_invalid() {
+        return;
+    }
+
+    crate::engines::pdf_viewer::open(path, window.0 as isize, the_band_area(content));
+}
+
 pub(super) fn place_pinned_siblings() {
     let Some(content) = pinned_content() else {
         return;
     };
+
+    // The pin's PDF viewer stands at the same band a player and a page do, and it is moved by the
+    // same box changes: a drag, a resize, a maximize, a display move (see `engines::pdf_viewer`).
+    crate::engines::pdf_viewer::place(the_band_area(content));
 
     let kind = CURRENT_MEDIA
         .lock()

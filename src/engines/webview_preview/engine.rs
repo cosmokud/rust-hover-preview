@@ -70,7 +70,7 @@ fn idle_expired(idle_since: Instant) -> bool {
 /// reason the probes exist: an engine that does not come up says nothing on its own,
 /// and this is what it says. Nothing is written when the variable is not set, so an
 /// ordinary run leaves no file anywhere.
-pub(super) fn trace(message: &str) {
+pub(crate) fn trace(message: &str) {
     if std::env::var_os("RHP_WEBVIEW_TRACE").is_none() {
         return;
     }

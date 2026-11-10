@@ -3,6 +3,7 @@ pub(crate) mod document_cache;
 pub(crate) mod imagemagick_render;
 pub(crate) mod libreoffice_render;
 pub(crate) mod office_render;
+pub(crate) mod pdf_viewer;
 pub(crate) mod peazip_render;
 pub(crate) mod supervisor;
 pub(crate) mod webview_preview;

@@ -632,7 +632,12 @@ pub fn stale_run_pids(root: &Path) -> Vec<u32> {
     entries
         .flatten()
         .filter(|entry| entry.path().is_dir())
-        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        // A folder is named for its run, and a pin's PDF viewer keeps one of its own beside the
+        // hover engine's (`<pid>-pin`): the run is the number the name begins with either way.
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            name.split('-').next()?.parse::<u32>().ok()
+        })
         .filter(|pid| *pid != ours)
         .collect()
 }

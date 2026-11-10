@@ -4437,6 +4437,12 @@ pub fn run_preview_window() {
                         // is written (see `pin_window::install`).
                         install(pin);
 
+                        // **A pinned PDF's band is Chromium's from here** — the viewer is asked for
+                        // once the pin is up, at the box the take-up gave it, and it reveals itself
+                        // only when the document arrives (see `engines::pdf_viewer`). Every other
+                        // kind is drawn by this app and asks for nothing.
+                        open_the_pins_pdf_viewer(kind, &path, content);
+
                         // A pin that is taken up owes the front from the moment it is up: the
                         // click that picks the next file activates the listing, and a pin in the
                         // ordinary band is that window over it for a frame however fast the pick
