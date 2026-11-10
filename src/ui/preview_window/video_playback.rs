@@ -903,13 +903,14 @@ fn start_video_playback_where(
     // **The film's own size, where it is kept for a host**: the one placement the road makes is then
     // the box the player was born at, and nothing of the source is resized under the Shell (see
     // `pin_film_thumbnail::the_one_placement`). A film drawn over the preview is the preview's box.
-    let (asked_width, asked_height) = match (kept_for_a_host, measured.as_ref()) {
-        (true, Some(geometry)) => (
-            (geometry.width as i32).max(1),
-            (geometry.height as i32).max(1),
-        ),
-        _ => (width.max(1), height.max(1)),
-    };
+    // It is the mpv road's own answer and asked of the same one function, so the two engines are born
+    // at the same box and neither can drift from the placement that follows (see
+    // `pin_film_thumbnail::the_box_a_source_is_born_at`).
+    let (asked_width, asked_height) = pin_film_thumbnail::the_box_a_source_is_born_at(
+        path,
+        kept_for_a_host,
+        (width.max(1), height.max(1)),
+    );
     let width_arg = asked_width.to_string();
     let height_arg = asked_height.to_string();
     let left_arg = x.to_string();
@@ -1119,16 +1120,6 @@ fn start_mpv_video_playback(
     // `mpv_ipc`).
     let ipc = mpv_ipc::next_pipe_name();
 
-    // **The box is named on the scale of the display mpv's window is created on, which is the
-    // primary's** — that is the size Windows scales to the display the film is moved to, and
-    // naming it there is the whole of what makes the window the box rather than twice it (see
-    // `video_launch::mpv_box_size`, where the measurement behind this is written out). `(0, 0)` is
-    // the primary display's own corner, and the primary is the display a player's window is created
-    // on whatever box the film is watched in. The box itself is what is written down below and what
-    // the tick asserts: only the player's geometry is in the other scale.
-    let (asked_width, asked_height) =
-        video_launch::mpv_box_size(width, height, dpi_at(x, y), dpi_at(0, 0));
-
     // **A pin's mpv film is drawn in a window of the player's own**, and the pin's host shows it
     // through the Shell's thumbnail (see `pin_film_thumbnail`); a hover's is either the same picture
     // in its own hover host or, where no host is kept, a window of the desktop's over the preview
@@ -1143,13 +1134,32 @@ fn start_mpv_video_playback(
         && !the_pins_film
         && hover_film_host::the_hover_film_is_kept_in_a_host(path);
     let behind_the_host = hover_destination || the_pins_film;
+
+    // **A film kept for a host is born at the size its one placement will ask it for** — the ffplay
+    // road's own rule, and the reason is the same on both (see `the_box_a_source_is_born_at`). What
+    // it costs a film drawn over the preview is nothing: that one is born at the preview's box and
+    // never placed at all. **The size is the probe's, not an argument the player is handed**: mpv
+    // answers for its own film only once it has opened it, and by then its window is already drawing.
+    let (born_width, born_height) =
+        pin_film_thumbnail::the_box_a_source_is_born_at(path, behind_the_host, (width, height));
+
+    // **The box is named on the scale of the display mpv's window is created on, which is the
+    // primary's** — that is the size Windows scales to the display the film is moved to, and
+    // naming it there is the whole of what makes the window the box rather than twice it (see
+    // `video_launch::mpv_box_size`, where the measurement behind this is written out). `(0, 0)` is
+    // the primary display's own corner, and the primary is the display a player's window is created
+    // on whatever box the film is watched in. The box itself is what is written down below and what
+    // the tick asserts: only the player's geometry is in the other scale.
+    let (asked_width, asked_height) =
+        video_launch::mpv_box_size(born_width, born_height, dpi_at(x, y), dpi_at(0, 0));
     // **The source is launched where it will stand rather than wherever mpv would put itself.** mpv
     // shows its own window as soon as it has opened the file — before this app has found the window
     // and adopted it — so a launch at the corner of the box that will show it is a window of mpv's
     // standing under that box for the moment that takes, rather than over a hover's frozen frame on
     // a take-up from one (see `pin_film_thumbnail` and
-    // `begin_the_pinned_film_at_the_hovers_frame`). Its *size* is not named here: the one placement
-    // asks for that after the launch (see `pin_film_thumbnail`).
+    // `begin_the_pinned_film_at_the_hovers_frame`). Its *size* is asked for above, at the box the one
+    // placement will name, so that nothing of the source is resized under the Shell after its first
+    // frame (see `pin_film_thumbnail::the_box_a_source_is_born_at`).
     let (launch_x, launch_y) = if behind_the_host {
         pin_film_thumbnail::the_source_launch_origin((x, y))
     } else {
