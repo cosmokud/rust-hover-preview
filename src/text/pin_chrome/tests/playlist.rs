@@ -1160,3 +1160,103 @@ fn the_caret_is_the_height_of_the_letter_it_stands_between() {
         "and it is not a speck in the middle of the pill either"
     );
 }
+
+/// **The field is shorter than a row.** It is a control a hand reaches for in a list, not a bar the
+/// band is built around: a pill the height of a row is a pill that reads as a row of the list, and
+/// the rows above it are what the band is for.
+#[test]
+fn the_field_is_shorter_than_a_row_of_the_list() {
+    let layout = playlist_layout(400, 400, SCALE, 40);
+
+    let field = layout.search_bottom - layout.search_top;
+    let row = layout.row_height;
+    assert!(
+        field < row,
+        "the field is {field} rows tall and a row of the list is {row}"
+    );
+    assert!(
+        field > row / 2,
+        "and it is not so short that a line of the query has no room to sit in"
+    );
+}
+
+/// **The pill's border runs the whole length of the one straight part of its top and bottom**, and
+/// the query inside it never paints over either: the row a run of text is handed is the pill's own
+/// inside, a hairline short of its edge, and the two rows of the border are the fill's last and the
+/// stroke's first.
+#[test]
+fn the_field_border_runs_the_whole_straight_part_of_the_pill() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let plate = text_paint::blend(palette.background, palette.foreground, 0.07);
+    let ink =
+        |at: [u8; 3]| (0..3).any(|channel| (at[channel] as i32 - plate[channel] as i32).abs() > 4);
+
+    let layout = playlist_layout(400, 240, SCALE, 0);
+    let radius = (layout.search_bottom - layout.search_top) as f32 / 2.0;
+    let straight = (
+        layout.search_left + radius.ceil() as i32,
+        layout.search_right - radius.ceil() as i32,
+    );
+
+    for (text, focused) in [
+        ("", false),
+        ("a query of a name the field is wide enough to hold", true),
+    ] {
+        let (surface, box_) = a_band_of_the_field(PlaylistSearch {
+            text,
+            caret: text.len(),
+            focused,
+        });
+        let pixels = field_pixels(&surface);
+        let width = surface.width as usize;
+
+        for row in [box_.top, box_.bottom - 1] {
+            let missing = (straight.0..straight.1)
+                .filter(|x| !ink(pixels[row as usize * width + *x as usize]))
+                .count();
+            assert_eq!(
+                missing, 0,
+                "{} of the pill's row {row} carries no edge under a {focused} query",
+                missing
+            );
+        }
+    }
+}
+
+/// **A press names a place in the query as it is drawn.** The query is set at the facts line's scale
+/// rather than at the band's own, so the columns a press is measured against are that face's: a press
+/// measured at the band's scale would name a character several of them away from the one under it.
+#[test]
+fn a_press_on_the_field_is_measured_at_the_size_the_query_is_drawn() {
+    let layout = playlist_layout(400, 240, SCALE, 0);
+    let query = "a name too wide for its own field";
+
+    let at_band_scale = search_index_at(&layout, query, layout.search_right, SCALE);
+    let at_query_scale = search_index_at(&layout, query, layout.search_right, SCALE);
+    assert_eq!(
+        at_band_scale, at_query_scale,
+        "one press names one place in the query, whatever the band's own scale is"
+    );
+
+    // The face the query is drawn in is narrower than the one the band draws its rows in, so the
+    // whole of a query fits in a field the band's own face would have cut: a press at the field's
+    // right edge is past the last of its characters rather than part way through them.
+    let cell_of_query = text_paint::scaled(
+        text_paint::LEVEL_FONT_PIXELS[facts_style().level as usize],
+        SCALE,
+    );
+    let cell_of_band = text_paint::scaled(text_paint::LEVEL_FONT_PIXELS[1], SCALE);
+    assert!(
+        cell_of_query < cell_of_band,
+        "the query is set a level under the band's own header"
+    );
+    assert_eq!(
+        search_index_at(&layout, "ab", layout.search_left, SCALE),
+        0,
+        "and a press at the field's left edge is before its first character"
+    );
+    assert!(
+        layout.search_text_left > layout.search_left,
+        "which is a column past the mark, not the pill's own edge"
+    );
+}
