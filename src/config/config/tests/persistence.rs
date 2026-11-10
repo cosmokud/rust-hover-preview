@@ -156,6 +156,7 @@ fn a_file_the_app_wrote_is_one_it_reads_back_as_itself() {
         hdr_tone_map: Curve::Aces,
         hdr_exposure: -2.5,
         decode_budget_gb: 0.5,
+        animated_webp_budget_mb: 256,
         office_engine_idle: EngineIdle::Indefinite,
         beat_hz: BeatHz::Top(1200),
         webview_idle: EngineIdle::Seconds(60),

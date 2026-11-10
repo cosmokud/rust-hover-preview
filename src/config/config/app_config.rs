@@ -6,20 +6,21 @@ use crate::readers::tone_map::Curve;
 
 use super::defaults::{
     DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_FPS_MAX, DEFAULT_ANIMATED_SCALE_PERCENT,
-    DEFAULT_AUDIO_MARK_OFFSET_Y, DEFAULT_AUDIO_VOLUME, DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED,
-    DEFAULT_CHECK_FOR_UPDATES, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB,
-    DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
-    DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH,
-    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
-    DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER,
-    DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_REMEMBER_AUDIO_VOLUME,
-    DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
-    DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE, DEFAULT_SPINNER_DELAY_MS,
-    DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS,
-    DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES,
-    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_MARK_OFFSET_Y, DEFAULT_AUDIO_VOLUME,
+    DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED, DEFAULT_CHECK_FOR_UPDATES, DEFAULT_DECODE_BUDGET_GB,
+    DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB,
+    DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
+    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH, DEFAULT_NORMALIZE_VIDEO_VOLUME,
+    DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_ZOOM_BOUNCE_GATE,
+    DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
+    DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
+    DEFAULT_SILENT_AUTO_UPDATE, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_DONT_PREVIEW_SECRETS,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
+    DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS, DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE,
+    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME,
+    DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use super::setting_types::{
     AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile,
@@ -637,8 +638,18 @@ pub struct AppConfig {
     ///
     /// The one setting here that bounds a file rather than a cache: a reader is
     /// handed it before it allocates, so a file larger than the budget is answered
-    /// with no preview instead of with memory the app may not get.
+    /// with no preview instead of with memory the app may not get. The tray lists it
+    /// as `Decode Budget → Ceiling`, under the room an animated WebP's run of frames
+    /// is given (see `animated_webp_budget_mb`).
     pub decode_budget_gb: f32,
+    /// What one pinned picture's held run of frames may take, in megabytes.
+    ///
+    /// A picture that plays is read once, in the background, and every frame of it is kept so
+    /// that a hand on its track is shown whatever frame it names at once (see `pin_index`). This
+    /// is what bounds that run: the frames are held at the pin's own size while they fit, and at
+    /// the largest size that does when they do not. It is `Decode Budget → Animated WEBP` in the
+    /// tray, and it is the one setting under that submenu that is about what is *kept*.
+    pub animated_webp_budget_mb: u32,
     /// Whether a video is decoded on the graphics card rather than on a core, which is the
     /// `Video` row under `Performance → Hardware Acceleration` in the tray.
     ///
@@ -845,6 +856,7 @@ impl Default for AppConfig {
             libreoffice_idle: EngineIdle::Away,
             afk_timer_seconds: DEFAULT_AFK_TIMER_SECS,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
+            animated_webp_budget_mb: DEFAULT_ANIMATED_WEBP_BUDGET_MB,
             video_hw_accel: DEFAULT_VIDEO_HW_ACCEL,
             hdr_tone_map: DEFAULT_HDR_TONE_MAP,
             hdr_exposure: DEFAULT_HDR_EXPOSURE,

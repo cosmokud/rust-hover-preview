@@ -9,9 +9,15 @@
 //! therefore the file, not the seek: going back four frames costs the walk to the beginning again.
 //!
 //! So the run is read once, in the background, and every frame of it is kept — at the size the
-//! pin draws at when that fits the budget, and at the largest size that does when it does not. The
-//! frames are what is *kept*, so the walk this file needs is paid once per pin rather than once per
-//! press, and a hand that goes back and forth reads frames of memory both ways.
+//! pin draws at when that fits the room `Performance → Decode Budget → Animated WEBP` names, and at
+//! the largest size that does when it does not. The frames are what is *kept*, so the walk this
+//! file needs is paid once per pin rather than once per press, and a hand that goes back and forth
+//! reads frames of memory both ways.
+//!
+//! **The walk is started once per pin and never per press.** A run already in hand for the file on
+//! screen and the size the pin draws at is the run a press reads, and a start for it answers
+//! nothing; so a drag across a long picture asks for no decode of its own at all until the hand
+//! lets go, and the memory it costs is the run and nothing else.
 //!
 //! It is deliberately only the two kinds whose walks are expensive and which are decoded here:
 //! a APNG is composited by the `image` crate from its own frame records and needs no index at all,
@@ -28,23 +34,38 @@ use super::*;
 /// How much of a picture's run is held at once, which is what decides whether the frames are the
 /// pin's own size or a size that fits: a file of a few hundred frames at a thumbnail's box is held
 /// whole and exactly, and one of a few thousand is held whole and small.
-pub(super) const INDEX_RETAINED_BYTES: usize = 128 * 1024 * 1024;
+///
+/// It is the `Performance → Decode Budget → Animated WEBP` setting rather than a constant: the run
+/// is what a hand on a picture's track is shown a frame of, so how sharp a dragged picture is, is
+/// a question a machine with less memory to spare answers for itself (see
+/// `animated_webp_budget_bytes`).
+pub(super) fn retained_bytes() -> usize {
+    crate::config::config::animated_webp_budget_bytes()
+}
 
 /// The narrowest a proxy frame is drawn at: below this a frame is a smear rather than a place in
-/// the file, and a run that does not fit even here is the frames from the beginning that do.
+/// the file. A run that would be drawn smaller is the frames from the beginning that fit at this
+/// width instead — the run is cut rather than made unreadable, and the frames it holds are the ones
+/// a hand starts from.
 const INDEX_PROXY_MIN_WIDTH: u32 = 96;
 
 /// A held run of one file at one size.
 struct Index {
     path: PathBuf,
     version: FileVersion,
+    /// The size the frames are held at, which is the size a box change asks for again: a picture
+    /// laid out at another box is a run at another size, and the frames of the old one are frames
+    /// the window is no longer drawn at.
+    width: u32,
+    height: u32,
     /// The walk that is filling this run, which is what says whether a frame arriving belongs in
     /// it: a box change asks for the same file at another size, and a frame of the size it was is a
     /// frame of a run nobody holds any more.
     walk: u64,
-    /// The size the frames are held at, which is why a run of another size is another run.
-    width: u32,
-    height: u32,
+    /// The room the run was read into, which is what the setting said when it was asked for: a run
+    /// read into one room is not the run a smaller one would have held, so a changed setting is a
+    /// run to read again.
+    room: usize,
     /// How many frames the run may hold, which is the budget divided by the size of one frame of
     /// it: a file of a few thousand frames is read as far as the budget reaches rather than to the
     /// end of it, so that an index of one picture never becomes the reason the app is using memory.
@@ -86,15 +107,19 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
     if width == 0 || height == 0 {
         return;
     }
+    let room = retained_bytes();
 
     // What is already being read is what was going to be read: a second ask for the same file at
-    // the same size is a walk already on its way.
+    // the same size and the same room is a walk already on its way, and one for a run already in
+    // hand is nothing asked for at all. That is the whole of what keeps a drag from walking the
+    // file per press (see `show_the_frame_of`).
     if let Ok(index) = INDEX.lock() {
         if let Some(index) = index.as_ref() {
             if index.path == path
                 && index.version == version
                 && index.width == width
                 && index.height == height
+                && index.room == room
             {
                 return;
             }
@@ -102,15 +127,16 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
     }
 
     let walk = INDEX_WALK.fetch_add(1, Ordering::AcqRel) + 1;
-    let max_frames = max_frames(width, height);
+    let max_frames = max_frames(width, height, room);
 
     if let Ok(mut index) = INDEX.lock() {
         *index = Some(Index {
             path: path.to_path_buf(),
             version,
-            walk,
             width,
             height,
+            room,
+            walk,
             max_frames,
             frames: Vec::new(),
         });
@@ -153,23 +179,24 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
     });
 }
 
-/// How many frames of a run held at `width` by `height` fit the budget, and never none.
-fn max_frames(width: u32, height: u32) -> usize {
+/// How many frames of a run held at `width` by `height` fit `room`, and never none.
+fn max_frames(width: u32, height: u32, room: usize) -> usize {
     let frame_bytes = (width as u64 * height as u64 * 4).max(4);
 
-    (INDEX_RETAINED_BYTES as u64 / frame_bytes).max(1) as usize
+    (room as u64 / frame_bytes).max(1) as usize
 }
 
 /// The size a run of `total` frames is held at: the pin's own where that fits the budget, and the
 /// largest that does where it does not.
 fn proxy_size(total: usize, display: (u32, u32)) -> (u32, u32) {
     let frame_bytes = display.0 as u64 * display.1 as u64 * 4;
+    let retained = retained_bytes() as u64;
     let wanted = frame_bytes.saturating_mul(total as u64);
-    if wanted <= INDEX_RETAINED_BYTES as u64 {
+    if wanted <= retained {
         return display;
     }
 
-    let room = INDEX_RETAINED_BYTES as u64 / total.max(1) as u64;
+    let room = retained / total.max(1) as u64;
     // The scale that keeps the frame's own shape inside the room, taken from its area.
     let scale = (room as f64 / frame_bytes as f64).sqrt();
     let width = ((display.0 as f64 * scale).floor() as u32).max(INDEX_PROXY_MIN_WIDTH);
@@ -326,13 +353,25 @@ fn walk_animated_webp(
 mod tests {
     use super::*;
 
+    /// The index is one per process, so the tests that hold runs and the one that reads a file off
+    /// a thread of its own share it: a walk put down by another test's `forget` is a walk this one
+    /// is waiting on for ever. One test at a time is what a state of this shape needs.
+    static ONE_TEST: Mutex<()> = Mutex::new(());
+
+    fn one_test_at_a_time() -> MutexGuard<'static, ()> {
+        ONE_TEST
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn a_frame(file_index: usize, side: u32) -> ImageFrame {
         let mut frame = ImageFrame::new(vec![0u8; (side * side * 4) as usize], side, side, 100);
         frame.file_index = file_index;
         frame
     }
 
-    fn hold(path: &Path, width: u32, height: u32, frames: &[(usize, u32)]) {
+    fn hold(path: &Path, room: usize, frames: &[(usize, u32)]) {
+        let (width, height) = (320, 240);
         let mut index = INDEX.lock().expect("the index's lock");
         let mut frames_held = Vec::new();
         for (at, side) in frames {
@@ -344,10 +383,11 @@ mod tests {
         *index = Some(Index {
             path: path.to_path_buf(),
             version: file_version(path),
-            walk: INDEX_WALK.fetch_add(1, Ordering::AcqRel) + 1,
             width,
             height,
-            max_frames: max_frames(width, height),
+            room,
+            walk: INDEX_WALK.fetch_add(1, Ordering::AcqRel) + 1,
+            max_frames: max_frames(width, height, room),
             frames: frames_held,
         });
     }
@@ -366,9 +406,10 @@ mod tests {
     /// and one that has not is answered by the nearest that has rather than by a walk.
     #[test]
     fn a_frame_of_the_run_is_answered_at_once_and_a_frame_it_does_not_hold_is_answered_nearest() {
+        let _one = one_test_at_a_time();
         forget();
         let path = a_file();
-        hold(&path, 320, 240, &[(3, 320), (4, 320), (5, 320)]);
+        hold(&path, retained_bytes(), &[(3, 320), (4, 320), (5, 320)]);
 
         let frame = at(&path, 4).expect("a frame of the run");
         assert_eq!(frame.file_index, 4, "the place in the file is the key");
@@ -389,6 +430,7 @@ mod tests {
     /// got, and what the bar is drawn on while the picture is standing there.
     #[test]
     fn a_run_is_read_off_the_file_with_a_frame_for_every_place_in_it() {
+        let _one = one_test_at_a_time();
         let folder = std::env::temp_dir().join("pin-index-walk-tests");
         std::fs::create_dir_all(&folder).expect("a fixture folder");
         let path = folder.join("run.webp");
@@ -445,7 +487,8 @@ mod tests {
     fn a_run_is_held_at_the_pin_own_size_while_it_fits_and_scaled_down_when_it_does_not() {
         let display = (320, 240);
         let frame_bytes = 320u64 * 240 * 4;
-        let fits = (INDEX_RETAINED_BYTES as u64 / frame_bytes) as usize;
+        let retained = retained_bytes() as u64;
+        let fits = (retained / frame_bytes) as usize;
 
         assert_eq!(
             proxy_size(fits, display),
@@ -469,7 +512,7 @@ mod tests {
             "a proxy keeps the frame's own shape"
         );
         assert!(
-            width as u64 * height as u64 * 4 <= INDEX_RETAINED_BYTES as u64 / (fits as u64 + 1),
+            width as u64 * height as u64 * 4 <= retained / (fits as u64 + 1),
             "and one frame of it is inside its own room in the budget"
         );
 

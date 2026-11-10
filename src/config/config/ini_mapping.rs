@@ -10,13 +10,13 @@ use crate::readers::tone_map::Curve;
 
 use super::app_config::AppConfig;
 use super::defaults::{
-    parse_text_font_scale, sanitize_animated_fps_max, sanitize_audio_mark_offset_y,
-    sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
-    sanitize_hdr_exposure, sanitize_image_cache_mb, sanitize_image_disk_cache_mb,
-    sanitize_pin_zoom_bounce_ms, sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms,
-    sanitize_program_path, sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
-    sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
-    sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
+    parse_text_font_scale, sanitize_animated_fps_max, sanitize_animated_webp_budget_mb,
+    sanitize_audio_mark_offset_y, sanitize_decode_budget_gb, sanitize_document_cache_mb,
+    sanitize_general_disk_cache_mb, sanitize_hdr_exposure, sanitize_image_cache_mb,
+    sanitize_image_disk_cache_mb, sanitize_pin_zoom_bounce_ms, sanitize_pin_zoom_bounce_power,
+    sanitize_pin_zoom_bounce_speed_ms, sanitize_program_path, sanitize_spinner_delay_ms,
+    sanitize_text_font_scale_percent, sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms,
+    sanitize_ttc_face, sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
 };
 use super::migrate;
 use super::setting_types::{
@@ -543,6 +543,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "decode_budget_gb",
             Some(sanitize_decode_budget_gb(self.decode_budget_gb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "animated_webp_budget_mb",
+            Some(sanitize_animated_webp_budget_mb(self.animated_webp_budget_mb).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -1286,6 +1291,9 @@ impl AppConfig {
         // count of them.
         if let Ok(Some(value)) = ini.getfloat(CONFIG_SECTION, "decode_budget_gb") {
             self.decode_budget_gb = sanitize_decode_budget_gb(value as f32);
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "animated_webp_budget_mb") {
+            self.animated_webp_budget_mb = sanitize_animated_webp_budget_mb(value as u32);
         }
         // A curve is read by name, and a name that is not one of them is answered with the
         // default this field already holds rather than with a curve picked at random: what
