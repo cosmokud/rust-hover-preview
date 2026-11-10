@@ -610,6 +610,10 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 // playhead is the share of the run the hand let go on while it is being dragged,
                 // and the frame the picture is on otherwise.
                 fps_open: paint.fps.open,
+                // The frame under the hand of a drag, and the file's own count of them: the two are
+                // written beside the clock so that a track of a few hundred columns over a file of a
+                // few thousand frames says which frame it is on (see `paint_frame_count`).
+                frames: paint.frames,
             };
 
             TRANSPORT_SURFACE.with(|cell| {
@@ -992,6 +996,9 @@ pub(super) struct PinnedPaint {
     pub(super) transport_animated: bool,
     /// The pace a picture that plays is held at, and whether its slider is up (see `PinFps`).
     pub(super) fps: PinFps,
+    /// The frame a hand on a picture's track is standing at, and how many frames the file plays:
+    /// nothing while no hand is on the track, which is the state the count is not written in.
+    pub(super) frames: Option<(usize, usize)>,
     /// Where the FPS popup goes, or nothing while it is closed: asked of the pin rather than
     /// recomputed at paint, so that the panel drawn is the panel a press is answered against (see
     /// `pinned_fps_geometry`).
@@ -1099,6 +1106,7 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
             volume: pin.volume,
             transport_animated: pin.transport_animated,
             fps: pin.fps,
+            frames: None,
             fps_popup: None,
             volume_popup: None,
             find_bar: None,
@@ -1133,6 +1141,13 @@ pub(super) fn pinned_paint() -> Option<PinnedPaint> {
     };
     paint.duration = pin_duration(&transport);
     paint.playing = pin_is_playing(&transport);
+    // The frame a drag of a picture that plays is standing at, and the count of frames it plays:
+    // asked of the same walk of the container the playhead was placed by, and only while a hand is
+    // on the track, since it is the read-out of that hand (see `paint_frame_count`).
+    paint.frames = match (paint.transport_animated, paint.fps.seeking_frame) {
+        (true, Some(frame)) => animation_total().map(|total| (frame + 1, total)),
+        _ => None,
+    };
 
     Some(paint)
 }

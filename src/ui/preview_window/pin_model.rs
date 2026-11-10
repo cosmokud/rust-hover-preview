@@ -889,6 +889,12 @@ pub(super) struct PinFps {
     /// is drawn there while the drag lasts, and the decode lands on the frame when it lets go
     /// (see `pin_frame_share`).
     pub(super) seeking: Option<f64>,
+    /// The frame of the file that share names, which is the frame the picture is taken to while the
+    /// hand is on the track and the one written beside the clock: a drag of a picture that plays is
+    /// a walk through its frames, and it is the frame rather than the second that is remembered —
+    /// two shares inside one frame are one frame to decode, and asking again is a decode the hand
+    /// would wait for nothing (see `take_the_picture_to_frame`).
+    pub(super) seeking_frame: Option<usize>,
     /// Whether its knob is being held: a drag is a hand on the pace, and it must not be mistaken
     /// for the pointer having gone away from the slider.
     pub(super) dragging: bool,

@@ -452,6 +452,7 @@ fn both_panels_stay_painted_inside_a_window_narrower_than_they_are() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };
@@ -547,6 +548,7 @@ fn a_row_the_window_is_not_offering_is_faded_and_washed_by_nothing() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };
@@ -1418,6 +1420,7 @@ fn a_check_row_carries_a_check_alone_and_a_choice_its_disc() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };
@@ -1572,6 +1575,7 @@ fn the_row_under_the_pointer_is_washed() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };
@@ -1647,6 +1651,7 @@ fn a_door_row_carries_the_arrow_and_a_row_that_answers_carries_none() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };
@@ -1755,6 +1760,7 @@ fn the_flyout_s_panel_is_not_painted_while_the_flyout_is_down() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };
@@ -1823,6 +1829,7 @@ fn a_menu_is_painted_as_a_panel_of_the_theme_over_what_is_behind_it() {
         background: [30, 34, 42],
         foreground: [198, 202, 210],
         accent: [86, 182, 194],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };

@@ -396,12 +396,22 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
             // A picture that plays is not measured in seconds of a player behind it: the track
             // runs from its first frame to its last, and a press on it names the frame to take the
             // file to (see `AnimationPlayback` and `pin_frame_share`).
+            //
+            // **The press holds the picture where the hand landed and takes it to that frame at
+            // once**, which is the whole of what a drag of one is: a frame at a time, under a hand
+            // that is reading them, and the picture standing still until the hand lets go (see
+            // `hold_the_picture_on_its_frame`).
             if bar.animated {
-                if pin_frame_share(share).is_none() {
+                let Some(frame) = pin_frame_share(share) else {
                     return false;
-                }
+                };
 
-                update_pin_fps(|fps| fps.seeking = Some(share));
+                hold_the_picture_on_its_frame(true);
+                update_pin_fps(|fps| {
+                    fps.seeking = Some(share);
+                    fps.seeking_frame = Some(frame);
+                });
+                take_the_picture_to_frame(frame);
                 let _ = SetCapture(hwnd);
                 render_layered_preview(hwnd);
                 return true;
@@ -466,6 +476,11 @@ pub(super) fn pin_seconds_at(transport: &PinTransport, share: f64) -> Option<f64
 
 /// Carry a drag along the transport bar: the playhead follows the hand, and the file is taken
 /// there only when the pointer lets go.
+///
+/// A picture that plays is the exception and the whole of why a drag of one is a scrub: its track
+/// names frames rather than seconds of a player, so the frame under the hand is taken to while the
+/// hand is still moving — one frame at a time, held where the hand put it (see
+/// `take_the_picture_to_frame`).
 pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
     let Some(bar) = pinned_transport_geometry() else {
         return false;
@@ -484,10 +499,26 @@ pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
     let share =
         pin_chrome::transport_share_at(x, bar.width, bar.height, bar.dpi, bar.live, bar.animated);
     if bar.animated {
-        update_pin_fps(|fps| fps.seeking = Some(share));
-    } else {
-        update_pin_transport(|transport| transport.seeking = pin_seconds_at(transport, share));
+        let frame = pin_frame_share(share);
+        let previous =
+            pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.fps.seeking_frame));
+        with_pin(|pin| {
+            pin.fps.seeking = Some(share);
+            pin.fps.seeking_frame = frame;
+        });
+
+        // A move inside the frame the hand is already on is a playhead that has not moved in the
+        // file, which is a decode asked for nothing.
+        if previous != frame {
+            if let Some(frame) = frame {
+                take_the_picture_to_frame(frame);
+            }
+        }
+        render_layered_preview(hwnd);
+        return true;
     }
+
+    update_pin_transport(|transport| transport.seeking = pin_seconds_at(transport, share));
     render_layered_preview(hwnd);
     true
 }
@@ -571,21 +602,23 @@ pub(super) unsafe fn pinned_transport_release(
     // playing under the hand until this moment — the press ends nothing (see
     // `pinned_transport_press`) — and it goes on being the picture while the replacement opens the
     // file: the registration standing in the pin's host is what covers a relaunch.
-    // A picture that plays is taken to the frame the hand stopped on, which is a decode of this
-    // app's begun at that frame rather than a player relaunched (see `pin_frame_share`).
+    // A picture that plays is taken to the frame the hand stopped on, which is the frame the drag
+    // was already on — a playhead put down on a frame of the file in hand, or the answer to the
+    // decode the last move asked for — and it plays on from there rather than from where the hand
+    // began (see `take_the_picture_to_frame`).
     if let Some(share) = seeking_frame {
         let aim = pin_frame_share(share);
         update_pin_fps(|fps| {
             fps.seeking = None;
+            fps.seeking_frame = None;
             if fps.open {
                 fps.dragging = false;
                 fps.held = None;
             }
         });
-        if let Some((path, content, _, _)) = pinned_playback_state() {
-            if let (Some(frame), Some(total)) = (aim, animation_total()) {
-                seek_pinned_animation(&path, content, frame, total);
-            }
+        hold_the_picture_on_its_frame(false);
+        if let Some(frame) = aim {
+            take_the_picture_to_frame(frame);
         }
         render_layered_preview(hwnd);
         return true;
@@ -665,7 +698,10 @@ pub(super) fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::Vol
 /// being turned and the popup is kept open while the pointer is on it (see
 /// `app::seam::PIN_VOLUME_REGION` and `refresh_pin_volume`).
 pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
-    if pin.collapsed {
+    // A picture that plays has no level and no button to open one: a file of frames has no sound
+    // for a level to be a level of, and a speaker drawn there would be a control that does nothing
+    // (see `transport_layout`).
+    if pin.collapsed || pin.transport_animated {
         return None;
     }
 
@@ -902,7 +938,7 @@ pub(super) fn pinned_fps_panel(pin: &PinnedPreview) -> Option<pin_chrome::Volume
         return pin.fps.held;
     }
     let (width, _) = pin.window_size();
-    Some(pin_chrome::volume_popup_from_button(
+    Some(pin_chrome::fps_popup_from_button(
         pinned_fps_button(pin)?,
         width,
         pin.dpi,

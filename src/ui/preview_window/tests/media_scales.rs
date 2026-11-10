@@ -370,6 +370,48 @@ fn a_media_whose_head_was_never_delivered_wraps_onto_its_own_first_frame() {
     );
 }
 
+/// **A frame the media has in hand is a playhead put down on it.** A hand dragging a picture's
+/// track names a frame per column of it, and a decode per column is a drag that lags the hand it is
+/// following — so a picture whose frames were all decoded is taken to one by moving the playhead,
+/// and a frame it does not hold is answered "not in hand" rather than moved to the nearest one
+/// (see `MediaData::show_the_frame`).
+#[test]
+fn a_frame_in_hand_is_a_playhead_put_down_on_it() {
+    let mut media = a_playing_media(&[5, 6, 7, 0, 1, 2, 3, 4]);
+    media.last_frame_time = Instant::now() - Duration::from_millis(500);
+
+    assert!(
+        media.show_the_frame(2),
+        "a frame of the file this media holds"
+    );
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(2),
+        "the frame the file carries that id at"
+    );
+    assert_eq!(
+        media.current_frame, 5,
+        "at the place in the list it has, which is not the id it carries"
+    );
+
+    // The frame the hand put the picture on begins now: a delay counted from the frame before it
+    // would hold it for a stretch of somebody else's.
+    assert!(
+        media.last_frame_time.elapsed() < Duration::from_millis(50),
+        "the frame the hand took the picture to is a frame that begins here"
+    );
+
+    // And a frame the file has and this media does not is answered as not in hand, which is the
+    // caller's cue to ask for a decode: a playhead moved to the nearest frame instead is a picture
+    // left on a frame nobody named.
+    assert!(!media.show_the_frame(9), "a frame this media does not hold");
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(2),
+        "and it did not move"
+    );
+}
+
 /// A media that plays, holding the frames of the given ids and decoded whole: nothing is streaming and nothing
 /// has been given back, so the playhead is the only thing that moves.
 fn a_playing_media(file_indices: &[usize]) -> MediaData {
