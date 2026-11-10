@@ -775,6 +775,94 @@ fn room_bounds_as_region(room: ScreenBounds) -> ScreenRegion {
     (room.left, room.top, room.right, room.bottom)
 }
 
+/// A pair puts the *window* in the middle of the display rather than the card alone: with the band up
+/// the room the card is fitted into gives up the band's rows, so the card sits that half-row higher
+/// and the band under it lands on the display the way the card alone used to (see
+/// `reset_pinned_size`).
+#[test]
+fn a_pair_counts_the_band_under_a_card_when_it_puts_the_window_in_the_middle() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let room = work_area_at(0, 0);
+    let content = (room.left, room.top, room.left + 320, room.top + 96);
+    let mut pin = sound_pin();
+    pin.content = content;
+    // A card carries no caption above it and no transport below it, so the window it stands in is the
+    // card and the band under it and nothing else (see `pin_shows_an_audio_card`).
+    pin.caption = 0;
+    pin.path = std::env::temp_dir().join("a-card-with-a-band-under.flac");
+    stand_pin(Some(pin));
+
+    let mut media = create_loading_media(320, 96);
+    media.media_type = MediaType::Audio;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    // The band up over the card, at the height a band opens at, and so a window taller than the card.
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    let band = pin_state()
+        .and_then(|pinned| pinned.pin().map(pin_playlist::playlist_rows))
+        .expect("a pin up");
+    assert!(
+        band > 0,
+        "a band opened over a sound's card takes rows of its own"
+    );
+
+    let mut request = None;
+    let mut wait = None;
+    let mut started = None;
+    let mut offset = 0.0;
+    let mut paused = None;
+    ask_pin(PinCommand::ResetSize);
+    unsafe {
+        pin_command_request(
+            HWND(0x1000 as *mut _),
+            &mut request,
+            &mut wait,
+            &mut started,
+            &mut offset,
+            &mut paused,
+            false,
+            None,
+        );
+    }
+
+    let Some(PreviewMessage::PinBox(reset_box)) = request else {
+        panic!("a reset of a card asked for no box");
+    };
+    assert_eq!(
+        (reset_box.2 - reset_box.0, reset_box.3 - reset_box.1),
+        (320, 96),
+        "a card keeps the size it is drawn at"
+    );
+
+    // What the pair puts in the middle is the window, which is the card with the band under it.
+    let window = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.window_box()))
+        .expect("a pin up");
+    assert_eq!(
+        window.3 - window.1,
+        96 + band,
+        "the window the card stands in is the card and its band"
+    );
+    let (above, below) = (window.1 - room.top, room.bottom - window.3);
+    assert!(
+        (above - below).abs() <= 1,
+        "the window the card and its band make is not in the middle of the room: \
+         {above} rows above it against {below} under it, {window:?} in {room:?}"
+    );
+
+    // And the band down for the tests beside this one.
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+}
+
 /// The maximize button is a toggle, and both of its presses change the pin.
 ///
 /// A window with no restore put aside is maximized to the room and remembers the box it had;

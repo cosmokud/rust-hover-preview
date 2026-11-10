@@ -318,6 +318,23 @@ impl PinPlaylist {
             .min(pin_chrome::playlist_scroll_max(self.shown.len(), visible));
     }
 
+    /// **Put the file the pin is showing in the middle of the band**, and on the nearer end of the
+    /// list where the middle of the band is not there to be had: a row in the first half has nothing
+    /// above it to be centred against and stays on the band's first row, and a row in the last half
+    /// stays on its last, because a list scrolled past its own ends is a band with the file on it
+    /// somewhere off the window.
+    ///
+    /// **This is where a band opens**, and it is what keeps a playlist the pin was taken up in the
+    /// middle of from being drawn from the top of the folder: the rows are the walk's, in walk order,
+    /// and the file the pin came up on can be any of them.
+    fn park_the_showing_row(&mut self, visible: usize) {
+        let Some(showing) = self.showing.and_then(|row| self.position_of_row(row)) else {
+            return;
+        };
+
+        self.scroll = the_row_a_band_opens_on(self.shown.len(), showing, visible);
+    }
+
     /// The field's own edits, run in the one place so that the filter, the paints and the keys are all
     /// told the same thing by the same change: the band is dirtied where the query moved, as it is for
     /// every other move of its own (see `the_box_has_moved`).
@@ -473,6 +490,17 @@ impl PinPlaylist {
     }
 }
 
+/// Where the camera of a band of `rows` rows stands when the file the pin is showing is at
+/// `showing` — the middle of the band, and the nearer end of the list where the middle of it is not
+/// there to be had: a row in the first half has nothing above it to be centred against, and one in
+/// the last half nothing below, and a list scrolled past either of them is a band of the background
+/// with the file on it somewhere off the window (see `PinPlaylist::park_the_showing_row`).
+pub(super) fn the_row_a_band_opens_on(rows: usize, showing: usize, visible: usize) -> usize {
+    showing
+        .saturating_sub(visible / 2)
+        .min(pin_chrome::playlist_scroll_max(rows, visible))
+}
+
 /// The band this pin carries, as the row it begins at and how tall it is, or nothing where the pin
 /// is showing no sound's card or the band is down.
 ///
@@ -607,6 +635,20 @@ pub(super) fn toggle(pin: &PinnedPreview) {
         playlist.search_slide = 0.0;
         playlist.search_last = Instant::now();
         playlist.refresh_the_shown(false);
+
+        // **And a band put up is a band on the file the pin is showing**, wherever the rows it
+        // already held were scrolled to: a list opened where the hand last left it is a list opened
+        // on a row the pin may be a folder away from (see `park_the_showing_row`).
+        let (width, _) = pin.window_size();
+        let visible = pin_chrome::playlist_layout(
+            width,
+            playlist_band_height(pin),
+            pin.dpi as f32 / 96.0,
+            playlist.shown.len(),
+        )
+        .visible
+        .max(0) as usize;
+        playlist.park_the_showing_row(visible);
     }
 }
 
@@ -725,13 +767,19 @@ pub(super) fn refresh_the_rows() -> bool {
     // landing, the stripe moving onto it — so the scroll the hand left is the scroll it is read at,
     // and only the two rows that mean something are brought back into sight: the picked row and the
     // one the pin is showing (see `keep_the_selection_in_sight`).
-    if !moved {
-        if let Some((_, height, width, scale)) = the_band_of_the_pin() {
-            if let Ok(mut playlist) = THE_PLAYLIST.lock() {
-                let visible =
-                    pin_chrome::playlist_layout(width, height, scale, playlist.shown.len())
-                        .visible
-                        .max(0) as usize;
+    //
+    // **And a walk that moved is a band put on the file the pin is showing.** The playlist is new —
+    // the band just opened, or the order behind it did — so there is no scroll the hand left to
+    // keep, and the file the pin came up on is the row the camera goes to (see
+    // `park_the_showing_row`).
+    if let Some((_, height, width, scale)) = the_band_of_the_pin() {
+        if let Ok(mut playlist) = THE_PLAYLIST.lock() {
+            let visible = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len())
+                .visible
+                .max(0) as usize;
+            if moved {
+                playlist.park_the_showing_row(visible);
+            } else {
                 playlist.keep_the_selection_in_sight(visible);
             }
         }

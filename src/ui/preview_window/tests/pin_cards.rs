@@ -2174,6 +2174,172 @@ fn a_pin_that_comes_up_under_a_band_asks_the_walk_for_its_playlist() {
     stand_pin(previous_pin);
 }
 
+/// A band opens on the file the pin came up on rather than on the top of the folder it walks: the
+/// camera goes to the middle of the band where the list has rows above and below to put there, and
+/// to the nearer end where it has not — a row in the first half has nothing above it to be centred
+/// against and one in the last half nothing below (see `park_the_showing_row`).
+#[test]
+fn the_camera_of_a_band_opens_on_the_file_the_pin_came_up_on() {
+    // Ten rows in sight: the middle of the band is the fifth row of them, and a row that has four
+    // above it is the first that can stand there.
+    assert_eq!(
+        pin_playlist::the_row_a_band_opens_on(40, 20, 10),
+        15,
+        "the file in the middle of the list is drawn in the middle of the band"
+    );
+    assert_eq!(
+        pin_playlist::the_row_a_band_opens_on(40, 0, 10),
+        0,
+        "the first file of the list is the band's first row, with nothing forced above it"
+    );
+    assert_eq!(
+        pin_playlist::the_row_a_band_opens_on(40, 4, 10),
+        0,
+        "a file in the first half is the band's first row rather than a row above the list"
+    );
+    assert_eq!(
+        pin_playlist::the_row_a_band_opens_on(40, 39, 10),
+        30,
+        "the last file of the list is the band's last row, with nothing forced below it"
+    );
+    assert_eq!(
+        pin_playlist::the_row_a_band_opens_on(40, 38, 10),
+        30,
+        "a file in the last half is clamped to the last page rather than a row past the list"
+    );
+    assert_eq!(
+        pin_playlist::the_row_a_band_opens_on(6, 3, 10),
+        0,
+        "a list that fits whole is a band with nothing to scroll, wherever the file is on it"
+    );
+}
+
+/// A band that opens over a folder the pin is deep in is drawn around the pin's own row: the walk's
+/// order lands whole on the pin, the rows are built, and the camera is parked on the file the pin is
+/// showing rather than on the folder's first file — and reopening the band puts it back there after
+/// a wheel has left it somewhere else (see `park_the_showing_row`).
+#[test]
+fn a_band_drawn_over_a_walk_parks_its_camera_on_the_row_the_pin_is_showing() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let folder = std::env::temp_dir().join("rust-hover-preview-band-parks-its-camera");
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).expect("a folder a test can write to");
+
+    // A folder longer than any band is tall at any scale, so the rows have to scroll to be in sight
+    // of each other at all.
+    const SOUNDS: usize = 40;
+    for index in 0..SOUNDS {
+        std::fs::write(folder.join(format!("{index:02}.mp3")), vec![0u8; 8])
+            .expect("a file a test can write");
+    }
+    let deep = folder.join(format!("{:02}.mp3", SOUNDS / 2));
+
+    let was = {
+        let mut config = CONFIG.lock().expect("the configuration");
+        let was = config.pin_mode_audio_shuffle;
+        // The folder's own order, so which row the pin's file is on is the folder's answer rather
+        // than a draw's.
+        config.pin_mode_audio_shuffle = false;
+        was
+    };
+
+    let mut standing = sound_pin();
+    standing.path = deep.clone();
+    stand_pin(Some(standing));
+
+    // The band up, the walk behind it asked for its order, and the playlist taken whole onto a pin
+    // that holds no walk — the road a band opened over a pin is (see
+    // `pin_walk_synced_its_playlist`).
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    ask_the_walk_again();
+    let job = PIN_JOBS
+        .0
+        .lock()
+        .expect("the pin's job slot")
+        .take()
+        .expect("the walk the band asked for");
+    let Some(PinPlanned::Walk(spawned)) = answer_pin_job(&job) else {
+        panic!("a walk is always answered")
+    };
+    let showing = spawned
+        .order
+        .iter()
+        .position(|file| *file == deep)
+        .expect("the file the pin is showing is on its own walk");
+    pin_walk_synced_its_playlist(&spawned);
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the rows banded are the rows of the playlist that landed"
+    );
+
+    // How many rows the band draws, which is the display's answer rather than a test's.
+    let visible = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            let (width, _) = pin.window_size();
+            Some(
+                pin_chrome::playlist_layout(
+                    width,
+                    pin_playlist::playlist_band_height(pin),
+                    pin.dpi as f32 / 96.0,
+                    0,
+                )
+                .visible
+                .max(0) as usize,
+            )
+        })
+        .expect("a pin up");
+    assert!(
+        visible > 0 && visible < SOUNDS,
+        "a band of {visible} rows draws part of a {SOUNDS}-row playlist"
+    );
+
+    let opened_on = pin_playlist::the_row_a_band_opens_on(SOUNDS, showing, visible);
+    let scroll = pin_playlist::the_band_in_hand()
+        .expect("the band's own state")
+        .2;
+    assert_eq!(
+        scroll, opened_on,
+        "the band opens on the file the pin is showing"
+    );
+    assert!(
+        scroll > 0,
+        "a file in the middle of the folder is not left at the top of the band, but at {scroll}"
+    );
+
+    // A wheel carries the camera away from it, and a band put away and up again is a band opened on
+    // the pin's file once more.
+    assert!(
+        pin_playlist::step_the_notches_for_a_test(-1200),
+        "a wheel over the band is the band's"
+    );
+    assert!(
+        pin_playlist::the_band_in_hand()
+            .expect("the band's own state")
+            .2
+            > opened_on,
+        "a wheel over the band carries the camera off the pin's own row"
+    );
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert_eq!(
+        pin_playlist::the_band_in_hand()
+            .expect("the band's own state")
+            .2,
+        opened_on,
+        "a band reopened is a band opened on the file the pin is showing"
+    );
+
+    // The band down, so the tests beside this one are answered what they stood.
+    pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_mode_audio_shuffle = was;
+    }
+    let _ = std::fs::remove_dir_all(&folder);
+    stand_pin(previous_pin);
+}
+
 /// The band's two edges are the window's two edges, and a press on either is the height being
 /// dragged rather than a row being picked: the card is never resized, and the band is the only thing
 /// a pinned sound's window has to be resized by.
