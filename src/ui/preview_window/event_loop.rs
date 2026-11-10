@@ -3833,6 +3833,15 @@ pub fn run_preview_window() {
                     PinSwap::Ready(file) => {
                         install_pinned_media(install, file);
 
+                        // **A step that lands on a PDF asks for its viewer here**, where the file
+                        // that was on screen has already gone with its own (see
+                        // `take_down_pinned_media`): nothing else in this arm moves a window that
+                        // is not the pin's, and a document left to the raster is a document
+                        // nothing can be read in (see `engines::pdf_viewer`).
+                        if the_bands_pdf_viewer_is_owed() {
+                            place_pinned_siblings();
+                        }
+
                         // The pin has just been put up with the file the user picked, and what the
                         // click that picked it did to the z-order may have landed while the file
                         // was being read: the front the pin owes is owed again here, where the
@@ -4436,12 +4445,6 @@ pub fn run_preview_window() {
                         // The pin is published as up inside this, after the state it publishes
                         // is written (see `pin_window::install`).
                         install(pin);
-
-                        // **A pinned PDF's band is Chromium's from here** — the viewer is asked for
-                        // once the pin is up, at the box the take-up gave it, and it reveals itself
-                        // only when the document arrives (see `engines::pdf_viewer`). Every other
-                        // kind is drawn by this app and asks for nothing.
-                        open_the_pins_pdf_viewer(kind, &path, content);
 
                         // A pin that is taken up owes the front from the moment it is up: the
                         // click that picks the next file activates the listing, and a pin in the

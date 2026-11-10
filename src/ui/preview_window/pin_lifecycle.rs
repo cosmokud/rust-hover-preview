@@ -1902,7 +1902,7 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // does not carry, and one left behind is a band drawn over by whatever raised the pin. Every
     // other kind is placed by the caller that knows what stands in its band (see
     // `place_pinned_siblings`).
-    if engine_page_in_the_band().is_some() {
+    if engine_page_in_the_band().is_some() || the_bands_pdf_viewer_is_owed() {
         place_pinned_siblings();
     }
 }
@@ -3126,6 +3126,18 @@ pub(super) fn the_band_area(content: ScreenRegion) -> crate::engines::webview_pr
     }
 }
 
+/// Whether the pin's band is a PDF's, which is placed by the same road a page is: the viewer is a
+/// window of its own standing in the band, and every road that raises, shows or re-boxes the pin has
+/// to put it there (see `place_pinned_siblings` and `engines::pdf_viewer`).
+pub(super) fn the_bands_pdf_viewer_is_owed() -> bool {
+    pinned_content().is_some()
+        && CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| media.as_ref().map(|media| media.media_type))
+            == Some(MediaType::Pdf)
+}
+
 /// **A pinned PDF is worked in rather than looked at**, so its band is handed to Chromium's own
 /// viewer at the take-up and every box change after it: what stands on screen until the document
 /// arrives — and for good where it never does — is the static raster the pin already holds (see
@@ -3153,8 +3165,15 @@ pub(super) fn place_pinned_siblings() {
         return;
     };
 
-    // The pin's PDF viewer stands at the same band a player and a page do, and it is moved by the
-    // same box changes: a drag, a resize, a maximize, a display move (see `engines::pdf_viewer`).
+    // **A pinned PDF's band is Chromium's, and this is the one road that knows both the window the
+    // pin stands in and the box it stands in**: a take-up, a swap, a walk, a maximize, a display
+    // change all arrive here, and the module answers one ask per file (see `open_the_pins_pdf_viewer`).
+    if the_bands_pdf_viewer_is_owed() {
+        if let Some((path, _)) = pinned_media_owner() {
+            open_the_pins_pdf_viewer(Some(MediaType::Pdf), &path, content);
+        }
+    }
+
     crate::engines::pdf_viewer::place(the_band_area(content));
 
     let kind = CURRENT_MEDIA

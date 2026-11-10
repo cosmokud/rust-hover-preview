@@ -194,8 +194,8 @@ pub(crate) fn stale_profile_pids() -> Vec<u32> {
 /// (see `user_data_folder`). It is named for the run it belongs to, so the sweep that ends a crashed
 /// run's browsers and clears its folders reaches it by the same road (`app::engine_processes::stale_run_pids`,
 /// `clear_stale_profiles`).
-pub(crate) fn a_pins_profile_folder() -> PathBuf {
-    profile_root().join(format!("{}-pin", std::process::id()))
+pub(crate) fn a_pins_profile_folder(instance: u32) -> PathBuf {
+    profile_root().join(format!("{}-pin-{instance}", std::process::id()))
 }
 
 /// The folder the per-run folders live in.

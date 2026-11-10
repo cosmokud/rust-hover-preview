@@ -43,10 +43,10 @@ use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTME
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetAncestor, GetClassNameW,
-    GetClientRect, GetForegroundWindow, IsWindowVisible, PeekMessageW, PostMessageW,
-    RegisterClassW, SetWindowPos, ShowWindow, TranslateMessage, WindowFromPoint, GA_ROOT, MSG,
-    PM_NOREMOVE, PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WHEEL_DELTA,
-    WINDOW_EX_STYLE, WNDCLASSW, WS_POPUP,
+    GetClientRect, IsIconic, IsWindowVisible, PeekMessageW, PostMessageW, RegisterClassW,
+    SetWindowPos, ShowWindow, TranslateMessage, WindowFromPoint, GA_ROOT, MSG, PM_NOREMOVE,
+    PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNOACTIVATE, WHEEL_DELTA, WINDOW_EX_STYLE,
+    WNDCLASSW, WS_POPUP,
 };
 
 use crate::app::engine_processes;
@@ -111,13 +111,32 @@ pub(crate) fn is_up() -> bool {
     VIEWER_OPEN.load(Ordering::Acquire)
 }
 
+/// The one file asked for, and the window it was asked in. A viewer is asked for from the road that
+/// places a pin's band, which runs on every box change of that pin: the ask is answered once per
+/// file rather than once per placement (see `open`).
+static ASKED: Lazy<Mutex<Option<(PathBuf, isize)>>> = Lazy::new(|| Mutex::new(None));
+
 /// Ask for a viewer on `path`, in the pin `owner`, at `area`, counting one more viewer owed.
 ///
 /// The ask is taken as soon as there is a thread to take it: what it becomes is a browser start and
 /// a navigation, both of which are the viewer thread's and neither of which the caller waits for.
+/// A second ask for the file already asked for is nothing at all — the placement road asks on every
+/// box change, and a viewer is one thing per pin rather than one per move.
 pub(crate) fn open(path: &Path, owner: isize, area: Area) -> bool {
     if path.as_os_str().is_empty() || owner == 0 {
         return false;
+    }
+
+    if let Ok(mut asked) = ASKED.lock() {
+        if asked.as_ref() == Some(&(path.to_path_buf(), owner)) {
+            // Already this file in this window: what a later ask owes is the box, and that is
+            // `place`'s.
+            if OPEN.load(Ordering::Acquire) > 0 {
+                return true;
+            }
+        }
+
+        *asked = Some((path.to_path_buf(), owner));
     }
 
     let mut engine = match ENGINE.lock() {
@@ -166,6 +185,12 @@ pub(crate) fn place(area: Area) {
 
 /// Let go of `path`'s viewer, and — where it was the last one owed — of the browser and the thread.
 pub(crate) fn close(path: &Path) {
+    if let Ok(mut asked) = ASKED.lock() {
+        if asked.as_ref().is_some_and(|(asked, _)| asked == path) {
+            *asked = None;
+        }
+    }
+
     let mut engine = match ENGINE.lock() {
         Ok(engine) => engine,
         Err(_) => return,
@@ -195,6 +220,10 @@ pub(crate) fn close(path: &Path) {
 pub(crate) fn close_all() {
     OPEN.store(0, Ordering::Release);
 
+    if let Ok(mut asked) = ASKED.lock() {
+        *asked = None;
+    }
+
     let mut engine = match ENGINE.lock() {
         Ok(engine) => engine,
         Err(_) => return,
@@ -221,7 +250,7 @@ enum Life {
     /// The document arrived and the window is up, which is the only state a notch or a click is
     /// answered in.
     Shown,
-    /// Up but put away (`SetIsVisible(false)` then `TrySuspend`): occluded, unfocused or minimized.
+    /// Up but put away (`SetIsVisible(false)` then `TrySuspend`): the window is hidden or minimized.
     Suspended,
     /// Closed, and nothing more is owed to it.
     Closed,
@@ -232,7 +261,7 @@ enum Life {
 enum Step {
     /// Put the window up: the document arrived.
     Reveal,
-    /// Stop drawing: the pin is not the window the user is in.
+    /// Stop drawing: the document is not on the screen.
     Suspend,
     /// Draw again.
     Resume,
@@ -259,9 +288,9 @@ impl Life {
         }
     }
 
-    /// Whether the pin is the window the user is in, asked once a pass while a document is up.
-    fn settle(&mut self, the_pin_is_the_window_the_user_is_in: bool) -> Step {
-        match (*self, the_pin_is_the_window_the_user_is_in) {
+    /// What the document being on the screen decides, asked once a pass while it is up.
+    fn settle(&mut self, the_document_is_on_the_screen: bool) -> Step {
+        match (*self, the_document_is_on_the_screen) {
             (Life::Shown, false) => {
                 *self = Life::Suspended;
                 Step::Suspend
@@ -464,7 +493,7 @@ impl Host {
             return;
         }
 
-        let running = self.the_pin_is_the_window_the_user_is_in();
+        let running = self.the_document_is_on_the_screen();
 
         match self.life.settle(running) {
             Step::Suspend => self.suspend(),
@@ -473,28 +502,19 @@ impl Host {
         }
     }
 
-    /// Whether this viewer's window — or the pin that owns it — is the window the user is in.
+    /// Whether the document is on the screen at all, which is what decides between drawing and
+    /// being suspended.
     ///
-    /// It is asked of the foreground rather than of `WM_ACTIVATE` because a pin is put away by the
-    /// Shell as well as by its own buttons (a minimize, a taskbar visit, another program's click),
-    /// and a window that is not visible is one no compositor is drawing: both are one question the
-    /// pass can ask, and it is the answer `SetIsVisible`/`TrySuspend` want.
-    fn the_pin_is_the_window_the_user_is_in(&self) -> bool {
-        unsafe {
-            if !IsWindowVisible(self.hwnd).as_bool() {
-                return false;
-            }
-
-            let foreground = GetForegroundWindow();
-
-            if foreground == self.hwnd || foreground == self.owner {
-                return true;
-            }
-
-            // The caret may be inside Chromium's own child of the viewer, which is still this
-            // viewer's window: the root above it is the one the question is about.
-            !foreground.is_invalid() && GetAncestor(foreground, GA_ROOT) == self.hwnd
-        }
+    /// **A viewer that is merely behind another window is not suspended.** A suspended controller
+    /// stops drawing, and a document that is in front of the listing while the caret is in the
+    /// listing would be the one thing this road may not show: an empty band where a page was. So the
+    /// ask is whether the window is on the screen — a minimize, a taskbar visit, a pin collapsed to
+    /// its bubble, a pin put away for a swap all hide the window the viewer is owned by, and Windows
+    /// hides an owned window with its owner — rather than which window holds the keyboard. The
+    /// suspension is still the whole of what a pin that goes away pays: the document is kept, and a
+    /// pin that comes back is a resume rather than a browser begun again.
+    fn the_document_is_on_the_screen(&self) -> bool {
+        unsafe { IsWindowVisible(self.hwnd).as_bool() && !IsIconic(self.owner).as_bool() }
     }
 
     fn reveal(&mut self) {
@@ -685,7 +705,13 @@ fn viewer_thread(commands: Receiver<Command>) {
         }
     }
 
-    let folder = crate::engines::webview_preview::a_pins_profile_folder();
+    // A folder of its own for this thread, beside the hover engine's: one folder is one browser at a
+    // time, and a viewer begun while the last one is still closing is a second browser (see
+    // `webview_preview::user_data_folder`). The run's number is the name it begins with, so the
+    // sweep that ends a crashed run's browsers and clears its folders reaches it either way.
+    static INSTANCES: AtomicUsize = AtomicUsize::new(0);
+    let instance = INSTANCES.fetch_add(1, Ordering::AcqRel) as u32;
+    let folder = crate::engines::webview_preview::a_pins_profile_folder(instance);
     let _ = std::fs::create_dir_all(&folder);
 
     let mut environment: Option<ICoreWebView2Environment> = None;
@@ -881,8 +907,8 @@ mod tests {
         assert!(life.is_up());
     }
 
-    /// A pin the user leaves is suspended rather than closed, and a pin they come back to is
-    /// resumed: the document is kept, which is the whole of what a pin is for.
+    /// A pin whose window goes off the screen is suspended rather than closed, and a pin that comes
+    /// back is resumed: the document is kept, which is the whole of what a pin is for.
     #[test]
     fn a_viewer_the_user_leaves_is_suspended_and_the_one_they_return_to_is_resumed() {
         let mut life = Life::Arriving;
