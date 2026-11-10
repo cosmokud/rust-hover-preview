@@ -3174,7 +3174,12 @@ pub(super) fn place_pinned_siblings() {
         }
     }
 
-    crate::engines::pdf_viewer::place(the_band_area(content));
+    // The pin's own window is the key: a viewer is placed for the pin that owns it, and a box of
+    // one pin is no box of another (see `engines::pdf_viewer::Place`).
+    let owner = pinned_window();
+    if !owner.is_invalid() {
+        crate::engines::pdf_viewer::place(owner.0 as isize, the_band_area(content));
+    }
 
     let kind = CURRENT_MEDIA
         .lock()

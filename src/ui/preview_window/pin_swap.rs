@@ -849,7 +849,14 @@ pub(super) fn take_down_pinned_media() {
     // and the page's registration go below: the file replacing this one paints the same band, and a
     // browser left standing over it is a document nobody asked for (see `engines::pdf_viewer`).
     if let Some(path) = pinned_path() {
-        crate::engines::pdf_viewer::close(&path);
+        // Keyed by the pin as well as the file: the same document pinned twice is two viewers, and
+        // this road is about the one the media on screen belongs to (see `engines::pdf_viewer`).
+        let owner = pinned_window();
+        if owner.is_invalid() {
+            crate::engines::pdf_viewer::close_all();
+        } else {
+            crate::engines::pdf_viewer::close(&path, owner.0 as isize);
+        }
     }
 
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
