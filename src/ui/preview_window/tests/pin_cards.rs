@@ -3888,6 +3888,92 @@ fn a_press_carried_across_the_field_selects_the_range_it_crosses() {
     stand_pin(previous_pin);
 }
 
+/// **A double press in the field takes the word it landed on**, and a second double press on that word
+/// takes the whole query — a field in a list is a text field, and a word a hand picks out of it is a
+/// range the keys that cut text act on (see `text_find_field::Field::select_word`).
+#[test]
+fn a_double_press_in_the_field_takes_its_word_and_the_second_one_the_whole_query() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of two sounds for a word the bands field takes");
+    let sounds = [
+        folder.join("a first mixdown.mp3"),
+        folder.join("a last take.mp3"),
+    ];
+
+    let mut pin = sound_pin();
+    pin.path = sounds[0].clone();
+    pin_playlist::toggle(&pin);
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
+    let field = (field_top + field_bottom) / 2;
+    assert!(unsafe { pin_playlist::hover(40, field) });
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
+
+    assert!(unsafe { pin_playlist::press(HWND::default(), 100, field, false) });
+    assert!(unsafe { pin_playlist::release(HWND::default()) });
+    for character in "cute cat".chars() {
+        pin_playlist::type_into_the_search(character);
+    }
+
+    // A press on the query's own first column is a press inside its first word.
+    let (text_left, _) = pin_playlist::the_field_text_columns().expect("a field on screen");
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), text_left + 1, field, true) },
+        "a second press of a pair is the field's"
+    );
+    assert_eq!(
+        pin_playlist::the_selection_in_hand(),
+        Some((0, 4)),
+        "the word the press landed in, rather than the character under the pointer"
+    );
+
+    // The same word again widens it to the whole of the query, which is the line a query is.
+    assert!(unsafe { pin_playlist::press(HWND::default(), text_left + 1, field, true) });
+    assert_eq!(
+        pin_playlist::the_selection_in_hand(),
+        Some((0, 8)),
+        "a second double press on the word already taken takes the whole line"
+    );
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some(("cute cat".to_string(), true)),
+        "and a selection is not an edit of the query it is a range of"
+    );
+
+    // A press elsewhere in the run is the word under it again rather than the line: the widening
+    // belongs to the word a hand has already taken, and the words beside it are words of their own.
+    assert!(unsafe { pin_playlist::press(HWND::default(), text_left + 20, field, true) });
+    let narrowed = pin_playlist::the_selection_in_hand().expect("a word the hand is on");
+    assert!(
+        narrowed.0 < narrowed.1 && narrowed.1 - narrowed.0 < "cute cat".len(),
+        "a word of the query rather than the whole of it: {narrowed:?}"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
 /// **The × at the field's right empties the query rather than the field.** The list comes back whole,
 /// the caret stays where the hand is holding it and the pill stays in sight: a field that parked
 /// itself under the press that cleared it is a field the hand has to reach for twice.
