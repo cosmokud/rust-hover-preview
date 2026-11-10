@@ -1786,7 +1786,18 @@ fn a_return_plays_the_row_a_sounds_band_has_picked() {
         "and one with no row picked asks for none either"
     );
 
-    // The row a `Down` arrow picks is the row the key plays, and it is the second of the walk.
+    // The row a `Down` arrow picks is the row the key plays, and it is the second of the walk — asked
+    // with the pointer in the band, because a band with its field parked is a band the hand can reach.
+    // The band's own row is read and the pin's lock let go of before the move is answered: the pin is
+    // not asked twice on one thread (see `the_band_of_the_pin`).
+    let band_top = pin_state()
+        .and_then(|pinned| pinned.pin().and_then(pin_playlist::pin_playlist_band))
+        .expect("the band")
+        .0;
+    assert!(
+        unsafe { pin_playlist::hover(band_top + 4) },
+        "the hand reaches into the band"
+    );
     assert!(
         pin_playlist::step_the_pick(1),
         "the band takes the arrow over it"
@@ -3571,7 +3582,15 @@ fn a_query_in_the_bands_field_hides_the_rows_it_does_not_name() {
     );
     let field = (field_top + field_bottom) / 2;
 
-    // A press on the field is the caret's and picks nothing.
+    // A press on the field is the caret's and picks nothing — and it is a press on a field a hand has
+    // reached into the band for, since a field parked under the edge is a field nothing can press.
+    assert!(
+        unsafe { pin_playlist::hover(band_top + 4) },
+        "the hand reaches into the band"
+    );
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
     assert_eq!(
         pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
         Some(None),
@@ -3763,6 +3782,345 @@ fn a_press_beside_the_field_blurs_it_and_leaves_the_query_it_typed() {
         grown.1 - grown.0,
         field_rows.1 - field_rows.0,
         "and the field itself is the same height it was"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// A band of twelve sounds with the pin stood on the first of them, which is the only list a test of
+/// the band's own scroll can count rows on: a folder of the disk's own is a folder a test cannot see
+/// the whole of.
+fn a_walk_of_twelve_sounds(mut pin: PinnedPreview) -> Vec<PathBuf> {
+    let folder = PathBuf::from("a folder of twelve sounds for the bands own slide");
+    let sounds: Vec<PathBuf> = (0..40)
+        .map(|at| folder.join(format!("a track {at:02} of the folder.mp3")))
+        .collect();
+
+    pin.path = sounds[0].clone();
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.clone(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    sounds
+}
+
+/// **The field is the pointer's**: it comes into sight when a hand reaches into the band and it parks
+/// when the hand leaves — and it parks by travelling rather than by jumping, which is the one thing a
+/// slide is for.
+#[test]
+fn the_bands_field_slides_in_with_the_pointer_and_parks_when_it_goes() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of three sounds for the bands own slide");
+    let sounds = [
+        folder.join("a first mixdown.mp3"),
+        folder.join("a middle take.mp3"),
+        folder.join("a last mixdown.mp3"),
+    ];
+
+    let mut pin = sound_pin();
+    pin.path = sounds[0].clone();
+    pin_playlist::toggle(&pin);
+    let (band_top, band_height) =
+        pin_playlist::pin_playlist_band(&pin).expect("the band the hand just opened");
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(pin_playlist::refresh_the_rows(), "the band builds its rows");
+
+    // **A band opens parked.** The field is a hand's rather than a band's, and a hand that has not
+    // reached into it yet has not asked for it.
+    assert_eq!(
+        pin_playlist::the_search_slide().map(|(slide, _)| slide),
+        Some(0.0),
+        "the field is out of sight until the pointer comes into the band"
+    );
+
+    // A pointer inside the band is a hand reaching for it: the target moves, and the paint that
+    // follows travels toward it rather than landing on it.
+    assert!(
+        unsafe { pin_playlist::hover(band_top + band_height / 2) },
+        "a pointer in the band is the band's own"
+    );
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((0.0, true)),
+        "the field is wanted and has not travelled yet"
+    );
+    assert!(
+        pin_playlist::slide_the_search_on(20),
+        "and the tick after it moves it"
+    );
+    let (part_way, _) = pin_playlist::the_search_slide().expect("the field");
+    assert!(
+        part_way > 0.0 && part_way < 1.0,
+        "a field on its way in is drawn part way rather than blinking, not at {part_way}"
+    );
+
+    // A pointer that has left the band lets it go, and it travels back the same way.
+    assert!(
+        unsafe { pin_playlist::hover(0) },
+        "a pointer over the card is the band's answer that it is in it no longer"
+    );
+    let (held, wanted) = pin_playlist::the_search_slide().expect("the field");
+    assert!(!wanted, "the pointer gone is the field no longer wanted");
+    assert!(
+        held > 0.0,
+        "and it is not taken away where it stands: it has a way to go back"
+    );
+
+    // **And it comes back to exactly nothing**, so that a parked field asks for no paint: twelve ticks
+    // of a loop's own cadence is longer than the whole slide, so the last of them lands it.
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((0.0, false)),
+        "a parked field rests at nothing rather than a hair short of it"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **A field a hand has named is a field the band keeps**: the caret holds it in sight whatever the
+/// pointer does, and so does a query that is hiding rows — a list with rows missing and no field to
+/// explain it is a list the hand cannot get back.
+#[test]
+fn a_focused_field_and_a_query_hold_the_band_open_with_no_pointer_at_all() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of three sounds for a field held open");
+    let sounds = [
+        folder.join("a first mixdown.mp3"),
+        folder.join("a middle take.mp3"),
+        folder.join("a last mixdown.mp3"),
+    ];
+
+    let mut pin = sound_pin();
+    pin.path = sounds[0].clone();
+    pin_playlist::toggle(&pin);
+    stand_pin(Some(pin));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        step: 1,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(pin_playlist::refresh_the_rows(), "the band builds its rows");
+
+    // The hand reaches into the band, the field comes in to meet it, and a press takes it: after that
+    // the pointer may go wherever it likes and the field stays whole.
+    let (band_top, _) =
+        pin_playlist::pin_playlist_band(pin_state().expect("the pin").pin().expect("the pin"))
+            .expect("the band");
+    assert!(
+        unsafe { pin_playlist::hover(band_top + 4) },
+        "the hand reaches in"
+    );
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((1.0, true)),
+        "the field is in sight whole before a hand presses it"
+    );
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
+    assert!(unsafe {
+        pin_playlist::press(HWND::default(), 100, (field_top + field_bottom) / 2, false)
+    });
+    // **The pointer leaves the band**, which the tick that finds the cursor outside it is what says: a
+    // move the window is sent and the cursor the tick reads are one answer (see `set_the_hover`).
+    // Whether the band changed for it is not the question — the caret is what says it did not.
+    pin_playlist::the_pointer_has_left_the_band();
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((1.0, true)),
+        "a caret is a field the band cannot put away"
+    );
+
+    // `Esc` lets the caret go, and with the query empty the field parks.
+    assert!(
+        pin_playlist::key_while_the_search_has_focus(VK_ESCAPE.0 as i32),
+        "the field has the caret, so `Esc` is its"
+    );
+    pin_playlist::blur_the_search();
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((1.0, false)),
+        "the caret has gone, so the field is wanted by nothing and starts back"
+    );
+
+    // **A query holds it open by itself**, with no pointer and no caret: it is what is hiding rows.
+    pin_playlist::type_into_the_search('m');
+    assert_eq!(
+        pin_playlist::the_search_slide().map(|(_, wanted)| wanted),
+        Some(true),
+        "a query hiding rows is a field the hand has to be able to see and edit"
+    );
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some(("m".to_string(), false)),
+        "and the caret it was typed with is gone, which is the state the field is held in"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **A press where the field would be is not a press in the field** while it is parked: the strip is
+/// reserved whether the pill is drawn in it or not, so the rows above it never jump — which means the
+/// strip is a place a hand can press, and what it must not get is a caret it cannot see.
+#[test]
+fn a_press_where_the_field_would_be_focuses_nothing_while_it_is_parked() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    stand_pin(Some(pin));
+
+    for _ in 0..14 {
+        pin_playlist::slide_the_search_on(20);
+    }
+    assert_eq!(
+        pin_playlist::the_search_slide(),
+        Some((0.0, false)),
+        "the field is parked before the press"
+    );
+
+    let (field_top, field_bottom) =
+        pin_playlist::the_field_rows().expect("a band with its field on screen");
+    assert!(
+        unsafe { pin_playlist::press(HWND::default(), 100, (field_top + field_bottom) / 2, false) },
+        "a press in the band is the band's"
+    );
+    assert_eq!(
+        pin_playlist::the_query_in_hand(),
+        Some((String::new(), false)),
+        "and it puts no caret in a field that is not there"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **A pick is not a scroll home.** A press on a row, or a `Return` on one the hand picked, walks the
+/// pin onto that row's file — which reconciles the band's rows — and the band used to reset its scroll
+/// to the top on every reconciliation, so a hand that pressed row eleven was left reading row one.
+///
+/// What a reconciliation of rows costs the scroll is nothing: the hand is reading the row it picked.
+#[test]
+fn a_pick_leaves_the_band_scrolled_where_the_hand_left_it() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let sounds = a_walk_of_twelve_sounds(pin);
+
+    // The band is scrolled down the way a wheel scrolls it — a notch forward is a notch down the list,
+    // which is the wheel's own reading of it.
+    assert!(
+        pin_playlist::step_the_notches_for_a_test(-1200),
+        "the wheel is the band's"
+    );
+    let (_, scrolled) = pin_playlist::the_rows_and_scroll();
+    assert!(
+        scrolled > 0,
+        "the band is scrolled down before the pick, and it is at {scrolled}"
+    );
+
+    // The arrows step down the band a row at a time, and the last press of them is the row a hand reads
+    // before it presses Return on it.
+    assert!(
+        pin_playlist::step_the_pick(1),
+        "the band takes the arrow over it"
+    );
+    let picked = pin_playlist::the_band_in_hand()
+        .and_then(|(_, picked, _)| picked)
+        .expect("a row the arrow picked");
+
+    // **The read of the band the pick leaves behind**, before a row is reconciled against it.
+    let (_, picked_before, scroll_before) = pin_playlist::the_band_in_hand().expect("the band");
+    assert_eq!(
+        picked_before,
+        Some(picked),
+        "the band's pick is the arrow's"
+    );
+
+    // **The pick walks the pin onto that row's file**, which is what reconciles the rows of the band:
+    // the pin is stood on the file the press named and the walk with it, exactly as a double press on
+    // a row does (see `show_pinned_file` and `refresh_the_rows`).
+    if let Some(mut state) = pin_state() {
+        if let Some(pin) = state.pin_mut() {
+            pin.path = sounds[picked].clone();
+        }
+    }
+    stand_pin_walk(Some(PinStep {
+        at: sounds[picked].clone(),
+        from: sounds[picked].clone(),
+        step: 1,
+        order: sounds.clone(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the pin walked, so the band reconciles the rows"
+    );
+
+    // **What the reconciliation costs the band is nothing.** A hand that picked row eleven was reading
+    // row eleven, and the band it is left with is scrolled where it was rather than at its top.
+    let (_, picked_after, scroll_after) = pin_playlist::the_band_in_hand().expect("the band");
+    assert_ne!(
+        scroll_after, 0,
+        "a pick on a row down the list does not scroll the band back to its top"
+    );
+    assert_eq!(
+        scroll_after, scroll_before,
+        "and the band is scrolled where the hand left it"
+    );
+    assert_eq!(
+        picked_after,
+        Some(picked),
+        "the pick survived the reconciliation of rows"
     );
 
     let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));

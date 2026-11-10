@@ -834,6 +834,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         text: "",
         caret: 0,
         focused: false,
+        slide: 1.0,
     });
     let placeholder = inked(&empty, box_);
     assert!(
@@ -845,6 +846,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         text: "",
         caret: 0,
         focused: true,
+        slide: 1.0,
     });
     assert!(
         inked(&focused, box_) > placeholder,
@@ -873,6 +875,7 @@ fn the_field_draws_its_placeholder_its_query_and_its_caret() {
         text: "mixdown",
         caret: 4,
         focused: true,
+        slide: 1.0,
     });
     assert!(
         inked(&typed, box_) > 0,
@@ -994,6 +997,7 @@ fn the_field_is_a_pill_rather_than_a_box() {
         text: "",
         caret: 0,
         focused: false,
+        slide: 1.0,
     });
     let pixels = field_pixels(&surface);
     let at = |x: i32, y: i32| pixels[y as usize * surface.width as usize + x as usize];
@@ -1060,6 +1064,7 @@ fn the_field_draws_its_mark_at_its_left_and_sets_the_query_after_it() {
         text: "",
         caret: 0,
         focused: false,
+        slide: 1.0,
     });
     let pixels = field_pixels(&surface);
     let width = surface.width as usize;
@@ -1122,12 +1127,14 @@ fn the_caret_is_the_height_of_the_letter_it_stands_between() {
         text: "  ",
         caret: 0,
         focused: true,
+        slide: 1.0,
     })
     .0;
     let without = a_band_of_the_field(PlaylistSearch {
         text: "  ",
         caret: 0,
         focused: false,
+        slide: 1.0,
     })
     .0;
     let painted = field_pixels(&with);
@@ -1206,6 +1213,7 @@ fn the_field_border_runs_the_whole_straight_part_of_the_pill() {
             text,
             caret: text.len(),
             focused,
+            slide: 1.0,
         });
         let pixels = field_pixels(&surface);
         let width = surface.width as usize;
