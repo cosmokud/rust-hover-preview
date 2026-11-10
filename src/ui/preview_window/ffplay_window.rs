@@ -711,9 +711,20 @@ unsafe fn unlist_the_awaited_window() -> bool {
     !unsafe { give_a_players_window_no_button(pid) }
 }
 
-/// Put the bits that keep a player's window out of the user's lists on it, wherever it is in its life:
-/// answering whether it was there to be styled yet (see `unlist_the_awaited_window`).
-unsafe fn give_a_players_window_no_button(pid: u32) -> bool {
+/// **The window a player of this app's has made for its film**, found by the process that owns it: the
+/// one search the eager pass styles, asked for its window rather than for its style (see
+/// `the_films_window_callback`).
+///
+/// Nothing is answered for a player that has not made its window yet, which is a player whose pipe may
+/// well be open already: the window arrives after the process does and after its own pipe
+/// (see `mpv_resident::PIPE_UP_WAIT`).
+///
+/// Safety: the handle is a window of another process's, and every caller asks it something the pid
+/// named here has made true of it.
+unsafe fn the_window_a_player_made(pid: u32) -> Option<HWND> {
+    if pid == 0 {
+        return None;
+    }
     let mut data = TheFilmsWindowSearch {
         target_pid: pid,
         found: HWND::default(),
@@ -724,15 +735,50 @@ unsafe fn give_a_players_window_no_button(pid: u32) -> bool {
             LPARAM(&mut data as *mut TheFilmsWindowSearch as isize),
         )
     };
-    if data.found.is_invalid() {
+    (!data.found.is_invalid()).then_some(data.found)
+}
+
+/// **Put a player's own window at a size before it has a film in it**: the warm resident's, sized to
+/// the box its one placement will ask for, so that the player configures its output for that box rather
+/// than growing into it after its first frame (see
+/// `pin_film_thumbnail::the_box_a_source_is_born_at`).
+///
+/// **It is the call that must land before the file does, so it is sent rather than posted**: the file
+/// is handed to the player down its pipe on a thread of the player's own, and a resize left in this
+/// app's window queue could be read after the player had already opened the film and configured its
+/// output for the window it had. One call per player, and never one on a frame's road (see
+/// `pin_film_thumbnail::size_the_source`, whose ask is posted for the opposite reason).
+///
+/// Safety: the window is found by the pid given, which is a player this app began, and it is asked for
+/// a size and no position — the player's parking corner is where it stands until its one placement.
+pub(super) unsafe fn size_a_players_window(pid: u32, box_: (i32, i32)) {
+    let Some(window) = (unsafe { the_window_a_player_made(pid) }) else {
+        return;
+    };
+    let (width, height) = (box_.0.max(1), box_.1.max(1));
+    let _ = unsafe {
+        SetWindowPos(
+            window,
+            None,
+            0,
+            0,
+            width,
+            height,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+}
+
+/// Put the bits that keep a player's window out of the user's lists on it, wherever it is in its life:
+/// answering whether it was there to be styled yet (see `unlist_the_awaited_window`).
+unsafe fn give_a_players_window_no_button(pid: u32) -> bool {
+    let Some(window) = (unsafe { the_window_a_player_made(pid) }) else {
         return false;
-    }
+    };
 
     if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
         *held = None;
     }
-
-    let window = data.found;
     let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
     let wanted = eager_ex_style(current);
     if wanted != current {

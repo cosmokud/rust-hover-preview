@@ -2071,6 +2071,46 @@ fn the_max_track() -> (i32, i32) {
     }
 }
 
+/// **The box a player of this film is to be born at**: the film's own picture size as the probe
+/// measured it, clamped exactly as the one placement clamps it, or the box the player would have been
+/// begun at where the film is drawn through no host at all (see `the_one_placement`).
+///
+/// **A source born at the box it is then placed at is a source never resized under the Shell**, and
+/// that is the whole of what this is for: a player begun at the preview's box and grown to a film's
+/// own size after its first frame is a surface still holding the box-sized picture while the crop
+/// follows the window that grew — black around a picture the size of the box, until the player
+/// catches up. On a 1920×1080 film that catch-up is a frame or two nobody sees; on a 4K one it is
+/// seconds of exactly that (`size_the_source` is the one call that ever asks, and this is the launch
+/// asking the same number first — see `video_playback::start_mpv_video_playback`).
+///
+/// **A film drawn over the preview and not through a host is born at the preview's box**, and the
+/// preview is the whole of what it is drawn in: there is no source for a crop to disagree with.
+///
+/// **It is the probe's measurement and not the player's `video-params`**, because it is asked before
+/// there is a player to ask; the two are the same number for a film the player reports no crop for,
+/// which is every film but the ones the probe cuts a crop out of. A film the probe could not measure
+/// is born at `box_` and placed by the road that watches the player (see
+/// `place_the_source_when_the_player_answers`).
+pub(super) fn the_box_a_source_is_born_at(
+    path: &Path,
+    behind_the_host: bool,
+    box_: (i32, i32),
+) -> (i32, i32) {
+    if !behind_the_host {
+        return box_;
+    }
+    let Some(ProbedGeometry::Measured(geometry)) = cached_video_geometry(path) else {
+        return box_;
+    };
+    // The one placement's own answer, asked with a corner this question has no use for: the origin
+    // is not part of what is asked here, and taking the clamp from that call is what keeps this
+    // launch and that placement from ever naming two sizes.
+    let native = (geometry.width as i32, geometry.height as i32);
+    the_one_placement(None, Some((0, 0)), Some(native), the_max_track())
+        .map(|(_, _, width, height)| (width, height))
+        .unwrap_or(box_)
+}
+
 /// The film's own picture size as the player answers it, or the probe's measurement of the same film
 /// where the player has not answered: the size the film would be drawn at were it not fitted to a
 /// window, which is the picture's own size and not the box it is shown in (see `the_players_picture_size`
@@ -4112,6 +4152,78 @@ mod tests {
         );
 
         unsafe { hover_film_host::take_down_the_hover_film_host() };
+        video_geometry_cache().remove(&key);
+    }
+
+    /// **A film kept for a host is born at the box its one placement will ask it for**, so that
+    /// nothing of the source is resized under the Shell after its first frame: the film's own size as
+    /// the probe measured it, clamped exactly as that placement clamps it (see
+    /// `the_box_a_source_is_born_at`). A film drawn over the preview is born at the preview's box,
+    /// and one nothing measured at the box it was launched at — the road that watches the player's
+    /// own answer places that one (see `place_the_source_when_the_player_answers`).
+    #[test]
+    fn a_source_kept_for_a_host_is_born_at_the_box_its_one_placement_asks() {
+        let _room = the_room_to_itself();
+        let path = PathBuf::from("a-4k-film.mkv");
+        let key = VideoGeometryKey {
+            path: path.clone(),
+            version: file_version(&path),
+        };
+        let measured = |width: u32, height: u32| {
+            ProbedGeometry::Measured(VideoGeometry {
+                width,
+                height,
+                frame_width: width,
+                frame_height: height,
+                crop: None,
+                duration: None,
+                subtitles: SubtitleStreams::default(),
+                sidecar: None,
+                derived: None,
+                subtitle_codecs: Vec::new(),
+                attachment_codecs: Vec::new(),
+                subtitle_extraction_failed: false,
+            })
+        };
+        let box_it_is_drawn_in = (916, 515);
+
+        video_geometry_cache().insert(key.clone(), measured(3840, 2160));
+        let placed_at = the_one_placement(None, Some((0, 0)), Some((3840, 2160)), the_max_track())
+            .map(|(_, _, width, height)| (width, height))
+            .expect("a film of a size the window system will take is placed once");
+        assert_eq!(
+            the_box_a_source_is_born_at(&path, true, box_it_is_drawn_in),
+            placed_at,
+            "the box the player is born at is the box its one placement will ask it for"
+        );
+
+        // A film larger than any window is born at the largest window there is, which is the number
+        // the placement is held to as well.
+        let (max_width, max_height) = the_max_track();
+        video_geometry_cache().insert(
+            key.clone(),
+            measured((max_width + 512) as u32, (max_height + 512) as u32),
+        );
+        assert_eq!(
+            the_box_a_source_is_born_at(&path, true, box_it_is_drawn_in),
+            (max_width, max_height),
+            "a source is never asked for a window larger than the window system's own limit"
+        );
+
+        // Nothing widened where nothing is placed: a film drawn over the preview is the box it is
+        // drawn in, and so is one the probe could not measure.
+        assert_eq!(
+            the_box_a_source_is_born_at(&path, false, box_it_is_drawn_in),
+            box_it_is_drawn_in,
+            "a film drawn over the preview has no source for a crop to disagree with"
+        );
+        video_geometry_cache().insert(key.clone(), ProbedGeometry::Unmeasurable);
+        assert_eq!(
+            the_box_a_source_is_born_at(&path, true, box_it_is_drawn_in),
+            box_it_is_drawn_in,
+            "a film nothing measured is born at the box it is drawn in"
+        );
+
         video_geometry_cache().remove(&key);
     }
 
