@@ -904,14 +904,27 @@ pub(super) struct PinFps {
     /// Whether its knob is being held: a drag is a hand on the pace, and it must not be mistaken
     /// for the pointer having gone away from the slider.
     pub(super) dragging: bool,
+    /// The pace a wheel notch asked for, in the wheel's own fine units (one frame a notch), while the
+    /// shown pace is still on its way there, and nothing once it has landed.
+    ///
+    /// Fine units rather than whole frames because that is where a notch is exact: a notch is
+    /// `WHEEL_FPS_UNITS_PER_FRAME` and the pace settles on it precisely.
+    pub(super) target: Option<i64>,
+    /// Where the glide has got to, in `target`'s units; only meaningful while `target` is set.
+    pub(super) applied: i64,
     /// The slider's box as it stood when the drag began, so that a chrome or card that lays itself
     /// out under the hand does not move the groove out from under the knob.
     pub(super) held: Option<pin_chrome::VolumePopup>,
 }
 
 impl PinFps {
-    /// The pace this pin plays at: the one a hand asked for, or the file's own.
+    /// The pace this pin plays at: the one a hand asked for, or the file's own — and while a wheel's
+    /// glide is in flight, the fine units it has got to so far, so a notch is a ramped move rather
+    /// than a step (see `ramp_pin_fps`).
     pub(super) fn pace(&self) -> u32 {
+        if self.target.is_some() {
+            return fps_from_wheel_units(self.applied);
+        }
         self.wanted
             .unwrap_or_else(|| self.detected.round().max(1.0) as u32)
             .max(1)

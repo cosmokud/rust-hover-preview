@@ -318,6 +318,10 @@ pub fn run_preview_window() {
         // units so that a smooth wheel's messages move it too; `None` until the wheel is first
         // turned (see `volume_after_wheel_delta`).
         let mut volume_wheel_units: Option<i64> = None;
+        // The pace a wheel has asked for over a pin's FPS control, on the level's own terms: in the
+        // wheel's sub-notch units so a smooth wheel's messages move it too, and `None` until the
+        // wheel is first turned (see `fps_after_wheel_delta`).
+        let mut fps_wheel_units: Option<i64> = None;
         // A walk a pin's own caption button stepped, held for as long as the walk has files
         // left to offer rather than for the length of the tick that started it: a file the pin
         // cannot be shown is stepped over rather than stopped at, and the file after it is
@@ -2549,6 +2553,40 @@ pub fn run_preview_window() {
             // and `settle_pin_volume_after_quiet`).
             flush_pin_volume_level();
             settle_pin_volume_after_quiet();
+
+            // And a wheel notch over a pin's FPS button or its open panel is the pace, the level's
+            // own road one control along: the hook swallowed it and left the count here, the popup is
+            // opened after the pace is stepped toward, and the request is carried in the wheel's fine
+            // units so a smooth wheel's messages move it too (see `fps_after_wheel_delta`).
+            let fps_delta = crate::app::seam::take_pin_fps_delta();
+            if fps_delta != 0 {
+                if let Some(pace) = pin_fps_pace() {
+                    let base = fps_wheel_base_units(fps_wheel_units, pace);
+                    let units = fps_after_wheel_delta(base, fps_delta, current_animated_fps_max());
+                    note_playback_trace!(
+                        "fps wheel base {} delta {} units {} pace {}",
+                        base,
+                        fps_delta,
+                        units,
+                        pace
+                    );
+                    fps_wheel_units = Some(units);
+                    set_pin_fps_target(units);
+                    open_pin_fps(pinned_window());
+                }
+            } else if let Some(pace) = pin_fps_pace() {
+                // The level's own re-base: a knob or the tray moved the pace between wheel ticks, so
+                // sub-notch travel is not applied twice to the pace it was built from.
+                if !pin_fps_is_moving()
+                    && fps_wheel_units.is_some_and(|units| fps_from_wheel_units(units) != pace)
+                {
+                    fps_wheel_units = Some(i64::from(pace) * WHEEL_FPS_UNITS_PER_FRAME);
+                }
+            }
+
+            // The applied pace is stepped toward the wheel's request before the picture is drawn, so
+            // a notch is a short ramp rather than a step (see `ramp_pin_fps`).
+            ramp_pin_fps();
 
             // A wheel notch over a scrollable text preview belongs to the preview:
             // the wheel hook swallowed it so Explorer does not scroll, and left
@@ -5316,14 +5354,16 @@ pub fn run_preview_window() {
                 let panning = pin_is_panning();
                 // A level the wheel has just asked for is something to animate as well: its glide and
                 // its flush are only as smooth as the ticks they land on, and the pin's own wait is
-                // four times the frame's (see `pin_volume_is_moving`).
+                // four times the frame's (see `pin_volume_is_moving`). A pace is the same thing one
+                // control along, and for the same reason (see `pin_fps_is_moving`).
                 let wait_ms = wait_before_the_next_tick(
                     false,
                     media_dynamic_hint
                         || tick_has_wait
                         || travelling
                         || panning
-                        || pin_volume_is_moving(),
+                        || pin_volume_is_moving()
+                        || pin_fps_is_moving(),
                     pinned(),
                 );
                 // And a travel is paced by the compositor rather than by that wait, because what its
