@@ -492,6 +492,44 @@ pub(super) fn bubble_players_box(x: i32, y: i32, width: i32) -> (i32, i32) {
     (right_of_the_desktop, y)
 }
 
+/// The filter chain FFmpeg's player is begun with, from the geometry the probe measured: the crop
+/// the picture is cut from where it settled on one, and the pixels squared where the file's own are
+/// not.
+///
+/// **`setsar=1` on its own does not correct a pixel aspect, it *discards* it** — the renderer is
+/// handed a frame whose ratio has been erased, fits it as a square-pixel picture and draws a file
+/// that stores 1080 x 1080 through a 9:16 pixel as a square rather than as the portrait film it is.
+/// What applies the ratio is a `scale` *to* the displayed shape the box was placed at
+/// (`geometry.width/height`), which makes the pixels square and the picture the box's own shape in
+/// one step, so the player letterboxes nothing and resamples nothing for a file whose pixels are
+/// already square. That shape is what the box is placed at (see `video_box`), so box and picture
+/// agree about their shape instead of one approximating the other.
+///
+/// A file that needs neither a crop nor squaring gets no chain at all — no filter, no resample,
+/// which is the argv every ordinary film had before this. A file that was never measured gets
+/// nothing either, which is the frame as the file holds it.
+fn the_video_chain(measured: Option<&VideoGeometry>) -> Option<String> {
+    let geometry = measured?;
+    let mut chain: Vec<String> = Vec::new();
+    if let Some(crop) = geometry.crop {
+        chain.push(format!(
+            "crop={}:{}:{}:{}",
+            crop.width, crop.height, crop.x, crop.y
+        ));
+    }
+    // Frame pair stays raw and the displayed pair diverges from it only through a pixel aspect,
+    // so equal pairs mean square pixels -> scale identical-in/identical-out, a wasted copy (see
+    // `probe_video_geometry`).
+    if (geometry.width, geometry.height) != (geometry.frame_width, geometry.frame_height) {
+        chain.push(format!(
+            "scale={}:{},setsar=1",
+            geometry.width, geometry.height
+        ));
+    }
+
+    (!chain.is_empty()).then(|| chain.join(","))
+}
+
 /// Start ffplay for video preview, at the level `volume` names and with the film's own measured
 /// loudness folded into it where `Normalize` is on for videos (see `normalizing_video`).
 ///
@@ -802,13 +840,13 @@ fn start_video_playback_where(
         _ => None,
     };
 
-    let vf = measured.as_ref().map(|geometry| match geometry.crop {
-        Some(crop) => format!(
-            "crop={}:{}:{}:{},setsar=1",
-            crop.width, crop.height, crop.x, crop.y
-        ),
-        None => "setsar=1".to_string(),
-    });
+    // **The chain applies the ratio to the pixels at the displayed shape, which is also the shape
+    // the box is placed at**: `setsar=1` alone would erase the ratio rather than apply it, so a
+    // file whose pixels are not square is scaled to `geometry.width/height` — square pixels and
+    // the box's own shape in one step, nothing to letterbox. A film that needs neither a crop nor
+    // squaring is given no chain at all, so an ordinary film is begun with no filter and no
+    // resample, exactly the argv it had before.
+    let vf = the_video_chain(measured.as_ref());
 
     // The subtitles are drawn into the same filter chain rather than named beside it, because
     // `-sst` is inert on this build: the subtitle stream is demuxed, no subtitle filter is put
@@ -2354,6 +2392,80 @@ pub(super) unsafe fn player_stands_over_the_pin(pin: HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The chain squares the pixels at the shape the film is displayed at, and never merely
+    /// erases the ratio**: a file whose pixel is not square is drawn squashed by a `setsar=1` alone,
+    /// because the renderer is handed a frame whose pixel aspect has been discarded rather than
+    /// corrected. A `scale` *to* the displayed shape is what applies the ratio to the pixels, so it
+    /// is in the chain of every film whose pixels are not square — and a film whose pixels already
+    /// are keeps the argv it had before this change, no filter at all.
+    fn the_measured_geometry() -> VideoGeometry {
+        VideoGeometry {
+            width: 1080,
+            height: 1920,
+            frame_width: 1080,
+            frame_height: 1080,
+            crop: None,
+            duration: None,
+            subtitles: SubtitleStreams::default(),
+            sidecar: None,
+            derived: None,
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
+            subtitle_extraction_failed: false,
+        }
+    }
+
+    #[test]
+    fn the_chain_squares_the_pixels_of_a_measured_film_and_never_drops_the_ratio() {
+        let cropped = VideoGeometry {
+            width: 1080,
+            height: 1920,
+            frame_width: 1080,
+            frame_height: 1080,
+            crop: Some(VideoCrop {
+                x: 40,
+                y: 0,
+                width: 1000,
+                height: 1080,
+            }),
+            ..the_measured_geometry()
+        };
+
+        let chain = the_video_chain(Some(&cropped)).expect("a measured film has a chain");
+        assert_eq!(
+            chain, "crop=1000:1080:40:0,scale=1080:1920,setsar=1",
+            "the crop stays in the frame's own pixels and leads, and the ratio is applied to the \
+             pixels at the displayed shape rather than discarded"
+        );
+
+        let whole = the_measured_geometry();
+        assert_eq!(
+            the_video_chain(Some(&whole)).as_deref(),
+            Some("scale=1080:1920,setsar=1"),
+            "a film with nothing to crop is squared at the displayed shape and nothing else"
+        );
+
+        let ordinary = VideoGeometry {
+            width: 1920,
+            height: 1080,
+            frame_width: 1920,
+            frame_height: 1080,
+            ..the_measured_geometry()
+        };
+        assert_eq!(
+            the_video_chain(Some(&ordinary)),
+            None,
+            "a square-pixel film with nothing to crop keeps the argv it had before: no filter, \
+             no resample"
+        );
+
+        assert_eq!(
+            the_video_chain(None),
+            None,
+            "and a file nothing measured is the frame as the file holds it, which is no filter"
+        );
+    }
 
     /// **An answer the trace already wrote is not written again**: the raise road is asked on every
     /// tick, so the same answer for the same window is one line and every transition is one more.
