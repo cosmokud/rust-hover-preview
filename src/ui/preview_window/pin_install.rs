@@ -1173,10 +1173,15 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     // file after the sound came at its own bound. There is nothing to carry for a
     // first pin, which is why the take-up below reads exactly as it always did.
 
-    // The length the probe read is asked before the pin's own lock is taken:
-    // the answer comes from the geometry cache, which is a lock and the
-    // file's own metadata besides, and a take-up is no place to hold the pin
-    // across either (see `cached_video_geometry`).
+    // The length the file plays is asked before the pin's own lock is taken: the answer
+    // comes from the geometry cache, which is a lock and the file's own metadata besides, and a
+    // take-up is no place to hold the pin across either (see `cached_video_geometry`).
+    //
+    // **A film's length is the file's rather than a player's, so it is answered with no player
+    // begun**, and on a machine with no FFmpeg it comes from the media stack's own read of the
+    // container (see `video_duration`). A route that reaches this with nothing measured — a film
+    // no header could be read for — is a bar with no length to draw a playhead against, which is
+    // the answer it always gave.
     let duration = video_duration(path);
 
     // And the second the player has already got to, where this app has a clock for it: a pin

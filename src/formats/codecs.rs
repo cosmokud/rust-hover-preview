@@ -507,6 +507,10 @@ pub fn refresh() {
         *cached = None;
     }
 
+    if let Ok(mut cached) = FFMPEG.lock() {
+        *cached = None;
+    }
+
     if let Ok(mut cached) = MPV.lock() {
         *cached = None;
     }
@@ -614,6 +618,12 @@ pub fn mpv_available() -> bool {
 /// it and the player that applies the gain to it are one install, and both of them have to be
 /// here for the tray's `Normalize` row to be anything but a switch that cannot act.
 ///
+/// **It is the one question here that needs FFmpeg whatever engine plays the file.** `ebur128` is
+/// an FFmpeg filter and a gain is applied by naming one, so a film mpv plays is played through
+/// mpv's bridge to the same libavfilter and the measurement is still `ffmpeg`'s pass (see
+/// `audio_engine::measure_audio_loudness`). Nothing else a preview of a film needs — its shape, its
+/// length, its seek, its hold, its subtitles — is asked of FFmpeg at all when mpv is the player.
+///
 /// It is asked the way the player's own answer is asked and kept the same way — an install that
 /// arrives while the app is running is picked up by the next opening of the menu rather than at
 /// the next restart (see [`refresh`]).
@@ -631,6 +641,37 @@ pub fn normalize_available() -> bool {
     let answer = find_ffplay().is_some() && find_program(FFMPEG_NAME).is_some();
 
     if let Ok(mut cached) = NORMALIZE.lock() {
+        *cached = Some(answer);
+    }
+
+    answer
+}
+
+/// Whether `ffmpeg.exe` itself is on the machine, which is the one program a film's route still asks
+/// for beyond a player: the loudness meter (see [`normalize_available`]), and mpv's own frames where a
+/// film's player has none to hand over.
+///
+/// It is asked apart from `ffplay_available` for the reason `ffprobe_available` is: a build can ship
+/// the meter and the player apart, and a question about a measurement is not a question about which
+/// engine plays a film. Kept between hovers and cleared by [`refresh`] the way the others are.
+///
+/// **Nothing that can answer without FFmpeg asks this.** What is left on it is the loudness meter, and
+/// a film's frame where no player can be asked for one — a `ffplay` preview's bubble, which the player
+/// itself cannot hand a picture over from (see `bubble_stream`).
+pub fn ffmpeg_available() -> bool {
+    if ffmpeg_disabled() {
+        return false;
+    }
+
+    if let Ok(cached) = FFMPEG.lock() {
+        if let Some(answer) = *cached {
+            return answer;
+        }
+    }
+
+    let answer = find_program(FFMPEG_NAME).is_some();
+
+    if let Ok(mut cached) = FFMPEG.lock() {
         *cached = Some(answer);
     }
 
@@ -1195,6 +1236,9 @@ static FFPLAY: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether FFmpeg's probe is installed, kept and cleared the way the player's own answer is.
 static FFPROBE: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
+
+/// Whether `ffmpeg.exe` itself is installed, kept and cleared the way the player's own answer is.
+static FFMPEG: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether mpv is installed, kept between hovers and cleared by [`refresh`].
 static MPV: Lazy<Mutex<Option<bool>>> = Lazy::new(|| Mutex::new(None));
