@@ -1134,6 +1134,19 @@ pub fn run_preview_window() {
                     render_layered_preview(hwnd);
                 }
 
+                // **A pinned document's band owes one for the same reason and on the same road.** What
+                // the pin fills that band with is asked of the viewer rather than of the file's kind
+                // (`a_documents_band_is_the_viewers`): while none stands in it the band is the raster of
+                // page one, and once one does it is the caption's colour around the document. The
+                // viewer's thread is the one that learns a document has stood up or been let go of, and
+                // this is the thread that draws the frame around it — so the debt is flagged there and
+                // spent here, woken on the channel's own event rather than left for the next tick (see
+                // `engines::pdf_viewer::the_band_owes_a_repaint`).
+                if crate::engines::pdf_viewer::take_the_band_repaint() {
+                    last_pin_repaint = Instant::now();
+                    render_layered_preview(hwnd);
+                }
+
                 // A window waiting for a file is painted again for the arc: once, when the
                 // wait has run for the delay `spinner_delay_ms` names, and then once per turn
                 // of it. A window with a transport bar would have been repainted anyway and
