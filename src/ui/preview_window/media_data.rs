@@ -306,6 +306,22 @@ impl MediaData {
             .map(|(_, file_index, frame)| (file_index, Arc::clone(frame)))
     }
 
+    /// How much of this media's frames may be held at once.
+    ///
+    /// **A pinned picture is held whole up to the budget the tray's `Performance → Memory → Animated
+    /// WEBP` row names**, which is what leaves the run it decoded the single source of truth a drag,
+    /// a click and a release all read: a run that fits is decoded once and every frame of it stays,
+    /// so a frame a hand names is a playhead put down on it rather than a decode begun again (see
+    /// `pin_index`, which reads a run this one cannot hold). A hover, and a still, keep the
+    /// constant.
+    pub(super) fn retained_room(&self) -> usize {
+        if self.media_type.is_animation() && super::pinned() {
+            crate::config::config::animated_webp_budget_bytes()
+        } else {
+            ANIMATION_RETAINED_BYTES
+        }
+    }
+
     /// This same picture showing only `frame`, as a picture that does not play: what a hand on a
     /// track is shown of a frame this media does not carry.
     ///
@@ -515,7 +531,7 @@ impl MediaData {
         };
 
         let retained_bytes: usize = self.frames.iter().map(|frame| frame.pixels.len()).sum();
-        if retained_bytes < ANIMATION_RETAINED_BYTES || self.is_fully_loaded() {
+        if retained_bytes < self.retained_room() || self.is_fully_loaded() {
             let result = shared.lock();
             if let Ok(mut streamed) = result {
                 if !streamed.queue.is_empty() {
@@ -545,10 +561,9 @@ impl MediaData {
     /// Two things have to hold before a frame is given back, and both of them are
     /// about a promise the player makes to itself: the frames that are dropped are
     /// frames that have to be decoded again. The window has to be full, which is
-    /// the only thing a release is for — an animation that fits in
-    /// `ANIMATION_RETAINED_BYTES` is held whole, plays from beginning to end and
-    /// wraps back into the frame it started on, and the file is read once for all
-    /// of it. And the decoder has to still be working, which is settled under the
+    /// the only thing a release is for — an animation that fits `retained_room` is held whole,
+    /// plays from beginning to end and wraps back into the frame it started on, and the file
+    /// is read once for all of it. And the decoder has to still be working, which is settled under the
     /// same lock the decoder takes as it ends a pass: a decoder that has finished
     /// with a file it decoded whole has nothing to decode again.
     pub(super) fn release_played_frames(&mut self, retained_bytes: usize) {
@@ -561,7 +576,7 @@ impl MediaData {
             return;
         }
 
-        if retained_bytes < ANIMATION_RETAINED_BYTES {
+        if retained_bytes < self.retained_room() {
             return;
         }
 
