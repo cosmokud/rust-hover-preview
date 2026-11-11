@@ -349,9 +349,11 @@ fn start(wanted: Wanted) -> Stream {
 /// The scale and the crop are the same pair every other bubble's picture is cut to (see
 /// `grab_video_frame`): the square the circle is inscribed in, filled rather than letterboxed, so
 /// that a bubble shows the middle of the film rather than a stripe across the middle of the circle.
-/// **The pixels are squared first**, `scale=iw*sar:ih,setsar=1`, because the cover crop weighs a
-/// frame in its own space: a film stored through a 9:16 pixel is a portrait picture and the middle
-/// of it is not the middle of its square frame (see `grab_a_frame` in `pin_bubble`).
+/// **The cover is cut in square-pixel space**, `reset_sar=true`, because the cover weighs a frame in
+/// its own space: a film stored through a 9:16 pixel is a portrait picture and the middle of it is
+/// not the middle of its square frame (see `grab_a_frame` in `pin_bubble`). `reset_sar` normalises
+/// the ratio only while the scale is proportional — which `force_original_aspect_ratio=increase` is
+/// — so one scale both covers and squares, where normalising first cost a second scale.
 fn stream_args(path: &Path, at: f64, side: u32) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
@@ -366,8 +368,10 @@ fn stream_args(path: &Path, at: f64, side: u32) -> Vec<String> {
             // copies of one film's audio heard at once.
             "-an".to_string(),
             "-vf".to_string(),
+            // `reset_sar` rule: the cover carries the ratio, so the square is cut in square-pixel
+            // space — a film through a 9:16 pixel is portrait, its middle is not its frame's.
             format!(
-                "scale=iw*sar:ih,setsar=1,scale={side}:{side}:force_original_aspect_ratio=increase,crop={side}:{side},fps={BUBBLE_STREAM_FPS}"
+                "scale={side}:{side}:force_original_aspect_ratio=increase:reset_sar=true,crop={side}:{side},fps={BUBBLE_STREAM_FPS}"
             ),
             // Raw BGRA on the pipe, which is what the bubble paints with: a picture is not encoded
             // and decoded again across a process boundary when the bytes are what is wanted either
@@ -546,7 +550,7 @@ mod tests {
                 // No sound: the film's own player is making it.
                 "-an",
                 "-vf",
-                "scale=iw*sar:ih,setsar=1,scale=44:44:force_original_aspect_ratio=increase,crop=44:44,fps=25",
+                "scale=44:44:force_original_aspect_ratio=increase:reset_sar=true,crop=44:44,fps=25",
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
@@ -558,6 +562,23 @@ mod tests {
             .collect::<Vec<String>>(),
             "the command is the one the spec settles on, and every part of it is what makes a \
              second decode of a film cheap enough to sit behind a bubble"
+        );
+
+        // The square is cut in square-pixel space: `reset_sar` makes the cover's own scale carry
+        // the ratio, so the film is weighed at its displayed shape rather than its frame's.
+        let vf = stream_args(&film, 92.5, 44)
+            .into_iter()
+            .skip_while(|arg| arg != "-vf")
+            .nth(1)
+            .expect("the stream names a chain");
+        assert_eq!(
+            vf.matches("scale=").count(),
+            1,
+            "one scale, not a normalise and then a cover: {vf}"
+        );
+        assert!(
+            vf.contains("force_original_aspect_ratio=increase:reset_sar=true"),
+            "the ratio rides the cover's scale, so the square is cut in square-pixel space: {vf}"
         );
     }
 
