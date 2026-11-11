@@ -452,3 +452,49 @@ fn a_run_whose_stream_was_cancelled_holds_its_last_frame_and_never_returns_to_it
         "so the frames the picture would have cycled through are not played again"
     );
 }
+/// **A pinned picture's held run is its own budget, and a hover keeps the constant**: the room a
+/// release gives frames back in is the tray's `Performance → Memory → Animated WEBP` for a picture
+/// that has been pinned — which is what lets the player hold a run whole and serve a drag from it —
+/// and the module's constant for a hover, which is never dragged (see `MediaData::retained_room`).
+#[test]
+fn a_pinned_pictures_retained_room_is_its_own_budget_and_a_hover_keeps_the_constant() {
+    let a_picture = |kind: MediaType| {
+        static_image_media(Arc::new(ImageFrame::new(vec![0u8; 4], 1, 1, 0)), kind)
+    };
+    let budget = crate::config::config::animated_webp_budget_bytes();
+    let previous_pin = take_pin_for_a_test();
+
+    // A hover: a picture that plays, held to the constant every hover's animation is held to.
+    assert_eq!(
+        a_picture(MediaType::AnimatedGif).retained_room(),
+        ANIMATION_RETAINED_BYTES,
+        "a hover's run keeps the constant it always had"
+    );
+
+    // A pin: the same picture, held to the budget the tray's own row names.
+    let mut pin = overlay_pin((100, 100, 400, 340), PinChrome::always());
+    pin.path = std::env::temp_dir()
+        .join("pin-index-tests")
+        .join("run.webp");
+    stand_pin(Some(pin));
+    assert_eq!(
+        a_picture(MediaType::AnimatedWebP).retained_room(),
+        budget,
+        "a pinned picture's room is the budget set for it"
+    );
+    assert_eq!(
+        a_picture(MediaType::AnimatedGif).retained_room(),
+        budget,
+        "whatever kind of run it is"
+    );
+    stand_pin(None);
+
+    // And a still is a picture that does not play: it is held whole either way, so its room is
+    // the constant and never the budget of a run it does not have.
+    assert_eq!(
+        a_picture(MediaType::StaticImage).retained_room(),
+        ANIMATION_RETAINED_BYTES
+    );
+
+    stand_pin(previous_pin);
+}
