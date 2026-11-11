@@ -1163,20 +1163,13 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
 /// here — and make the pin the window the user is in. The second is window-manager work that is
 /// synchronous and can be long: `SetForegroundWindow` and `SetFocus` deliver messages back into this
 /// thread, and the window the keyboard is taken from is a window of this app's often enough that the
-/// ordinary window behind it has to be found (see `pin_take_focus`). Asked here, that work stands
+/// ordinary window behind it has to be found (see `pin_take_focus`). Asked first, that work stands
 /// between the press and the pointer — and a first press whose moves have nowhere to go is a drag
 /// that does nothing until the hand lets go and presses again, which is the user's "the first
-/// click-and-hold does nothing, the second works". **So the press does not ask it at all: it records
-/// the ask (`ask_the_keyboard_after_the_press`) and the release makes it**, so nothing
-/// window-manager-shaped stands between a press and the hand's first moves.
+/// click-and-hold does nothing, the second works".
 ///
 /// `wants_the_keyboard` is the caller's answer to *the pin is not the window the user is in*: asked of
 /// Windows by the window procedure rather than here, and staged by a test that has no desktop.
-///
-/// **And it stands down where the caret is the document's** (`the_document_holds_the_caret`): the
-/// same rule the tick's own claim follows (`pin_ask_keyboard_back`), because a caption press that
-/// took the keyboard off the page would break the document. A press that stood down records
-/// nothing, so its release asks for nothing either (see `take_the_keyboard_the_press_asked_for`).
 ///
 /// **A press inside a document's box is the document's**, and it is answered here rather than passed
 /// into the chrome: nothing is carried, nothing is resized, and the keyboard is not taken back from
@@ -1196,8 +1189,8 @@ pub(super) unsafe fn press_the_pin(
     let answered =
         unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
 
-    if wants_the_keyboard && !the_document_holds_the_caret() {
-        ask_the_keyboard_after_the_press();
+    if wants_the_keyboard {
+        unsafe { pin_take_focus(hwnd, window) };
     }
 
     answered
@@ -1530,12 +1523,5 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
         apply_pin_drag(hwnd);
     }
 
-    let answered = finish_pin_drag(hwnd, window);
-
-    // The keyboard the press recorded, asked for only now that the pointer is let go: nothing of the
-    // window manager's is left standing between a press and the moves that carried it (see
-    // `press_the_pin`). A release that no press left a record for asks for nothing.
-    unsafe { take_the_keyboard_the_press_asked_for(hwnd, window) };
-
-    answered
+    finish_pin_drag(hwnd, window)
 }

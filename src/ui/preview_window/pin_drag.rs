@@ -230,9 +230,7 @@ pub(super) unsafe fn settle_pinned_engine_press(hwnd: HWND, seen_presses: &mut u
         pinned_engine_press_action(window, dpi, frame, point),
         false,
     );
-    // Recorded rather than asked, on the one rule a press on the pin's own frame follows: the hand
-    // is already carrying the window (see `pin_input::press_the_pin`).
-    ask_the_keyboard_after_the_press();
+    pin_take_focus(hwnd, &Win32PinWindow);
 }
 
 /// Bring a pinned window to the front of its band for a press the user made on the preview,

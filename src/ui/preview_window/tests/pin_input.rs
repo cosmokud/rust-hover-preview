@@ -743,32 +743,30 @@ fn a_pan_owes_the_loop_the_paint_that_carries_the_picture() {
     stand_pin(previous_pin);
 }
 
-/// **The press takes the pointer and records the keyboard; the release is where the keyboard is
-/// asked for** — and that order is the whole of what makes a drag work on the first press rather
-/// than the second.
+/// **The first press takes the pointer before it asks for the keyboard**, and that order is the
+/// whole of what makes a drag work on the first press rather than the second.
 ///
 /// A pin that has just appeared is not the window the user is in — nothing activated it — so the
-/// first press on it has two things before it: the drag or the resize its place means, which is the
-/// pointer taken for this window so the moves that follow arrive here, and the keyboard the hand is
-/// owed afterwards. The second is window-manager work, synchronous and long, and a press that made
-/// it stands between itself and every move the hand has already made: the user's "the first
-/// click-and-hold does nothing; the second works", and a pinned document whose chrome and viewer
-/// trail the cursor for the length of that work.
+/// first press on it is a two-part press: begin the drag or the resize its place means, which is the
+/// pointer taken for this window so the moves that follow arrive here, and then make the pin the
+/// window the user is in. The second part is synchronous window-manager work, and on a press it is
+/// also *long* work: the window the keyboard is taken from has to be resolved into the ordinary
+/// window a hand-back goes to, which is a walk of the desktop (see `pin_lifecycle::the_window_behind`).
 ///
-/// So the press asks the window for **nothing**, and the release does the asking once the pointer is
-/// let go (see `ask_the_keyboard_after_the_press` and `take_the_keyboard_the_press_asked_for`). A
-/// press whose ask was never recorded — the pin already holds the keyboard, or the document does —
-/// leaves its release with nothing to ask for.
+/// Asked in the other order, the hand's first moves land in a queue behind that walk, and a hand
+/// that is already moving when the press lands is a drag that goes nowhere: the user's "the first
+/// click-and-hold does nothing; the second works". So the pointer is taken first, always — and the
+/// press is answered as it always was, and the keyboard is still asked for afterwards (see
+/// `press_the_pin`).
 ///
-/// The window is a recorder, because the halves this test is about are both *of the window*: the
+/// The window is a recorder, because the two halves this test is about are both *of the window*: the
 /// capture a drag takes and the focus, foreground and style a keyboard costs. The pin's own facts —
 /// which edge a point is on, what a caption means — are the same ones the presses above are asked of.
 #[test]
-fn the_press_takes_the_pointer_and_the_release_asks_for_the_keyboard() {
+fn the_first_press_takes_the_pointer_before_it_asks_for_the_keyboard() {
     let _room = the_room_to_itself();
     let previous_pin = take_pin_for_a_test();
     let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
-    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
 
     // A picture standing at the corner of the screen it is on, with a frame to be resized by: the
     // press below is a title-bar press and an edge press, which are the two ways a press on a pin is
@@ -783,42 +781,42 @@ fn the_press_takes_the_pointer_and_the_release_asks_for_the_keyboard() {
         *current = Some(media);
     }
 
-    let hwnd = HWND(0x1000 as *mut _);
-    // The pin's window is a handle no `GetFocus` of this machine names, which is what leaves
-    // `pin_is_focused` answering no: a pin that already holds the keyboard asks nothing.
-    PREVIEW_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
-    forget_the_keyboard_ask();
-
     // A point on the caption's empty strip rather than on one of its buttons: the buttons stand against
     // the right edge, and a press on one of them is a button's press and takes no drag (see
     // `pin_chrome::button_boxes`).
     let on_the_strip = 20;
-    let carried = content.1 + caption + 100;
 
+    let hwnd = HWND(0x1000 as *mut _);
     let window = RecordedPinWindow::with(
         hwnd.0 as isize,
-        Some((content.0 + on_the_strip, carried)),
+        Some((content.0 + on_the_strip, content.1 + caption + 100)),
         Some(content),
     );
+
+    // The press, and the keyboard it asks for because the pin is not the window in front.
     assert!(
         unsafe { press_the_pin(hwnd, on_the_strip, caption / 2, &window, true) },
         "a press on the caption is the pin's to act on"
     );
+
     let calls = window.calls();
-    assert!(
-        calls.contains(&PinWindowCall::Capture),
-        "the pointer is the press's own: {calls:?}"
-    );
+    let at = |call: PinWindowCall| {
+        calls
+            .iter()
+            .position(|seen| *seen == call)
+            .unwrap_or_else(|| panic!("{call:?} was never asked of the window: {calls:?}"))
+    };
+    let pointer = at(PinWindowCall::Capture);
     for keyboard_work in [
         PinWindowCall::SetFocusable { focusable: true },
         PinWindowCall::SetForeground,
         PinWindowCall::SetFocus,
     ] {
         assert!(
-            !calls.contains(&keyboard_work),
-            "a press records the ask and asks the window for no keyboard at all, so that nothing \
-             window-manager-shaped stands between it and the hand's first moves: {keyboard_work:?} \
-             was asked of it ({calls:?})"
+            pointer < at(keyboard_work),
+            "the pointer was taken at {pointer} and {keyboard_work:?} at {}: a drag whose press is \
+             queued behind the window work is the first press that does nothing ({calls:?})",
+            at(keyboard_work)
         );
     }
     assert!(
@@ -832,50 +830,12 @@ fn the_press_takes_the_pointer_and_the_release_asks_for_the_keyboard() {
         "and what the press armed is the drag a title bar begins"
     );
 
-    // The release is where the keyboard is asked for, and it is asked for after the pointer is let go:
-    // the hand is off the window, so the window work owes the drag nothing.
-    let window = RecordedPinWindow::with(
-        hwnd.0 as isize,
-        Some((content.0 + on_the_strip, carried)),
-        Some(content),
-    );
-    assert!(
-        unsafe { pinned_release(hwnd, on_the_strip, caption / 2, &window) },
-        "the release of a press that armed a drag is the drag's own"
-    );
-    let calls = window.calls();
-    let at = |call: PinWindowCall| {
-        calls
-            .iter()
-            .position(|seen| *seen == call)
-            .unwrap_or_else(|| panic!("{call:?} was never asked of the window: {calls:?}"))
-    };
-    let let_go = at(PinWindowCall::ReleaseCapture);
-    for keyboard_work in [
-        PinWindowCall::SetFocusable { focusable: true },
-        PinWindowCall::SetForeground,
-        PinWindowCall::SetFocus,
-    ] {
-        assert!(
-            let_go < at(keyboard_work),
-            "the pointer was let go of at {let_go} and {keyboard_work:?} asked for at {}: the \
-             keyboard is the release's, after the hand has let go ({calls:?})",
-            at(keyboard_work)
-        );
-    }
-    assert!(
-        !pin_state()
-            .and_then(|pinned| pinned.pin().map(|pin| pin.dragging.is_some()))
-            .unwrap_or(false),
-        "and the drag is over"
-    );
-
     // The same press on an edge of the window is a resize, and it is the pointer too: an edge is the
     // other hand a press takes hold of a window with, and it is the one the user reported as needing
     // a second press.
     let edge_window = RecordedPinWindow::with(
         hwnd.0 as isize,
-        Some((content.0 + 2, carried)),
+        Some((content.0 + 2, content.1 + caption + 100)),
         Some(content),
     );
     assert!(
@@ -883,34 +843,29 @@ fn the_press_takes_the_pointer_and_the_release_asks_for_the_keyboard() {
         "a press on the window's own edge is the pin's to act on"
     );
     let calls = edge_window.calls();
+    let at = |call: PinWindowCall| {
+        calls
+            .iter()
+            .position(|seen| *seen == call)
+            .unwrap_or_else(|| panic!("{call:?} was never asked of the window: {calls:?}"))
+    };
     assert!(
-        calls.contains(&PinWindowCall::Capture) && !calls.contains(&PinWindowCall::SetForeground),
-        "an edge press takes the pointer and records the same ask rather than making it: {calls:?}"
+        at(PinWindowCall::Capture) < at(PinWindowCall::SetForeground),
+        "an edge press takes the pointer before the keyboard for the same reason a drag does: \
+         {calls:?}"
     );
     let armed = pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging));
     assert!(
         matches!(armed, Some(PinDrag { action: PinDragAction::Resize(edge), .. }) if edge.left && !edge.top && !edge.right && !edge.bottom),
         "and what it armed is the resize of the left edge"
     );
-    assert!(
-        unsafe { pinned_release(hwnd, 2, caption + 100, &edge_window) },
-        "the resize is let go of by the release"
-    );
-    assert!(
-        edge_window.calls().contains(&PinWindowCall::SetForeground),
-        "and its release is where the keyboard the press recorded is asked for: {:?}",
-        edge_window.calls()
-    );
 
-    // And a press on a pin that is already the window the user is in asks for no keyboard at all: the
-    // pointer is still taken, because that is the press's own, and a keyboard the pin already holds is
-    // not one to ask for again — the release has nothing recorded to spend. The pin is stood afresh
-    // first: the edge let go of above is a resize the release applied, so the window is no longer at
-    // the box the points below were measured on.
-    stand_pin(Some(overlay_pin(content, PinChrome::always())));
+    // And a press on a pin that is already the window the user is in asks for no keyboard at all:
+    // the pointer is still taken, because that is the press's own, and nothing is asked of a
+    // keyboard the pin already holds.
     let settled_window = RecordedPinWindow::with(
         hwnd.0 as isize,
-        Some((content.0 + on_the_strip, carried)),
+        Some((content.0 + on_the_strip, content.1 + caption + 100)),
         Some(content),
     );
     assert!(
@@ -925,27 +880,7 @@ fn the_press_takes_the_pointer_and_the_release_asks_for_the_keyboard() {
         "the pointer is taken and the keyboard is left alone: {:?}",
         settled_window.calls()
     );
-    let settled_release = RecordedPinWindow::with(
-        hwnd.0 as isize,
-        Some((content.0 + on_the_strip, carried)),
-        Some(content),
-    );
-    assert!(unsafe { pinned_release(hwnd, on_the_strip, caption / 2, &settled_release) });
-    let calls = settled_release.calls();
-    for keyboard_work in [
-        PinWindowCall::SetFocusable { focusable: true },
-        PinWindowCall::SetForeground,
-        PinWindowCall::SetFocus,
-    ] {
-        assert!(
-            !calls.contains(&keyboard_work),
-            "a release whose press recorded no ask asks for no keyboard: {keyboard_work:?} was \
-             asked of it ({calls:?})"
-        );
-    }
 
-    forget_the_keyboard_ask();
-    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     stand_pin(previous_pin);
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = previous_media;
