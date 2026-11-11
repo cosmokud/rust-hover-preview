@@ -3902,6 +3902,19 @@ pub fn run_preview_window() {
                 place_pinned_siblings();
             }
 
+            // **And a document that is on the screen is put at the pin's band again wherever it is not
+            // there.** The pin's own window and the document standing in it are two windows of two
+            // threads, and every road that re-boxes the pin publishes the box for the document in a
+            // second call: a placement that never reached the take-up — a thread of another thread's
+            // mid-navigation, a box taken up before the pin's own commit — leaves the document standing
+            // beside its pin, and no road of the pin's own asks again. This is that ask, so the tail a
+            // lost placement used to cost is one tick rather than the next box change the hand has to
+            // cause (see `the_pins_document_stands_off_its_band` and
+            // `engines::pdf_viewer::a_move_is_owed`).
+            if the_pins_document_stands_off_its_band() {
+                place_pinned_siblings();
+            }
+
             // A pin that has just answered a pick keeps answering for the front of its band for a
             // moment after it: the click is this loop's before it is the listing's, and the window the
             // listing is in is activated after it — which is that window being put over the pin again
