@@ -124,6 +124,7 @@ pub(super) fn load_animated_gif(
             audio_scale: None,
             animation: AnimationPlayback::detected(path),
             paused: false,
+            shown_for_the_hand: None,
         });
     }
 
@@ -263,6 +264,7 @@ pub(super) fn load_animated_gif(
         audio_scale: None,
         animation: AnimationPlayback::detected(path),
         paused: false,
+        shown_for_the_hand: None,
     })
 }
 
@@ -409,6 +411,7 @@ pub(super) fn load_animated_apng(
             audio_scale: None,
             animation: AnimationPlayback::detected(path),
             paused: false,
+            shown_for_the_hand: None,
         });
     }
 
@@ -539,6 +542,7 @@ pub(super) fn load_animated_apng(
         audio_scale: None,
         animation: AnimationPlayback::detected(path),
         paused: false,
+        shown_for_the_hand: None,
     })
 }
 
@@ -702,6 +706,7 @@ pub(super) fn load_animated_webp(
             audio_scale: None,
             animation: AnimationPlayback::detected(path),
             paused: false,
+            shown_for_the_hand: None,
         });
     }
 
@@ -840,6 +845,7 @@ pub(super) fn load_animated_webp(
         audio_scale: None,
         animation: AnimationPlayback::detected(path),
         paused: false,
+        shown_for_the_hand: None,
     })
 }
 
@@ -901,6 +907,7 @@ pub(super) fn load_animated_heif(
         audio_scale: None,
         animation: AnimationPlayback::detected(path),
         paused: false,
+        shown_for_the_hand: None,
     })
 }
 
@@ -1004,5 +1011,6 @@ pub(super) fn load_animated_jxl(
         audio_scale: None,
         animation: AnimationPlayback::detected(path),
         paused: false,
+        shown_for_the_hand: None,
     })
 }

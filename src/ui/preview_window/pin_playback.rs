@@ -1936,10 +1936,9 @@ pub(super) fn animation_total() -> Option<usize> {
 /// picture's track does to it: its track is dragged frame by frame, and a picture that played on
 /// under the hand would be off the frame the hand was reading as it moved.
 ///
-/// An atomic rather than a flag on the media, because a decode begun at a frame lands a media of
-/// its own: a hold written on the one the drag was taken up against would be a hold the next frame
-/// in hand does not carry, and a drag across a file of a few thousand frames is a decode asked for
-/// on every column of the track (see `take_the_picture_to_frame`).
+/// An atomic rather than a flag on the media: a box change lands a media of its own, and a hold
+/// written on the one the drag was taken up against would be a hold that media does not carry (see
+/// `keep_animation_place`).
 static PICTURE_HELD_ON_ITS_FRAME: AtomicBool = AtomicBool::new(false);
 
 /// Hold the picture on screen on the frame it is on, or let it play on: asked by the press that
@@ -1976,16 +1975,19 @@ pub(super) fn picture_is_held_on_its_frame() -> bool {
 /// Take the picture on screen to `frame` of its own file, which is the frame a hand on the track
 /// named, answering whether that is the frame now on screen.
 ///
-/// Three answers, in the order they are cheap:
+/// Three answers, in the order they are cheap, and **none of them replaces the media**:
 ///
-/// * a frame the media has in hand is a playhead put down on it — the stream decoded it already;
-/// * a frame this pin has decoded before is that frame shown (see `pin_scrub`), which is what makes
-///   a hand that comes back to where it has been instant rather than a second walk through the file;
+/// * a frame of a run the media holds whole is a playhead put down on it — the stream decoded it
+///   already, and the picture plays on from there;
+/// * a frame this pin has decoded before is that frame *shown*, held beside the media rather than
+///   in place of it (see `MediaData::shown_for_the_hand`), which is what makes a hand that comes
+///   back to where it has been instant rather than a second walk through the file;
 /// * and a frame that is nowhere in hand is the **nearest** one that is, so that a hand on the track
-///   is shown where the file is going instead of a picture left standing where it was.
+///   is shown where the file is going instead of a picture left standing where it was. The media's
+///   own run is asked first, since a frame of it is a playhead put down where it already is.
 ///
-/// A `false` is the caller's cue to ask the file for the frame: this is the showing, not the decode
-/// (see `take_the_picture_to_frame`).
+/// A `false` is the caller's cue that the frame named is not the frame shown: this is the showing,
+/// and the release settles on what the hand left behind (see `settle_the_picture_on`).
 pub(super) fn show_the_frame_of_the_file(frame: usize) -> bool {
     // The pin's own lock is asked for *before* the media's and let go of before it is taken: a
     // reader that holds the media's lock and asks the pin's is the deadlock `toggle_pinned_playback`
@@ -2000,6 +2002,11 @@ pub(super) fn show_the_frame_of_the_file(frame: usize) -> bool {
 
 /// The same answer for a caller that already has the file in hand, which is the whole of what the
 /// question is about: the frames of that file, held by this media or by the run the scrub kept.
+///
+/// **Nothing here cancels the media's own stream.** A run still filling is the run a release plays
+/// on from, and a cancelled pass that had not yet delivered the file's head is a run holding its
+/// tail and nothing else — which is a picture with no frame to wrap to (see
+/// `MediaData::frame_of_file_start`).
 pub(super) fn show_the_frame_of(path: &Path, frame: usize) -> bool {
     let Ok(mut media) = CURRENT_MEDIA.lock() else {
         return false;
@@ -2012,6 +2019,7 @@ pub(super) fn show_the_frame_of(path: &Path, frame: usize) -> bool {
     // file is in hand, so the picture plays on from where the hand left it through the rest of the
     // file, and nothing is decoded again for it (see `MediaData::show_the_frame`).
     if media.is_fully_loaded() && media.show_the_frame(frame) {
+        media.shown_for_the_hand = None;
         return true;
     }
 
@@ -2019,127 +2027,76 @@ pub(super) fn show_the_frame_of(path: &Path, frame: usize) -> bool {
     // the file has to do to reach it (see `pin_index`): that is the answer a seek of a picture that
     // plays costs, and it costs it once per pin rather than once per press. A frame the scrub kept
     // is the next cheapest, and it is what a picture answers with while the index is being read.
+    // Both are shown *beside* the media rather than in place of it: the playhead and the stream stay
+    // where the file left them, and this is the frame painted while the hand is on the track.
     if let Some(held) = pin_index::at(path, frame).or_else(|| pin_scrub::at(path, frame)) {
-        media.cancel_background_work();
-        let shown = media.showing_only(held);
-        *media = shown;
+        media.shown_for_the_hand = Some(held);
         return true;
     }
 
-    // The nearest frame that is in hand, of the three places one can be: this media's own run, the
-    // run the index read (see `pin_index`), and the run this pin has decoded before. The media's own
-    // run is the cheapest answer and the first of the three, because a frame of it is a playhead put
-    // down where it already is — the stream it came from is still the picture, and replacing it for
-    // a place it holds would throw away the frames beside it.
-    let run = media.nearest_frame_to(frame).map(|(at, _)| (at, None));
-    let indexed = pin_index::nearest(path, frame).map(|(at, frame)| (at, Some(frame)));
-    let scrubbed = pin_scrub::nearest(path, frame).map(|(at, frame)| (at, Some(frame)));
+    // The nearest frame the index or the scrub holds is the next answer, and it is still shown
+    // beside the media: a hand on the track is painted where the file is going rather than left on
+    // the frame the drag began on, and the playhead the file plays from does not move for it.
+    if let Some((at, held)) =
+        pin_index::nearest(path, frame).or_else(|| pin_scrub::nearest(path, frame))
+    {
+        media.shown_for_the_hand = Some(held);
+        return at == frame;
+    }
 
-    let nearest = [run, indexed, scrubbed]
-        .into_iter()
-        .flatten()
-        .min_by_key(|(at, _)| at.abs_diff(frame));
-    let Some((at, shown_from_the_scrub)) = nearest else {
+    // Nothing at all is held, so there is nothing to paint beside the media: what is left is this
+    // media's own nearest frame, which is a playhead put down where it already is rather than a
+    // frame borrowed from somewhere else.
+    media.shown_for_the_hand = None;
+    let Some((at, _)) = media.nearest_frame_to(frame) else {
         return false;
     };
-
-    match shown_from_the_scrub {
-        Some(held) => {
-            if media.current_frame_of_file() == Some(at) {
-                return at == frame;
-            }
-            media.cancel_background_work();
-            let shown = media.showing_only(held);
-            *media = shown;
-        }
-        None => {
-            media.show_the_frame(at);
-        }
-    }
+    media.show_the_frame(at);
 
     at == frame
 }
 
-/// Ask the file for `frame` of the picture that plays: a decode of this app's begun at that frame,
-/// held on the loop's own slot so that a hand that keeps moving asks for the frame it is on rather
-/// than for every frame it passed (see `seek_pinned_animation`).
-pub(super) fn ask_for_the_frame(frame: usize) {
-    if let (Some((path, content, _, _)), Some(total)) = (pinned_playback_state(), animation_total())
-    {
-        seek_pinned_animation(&path, content, frame, total);
-    }
-}
-
-/// Take the picture on screen to `frame` of its own file, asking the file for it where it is not
-/// already there (see `show_the_frame_of_the_file`).
+/// Take the picture on screen to `frame` of its own file: the frame the hand named where the run in
+/// hand has it, and the nearest frame it has while the rest is still being decoded (see
+/// `show_the_frame_of_the_file`).
+///
+/// **No decode is asked for.** The run the media holds is the picture, and a frame of it past the
+/// ones decoded so far arrives with the stream already filling it — which is why the media is never
+/// replaced for a place under a hand.
 pub(super) fn take_the_picture_to_frame(frame: usize) {
-    if !show_the_frame_of_the_file(frame) {
-        ask_for_the_frame(frame);
-    }
+    let _ = show_the_frame_of_the_file(frame);
 }
 
-/// Let go of a picture a hand has been dragging: the frame it was left on is the frame it plays on
-/// from, which means the file's own run installed again where the drag showed a single frame of its
-/// own (see `MediaData::a_frame_shown_from_the_scrub`).
+/// Let go of a picture a hand has been dragging or has clicked: the frame it was left on is the
+/// frame the picture carries on from.
 ///
-/// **A frame of the index or of the scrub is not the file's run**, even where it is the pin's own
-/// size (see `pin_index`): it is one frame, so a picture left standing on it would never play again
-/// — and what the file is asked for here is the run that begins at the frame the hand named, which
-/// is installed with its playhead on that frame (see `land_the_picture_on`).
+/// What a hand leaves the picture on is the nearest frame the file has given it, and the rest
+/// arrives with the stream: the frame shown beside the media is dropped
+/// (`MediaData::shown_for_the_hand`), and the playhead is put down on the nearest frame the run in
+/// hand has. A run that does not hold that frame is left where it is and plays on from there —
+/// nothing is decoded for a release, and nothing is installed over the media.
 pub(super) fn settle_the_picture_on(frame: usize) {
-    let shown_from_the_scrub = CURRENT_MEDIA
-        .lock()
-        .ok()
-        .and_then(|media| media.as_ref().map(MediaData::a_frame_shown_from_the_scrub))
-        .unwrap_or(true);
+    let Ok(mut media) = CURRENT_MEDIA.lock() else {
+        return;
+    };
+    let Some(media) = media.as_mut() else {
+        return;
+    };
 
-    if shown_from_the_scrub {
-        ask_for_the_frame(frame);
+    media.shown_for_the_hand = None;
+
+    // **A run still filling is the one that reaches the frame itself.** Its playhead is left alone:
+    // moving it off a place whose frames are still arriving is the picture restarted part-way
+    // through the file, which is the tail replayed rather than the file played.
+    if !media.is_fully_loaded() {
+        return;
     }
-}
 
-/// Take a pinned picture that plays to `frame`, which is a decode of this app's begun at that
-/// frame rather than a player relaunched.
-///
-/// **It is the relayout road's own answer, and nothing new.** A decode begun part-way through a
-/// file answers the frames from that place on, each carrying its own index in the file (see
-/// `ImageFrame::file_index`), and the pin installs it exactly as a box change's answer is installed
-/// — `keep_animation_place` landing the playhead on the place the answer names (see `PinRelayout`
-/// and `pin_media_load`). So a scrub is one ask of a box the window already has, for a place in the
-/// file a hand chose, and the frames before it are decoded by the stream that follows.
-///
-/// The throttle is the one `PinRelayout` already keeps: only the newest ask is held, and the
-/// answer that asks nothing more is installed. A drag across a long GIF is therefore one decode in
-/// flight at a time rather a decode per pixel under the hand.
-pub(super) fn seek_pinned_animation(
-    path: &Path,
-    content: ScreenRegion,
-    frame: usize,
-    _total: usize,
-) {
-    let dpi = pin_state()
-        .and_then(|pinned| pinned.pin().map(|pin| pin.dpi))
-        .unwrap_or(96);
-    let width = (content.2 - content.0).max(1) as u32;
-    let height = (content.3 - content.1).max(1) as u32;
-    let cancel = Arc::new(AtomicBool::new(false));
-    let answer = pin_media_load(
-        path,
-        width,
-        height,
-        dpi,
-        PreviewScale::FitToScreen,
-        frame,
-        Arc::clone(&cancel),
-    );
-    // The ask is written down on the loop's own slot rather than started here, for the reason every
-    // other relayout is: the decode runs on a thread of its own and the tick that asked for it must
-    // not wait for it (see `PIN_RELAYOUT_ASK`).
-    ask_for_a_pin_relayout(PinRelayout {
-        path: path.to_path_buf(),
-        answer,
-        cancel,
-        decoded: None,
-        place: Some(frame),
-    });
+    if media.current_frame_of_file() == Some(frame) {
+        return;
+    }
+
+    if let Some((at, _)) = media.nearest_frame_to(frame) {
+        media.show_the_frame(at);
+    }
 }

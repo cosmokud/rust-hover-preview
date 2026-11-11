@@ -480,9 +480,9 @@ pub(super) fn pin_seconds_at(transport: &PinTransport, share: f64) -> Option<f64
 /// there only when the pointer lets go.
 ///
 /// A picture that plays is the exception and the whole of why a drag of one is a scrub: its track
-/// names frames rather than seconds of a player, so the frame under the hand is taken to while the
-/// hand is still moving — one frame at a time, held where the hand put it (see
-/// `take_the_picture_to_frame`).
+/// names frames rather than seconds of a player, so the frame under the hand is shown while the
+/// hand is still moving — one frame at a time, out of the run the media already holds (see
+/// `show_the_frame_of_the_file`).
 pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
     let Some(bar) = pinned_transport_geometry() else {
         return false;
@@ -509,16 +509,15 @@ pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
         });
 
         // A move inside the frame the hand is already on is a playhead that has not moved in the
-        // file, which is a decode asked for nothing.
+        // file, which is a frame painted for nothing.
         if previous != frame {
             if let Some(frame) = frame {
-                // **The picture is taken to the frame at once where it can be**, and shown the
-                // nearest frame that is where it cannot: a hand on the track is shown where the file
-                // is going while the decode it asked for catches up, rather than a picture left
-                // standing on the frame the drag began on (see `show_the_frame_of_the_file`).
-                if !show_the_frame_of_the_file(frame) {
-                    ask_for_the_frame(frame);
-                }
+                // **The picture is shown the frame at once where the run holds it**, and the
+                // nearest frame that is where it does not: a hand on the track is shown where the
+                // file is going while the stream that is already filling the run catches up, rather
+                // than a picture left standing on the frame the drag began on. Nothing is decoded
+                // and nothing is installed for it (see `show_the_frame_of_the_file`).
+                let _ = show_the_frame_of_the_file(frame);
             }
         }
         render_layered_preview(hwnd);
@@ -609,10 +608,9 @@ pub(super) unsafe fn pinned_transport_release(
     // playing under the hand until this moment — the press ends nothing (see
     // `pinned_transport_press`) — and it goes on being the picture while the replacement opens the
     // file: the registration standing in the pin's host is what covers a relaunch.
-    // A picture that plays is taken to the frame the hand stopped on, which is the frame the drag
-    // was already on — a playhead put down on a frame of the file in hand, or the answer to the
-    // decode the last move asked for — and it plays on from there rather than from where the hand
-    // began (see `take_the_picture_to_frame`).
+    // A picture that plays settles on the frame the hand stopped on, which is the frame the drag was
+    // already showing — the frame painted beside the run in hand, or the run's own nearest one — and
+    // it plays on from there rather than from where the hand began (see `settle_the_picture_on`).
     if let Some(share) = seeking_frame {
         let aim = pin_frame_share(share);
         update_pin_fps(|fps| {
@@ -625,8 +623,8 @@ pub(super) unsafe fn pinned_transport_release(
         });
         hold_the_picture_on_its_frame(false);
         if let Some(frame) = aim {
-            // The file's own run is installed again where the drag was served from a single frame
-            // of the scrub's own, so that the picture plays on from the frame it was left on
+            // The frame painted beside the run goes with the hand, and the picture plays on from the
+            // nearest frame the file has given it: nothing is decoded and nothing installed for it
             // (see `settle_the_picture_on`).
             settle_the_picture_on(frame);
         }

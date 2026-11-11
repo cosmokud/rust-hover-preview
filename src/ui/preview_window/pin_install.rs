@@ -1639,7 +1639,6 @@ pub(super) fn relayout_pinned_media(
                 answer: pin_media_load(path, width, height, dpi, scale, place, Arc::clone(&cancel)),
                 cancel,
                 decoded: None,
-                place: None,
             })
         }
         None => None,
@@ -1752,48 +1751,6 @@ pub(super) enum PinRelayoutRoad {
 /// that is drawn for that box arrives when it arrives. An arc over it would say a thing that is
 /// not true: that the window has nothing to show yet. It is the same answer a resized video is
 /// given while the media engine's next frame is on its way.
-/// The seek a hand asked for on a picture's own bar, waiting for the loop to take it up.
-///
-/// A press on the track names a frame of the file, and the decode that frame begins at runs on a
-/// thread of its own — so the ask is written down here and picked up by the tick that holds the
-/// relayout slot, exactly as a box change's ask is (see `PinRelayout` and
-/// `seek_pinned_animation`). One ask is held at a time: a drag across a long picture is the newest
-/// place under the hand, and the answer to the one ahead of it is dropped with the frames it had
-/// decoded.
-pub(super) static PIN_RELAYOUT_ASK: Lazy<Mutex<Option<PinRelayout>>> =
-    Lazy::new(|| Mutex::new(None));
-
-/// Write an ask about a picture that plays into the slot the loop reads (see `PIN_RELAYOUT_ASK`),
-/// putting down whatever was there: the newest place under a hand is the one worth decoding.
-pub(super) fn ask_for_a_pin_relayout(relayout: PinRelayout) {
-    if let Ok(mut slot) = PIN_RELAYOUT_ASK.lock() {
-        // The older ask's frames are told to stop here rather than left decoding for a place
-        // nobody is asking about any more (see `PinRelayout`'s own `Drop`).
-        drop(slot.take());
-        *slot = Some(relayout);
-    }
-}
-
-/// Take a seek a hand asked for off the slot, where the loop has nothing of its own in flight.
-///
-/// One decode of the picture at a time is the whole of what keeps a drag from paying for a decode
-/// per pixel under the hand: a seek asked for while an answer is still on its way is one the
-/// answer already being waited on will land near enough to, and the ask left standing is the
-/// newest one when that answer lands.
-pub(super) fn take_the_seek_a_hand_asked_for(relayout: &mut Option<PinRelayout>) {
-    if relayout.is_some() {
-        return;
-    }
-
-    let asked = PIN_RELAYOUT_ASK
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take());
-    if let Some(asked) = asked {
-        *relayout = Some(asked);
-    }
-}
-
 pub(super) struct PinRelayout {
     /// The file being decoded, which is what the answer is installed over: a relayout left in
     /// flight across a swap would otherwise install a frame of the file the pin has left behind,
@@ -1802,20 +1759,16 @@ pub(super) struct PinRelayout {
     /// Where the answer arrives, asked for at the place the pin was at when the box changed.
     pub(super) answer: Receiver<Option<MediaData>>,
     /// The decode's own stop flag: the answer sitting on a channel is a decode already done, and a
-    /// decode still running is told to stop here when the ask it belongs to is put down — a drag
-    /// that sweeps a long picture asks for a new decode per column of the track, and one left
-    /// walking the file for a place nobody is asking about any more is a walk the whole seek waits
-    /// behind (see `ask_for_a_pin_relayout`).
+    /// decode still running is told to stop here when the ask it belongs to is put down — a box
+    /// that changed a second time asks for a decode of its own, and one left walking the file for a
+    /// place nobody is asking about any more is a walk the whole relayout waits behind (see
+    /// `ask_for_a_pin_relayout`).
     pub(super) cancel: Arc<AtomicBool>,
     /// The answer, once it has arrived, kept here while it is behind the pin: the decode began at
     /// the place the box change found the pin at, so it is a frame or three short of the place the
     /// pin has played to by the time it lands, and what it is short of is waited for rather than
     /// installed (see `take_pin_relayout`).
     pub(super) decoded: Option<MediaData>,
-    /// The frame a hand asked the picture to be taken to, where this ask is a seek rather than a
-    /// box: the answer lands on that frame whatever the pin has played to, since the place it was
-    /// asked for *is* the place the hand chose (see `seek_pinned_animation`).
-    pub(super) place: Option<usize>,
 }
 
 impl Drop for PinRelayout {
@@ -1830,28 +1783,6 @@ impl Drop for PinRelayout {
             media.cancel_background_work();
         }
     }
-}
-
-/// Land a picture that plays on the frame a hand asked for, our first one past it where the
-/// answer's own stream has already overtaken it.
-///
-/// The frame's wait begins at the landing rather than at the decode, because a seek is a hand
-/// asking for that frame *now*: the delay the file gives it is the delay a picture played at its
-/// own pace would have waited from the frame before, and the seek has just skipped it.
-pub(super) fn land_the_picture_on(media: MediaData, place: usize) -> MediaData {
-    let mut media = media;
-    if !media.media_type.is_animation() || media.frames.is_empty() {
-        return media;
-    }
-
-    media.current_frame = media
-        .frames
-        .iter()
-        .position(|frame| frame.file_index >= place)
-        .unwrap_or_else(|| media.frames.len().saturating_sub(1));
-    media.last_frame_time = Instant::now();
-
-    media
 }
 
 /// Take a relayout that has answered, install it, and answer whether a frame was installed.
@@ -1906,19 +1837,15 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     // The answer is the one to install once it holds the place the picture has played to, or one
     // past it — which is a frame skipped rather than a picture put back. Short of it, the frames on
     // screen are still the ones drawn for the box, and the answer waits for its own stream.
-    // A seek is answered as soon as it arrives: what it was asked for is the frame the hand chose
-    // rather than the place the pin has played to, and waiting for the pin's own place would hold
-    // a picture dragged backwards until its stream had decoded past where it already was.
-    let caught_up = pending.place.is_some()
-        || pending.decoded.as_ref().is_none_or(|decoded| {
-            !decoded.media_type.is_animation()
-                || wanted.is_none_or(|wanted| {
-                    decoded
-                        .frames
-                        .iter()
-                        .any(|frame| frame.file_index >= wanted)
-                })
-        });
+    let caught_up = pending.decoded.as_ref().is_none_or(|decoded| {
+        !decoded.media_type.is_animation()
+            || wanted.is_none_or(|wanted| {
+                decoded
+                    .frames
+                    .iter()
+                    .any(|frame| frame.file_index >= wanted)
+            })
+    });
     if !caught_up {
         return false;
     }
@@ -1926,7 +1853,6 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     let Some(mut pending) = relayout.take() else {
         return false;
     };
-    let place = pending.place;
     let Some(media) = pending.decoded.take() else {
         return false;
     };
@@ -1943,12 +1869,6 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
 
     let media = keep_text_place(media);
     let media = keep_animation_place(media);
-    // And a seek lands on the frame the hand chose: the answer's own first frame is that frame, or
-    // the nearest one past it, and the playhead is put on it with its wait begun now.
-    let media = match place {
-        Some(place) => land_the_picture_on(media, place),
-        None => media,
-    };
     // The frames this answer carries are frames of the file that can be shown again without walking
     // it: a hand that comes back to a place it has already been is not walked there twice (see
     // `pin_scrub`).

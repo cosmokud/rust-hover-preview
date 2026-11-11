@@ -14,17 +14,16 @@
 //! file needs is paid once per pin rather than once per press, and a hand that goes back and forth
 //! reads frames of memory both ways.
 //!
-//! **It is a fallback for the runs the pin cannot hold whole, and nothing else.** A pinned
-//! picture's own run is held up to the same budget (see `retained_room`), so a run that fits it is
-//! decoded once by the player and every frame of it stays in hand — a second run of the same
-//! frames would be the same picture held twice, and a frame a hand named is already a playhead put
-//! down on the player's own run (see `show_the_frame_of`).
+//! **It is a fallback for the runs the pin cannot hold whole, and nothing else.** A pinned picture's
+//! own run is held up to the same budget (see `retained_room`), so a run that fits it is decoded
+//! once by the player and every frame of it stays in hand — a second run of the same frames would be
+//! the same picture held twice, and a frame a hand named is already a playhead put down on the
+//! player's own run (see `show_the_frame_of`).
 //!
 //! **The walk is started once per pin and never per press.** A run already in hand for the file on
 //! screen and the size the pin draws at is the run a press reads, and a start for it answers
-//! nothing; so a drag across a long picture asks for no decode of its own at all until the hand
-//! lets go, and the memory it costs is the run and nothing else.
-//!
+//! nothing; so a drag across a long picture asks for no decode of its own at all, and the memory it
+//! costs is the run and nothing else.
 //! It is deliberately only the two kinds whose walks are expensive and which are decoded here:
 //! a APNG is composited by the `image` crate from its own frame records and needs no index at all,
 //! and a HEIF or a JXL sequence is held whole by the engine in the first place (see
@@ -32,8 +31,8 @@
 //!
 //! **A frame of a smaller size is a frame that is drawn scaled up**, so it is the shape of the
 //! picture that is true rather than its detail, which is what a hand reading where in the file it
-//! is wants. A run kept this way is one too long for the player to hold, so its frames are the
-//! picture until the player's own run has reached the place they name.
+//! is wants: a run this file holds is a run too long for the player to keep, so its frames are the
+//! picture until the player's own run reaches that place.
 //!
 //! **And nothing is read for a picture the player already holds whole.** A short animation is
 //! decoded from start to finish by the player itself and every frame of it stays in hand, so a
@@ -127,8 +126,8 @@ pub(super) fn start(path: &Path, kind: MediaType, total: usize, display: (u32, u
 
     // **And a run that fits the budget is one the player will hold whole**, decoded once as it
     // plays: this file's own walk would be the same frames kept a second time (see `retained_bytes`).
-    // What a hand names before the player has reached that place is answered by the nearest frame it
-    // has, which is the answer a drag wants anyway.
+    // A frame a hand names is a playhead put down on the run the player has by the time it has
+    // reached that place, which is the answer a hand on the track wants anyway.
     if total as u64 * display.0 as u64 * display.1 as u64 * 4 <= retained_bytes() as u64 {
         return;
     }
