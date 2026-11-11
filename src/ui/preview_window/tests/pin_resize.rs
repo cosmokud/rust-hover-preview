@@ -1693,7 +1693,6 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
             cancel: Arc::new(AtomicBool::new(false)),
             answer: answers,
             decoded: None,
-            place: None,
         });
         assert!(
             take_pin_relayout(&mut relayout),
@@ -1764,7 +1763,6 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
         cancel: Arc::new(AtomicBool::new(false)),
         answer: answers,
         decoded: None,
-        place: None,
     });
     assert!(
         !take_pin_relayout(&mut relayout),
@@ -1844,7 +1842,6 @@ fn a_box_change_waits_for_its_answer_to_reach_the_place_the_pin_has_played_to() 
         cancel: Arc::new(AtomicBool::new(false)),
         answer: answer_from(5, 7),
         decoded: None,
-        place: None,
     });
     assert!(
         !take_pin_relayout(&mut relayout),
@@ -1866,7 +1863,6 @@ fn a_box_change_waits_for_its_answer_to_reach_the_place_the_pin_has_played_to() 
         cancel: Arc::new(AtomicBool::new(false)),
         answer: answer_from(5, 9),
         decoded: None,
-        place: None,
     });
     assert!(
         take_pin_relayout(&mut relayout),
@@ -1940,7 +1936,6 @@ fn a_released_playhead_is_carried_as_exactly_as_a_held_one() {
         cancel: Arc::new(AtomicBool::new(false)),
         answer: answers,
         decoded: None,
-        place: None,
     });
     assert!(
         take_pin_relayout(&mut relayout),

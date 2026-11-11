@@ -4,8 +4,9 @@
 //! A drag of a picture is a walk through its frames, and the walk is the expensive part: GIF, APNG
 //! and WebP are delta-coded and carry no frame index, so landing on frame `n` means decoding the
 //! ones before it (see `animation_frames`). What a decode answers is therefore worth holding on to:
-//! the frames of a seek land in this cache, and a hand that comes back to a place it has already
-//! been is shown that place at once rather than walked to it again (see `take_the_picture_to_frame`).
+//! the frames a load or a box change lands are remembered here, and a hand that comes back to a
+//! place it has already been is shown that place at once rather than walked to it again (see
+//! `show_the_frame_of_the_file`).
 //!
 //! It is a budget rather than a file: the frames are held decoded *and scaled*, which is what makes
 //! them worth holding, and a picture of a few thousand frames would be hundreds of megabytes of them.

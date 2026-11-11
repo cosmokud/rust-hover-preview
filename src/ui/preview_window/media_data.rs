@@ -110,6 +110,14 @@ pub(super) struct MediaData {
     /// media (see `PICTURE_HELD_ON_ITS_FRAME`) — and because the loop's walk is a question about
     /// the media alone.
     pub(super) paused: bool,
+    /// The frame a hand on a picture's track is shown while the frame it named is not in the run yet:
+    /// one frame taken from the index or the scrub, with this media's playhead and stream untouched
+    /// (see `show_the_frame_of`).
+    ///
+    /// It is not a playhead. A hand's frame is a place being read rather than where the file plays
+    /// from, so `current_frame_of_file` never reads it while `current_frame` — and every repaint,
+    /// bubble and zoom drawn from the frame on screen — does.
+    pub(super) shown_for_the_hand: Option<Arc<ImageFrame>>,
 }
 
 /// Paint a band of a layered window one flat opaque colour, for a window whose media is not there.
@@ -270,15 +278,27 @@ fn fill_band(out: &mut [u8], width: u32, origin_y: u32, height: u32, flat: [u8; 
 
 impl MediaData {
     /// The frame on screen, which a document the engine draws does not have.
+    ///
+    /// A frame a hand is shown from the index or the scrub is the frame on screen for as long as the
+    /// hand is there (see `shown_for_the_hand`), which is what makes a repaint, a bubble and a zoom
+    /// follow it without asking.
     pub(super) fn current_frame(&self) -> Option<&ImageFrame> {
-        self.frames.get(self.current_frame).map(AsRef::as_ref)
+        match &self.shown_for_the_hand {
+            Some(frame) => Some(frame.as_ref()),
+            None => self.frames.get(self.current_frame).map(AsRef::as_ref),
+        }
     }
 
     /// The place the frame on screen is at in its own file, which is the place a picture that plays
     /// carries across a decode — never the frame's index among the frames in hand, which a release
     /// and a decode begun part-way through the file both move (see `ImageFrame::file_index`).
+    ///
+    /// And never a frame a hand is being shown (`shown_for_the_hand`): that is a place being read,
+    /// not where the file plays from.
     pub(super) fn current_frame_of_file(&self) -> Option<usize> {
-        self.current_frame().map(|frame| frame.file_index)
+        self.frames
+            .get(self.current_frame)
+            .map(|frame| frame.file_index)
     }
 
     /// The index among the frames in hand of the frame carrying the file's first frame, which is
@@ -290,8 +310,8 @@ impl MediaData {
     ///
     /// `None` for a run whose head was never delivered: a decode begun part-way whose head pass was
     /// cancelled, so the run holds the file's tail and nothing else. Such a run has no start to wrap
-    /// to — wrapping to its own first frame is a picture that plays its tail and then replays it
-    /// for good — so nothing wraps to it (see `advance_frame`).
+    /// to — wrapping to its own first frame is a picture that plays its tail and then replays it for
+    /// good — so nothing wraps to it (see `advance_frame`).
     fn frame_of_file_start(&self) -> Option<usize> {
         self.frames.iter().position(|frame| frame.file_index == 0)
     }
@@ -312,8 +332,8 @@ impl MediaData {
     /// WEBP` row names**, which is what leaves the run it decoded the single source of truth a drag,
     /// a click and a release all read: a run that fits is decoded once and every frame of it stays,
     /// so a frame a hand names is a playhead put down on it rather than a decode begun again (see
-    /// `pin_index`, which reads a run this one cannot hold). A hover, and a still, keep the
-    /// constant.
+    /// `show_the_frame_of` and `retained_room`'s counterpart in `pin_index`, which reads a run this
+    /// one cannot hold). A hover keeps the constant, since a hover is never dragged.
     pub(super) fn retained_room(&self) -> usize {
         if self.media_type.is_animation() && super::pinned() {
             crate::config::config::animated_webp_budget_bytes()
@@ -322,46 +342,15 @@ impl MediaData {
         }
     }
 
-    /// This same picture showing only `frame`, as a picture that does not play: what a hand on a
-    /// track is shown of a frame this media does not carry.
-    ///
-    /// Nothing of the stream travels with it. It is a frame drawn while a drag lasts — the drag
-    /// holds the picture, and the decode it asks for installs the file's own run again when it
-    /// answers (see `take_the_picture_to_frame`) — so keeping a queue that nothing reads would be a
-    /// decoder left walking a file nobody is watching.
-    pub(super) fn showing_only(&self, frame: Arc<ImageFrame>) -> MediaData {
-        MediaData {
-            frames: vec![frame],
-            shared_frames: None,
-            all_frames_loaded: Some(Arc::new(AtomicBool::new(true))),
-            current_frame: 0,
-            last_frame_time: Instant::now(),
-            media_type: self.media_type,
-            stream_cancel: None,
-            video_process: None,
-            loading_start: None,
-            text_state: None,
-            audio_scale: self.audio_scale,
-            animation: self.animation,
-            paused: self.paused,
-        }
-    }
-
-    /// Whether what is on screen is a frame put there by a hand on a track rather than a run of this
-    /// file: the picture is one frame of the scrub's own making, and a release has to install the
-    /// file again for it to play on (see `settle_the_picture_on`).
-    pub(super) fn a_frame_shown_from_the_scrub(&self) -> bool {
-        self.shared_frames.is_none() && self.frames.len() == 1
-    }
-
     /// Put the playhead on the frame the file carries `index` at, answering whether that frame is
     /// one of those in hand.
     ///
     /// A picture whose frames have all been decoded is taken to one by moving the playhead rather
     /// than by decoding the file again from that place: a hand dragging a bar across a picture of a
     /// few thousand frames asks for a frame per column of the track, and a decode per column is a
-    /// drag that lags the hand it is following (see `take_the_picture_to_frame`). A frame of a file
-    /// that is still streaming is answered "not in hand", which is the caller's cue to ask for one.
+    /// drag that lags the hand it is following (see `show_the_frame_of_the_file`). A frame of a file
+    /// that is still streaming is answered "not in hand", which is the caller's cue to show the
+    /// nearest frame it has instead of this one.
     pub(super) fn show_the_frame(&mut self, index: usize) -> bool {
         if !self.media_type.is_animation() {
             return false;
@@ -561,9 +550,10 @@ impl MediaData {
     /// Two things have to hold before a frame is given back, and both of them are
     /// about a promise the player makes to itself: the frames that are dropped are
     /// frames that have to be decoded again. The window has to be full, which is
-    /// the only thing a release is for — an animation that fits `retained_room` is held whole,
-    /// plays from beginning to end and wraps back into the frame it started on, and the file
-    /// is read once for all of it. And the decoder has to still be working, which is settled under the
+    /// the only thing a release is for — an animation that fits `retained_room` is held
+    /// whole, plays from beginning to end and
+    /// wraps back into the frame it started on, and the file is read once for all
+    /// of it. And the decoder has to still be working, which is settled under the
     /// same lock the decoder takes as it ends a pass: a decoder that has finished
     /// with a file it decoded whole has nothing to decode again.
     pub(super) fn release_played_frames(&mut self, retained_bytes: usize) {
@@ -889,6 +879,7 @@ pub(super) fn engine_svg_media() -> MediaData {
         audio_scale: None,
         animation: AnimationPlayback::default(),
         paused: false,
+        shown_for_the_hand: None,
     }
 }
 
@@ -942,5 +933,6 @@ pub(super) fn static_image_media(frame: Arc<ImageFrame>, kind: MediaType) -> Med
         audio_scale: None,
         animation: AnimationPlayback::default(),
         paused: false,
+        shown_for_the_hand: None,
     }
 }

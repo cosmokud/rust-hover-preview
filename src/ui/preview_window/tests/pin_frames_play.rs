@@ -147,53 +147,13 @@ fn a_share_of_the_track_names_a_frame_of_the_file() {
     assert_eq!(one_frame.index_at_share(1.0), 0);
 }
 
-/// A seek lands the picture on the frame the hand chose: the answer's first frame is that one, or
-/// the nearest past it where the answer's own stream has already overtaken the place, and a frame
-/// the answer does not hold is its newest rather than a picture put back to the first.
+/// **A hand on the track paints the frame it named and never replaces the media**: a frame the
+/// scrub holds is shown beside the run in hand rather than in place of it, so the playhead the
+/// picture plays from stays where the file left it — and a release drops the frame it was shown
+/// and plays on from the nearest frame the file has given it (see `show_the_frame_of` and
+/// `settle_the_picture_on`).
 #[test]
-fn a_seek_lands_the_picture_on_the_frame_a_hand_chose() {
-    let frames = |indices: &[usize]| {
-        let frame = |file_index: usize| {
-            let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 1000);
-            frame.file_index = file_index;
-            Arc::new(frame)
-        };
-        let mut media = static_image_media(frame(indices[0]), MediaType::AnimatedGif);
-        media.frames = indices.iter().copied().map(frame).collect();
-        media
-    };
-
-    // A decode begun part-way through a file answers the run from that place on.
-    let media = land_the_picture_on(frames(&[40, 41, 42]), 40);
-    assert_eq!(
-        media.current_frame_of_file(),
-        Some(40),
-        "the answer's own first frame is the one asked for"
-    );
-
-    // A stream that has run past the place answers the nearest frame past it rather than the one
-    // before: a picture played one frame too far is moved on, and one played a frame back is a
-    // picture put where the hand did not ask for it.
-    let media = land_the_picture_on(frames(&[38, 39, 40, 41]), 40);
-    assert_eq!(media.current_frame_of_file(), Some(40));
-
-    // And a place past everything the answer holds lands on the newest frame it has.
-    let media = land_the_picture_on(frames(&[10, 11]), 900);
-    assert_eq!(media.current_frame_of_file(), Some(11));
-
-    // A picture that does not play has no frame to land on, and is returned as it came.
-    let still = static_image_media(
-        Arc::new(ImageFrame::new(vec![0u8; 4], 1, 1, 0)),
-        MediaType::StaticImage,
-    );
-    assert!(!land_the_picture_on(still, 7).media_type.is_animation());
-}
-
-/// **A frame the scrub holds is shown without walking the file again**, and a frame nothing holds is
-/// answered by taking the picture to the nearest one that is: a hand on a track is shown where the
-/// file is going while the decode it asked for catches up (see `show_the_frame_of`).
-#[test]
-fn a_frame_the_scrub_holds_is_shown_and_a_frame_it_does_not_is_shown_the_nearest() {
+fn a_hand_on_the_track_paints_the_frame_it_named_without_replacing_the_media() {
     let folder = std::env::temp_dir().join("pin-scrub-shown-tests");
     std::fs::create_dir_all(&folder).expect("a fixture folder");
     let path = folder.join("run.gif");
@@ -212,61 +172,89 @@ fn a_frame_the_scrub_holds_is_shown_and_a_frame_it_does_not_is_shown_the_nearest
     let stand = |media: MediaData| {
         *CURRENT_MEDIA.lock().expect("the media's lock") = Some(media);
     };
-    let held = || {
+    let playhead = || {
         CURRENT_MEDIA.lock().ok().and_then(|media| {
             media
                 .as_ref()
                 .and_then(|media| media.current_frame_of_file())
         })
     };
+    let shown = || {
+        CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media.as_ref().and_then(|media| {
+                media
+                    .shown_for_the_hand
+                    .as_ref()
+                    .map(|frame| frame.file_index)
+            })
+        })
+    };
     let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
     pin_scrub::forget();
 
-    // A frame the media holds is a playhead put down on it, which is the cheapest answer there is.
+    // A frame of the run in hand is a playhead put down on it, which is the cheapest answer there
+    // is and the one place a hand moves the picture itself.
     stand(a_run(&[40, 41, 42]));
     assert!(show_the_frame_of(&path, 41), "a frame of the run in hand");
-    assert_eq!(held(), Some(41));
+    assert_eq!(playhead(), Some(41), "and the playhead is on it");
+    assert_eq!(shown(), None, "with no frame painted beside the run");
 
-    // A frame this pin decoded before is that frame *shown*, without the media holding it at all:
-    // the run of the file is not walked again for a place this pin has already been.
+    // A frame this pin decoded before is that frame *shown*, and the media is untouched: the run
+    // of the file is not walked again for a place this pin has already been, and the playhead the
+    // picture plays from stays where it was.
     pin_scrub::remember(&path, &a_run(&[10, 11, 12]).frames);
     stand(a_run(&[40, 41, 42]));
     assert!(
         show_the_frame_of(&path, 11),
         "a frame the scrub holds is a frame shown"
     );
-    assert_eq!(held(), Some(11), "and the picture is on it");
-    assert!(
+    assert_eq!(shown(), Some(11), "and it is the frame painted");
+    assert_eq!(
+        playhead(),
+        Some(40),
+        "while the playhead the picture plays from is left where the file had it"
+    );
+    assert_eq!(
         CURRENT_MEDIA
             .lock()
             .ok()
-            .and_then(|media| media.as_ref().map(MediaData::a_frame_shown_from_the_scrub))
-            .unwrap_or(false),
-        "as a frame of the scrubs own making, which a release installs the file again for"
+            .and_then(|media| media.as_ref().map(|media| media.frames.len())),
+        Some(3),
+        "and the run in hand is the whole of what the media holds"
     );
 
-    // And a frame nobody holds is the nearest one that is: the picture moves toward the hand rather
-    // than standing on the frame the drag began on, and the caller is told the exact frame is not
-    // there yet so that it asks the file for it.
+    // And a frame nothing at all holds is the nearest frame of the run in hand, which is the one
+    // place a hand moves the picture itself: there is nothing to paint beside it, so the playhead is
+    // put down where the file has got to and the caller is told the exact frame is not there yet.
     pin_scrub::forget();
     stand(a_run(&[40, 41, 42]));
     assert!(
         !show_the_frame_of(&path, 300),
         "a frame neither the run nor the scrub holds is not shown"
     );
+    assert_eq!(shown(), None, "with nothing painted beside the run");
     assert_eq!(
-        held(),
+        playhead(),
         Some(42),
         "the picture is taken to the nearest frame that is here instead"
     );
+
     assert!(
         !show_the_frame_of(&path, 5),
         "and a place nothing holds is answered the same way"
     );
+    assert_eq!(shown(), None);
+    assert_eq!(playhead(), Some(40), "the nearest frame of the run");
+
+    // **A release settles on the frame in hand**: the frame painted beside the run is dropped, and
+    // the playhead goes to the nearest frame the file has given the picture — nothing is decoded,
+    // and no media is installed for it.
+    settle_the_picture_on(5);
+    assert_eq!(shown(), None, "the hand's frame goes with the hand");
     assert_eq!(
-        held(),
+        playhead(),
         Some(40),
-        "the picture is the nearest frame of the run, and the caller asks the file for the rest"
+        "and the picture plays on from the nearest frame it holds"
     );
 
     pin_scrub::forget();
@@ -302,6 +290,7 @@ fn a_picture_held_by_its_button_stands_on_its_frame_and_plays_on_from_it() {
                 wanted: None,
             },
             paused: false,
+            shown_for_the_hand: None,
         };
         media
     };
@@ -327,6 +316,7 @@ fn a_picture_held_by_its_button_stands_on_its_frame_and_plays_on_from_it() {
         "one frame past the one it was held on rather than the whole run"
     );
 }
+
 /// **A run that has played to its end wraps round to the frame carrying the file's first frame**,
 /// which is the loop a picture that fits the pin's budget plays for as long as it is up: the run is
 /// held whole, plays from beginning to end, and starts again at the file's first frame whatever
@@ -452,6 +442,7 @@ fn a_run_whose_stream_was_cancelled_holds_its_last_frame_and_never_returns_to_it
         "so the frames the picture would have cycled through are not played again"
     );
 }
+
 /// **A pinned picture's held run is its own budget, and a hover keeps the constant**: the room a
 /// release gives frames back in is the tray's `Performance → Memory → Animated WEBP` for a picture
 /// that has been pinned — which is what lets the player hold a run whole and serve a drag from it —

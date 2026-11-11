@@ -790,6 +790,7 @@ fn every_animated_kind_drains_its_queue() {
             audio_scale: None,
             animation: AnimationPlayback::default(),
             paused: false,
+            shown_for_the_hand: None,
         };
 
         assert!(
