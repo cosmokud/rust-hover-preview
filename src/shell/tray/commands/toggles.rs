@@ -397,6 +397,23 @@ pub(in super::super) fn toggle_text_dont_preview_secrets() {
     refresh_preview();
 }
 
+/// Whether a pinned document's viewer takes the caret as it is revealed — `Preview Settings → PDF →
+/// Pin Mode → Autofocus on PDF`.
+///
+/// **Nothing on screen is rebuilt for it, and nothing is told.** The row is read where a viewer is
+/// revealed and where one is resumed, which is the pin's or the browser's to do and not this
+/// process's (see `pdf_autofocus` and `engines::pdf_viewer::Host::take_the_caret`): a viewer that is
+/// up keeps the keyboard it has, and the reveal after this one — or the resume after a pin put away
+/// and brought back — is the first to answer the new value. A refresh would be a pin laid out again
+/// for a setting that changes nothing of what is on screen.
+pub(in super::super) fn toggle_pdf_autofocus() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pdf_autofocus = !config.pdf_autofocus;
+        config.save();
+    }
+    refresh_preview();
+}
+
 /// The switch above a sound's levels: whether a file's measured loudness is brought to one level
 /// before it is played, which is read where a player is started the way the level
 /// beside it is — nothing on screen is rebuilt, and a sound already playing is left where it is.

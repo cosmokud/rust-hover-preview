@@ -141,6 +141,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "text_show_extensionless",
         ],
     ),
+    ("PDF Preview", &["pdf_autofocus"]),
     (
         "Timing",
         &[

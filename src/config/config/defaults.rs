@@ -203,6 +203,20 @@ pub const MAX_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS: f32 = 1000.0;
 pub const DEFAULT_TEXT_SHOW_EXTENSIONLESS: bool = false;
 /// Whether to refuse previewing secret and sensitive files by default.
 pub const DEFAULT_TEXT_DONT_PREVIEW_SECRETS: bool = true;
+/// Whether a pinned document's viewer takes the caret as it is revealed — `Preview Settings → PDF →
+/// Pin Mode → Autofocus on PDF`, on where the app starts.
+///
+/// **On is the document being worked in**: the viewer asks Chromium for the focus, so a notch over
+/// the page scrolls it and `Ctrl` zooms it rather than being posted here by the wheel seam, and the
+/// arrow keys are the document's own rather than the pin's walk (see
+/// `engines::pdf_viewer::Host::take_the_caret`).
+///
+/// **Off is the pin keeping the keyboard**, which is what a reader walking a folder with the arrow
+/// keys wants: the document stands in the band as a picture to look at, a notch over it is handed to
+/// the browser by the seam, and the pin's own key table answers the arrows, the key that puts the pin
+/// away and the key that ends it. Nothing about the document is different — every key it would have
+/// answered by itself is one the pin answers instead.
+pub const DEFAULT_PDF_AUTOFOCUS: bool = true;
 /// How long the pointer rests on a file before a preview is put up for it, in
 /// milliseconds.
 ///

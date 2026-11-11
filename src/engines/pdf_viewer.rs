@@ -126,6 +126,15 @@ static ANY_VIEWER_ARRIVING: AtomicBool = AtomicBool::new(false);
 /// or one let go of — which is the one fact the pin's colour there turns on (see `the_band_owes_a_repaint`).
 static BAND_REPAINT_OWED: AtomicBool = AtomicBool::new(false);
 
+/// The box each pin's viewer is **standing at**, as the pass that took it up recorded it.
+///
+/// It is what makes a placement free where nothing about it has changed: a road that places a box and
+/// then places it again — the pin's own commit followed by the band's — would otherwise be two
+/// round trips to another thread and two `SetWindowPos` calls for one box. Written by the take-up
+/// pass rather than by the caller, because the box a viewer really stands at is the one it was *taken*
+/// up at and not the one it was last asked for (see `a_viewer_stands_at`).
+static STANDING_BOXES: Lazy<Mutex<Vec<(isize, Area)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
 /// The engine: the thread and the channel into it, begun by the first `open` and ended by the last
 /// `close`.
 static ENGINE: Lazy<Mutex<Option<Engine>>> = Lazy::new(|| Mutex::new(None));
@@ -252,7 +261,6 @@ pub(crate) fn take_the_band_repaint() -> bool {
 
 /// Publish the pins whose viewer has not arrived yet, written the same way and in the same pass as
 /// the live list above.
-///
 /// **It is what keeps a reveal off a box change the user has to cause**: a pin in this list is one
 /// the preview loop publishes a box for on every tick, so the box a document arrives at is the one
 /// its pin has now rather than the one the ask was made with (see `is_arriving_for`).
@@ -385,6 +393,26 @@ pub(crate) fn place(owner: isize, area: Area) {
     }
 
     let pairing = is_up_for(owner);
+
+    // **A box a viewer already stands at is a box owed nothing.** A road that places and then places
+    // again — the pin's own commit at the new box followed by the band's, which is what a centring, a
+    // maximize and a step of the walk all do — is otherwise two round trips to another thread and two
+    // `SetWindowPos` calls for one rectangle, and the second of them is a frame waited on with nothing
+    // to wait for (see `STANDING_BOXES`, `wait_for_the_take`).
+    //
+    // **The arriving half is never skipped.** A viewer that has not arrived owes a *place* of its own:
+    // the box it is created with is the band that stood before its pin was taken up on the file, and a
+    // reveal waits for one published since (see `Seat::placed` and `Life::navigated`). So the shortcut
+    // is asked only where a window is on the screen already.
+    //
+    // **And a box already on its way is not a box to skip either**, which is the one case the record
+    // of where a viewer stands cannot see: a hand that carries a pin out and back inside one pass has
+    // left a box in the cell that is not the one asked for now, and skipping the ask would leave the
+    // viewer at the box the hand passed through rather than at the one it came home to.
+    if pairing && a_box_is_not_in_flight(owner) && a_viewer_stands_at(owner, area) {
+        return;
+    }
+
     // Read before the publish, so that the take the wait is for is one this box is inside of: a take
     // that has already happened is a box carried out before this one was published (see
     // `wait_for_the_take`).
@@ -398,6 +426,57 @@ pub(crate) fn place(owner: isize, area: Area) {
     if ask_for_a_pass() && pairing {
         wait_for_the_take(taken_before);
     }
+}
+
+/// Whether this pin's viewer already stands at `area` — the box its last take-up carried out (see
+/// `STANDING_BOXES`).
+fn a_viewer_stands_at(owner: isize, area: Area) -> bool {
+    STANDING_BOXES
+        .lock()
+        .map(|boxes| {
+            boxes
+                .iter()
+                .any(|(asked, standing)| *asked == owner && *standing == area)
+        })
+        .unwrap_or(false)
+}
+
+/// Whether this pin has no box in the cells waiting to be taken up (see `PLACED_BOXES`).
+///
+/// A box nothing has taken yet is the viewer still on its way to one, so where a viewer *stands* says
+/// nothing about where it is about to be: the shortcut above is only safe over a quiet cell.
+fn a_box_is_not_in_flight(owner: isize) -> bool {
+    PLACED_BOXES
+        .lock()
+        .map(|boxes| !boxes.iter().any(|(asked, _)| *asked == owner))
+        .unwrap_or(true)
+}
+
+/// Publish the boxes the viewers stand at, out of the state the pass that just ran has settled on.
+///
+/// Written once a pass rather than on each placement, because what a viewer *really* stands at is the
+/// box a pass last took it up to and the box it was revealed at — a placement asked for before the
+/// document arrived is a box the window was created at and not one it is ever shown at (see
+/// `Life::navigated`).
+///
+/// **A viewer that is not on the screen stands nowhere.** It is suspended with its window hidden (see
+/// `suspend`), so a pin brought back up is owed a placement of the box it comes up at — the box it went
+/// down in may be another one, and a window put up at a stale box after a display change or a maximize
+/// fixed while it was away is a document standing beside its pin.
+fn publish_the_standing_boxes(boxes: Vec<(isize, Area)>) {
+    if let Ok(mut standing) = STANDING_BOXES.lock() {
+        *standing = boxes;
+    }
+}
+
+/// The boxes of the viewers a pass has just settled: what `publish_the_standing_boxes` is handed (see
+/// `a_viewer_stands_at`).
+fn the_boxes_the_viewers_stand_at(hosts: &[Host]) -> Vec<(isize, Area)> {
+    hosts
+        .iter()
+        .filter(|host| host.seat.life == Life::Shown)
+        .map(|host| (host.seat.owner, host.seat.area))
+        .collect()
 }
 
 /// Publish this pin's newest box for the engine's thread to move its viewer into (see `PLACED_BOXES`).
@@ -976,9 +1055,25 @@ impl Host {
     /// is over, but Chromium's own page only takes it once its controller holds the focus. Asking for
     /// it is what this app's chrome had otherwise taken on the press that raised the pin.
     ///
+    /// **And it is the `PDF → Pin Mode → Autofocus on PDF` setting's, which is the whole of what the
+    /// row is for.** On — where it starts — the document is worked in: the caret goes into it and
+    /// every notch and arrow over it is the document's own. Off, the pin keeps the keyboard for the
+    /// walk, and the asks below leave it where it is: a viewer revealed into a pin whose caret is in
+    /// the listing must not take it, and the pin's own key table is what an arrow reaches (see
+    /// `pin_chrome_layout::pin_ask_keyboard_back`, which leaves the pin's caret where it stands beside
+    /// this).
+    ///
+    /// It is read here rather than handed in, because it is read exactly where it is acted on and the
+    /// thread that reveals a viewer has no configuration of its own: the row is the same file both
+    /// processes watch, and nothing is kept between a reveal and the next one.
+    ///
     /// The foreground window is left to Windows: a viewer is owned by a pin and the pin is the window
     /// the user put there, so raising the viewer over the desktop is not this road's to do.
     fn take_the_caret(&self) {
+        if !pdf_autofocus() {
+            return;
+        }
+
         unsafe {
             let _ = self
                 .controller
@@ -1112,6 +1207,19 @@ fn configure(webview: &ICoreWebView2) {
             let _ = settings.SetIsWebMessageEnabled(false);
         }
     }
+}
+
+/// Whether a pinned document's viewer takes the caret as it is revealed — `Preview Settings → PDF →
+/// Pin Mode → Autofocus on PDF`, on where the app starts (see `DEFAULT_PDF_AUTOFOCUS`).
+///
+/// Read where a viewer is revealed and where one is resumed, and nowhere else: it is a question about
+/// the keyboard of a window that is about to be put on the screen, so a row moved while a viewer is
+/// up is answered by the next reveal rather than by this one.
+pub(crate) fn pdf_autofocus() -> bool {
+    crate::CONFIG
+        .lock()
+        .map(|config| config.pdf_autofocus)
+        .unwrap_or(true)
 }
 
 fn register_class() {
@@ -1281,6 +1389,10 @@ fn viewer_thread(commands: Receiver<Command>) {
         }
 
         hosts.retain(|host| !host.seat.life.is_closed());
+
+        // What the viewers stand at, out of the state this pass has settled on: a box already taken up
+        // is a box the next one asked for is owed nothing for (see `a_viewer_stands_at`).
+        publish_the_standing_boxes(the_boxes_the_viewers_stand_at(&hosts));
 
         // What the paint and placement roads read, published from the state the pass just settled:
         // the pins whose documents are on the screen and the pins still waiting for one, and no
@@ -1601,6 +1713,59 @@ mod tests {
                 .unwrap_or(false),
             "and taking them up leaves the cells empty"
         );
+    }
+
+    /// **A box a viewer already stands at is owed nothing, and a box it does not is owed a move.**
+    ///
+    /// The whole of why maximizing and centring a pinned document were a frame behind the pin: a road
+    /// that places twice — the pin's own commit at the new box, then the band's — asked for two round
+    /// trips to another thread and two `SetWindowPos` calls for one rectangle. The box a viewer stands
+    /// at is the one a pass took it up at, so the second ask is answered without a pass at all (see
+    /// `a_viewer_stands_at`).
+    #[test]
+    fn a_box_a_viewer_stands_at_is_owed_no_second_move() {
+        let pin = 9_100_007;
+        let area = |x: i32| Area {
+            x,
+            y: 40,
+            width: 640,
+            height: 480,
+        };
+
+        let _room = the_viewers_room();
+        publish_the_standing_boxes(vec![(pin, area(100))]);
+        assert!(a_viewer_stands_at(pin, area(100)));
+        assert!(
+            !a_viewer_stands_at(pin, area(200)),
+            "a box it does not stand at is a move owed"
+        );
+        assert!(
+            !a_viewer_stands_at(9_100_008, area(100)),
+            "and one pin's box is no box of another"
+        );
+
+        // **A viewer that is not on the screen stands nowhere.** It is suspended with its window
+        // hidden, so a pin brought back up is owed a placement of the box it comes back at — which is
+        // the filter `the_boxes_the_viewers_stand_at` puts on what a pass publishes, read here the way
+        // that function reads a pass's hosts.
+        let seats = [
+            (pin, Life::Shown),
+            (pin + 1, Life::Suspended),
+            (pin + 2, Life::Arriving),
+        ];
+        let chosen: Vec<(isize, Area)> = seats
+            .into_iter()
+            .filter(|(_, life)| *life == Life::Shown)
+            .map(|(owner, _)| (owner, area(100)))
+            .collect();
+        assert_eq!(
+            chosen,
+            vec![(pin, area(100))],
+            "only a shown viewer stands somewhere"
+        );
+
+        publish_the_standing_boxes(Vec::new());
+        assert!(!a_viewer_stands_at(pin, area(100)));
     }
 
     /// An ask is one viewer per file per pin: the same document pinned twice is two viewers, a
