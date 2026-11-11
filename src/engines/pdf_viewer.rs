@@ -301,11 +301,25 @@ pub(crate) fn take_the_band_repaint() -> bool {
 fn publish_the_arriving_owners(owners: Vec<isize>) {
     let arriving = !owners.is_empty();
 
-    if let Ok(mut list) = ARRIVING_OWNERS.lock() {
-        *list = owners;
-    }
+    let changed = match ARRIVING_OWNERS.lock() {
+        Ok(mut list) => {
+            let changed = *list != owners;
+            *list = owners;
+            changed
+        }
+        Err(_) => false,
+    };
 
     ANY_VIEWER_ARRIVING.store(arriving, Ordering::Release);
+
+    // **And what the band is painted from has changed with it.** A pin's band is a document's to fill
+    // from the moment one is on its way (see `the_band_belongs_to_the_document`), so a document that
+    // has just been asked for is the frame drawn where a raster of page one stands — and a document
+    // that arrived is the frame around the page rather than the raster under it, which is the same
+    // debt `publish_the_live_owners` leaves on its own change.
+    if changed {
+        the_band_owes_a_repaint();
+    }
 }
 
 /// Whether this pin is still waiting for its viewer, which is what the loop asks before publishing
@@ -1321,6 +1335,128 @@ pub(crate) fn pdf_autofocus() -> bool {
         .unwrap_or(true)
 }
 
+/// Whether a pinned document is handed to Chromium's own viewer — `Preview Settings → PDF → Pin Mode
+/// → Full Mode`, on where the app starts (see `DEFAULT_PDF_FULL_MODE`).
+///
+/// **Off, there is no viewer on any road**: the band is the single page this app reads and draws
+/// itself, which is what a hover of the same file shows — no ask, no window, no browser. Read where a
+/// document would be asked for and where one is let go of, and nowhere else, so the row is answered
+/// by the tick that follows it rather than at the next take-up (see `place_pinned_siblings`).
+pub(crate) fn pdf_full_mode() -> bool {
+    crate::CONFIG
+        .lock()
+        .map(|config| config.pdf_full_mode)
+        .unwrap_or(true)
+}
+
+/// Whether the pin's band is a document's to fill: the viewer stands in it, **or one is on its way**
+/// (see `paint::the_document_holds_the_band`).
+///
+/// The arriving half is the second one for the reason a walk needs it: a document asked for takes a
+/// browser start and a navigation, and a band that falls back to the raster for that long reads as two
+/// loads — a page image, then the document — for a file that was asked for as a document.
+pub(crate) fn the_band_belongs_to_the_document(owner: isize) -> bool {
+    is_up_for(owner) || is_arriving_for(owner)
+}
+
+/// Whether a placement is owed for this pin's band rather than one already made — the one question the
+/// preview loop's tick asks of a pinned document (see `place_pinned_siblings`).
+///
+/// Three answers in one, because they are three states of the same pair:
+///
+/// * **The band is not a document's** (the row is off, or the file is not a page): a viewer standing in
+///   it, or one on its way, is a document to let go of (`close_the_pin`).
+/// * **The band is a document's and one stands in it**: a move is owed where it stands somewhere other
+///   than the band (see `a_move_is_owed`).
+/// * **The band is a document's and nothing stands in it**: a document to ask for, unless one is
+///   already on its way — a viewer arriving and a viewer asked for are both a document that is coming,
+///   and asking again would be a second browser for the same band.
+///
+/// Asked of four published lists and no window, so a tick where the answer is no pays a handful of
+/// reads.
+pub(crate) fn a_placement_is_owed(owner: isize, area: Area, the_band_is_a_documents: bool) -> bool {
+    if owner == 0 {
+        return false;
+    }
+
+    if !the_band_is_a_documents {
+        return a_viewer_is_owed(owner) || is_up_for(owner) || is_arriving_for(owner);
+    }
+
+    if is_up_for(owner) {
+        return a_move_is_owed(owner, area);
+    }
+
+    !(is_arriving_for(owner) || a_viewer_is_owed(owner))
+}
+
+/// Let go of the document a pin is holding or owed: the row that keeps a pinned document a window of
+/// Chromium's was turned off, and a viewer left standing would be a browser in a band that has gone
+/// back to being this app's own page (see `close_the_pin`).
+///
+/// Every pin at once, because the row is the whole app's: there is one pin at a time and this is not
+/// the place to be clever about which.
+pub(crate) fn close_the_pins() {
+    let owners: Vec<isize> = match ASKED.lock() {
+        Ok(asked) => {
+            let mut owners: Vec<isize> = asked.iter().map(|(_, owner)| *owner).collect();
+            owners.sort_unstable();
+            owners.dedup();
+            owners
+        }
+        Err(_) => return,
+    };
+
+    for owner in owners {
+        close_the_pin(owner);
+    }
+}
+
+/// Let go of every document this pin holds or is owed, and answer nothing: one close per file the pin
+/// asked for, which is one for a pin, and the thread's own teardown after it (see `close`).
+pub(crate) fn close_the_pin(owner: isize) {
+    if owner == 0 {
+        return;
+    }
+
+    let (files, left) = match ASKED.lock() {
+        Ok(mut asked) => {
+            let files: Vec<PathBuf> = asked
+                .iter()
+                .filter(|(_, asked_owner)| *asked_owner == owner)
+                .map(|(path, _)| path.clone())
+                .collect();
+
+            asked.retain(|(_, asked_owner)| *asked_owner != owner);
+
+            (files, asked.len())
+        }
+        Err(_) => return,
+    };
+
+    let mut engine = match ENGINE.lock() {
+        Ok(engine) => engine,
+        Err(_) => return,
+    };
+
+    if let Some(held) = engine.as_mut() {
+        for path in files {
+            let _ = held.sender.send(Command::Close {
+                path: path.to_path_buf(),
+                owner,
+            });
+        }
+    }
+
+    if left == 0 {
+        // Nothing is owed a viewer any more, so the thread goes the way `close` sends it: whatever it
+        // still holds is closed on its own way out and nothing here waits for it (see `Engine`).
+        if let Some(engine) = engine.take() {
+            let _ = engine.sender.send(Command::Shutdown);
+        }
+    }
+}
+
 fn register_class() {
     static REGISTERED: AtomicBool = AtomicBool::new(false);
 
@@ -1822,6 +1958,86 @@ mod tests {
                 .unwrap_or(false),
             "and taking them up leaves the cells empty"
         );
+    }
+
+    /// **A row that decides whether a pin holds a document at all is answered as a placement**, so the
+    /// four states a pair can be in are read here: a band owed a document with none, a document on its
+    /// way, one that stands at the band, one that stands somewhere else, and a band that is not a
+    /// document's any more with a viewer still in it.
+    ///
+    /// It is the whole of what the preview loop's tick asks (`place_pinned_siblings`,
+    /// `the_pins_document_is_not_where_it_belongs`), and the row both ways arrives at it as an answer
+    /// rather than as a road of its own.
+    #[test]
+    fn a_band_and_the_document_in_it_are_placed_by_one_question() {
+        let _room = the_viewers_room();
+        let pin = 9_100_009;
+        let area = |x: i32| Area {
+            x,
+            y: 40,
+            width: 640,
+            height: 480,
+        };
+        // An ask is one viewer owed a pin, which is what a band with no viewer up is answered by.
+        let an_ask = |asked: bool| {
+            if let Ok(mut asks) = ASKED.lock() {
+                asks.retain(|(_, owner)| *owner != pin);
+
+                if asked {
+                    asks.push((PathBuf::from("a.pdf"), pin));
+                }
+            }
+        };
+
+        an_ask(false);
+        publish_the_live_owners(Vec::new());
+        publish_the_arriving_owners(Vec::new());
+        publish_the_standing_boxes(Vec::new());
+
+        assert!(
+            a_placement_is_owed(pin, area(10), true),
+            "a band owed a document with none on the screen is a document to ask for"
+        );
+
+        // And a document that is on its way is the answer to that ask rather than a reason to ask a
+        // second time — the arriving list is the viewer thread's own word for it.
+        an_ask(true);
+        publish_the_arriving_owners(vec![pin]);
+        assert!(
+            !a_placement_is_owed(pin, area(10), true),
+            "a document already on its way is not asked for twice"
+        );
+
+        // A document standing at its band is owed nothing at all, and one standing somewhere else is
+        // owed the move (see `a_move_is_owed`).
+        an_ask(true);
+        publish_the_arriving_owners(Vec::new());
+        publish_the_live_owners(vec![pin]);
+        publish_the_standing_boxes(vec![(pin, area(10))]);
+        assert!(!a_placement_is_owed(pin, area(10), true));
+        assert!(
+            a_placement_is_owed(pin, area(200), true),
+            "a document that stands somewhere else is one to move"
+        );
+
+        // **The row off is the same question answered the other way.** A viewer standing in a band that
+        // is no longer a document's is a document to let go of, and so is one still on its way; a band
+        // that holds no document and owes none asks nothing.
+        assert!(
+            a_placement_is_owed(pin, area(10), false),
+            "a viewer in a band that is not a document's any more is one to let go of"
+        );
+
+        an_ask(false);
+        publish_the_live_owners(Vec::new());
+        publish_the_arriving_owners(Vec::new());
+        publish_the_standing_boxes(Vec::new());
+        assert!(
+            !a_placement_is_owed(pin, area(10), false),
+            "and a band with no document and no ask is a pin with nothing to place"
+        );
+
+        an_ask(false);
     }
 
     /// **A box a viewer already stands at is owed nothing, and a box it does not is owed a move.**

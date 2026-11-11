@@ -3140,7 +3140,25 @@ pub(super) fn the_documents_area(
 /// Whether the pin's band is a PDF's, which is placed by the same road a page is: the viewer is a
 /// window of its own standing in the band, and every road that raises, shows or re-boxes the pin has
 /// to put it there (see `place_pinned_siblings` and `engines::pdf_viewer`).
+///
+/// **And whether the pin hands a document to a browser at all**, which is `PDF → Pin Mode → Full Mode`
+/// (see `pdf_full_mode`). Off, this answers no on every road it is asked — no viewer is asked for, and
+/// the one a pin is holding is let go of by the next placement — so a pinned document is the single
+/// page a hover of the same file is, drawn in the band by this app.
 pub(super) fn the_bands_pdf_viewer_is_owed() -> bool {
+    pinned_content().is_some()
+        && crate::engines::pdf_viewer::pdf_full_mode()
+        && CURRENT_MEDIA
+            .lock()
+            .ok()
+            .and_then(|media| media.as_ref().map(|media| media.media_type))
+            == Some(MediaType::Pdf)
+}
+
+/// Whether the pin's band is a PDF's at all — the file rather than the row, which is what a placement
+/// asks when it is deciding whether a viewer standing in the band is one to let go of (see
+/// `the_bands_pdf_viewer_is_owed`).
+fn the_band_is_a_pdfs() -> bool {
     pinned_content().is_some()
         && CURRENT_MEDIA
             .lock()
@@ -3172,8 +3190,9 @@ pub(super) fn open_the_pins_pdf_viewer(
     crate::engines::pdf_viewer::open(path, window.0 as isize, the_documents_area(content, dpi));
 }
 
-/// Whether a document the pin's band holds is standing somewhere other than that band, which is a
-/// placement owed rather than one already made (see `engines::pdf_viewer::a_move_is_owed`).
+/// Whether the pair — the pin's band and the document that belongs in it — has come apart, which is a
+/// placement owed rather than one already made: the question the preview loop's tick asks (see
+/// `engines::pdf_viewer::a_placement_is_owed`).
 ///
 /// **The two moves are separate windows of two threads, and this is what tests that they agree.** A
 /// road that re-boxes a pin moves the pin's own window in one call and publishes the box for the
@@ -3182,18 +3201,22 @@ pub(super) fn open_the_pins_pdf_viewer(
 /// lost placement leaves is a document standing beside the pin it belongs to, with nothing of the
 /// pin's left to ask again until a box change the hand has to cause.
 ///
-/// Asked of the band the pin has now and the box the document was last put at, and of nothing else:
-/// a tick where the two agree pays two reads, and one where they do not is the tick that repairs the
-/// pair (see the loop's own road, and `engines::pdf_viewer::a_move_is_owed`).
-pub(super) fn the_pins_document_stands_off_its_band() -> bool {
-    if !the_bands_pdf_viewer_is_owed() {
-        return false;
-    }
+/// **It is also the row, both ways.** With `PDF → Pin Mode → Full Mode` turned off under a pin that is
+/// up, the answer is a placement owed — the one that lets go of the viewer — and with it turned back on
+/// it is the placement that asks for one: nothing of the pin's own is re-boxed for either.
+///
+/// Asked of the band the pin has now, the box the document was last put at and the row, and of nothing
+/// else: a tick where they agree pays a handful of reads, and one where they do not is the tick that
+/// repairs the pair.
+pub(super) fn the_pins_document_is_not_where_it_belongs() -> bool {
+    // The file first, because it is the one question that costs a single read for every pin of every
+    // other kind: a pin whose media is not a page has no document on any road and asks nothing.
+    let kind = CURRENT_MEDIA
+        .lock()
+        .ok()
+        .and_then(|media| media.as_ref().map(|media| media.media_type));
 
-    let owner = pinned_window();
-
-    // The fast path is the cheap one: a pin whose document is not up has nothing to be off.
-    if owner.is_invalid() || !crate::engines::pdf_viewer::is_up_for(owner.0 as isize) {
+    if kind != Some(MediaType::Pdf) {
         return false;
     }
 
@@ -3201,9 +3224,19 @@ pub(super) fn the_pins_document_stands_off_its_band() -> bool {
         return false;
     };
 
+    let owner = pinned_window();
+
+    if owner.is_invalid() {
+        return false;
+    }
+
     let area = the_documents_area(content, dpi_at(content.0, content.1));
 
-    crate::engines::pdf_viewer::a_move_is_owed(owner.0 as isize, area)
+    crate::engines::pdf_viewer::a_placement_is_owed(
+        owner.0 as isize,
+        area,
+        crate::engines::pdf_viewer::pdf_full_mode(),
+    )
 }
 
 pub(super) fn place_pinned_siblings() {
@@ -3222,6 +3255,22 @@ pub(super) fn place_pinned_siblings() {
     if the_bands_pdf_viewer_is_owed() {
         if let Some((path, _)) = pinned_media_owner() {
             open_the_pins_pdf_viewer(Some(MediaType::Pdf), &path, content, document_dpi);
+        }
+    } else if the_band_is_a_pdfs() {
+        // **A band that has gone back to being a page rather than a document holds no viewer**, which
+        // is `PDF → Pin Mode → Full Mode` turned off under a pin that is up: the window, the controller
+        // and the browser behind it are this road's to let go of, and the band is the single page this
+        // app draws from here rather than a document nothing asks about (see
+        // `engines::pdf_viewer::close_the_pin`). The paint that replaces it is owed on the change the
+        // viewer thread publishes as it closes.
+        //
+        // Asked of the file rather than of the row so that a pin on another kind of file asks nothing:
+        // a viewer standing in a band that has moved on to a film is the swap's to close, not this
+        // road's.
+        let pin = pinned_window();
+
+        if !pin.is_invalid() {
+            crate::engines::pdf_viewer::close_the_pin(pin.0 as isize);
         }
     }
 

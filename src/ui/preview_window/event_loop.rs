@@ -3902,16 +3902,20 @@ pub fn run_preview_window() {
                 place_pinned_siblings();
             }
 
-            // **And a document that is on the screen is put at the pin's band again wherever it is not
-            // there.** The pin's own window and the document standing in it are two windows of two
-            // threads, and every road that re-boxes the pin publishes the box for the document in a
-            // second call: a placement that never reached the take-up — a thread of another thread's
-            // mid-navigation, a box taken up before the pin's own commit — leaves the document standing
-            // beside its pin, and no road of the pin's own asks again. This is that ask, so the tail a
-            // lost placement used to cost is one tick rather than the next box change the hand has to
-            // cause (see `the_pins_document_stands_off_its_band` and
-            // `engines::pdf_viewer::a_move_is_owed`).
-            if the_pins_document_stands_off_its_band() {
+            // **And a document that belongs in the pin's band is put there again wherever it is not.**
+            // The pin's own window and the document standing in it are two windows of two threads, and
+            // every road that re-boxes the pin publishes the box for the document in a second call: a
+            // placement that never reached the take-up — a thread of another thread's mid-navigation, a
+            // box taken up before the pin's own commit — leaves the document standing beside its pin, and
+            // no road of the pin's own asks again. This is that ask, so the tail a lost placement used to
+            // cost is one tick rather than the next box change the hand has to cause.
+            //
+            // **It is the row as well, both ways**: `PDF → Pin Mode → Full Mode` off leaves a placement
+            // owed until the viewer is let go of, and on leaves one owed until it is asked for, so a row
+            // moved under a pin that is up takes effect on this tick rather than at the next take-up
+            // (see `the_pins_document_is_not_where_it_belongs` and
+            // `engines::pdf_viewer::a_placement_is_owed`).
+            if the_pins_document_is_not_where_it_belongs() {
                 place_pinned_siblings();
             }
 

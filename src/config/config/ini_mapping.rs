@@ -592,6 +592,11 @@ impl AppConfig {
             "pdf_autofocus",
             Some(self.pdf_autofocus.to_string()),
         );
+        ini.set(
+            CONFIG_SECTION,
+            "pdf_full_mode",
+            Some(self.pdf_full_mode.to_string()),
+        );
         // Every list the configuration holds is one row of the table to write (see
         // `formats::lists`).
         lists::write_all(self, &mut ini);
@@ -1331,6 +1336,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pdf_autofocus") {
             self.pdf_autofocus = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pdf_full_mode") {
+            self.pdf_full_mode = value;
         }
         // Every list the configuration holds is read out of the file by the table, one row
         // each (see `formats::lists`).

@@ -231,6 +231,19 @@ pub(super) fn a_documents_band_is_the_viewers(media: MediaType, owner: isize) ->
     media == MediaType::Pdf && crate::engines::pdf_viewer::is_up_for(owner)
 }
 
+/// Whether the pin's band is a document's to fill on every road this window draws it — the viewer
+/// standing in it, **or one on its way to it** (see `engines::pdf_viewer::the_band_belongs_to_the_document`).
+///
+/// **A document that is still arriving is already the band's.** What a pinned document shows while
+/// Chromium comes up is the frame it will stand in, not a raster of page one: a walk to the next file
+/// would otherwise read as two loads — a page image, then the document — and the image is the one
+/// thing the file that was asked for is not going to look like. The static raster keeps its place as
+/// the fallback for a document that never comes, which is a viewer this app has stopped asking for
+/// (see `Life::closed`).
+pub(super) fn the_document_holds_the_band(media: MediaType, owner: isize) -> bool {
+    media == MediaType::Pdf && crate::engines::pdf_viewer::the_band_belongs_to_the_document(owner)
+}
+
 /// Whether the chrome's own rows of a pinned window are the pin's claim rather than its chrome:
 /// they always are where they are not the media's own. The strips carry the chrome on every road,
 /// so the bitmap owes those rows only the least pixel a press can land on — the same one part in
@@ -374,10 +387,11 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                 media.as_ref().map(|media| {
                     !media.media_type.is_engine()
                         && !matches!(media.media_type, MediaType::Video)
-                        // A pinned PDF's band is Chromium's while its viewer stands in it: what
-                        // this window would compose there is a raster of page one underneath the
-                        // document the user is working in (see `a_documents_band_is_the_viewers`).
-                        && !a_documents_band_is_the_viewers(media.media_type, hwnd.0 as isize)
+                        // A pinned PDF's band is Chromium's while its viewer stands in it — or is on
+                        // its way to it: what this window would compose there is a raster of page one
+                        // underneath the document the user is working in (see
+                        // `the_document_holds_the_band`).
+                        && !the_document_holds_the_band(media.media_type, hwnd.0 as isize)
                         // A model holds a stand-in frame of this app's and shows a picture of f3d's
                         // through the host, so what is composed here is nothing but the stand-in
                         // over the scene (see `a_models_band_is_a_hosts_picture`).
@@ -463,7 +477,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // the pixel, and the picture itself is the Shell's thumbnail of the page (see
                     // `a_pages_band_is_hit_testable` and `pin_page_thumbnail`).
                     fill_band_hit_testable(out, band_width, band_top.max(0) as u32, band_height);
-                } else if a_documents_band_is_the_viewers(media.media_type, hwnd.0 as isize) {
+                } else if the_document_holds_the_band(media.media_type, hwnd.0 as isize) {
                     // **A pinned document's band is Chromium's in the middle and this app's around
                     // it.** The viewer stands in the band inset by the pin's own margin, and the
                     // rows and columns that margin leaves are painted here rather than left

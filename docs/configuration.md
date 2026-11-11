@@ -210,6 +210,15 @@ spinner_delay_ms=250
 - `video_engine_idle` / `libreoffice_idle` / `office_engine_idle` / `webview_idle`: how long each engine is kept after its last file — `away` (default) keeps it while Explorer is reachable and lets it go after `afk_timer_seconds`, a number of seconds is that long after the last page (or film, for mpv), `indefinitely` until the app exits, and `0` lets it go at once. The tray's **MPV TTL**, **Microsoft Office TTL**, **LibreOffice TTL** and **WebView2 TTL** write them.
 - `afk_timer_seconds`: seconds with no Explorer window before an engine set to `away` is released. Default `60`, max one day. `0` releases immediately.
 
+### Pinned documents
+
+- `pdf_full_mode`: `true` (default) hands a pinned PDF to WebView2's own viewer, so the document is worked in — it scrolls, searches, selects and zooms as it does in a browser, and the pin's chrome is the frame around it. `false` makes a pinned PDF exactly what a hover of the same file is: the single page this app reads and draws itself, in the pin's band, with no browser and no second window in the pin's path.
+  - Read where a document would be asked for and where one is let go of, so the row is answered under a pin that is up: turning it off closes the viewer on the tick that follows and draws the page where it stood, and turning it back on asks for a viewer again.
+  - The tray's **PDF → Pin Mode → Full Mode** writes it.
+- `pdf_autofocus`: `true` (default) puts the caret in a pinned document's viewer as it is revealed and as it is resumed, so a notch over the page scrolls it and `Ctrl`, `Ctrl+F` and the arrows are the document's own. `false` keeps the keyboard in the pin: its key table answers the arrows so a folder walks with them, and a notch over the page is handed to the browser by this app rather than delivered to a window Windows has not put in front.
+  - Read at each reveal and resume, so a row moved under a pin that is up is answered by the next one.
+  - The tray's **PDF → Pin Mode → Autofocus on PDF** writes it, and the row is greyed out while `pdf_full_mode` is off — there is no viewer to put a caret in.
+
 ### Trigger and position
 
 - `trigger_key` / `trigger_key_mode` / `trigger_key_enabled`: the key (`alt`, `ctrl`, `shift`, `win`), what it does (`disable` or `enable`), and whether it is watched. Default `true`.

@@ -217,6 +217,24 @@ pub const DEFAULT_TEXT_DONT_PREVIEW_SECRETS: bool = true;
 /// away and the key that ends it. Nothing about the document is different — every key it would have
 /// answered by itself is one the pin answers instead.
 pub const DEFAULT_PDF_AUTOFOCUS: bool = true;
+
+/// Whether a pinned document is handed to Chromium's own viewer — `Preview Settings → PDF → Pin Mode
+/// → Full Mode`, on where the app starts.
+///
+/// **On, a pinned document is worked in.** `engines::pdf_viewer` asks the browser for a window of its
+/// own and stands it in the pin's band at every box change, so the page scrolls, searches, selects
+/// and zooms as it does in a browser, and the pin's own strips are the frame around it.
+///
+/// **Off, a pinned document is what a hovered one is**: the single page this app reads and draws
+/// itself, in the pin's band, with the pin's own chrome — no browser, no second window, and nothing
+/// of Chromium in the pin's path at all. It is the row for a machine where a browser per pinned
+/// document is more than the preview is worth, and it is the same page the hover shows, so a pin
+/// switched off reads as a picture to look at rather than as a reader to work in (see
+/// `the_bands_pdf_viewer_is_owed`).
+///
+/// Read where a document would be asked for and where one would be let go of, so a row moved under a
+/// pin that is up takes effect on the tick that follows it.
+pub const DEFAULT_PDF_FULL_MODE: bool = true;
 /// How long the pointer rests on a file before a preview is put up for it, in
 /// milliseconds.
 ///
