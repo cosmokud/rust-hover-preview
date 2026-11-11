@@ -44,11 +44,23 @@
 //! scrolls it rather than being posted here and there by the seam. The seam's posting is what a
 //! desktop without that focus falls back on, and the pin publishes no wheel box of its own for a
 //! document at all (see ARCHITECTURE.md, "The two PDF roads").
+//!
+//! **Two windows, one box, and one frame.** The viewer stands in the band of a window this thread does
+//! not own, so nothing but both moves landing inside one frame makes them one window to the eye: a box
+//! is published into a cell per pin rather than queued as a command per pointer move (see
+//! `PLACED_BOXES`), and a pin whose document is on the screen waits for that box to be taken up before
+//! it goes on with the rest of its move (see `place`, `wait_for_the_take`).
+//!
+//! **And the frame around the document owes a paint the moment the document stands up.** What the pin
+//! fills the band with is asked of `is_up_for` rather than of the file's kind (`a_documents_band_is_the_viewers`),
+//! so a pin whose viewer has just been revealed is a band whose pixels have just changed — and the
+//! viewer thread is the one that learns it, and the preview loop's thread the one that paints it (see
+//! `the_band_owes_a_repaint`).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
@@ -110,6 +122,10 @@ static ARRIVING_OWNERS: Lazy<Mutex<Vec<isize>>> = Lazy::new(|| Mutex::new(Vec::n
 /// that is up and owes nothing pays one read rather than a lock.
 static ANY_VIEWER_ARRIVING: AtomicBool = AtomicBool::new(false);
 
+/// Whether a pin's band owes a paint because what stands in it has changed — a document revealed in it,
+/// or one let go of — which is the one fact the pin's colour there turns on (see `the_band_owes_a_repaint`).
+static BAND_REPAINT_OWED: AtomicBool = AtomicBool::new(false);
+
 /// The engine: the thread and the channel into it, begun by the first `open` and ended by the last
 /// `close`.
 static ENGINE: Lazy<Mutex<Option<Engine>>> = Lazy::new(|| Mutex::new(None));
@@ -121,6 +137,37 @@ struct Engine {
     sender: Sender<Command>,
 }
 
+/// The newest box each pin has published for its viewer, and whether a command saying one is owed is
+/// already on its way to the thread.
+///
+/// **One cell per pin rather than a queue, and one command rather than a command per box.** A hand
+/// carrying the pin publishes a box per pointer move, and only the box it ends in is one to be in: what
+/// a queue of them buys is a viewer that falls further behind the window it stands in for as long as
+/// the hand keeps moving, and then goes on moving after the hand has stopped until it has drained —
+/// which reads as the document tailing the pin rather than standing in it. The cell is what lets the
+/// engine's thread decide how many moves a drag costs, and the flag is what makes a drag of a thousand
+/// publishes one command to a thread that is a browser already busy.
+static PLACED_BOXES: Lazy<Mutex<Vec<(isize, Area)>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+/// Whether a command saying a box is published has been sent and not yet taken up (see `PLACED_BOXES`).
+static PLACE_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// How many boxes the viewer thread has taken up, and the signal a pin waits on for one (see
+/// `wait_for_the_take`).
+///
+/// A count rather than a flag, because a hand carrying a pin publishes a box per pointer move and each
+/// of them is owed a take-up of its own: a flag would be cleared by the take-up of the box before it,
+/// and the pin would be answered for a move that had not been made.
+static TAKES: Lazy<(Mutex<u64>, Condvar)> = Lazy::new(|| (Mutex::new(0), Condvar::new()));
+
+/// How long a pin waits for its viewer to take up the box it has just published: a frame of the fastest
+/// display this app is likely to meet (240 Hz is 4.17 ms), and never more than one.
+///
+/// The wait is the pin's own thread — the one that draws it and pumps its window — so it is bounded by
+/// what a frame is worth: a viewer in the middle of a navigation may not reach its pass for as long as
+/// that takes, and a pin stopped for it would be a window that answers nothing while a browser thinks.
+const VIEWER_CATCH_UP: Duration = Duration::from_millis(4);
+
 /// What the app asks of a viewer.
 enum Command {
     Open {
@@ -130,14 +177,12 @@ enum Command {
         owner: isize,
         area: Area,
     },
-    /// The newest box **this pin's** band has, published rather than queued per pointer move: a
-    /// drag asks on every move and only the last one is a box to be in (the same shape as the hover
-    /// engine's `PLACED`, for the same reason). The owner is carried because two pins are two
-    /// boxes, and a box of one is no box of the other.
-    Place {
-        owner: isize,
-        area: Area,
-    },
+    /// **That a box is published for a viewer, and the box itself travels in the cells beside the
+    /// channel**: a drag asks on every pointer move and only the last one is a box to be in (see
+    /// `PLACED_BOXES`). The command is the wake and nothing else, so that a pass asleep in `recv_timeout`
+    /// takes the newest box up at once rather than at the end of its wait. The owner is carried by the
+    /// cell, because two pins are two boxes and a box of one is no box of the other.
+    Place,
     /// One pin's viewer for one file, and never another pin's of the same name.
     Close {
         path: PathBuf,
@@ -164,11 +209,45 @@ pub(crate) fn is_up_for(owner: isize) -> bool {
 /// that order — the list first and the fast path after it — so a reader that sees the flag sees a
 /// list that already names its own pin.
 fn publish_the_live_owners(owners: Vec<isize>) {
-    if let Ok(mut live) = LIVE_OWNERS.lock() {
-        *live = owners.clone();
-    }
+    let any = !owners.is_empty();
+    let changed = match LIVE_OWNERS.lock() {
+        Ok(mut live) => {
+            let changed = *live != owners;
+            *live = owners;
+            changed
+        }
+        Err(_) => false,
+    };
 
-    ANY_VIEWER_UP.store(!owners.is_empty(), Ordering::Release);
+    ANY_VIEWER_UP.store(any, Ordering::Release);
+
+    // **A band whose middle is Chromium's owes a paint the moment that answer changes.** What the pin
+    // fills that band with is asked of this list and not of the file's kind (see
+    // `a_documents_band_is_the_viewers`): while no viewer stands in it the band is the raster of page
+    // one the pin was taken up with, and once one does it is the caption's colour around the document.
+    // So the pass a viewer is revealed in — and the one it is let go of in — is a paint owed to the pin
+    // whose answer just changed: a frame left as it was is a document standing in the white of the page
+    // it was taken up on, until something else happens to ask for a paint.
+    if changed {
+        the_band_owes_a_repaint();
+    }
+}
+
+/// Owe the pins whose answer changed one paint of their band, and wake the loop that paints them.
+///
+/// The viewer thread is the one that learns a document has stood up or been let go of, and the preview
+/// loop's own thread is the one that paints the frame around it — so the debt is a flag and the wake is
+/// the channel's event. A reveal left to the loop's own tick would be a document standing in the white
+/// of the page it was taken up with for as long as that tick is away (see `take_the_band_repaint`).
+pub(crate) fn the_band_owes_a_repaint() {
+    BAND_REPAINT_OWED.store(true, Ordering::Release);
+    crate::app::seam::wake_preview_loop();
+}
+
+/// Take the band's repaint debt, if one is owed: the preview loop's tick spends it (see
+/// `the_band_owes_a_repaint`).
+pub(crate) fn take_the_band_repaint() -> bool {
+    BAND_REPAINT_OWED.swap(false, Ordering::AcqRel)
 }
 
 /// Publish the pins whose viewer has not arrived yet, written the same way and in the same pass as
@@ -285,21 +364,140 @@ pub(crate) fn open(path: &Path, owner: isize, area: Area) -> bool {
     taken
 }
 
-/// Move **this pin's** viewer to `area` — the pin's content band, which is the whole of what a
-/// viewer is placed by. A drag of one pin is no ask at all for the window of another (see `Place`).
+/// Move **this pin's** viewer to `area` — the pin's content band less the margin the viewer is inset
+/// by, which is the whole of what a viewer is placed by. A drag of one pin is no ask at all for the
+/// window of another (see `Place`).
+///
+/// **A box is published for a viewer that is still arriving as well as for one that is up.** The rect
+/// a viewer is created with is never the rect it is shown at, so the box that answers an ask is the
+/// newest one its pin has rather than the one that came with the ask (see `Seat::place`) — which is why
+/// the arriving half is published and not waited on: there is no window on the screen to pair with yet.
+///
+/// **And a pin whose document is on the screen waits for it to arrive at the box.** The viewer is a
+/// window of another thread's, so a box sent to it is a `SetWindowPos` made a thread-hop later, while
+/// the pin's own window is put at that box in this one: a viewer that catches up afterwards is seen
+/// standing where the pin was, one frame behind the frame the hand is watching — a document tailing the
+/// window it stands in rather than being carried with it. What the wait buys is both moves committing
+/// in the same frame, which is what makes the two read as one window (see `wait_for_the_take`).
 pub(crate) fn place(owner: isize, area: Area) {
-    // **A box is published for a viewer that is still arriving as well as for one that is up.** The
-    // rect a viewer is created with is never the rect it is shown at, so the box that answers an ask
-    // is the newest one its pin has rather than the one that came with the ask (see `Seat::place`).
     if !a_viewer_is_owed(owner) {
         return;
     }
 
-    if let Ok(engine) = ENGINE.lock() {
-        if let Some(engine) = engine.as_ref() {
-            let _ = engine.sender.send(Command::Place { owner, area });
+    let pairing = is_up_for(owner);
+    // Read before the publish, so that the take the wait is for is one this box is inside of: a take
+    // that has already happened is a box carried out before this one was published (see
+    // `wait_for_the_take`).
+    let taken_before = boxes_taken();
+
+    publish_a_box(owner, area);
+
+    // And a box nothing is going to take up is not a box to wait on: a thread that has gone leaves the
+    // channel it was reading alive but deaf, and a pin waiting on it would pay the bound on every step
+    // of a drag for a move that is never coming (see `ask_for_a_pass`).
+    if ask_for_a_pass() && pairing {
+        wait_for_the_take(taken_before);
+    }
+}
+
+/// Publish this pin's newest box for the engine's thread to move its viewer into (see `PLACED_BOXES`).
+/// The cell is replaced rather than added to, so a hand that has moved a hundred times has left one box.
+fn publish_a_box(owner: isize, area: Area) {
+    if let Ok(mut boxes) = PLACED_BOXES.lock() {
+        match boxes.iter_mut().find(|(asked, _)| *asked == owner) {
+            Some(box_) => box_.1 = area,
+            None => boxes.push((owner, area)),
         }
     }
+}
+
+/// Ask the engine's thread for a pass, once however many boxes have been published, and answer whether one
+/// is owed (see `PLACE_ASKED`).
+///
+/// A send that finds no engine, or one whose thread has gone, is a box nothing will take up, so the flag
+/// is given back rather than left owed: a flag left owed is a viewer that stops following the hand for
+/// the rest of the run.
+fn ask_for_a_pass() -> bool {
+    if PLACE_ASKED.swap(true, Ordering::AcqRel) {
+        return true;
+    }
+
+    let Ok(engine) = ENGINE.lock() else {
+        PLACE_ASKED.store(false, Ordering::Release);
+        return false;
+    };
+
+    match engine.as_ref() {
+        Some(engine) if engine.sender.send(Command::Place).is_ok() => true,
+        _ => {
+            PLACE_ASKED.store(false, Ordering::Release);
+            false
+        }
+    }
+}
+
+/// The boxes the engine's thread is to move its viewers into, taken out of the cells whole — the flag
+/// released with them, because a flag left owed over an empty cell is a viewer that never moves again.
+fn take_the_boxes() -> Vec<(isize, Area)> {
+    PLACE_ASKED.store(false, Ordering::Release);
+
+    PLACED_BOXES
+        .lock()
+        .map(|mut boxes| boxes.drain(..).collect())
+        .unwrap_or_default()
+}
+
+/// How many boxes the engine's thread has taken up (see `TAKES`).
+fn boxes_taken() -> u64 {
+    TAKES.0.lock().map(|taken| *taken).unwrap_or(0)
+}
+
+/// Note that a box has been taken up, which is what a pin waiting on one is woken for.
+fn a_box_was_taken() {
+    if let Ok(mut taken) = TAKES.0.lock() {
+        *taken += 1;
+        TAKES.1.notify_all();
+    }
+}
+
+/// Wait for the take that carries the box published after `taken_before` was read, and answer whether it
+/// came inside `VIEWER_CATCH_UP`.
+///
+/// **It is the whole of what makes a carried pin and its document one window.** A pinned document is a
+/// window of the viewer thread's standing in the band of a window of this thread's, and the two moves
+/// are one `SetWindowPos` each: the pin's is made in the pass that asks, and the viewer's is made by the
+/// take-up that ask asked for, a thread-hop later. Nothing but both landing before the compositor's own
+/// cut makes them travel together, so the pin waits for exactly that take — never for the browser, and
+/// never for anything the document is doing.
+///
+/// Bounded, because this is the pin's thread: a viewer whose browser is busy may not reach its pass
+/// inside the bound, and a step that passes without a take is the pair one frame apart for that step
+/// rather than a pin stopped.
+fn wait_for_the_take(taken_before: u64) -> bool {
+    let mut taken = TAKES.0.lock().unwrap_or_else(|held| held.into_inner());
+    let deadline = Instant::now() + VIEWER_CATCH_UP;
+
+    while *taken <= taken_before {
+        let left = deadline.saturating_duration_since(Instant::now());
+
+        if left.is_zero() {
+            return false;
+        }
+
+        let (guard, waited) = TAKES
+            .1
+            .wait_timeout(taken, left)
+            .unwrap_or_else(|held| held.into_inner());
+        taken = guard;
+
+        // A wake at the very end of the bound is a take that did happen: it is read before the bound
+        // rather than after it.
+        if waited.timed_out() && *taken <= taken_before {
+            return false;
+        }
+    }
+
+    true
 }
 
 /// Whether this pin has a viewer owed or standing: an ask is what makes a box meaningful, and an ask
@@ -745,6 +943,14 @@ impl Host {
 
         self.set_bounds();
 
+        // **And the band this window stands in is a paint owed the pin, before the caret is asked for.**
+        // What the pin fills that band with is asked of the list this reader is published in
+        // (`a_documents_band_is_the_viewers`), so a frame drawn before this reveal is the page's white
+        // still standing around a document that is now there — and nothing on the pin's own tick asks
+        // for another. The debt is left here rather than painted here because the pin's frame is the
+        // preview loop's, which is another thread (see `the_band_owes_a_repaint`).
+        the_band_owes_a_repaint();
+
         // **And the caret goes into the document, which is what the wheel then belongs to.** A notch
         // is delivered to the window the keyboard is in, and a viewer nobody has clicked into is not
         // that window: the pin's chrome around it is, so a wheel turned over the page would scroll
@@ -840,6 +1046,11 @@ impl Host {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
 
+        // The band is the pin's own again — it paints its raster there rather than showing the browser
+        // through it — so the frame around a document that has just left is a paint owed (see
+        // `the_band_owes_a_repaint`).
+        the_band_owes_a_repaint();
+
         self.suspended = true;
         trace(&format!("pdf: suspended {}", self.seat.path.display()));
     }
@@ -866,6 +1077,10 @@ impl Host {
         // for it: a resumed viewer whose focus was left in the pin's chrome is a page no wheel
         // scrolls.
         self.take_the_caret();
+
+        // And the band is Chromium's again, which is the same paint a reveal owes it (see
+        // `the_band_owes_a_repaint`).
+        the_band_owes_a_repaint();
 
         trace(&format!("pdf: resumed {}", self.seat.path.display()));
     }
@@ -932,6 +1147,14 @@ fn viewer_thread(commands: Receiver<Command>) {
     // The browser's own apartment, and its own thread: WebView2 must be created on a thread that is
     // pumping messages, and this is that thread for every viewer this app has open.
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+
+    // **No box is owed by a thread only just begun.** Whatever was published before this thread existed
+    // aimed at windows it has never made, and a flag left set by a thread that has gone would stop the
+    // next box from being asked for at all (see `PLACE_ASKED`).
+    PLACE_ASKED.store(false, Ordering::Release);
+    if let Ok(mut boxes) = PLACED_BOXES.lock() {
+        boxes.clear();
+    }
 
     // The thread's message queue, made before anything can be posted to it.
     {
@@ -1018,14 +1241,11 @@ fn viewer_thread(commands: Receiver<Command>) {
                     hosts.push(host);
                 }
             }
-            Ok(Command::Place { owner, area }) => {
-                // Only the pin the box belongs to: a drag of one pin is no box of another (see
-                // `Place`). An arriving viewer is given the box rather than moved to it (see
-                // `Seat::place`).
-                for host in hosts.iter_mut().filter(|host| host.seat.owner == owner) {
-                    host.place(area);
-                }
-            }
+            // The box travels in the cells beside the channel rather than in the command, so this arm
+            // has nothing of its own to say: the command's whole job is to bring back the wait
+            // `recv_timeout` is in, and the pass below takes every cell up with the rest of its work
+            // (see `take_the_boxes`).
+            Ok(Command::Place) => {}
             Ok(Command::Close { path, owner }) => {
                 for host in hosts
                     .iter_mut()
@@ -1036,6 +1256,24 @@ fn viewer_thread(commands: Receiver<Command>) {
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
+        }
+
+        // **A box published while this pass was asleep is taken up before anything else the pass owes.**
+        // It is the window a hand is carrying, and the pin that published it is waiting on this take
+        // (see `wait_for_the_take`): a placement made after a navigation has been begun is a placement
+        // made a document late, and one made after the pass's own settlement is a frame late. Only the
+        // pin the box belongs to is moved — a drag of one pin is no box of another — and an arriving
+        // viewer is given the box rather than moved to it (see `Seat::place`).
+        let boxes = take_the_boxes();
+
+        for (owner, area) in &boxes {
+            for host in hosts.iter_mut().filter(|host| host.seat.owner == *owner) {
+                host.place(*area);
+            }
+        }
+
+        if !boxes.is_empty() {
+            a_box_was_taken();
         }
 
         for host in &mut hosts {
@@ -1275,6 +1513,94 @@ mod tests {
         publish_the_live_owners(Vec::new());
         assert!(!is_up_for(first));
         assert!(!ANY_VIEWER_UP.load(Ordering::Acquire));
+    }
+
+    /// **A band whose middle is Chromium's owes a paint the moment that answer changes, and not one
+    /// before it.**
+    ///
+    /// What the pin fills the band with is asked of the viewer rather than of the file's kind (`a_documents_band_is_the_viewers`
+    /// in the preview's own paint), so the pass a document is revealed in is the pass the pin's frame
+    /// around it is owed — and the one it is let go of in. A pass that published the same list it
+    /// published before changed nothing of what the band holds, and asks for none: a paint a tick for a
+    /// document standing still is a frame nobody asked for (see `the_band_owes_a_repaint`).
+    #[test]
+    fn a_band_owes_a_paint_when_the_viewer_in_it_comes_or_goes() {
+        let _room = the_viewers_room();
+        let pin = 9_100_004;
+
+        let _ = take_the_band_repaint();
+        publish_the_live_owners(Vec::new());
+        assert!(
+            !take_the_band_repaint(),
+            "a desktop with no viewer in it has changed nothing"
+        );
+
+        publish_the_live_owners(vec![pin]);
+        assert!(
+            take_the_band_repaint(),
+            "the document stood up: the frame around it is a paint owed"
+        );
+        assert!(
+            !take_the_band_repaint(),
+            "and one paint is the whole of the debt, however often it is asked for"
+        );
+
+        publish_the_live_owners(vec![pin]);
+        assert!(
+            !take_the_band_repaint(),
+            "the same viewer standing in the same band is nothing to paint"
+        );
+
+        publish_the_live_owners(Vec::new());
+        assert!(
+            take_the_band_repaint(),
+            "and the band is the pin's own again once the document is let go of"
+        );
+    }
+
+    /// **A box is published into a cell rather than queued, and a hand that has moved a hundred times
+    /// has left one.**
+    ///
+    /// It is what keeps a viewer from tailing the window it stands in: the pin publishes a box per
+    /// pointer move and every one of them is replaced by the one after it, so what a take-up carries
+    /// out is where the hand has got to rather than where it has been (see `PLACED_BOXES`).
+    #[test]
+    fn a_drag_leaves_the_box_the_hand_is_at_now_rather_than_a_backlog() {
+        let (first, second) = (9_100_005, 9_100_006);
+        let area = |x: i32| Area {
+            x,
+            y: 40,
+            width: 640,
+            height: 480,
+        };
+
+        // A thread only just begun owes no box of a run before it (see `viewer_thread`).
+        PLACE_ASKED.store(false, Ordering::Release);
+        if let Ok(mut boxes) = PLACED_BOXES.lock() {
+            boxes.clear();
+        }
+
+        // A hand carrying one pin: three boxes published, and the cell holds the last.
+        publish_a_box(first, area(10));
+        publish_a_box(first, area(20));
+        publish_a_box(first, area(30));
+
+        // And a second pin's box is a cell of its own — one pin's move is no box of another.
+        publish_a_box(second, area(50));
+
+        let taken = take_the_boxes();
+        assert_eq!(
+            taken,
+            vec![(first, area(30)), (second, area(50))],
+            "one box per pin, and the one the hand is at now"
+        );
+        assert!(
+            PLACED_BOXES
+                .lock()
+                .map(|boxes| boxes.is_empty())
+                .unwrap_or(false),
+            "and taking them up leaves the cells empty"
+        );
     }
 
     /// An ask is one viewer per file per pin: the same document pinned twice is two viewers, a
