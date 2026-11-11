@@ -1718,9 +1718,10 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
     };
     assert_eq!(
         (landed, place),
-        (0, Some(3)),
-        "the answer's own first frame is the place the pin was at, rather than the place's number \
-         counted from a file decoded at its first frame"
+        (3, Some(3)),
+        "the place the pin was at is the place the installed run holds it at, which is the answer's \
+         first frame standing in the run the pin was already playing rather than counted from a \
+         file decoded at its own first frame"
     );
     assert_eq!(
         size,
@@ -1741,7 +1742,7 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
     };
     assert_eq!(
         (landed, place),
-        (1, Some(4)),
+        (4, Some(4)),
         "the frame carrying the place the pin reached while the decode was out"
     );
 
@@ -1957,8 +1958,9 @@ fn a_released_playhead_is_carried_as_exactly_as_a_held_one() {
     };
     assert_eq!(
         (landed, place, width),
-        (0, Some(12), 800),
-        "the file's twelfth frame, which the answer holds as its own first one"
+        (2, Some(12), 800),
+        "the file's twelfth frame, which the answer holds as its own first one, standing in the run \
+         the pin was playing"
     );
     assert!(
         served >= Duration::from_millis(40),
@@ -2123,9 +2125,189 @@ fn an_installed_answer_leaves_the_stream_it_brought_running() {
     });
     assert_eq!(
         streaming,
-        Some((Some(41), false)),
-        "the installed media opens on the place the pin was at, with the stream that answers for \
-         the rest of the file still walking it"
+        Some((Some(40), false)),
+        "the installed media opens on the place the pin was at — the frame of it the pin already \
+         held, with the answer's own frames taking their places in the run that was there — and the \
+         stream that answers for the rest of the file is still walking it"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+    stand_pin(previous_pin);
+}
+
+/// **A place a hand names after a resize is the place the picture goes to.** A box change asks for a
+/// decode at the box the window now has, and that decode answers `ANIMATION_STARTUP_FRAMES` frames
+/// from the place the pin was at — a picture whose run begins four frames past where the file does
+/// and stops there until the rest of it arrives. Taken as the whole of the run, every place the file
+/// has but that little run does not is a place a hand cannot reach: a click on the track names one,
+/// and the picture is left standing on the nearest frame of a run that is a thumbnail of the file's
+/// middle. So the run the pin was playing is kept around the answer, and the answer's own frames
+/// take the places in it they name (see `keep_animation_place` and `MediaData::sync_shared_frames`).
+#[test]
+fn a_place_a_hand_names_after_a_resize_is_the_place_the_picture_goes_to() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let frame = |width: u32, height: u32, file_index: usize| {
+        let mut frame = ImageFrame::new(vec![0u8; 4], width, height, 0);
+        frame.file_index = file_index;
+        Arc::new(frame)
+    };
+
+    let path = PathBuf::from("a-place-named-after-a-resize.gif");
+    let mut pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
+    pin.path = path.clone();
+    stand_pin(Some(pin));
+
+    // The pin had played to the file's 140th frame, out of the whole of a run it was decoding.
+    let mut playing = static_image_media(frame(400, 300, 0), MediaType::AnimatedGif);
+    playing.frames = (0..300).map(|index| frame(400, 300, index)).collect();
+    playing.current_frame = 140;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(playing);
+    }
+
+    // The answer the box change's own decode brings: the file's frames from the 140th onward, at the
+    // box the window has now.
+    let (answer, answers) = channel();
+    let mut decoded = static_image_media(frame(800, 600, 140), MediaType::AnimatedGif);
+    decoded.frames = (140..142).map(|index| frame(800, 600, index)).collect();
+    answer.send(Some(decoded)).ok();
+
+    let mut relayout = Some(PinRelayout {
+        path: path.clone(),
+        cancel: Some(Arc::new(AtomicBool::new(false))),
+        answer: answers,
+        decoded: None,
+    });
+    assert!(
+        take_pin_relayout(&mut relayout),
+        "the answer of a relayout standing on the pin's own file is installed"
+    );
+
+    // Every place the file has is a place the run holds, so a hand that names one is shown it rather
+    // than the nearest frame of the little run the answer brought.
+    let place = |target: usize| {
+        // Asked first, and the lock taken only for what it left: `show_the_frame_of` takes the
+        // media's own lock itself, and a lock held across it is one this thread already owns.
+        let exact = show_the_frame_of(&path, target);
+        let mut current = CURRENT_MEDIA.lock().expect("media");
+        let media = current.as_mut().expect("a media");
+        (
+            exact,
+            media.current_frame_of_file(),
+            media.current_width(),
+            media.frames.len(),
+            media
+                .frames
+                .iter()
+                .filter(|frame| frame.file_index == target)
+                .count(),
+        )
+    };
+
+    assert_eq!(
+        place(300 - 1),
+        (true, Some(299), 400, 300, 1),
+        "the file's last frame is a place the run holds, at the size the pin had decoded it at and \
+         stretched into the box the window is now drawn at"
+    );
+    assert_eq!(
+        place(80),
+        (true, Some(80), 400, 300, 1),
+        "and one from before the resize is the frame the pin already had of it — the size the window \
+         was, standing in the place it has in the file — rather than a place the run no longer holds"
+    );
+    assert_eq!(
+        place(140),
+        (true, Some(140), 800, 300, 1),
+        "while the place the pin came to rest on is answered by the frame the decode drew for this \
+         box, which takes that place rather than standing beside it"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+    stand_pin(previous_pin);
+}
+
+/// **And every place after a resize is a place the playhead can be put down on by the stream that is
+/// still filling the run.** The decode answers the frames from the place it was asked to begin at and
+/// then goes on down the file — so a frame that lands takes the place it names rather than being
+/// pushed beside the one already there, which is what keeps a hand's place among the frames the box
+/// drew for and not among duplicates of them (see `MediaData::sync_shared_frames`).
+#[test]
+fn a_frame_the_stream_answers_after_a_resize_takes_its_place_in_the_run() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let frame = |width: u32, height: u32, file_index: usize| {
+        let mut frame = ImageFrame::new(vec![0u8; 4], width, height, 0);
+        frame.file_index = file_index;
+        Arc::new(frame)
+    };
+
+    let path = PathBuf::from("a-frame-landed-later.gif");
+    let mut pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
+    pin.path = path.clone();
+    stand_pin(Some(pin));
+
+    let mut playing = static_image_media(frame(400, 300, 0), MediaType::AnimatedGif);
+    playing.frames = (0..300).map(|index| frame(400, 300, index)).collect();
+    playing.current_frame = 140;
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(playing);
+    }
+
+    let (answer, answers) = channel();
+    let mut decoded = static_image_media(frame(800, 600, 140), MediaType::AnimatedGif);
+    decoded.frames = (140..142).map(|index| frame(800, 600, index)).collect();
+    decoded.shared_frames = Some(Arc::new(Mutex::new(StreamedFrames {
+        queue: (142..144)
+            .map(|index| {
+                let mut frame = ImageFrame::new(vec![0u8; 4], 800, 600, 0);
+                frame.file_index = index;
+                frame
+            })
+            .collect(),
+        released: false,
+        decoded: false,
+    })));
+    answer.send(Some(decoded)).ok();
+
+    let mut relayout = Some(PinRelayout {
+        path: path.clone(),
+        cancel: Some(Arc::new(AtomicBool::new(false))),
+        answer: answers,
+        decoded: None,
+    });
+    assert!(
+        take_pin_relayout(&mut relayout),
+        "the answer of a relayout standing on the pin's own file is installed"
+    );
+
+    let (count, at_142, place) = {
+        let mut current = CURRENT_MEDIA.lock().expect("media");
+        let media = current.as_mut().expect("a media");
+        let before = media.frames.len();
+        media.sync_shared_frames();
+        let at = media
+            .frames
+            .iter()
+            .find(|frame| frame.file_index == 142)
+            .map(|frame| frame.width);
+        (before, at, media.current_frame_of_file())
+    };
+    assert_eq!(
+        (count, at_142, place),
+        (300, Some(800), Some(140)),
+        "the frames that arrive are placed in the run rather than pushed beside it: the count is the \
+         whole file once, and the frame of the 142nd place is the one the box drew, with the playhead \
+         left on the place it was"
     );
 
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
