@@ -774,6 +774,37 @@ pub(super) fn clear_pin_volume_region() {
     crate::app::seam::PIN_VOLUME_REGION.publish(None);
 }
 
+/// Publish the box a wheel notch over `pin`'s pace control belongs to, or clear it where there is
+/// no pin (see `PIN_FPS_REGION` and `publish_pin_volume_region` for what this is not being asked
+/// through the lock).
+///
+/// It is the union of the button and, while it is up, the panel hanging off it, so that the first
+/// notch after the panel opens is answered by the panel rather than by nothing.
+pub(super) fn publish_pin_fps_region(pin: Option<&PinnedPreview>) {
+    let region = pin.and_then(|pin| {
+        let button = pinned_fps_button(pin)?;
+        let panel = if pin.fps.open {
+            pinned_fps_panel(pin)?.panel
+        } else {
+            button
+        };
+        let window = pin.window_box();
+        Some((
+            window.0 + button.left.min(panel.left),
+            window.1 + button.top.min(panel.top),
+            window.0 + button.right.max(panel.right),
+            window.1 + button.bottom.max(panel.bottom),
+        ))
+    });
+
+    crate::app::seam::PIN_FPS_REGION.publish(region);
+}
+
+/// Take the published box away, for a pin that is no longer up (see `publish_pin_fps_region`).
+pub(super) fn clear_pin_fps_region() {
+    crate::app::seam::PIN_FPS_REGION.publish(None);
+}
+
 /// Where a pinned sound's card's volume button opens its panel from, in the window's own
 /// coordinates: the card fills the pin's media box and is drawn in the band between the chrome's
 /// (see `pinned_band_rows`), so the box the card lays its row out in is the box the window draws
@@ -991,9 +1022,45 @@ pub(super) fn pin_fps_dragging() -> bool {
         .unwrap_or(false)
 }
 
+/// Take the pace back to the file's own: what a double-click on the pace's slider does.
+///
+/// A pace a hand set is a pace a second press takes back to the file's — the zero of this slider is
+/// the file rather than a level of nothing, so a reset is `wanted` cleared to `None` and the pace the
+/// pin opened at standing again (see `PinFps::detected`). The picture is rebased onto the clock here
+/// rather than left where it stood, because a drag or a wheel long enough to move the pace a long way
+/// would otherwise have the loop catch up a stretch of frames in one tick. The panel stays up: the
+/// press was on it, and what it says next is the file's own pace.
+pub(super) unsafe fn reset_pin_fps(hwnd: HWND) {
+    let mut pace = None;
+    with_pin(|pin| {
+        pin.fps.wanted = None;
+        pin.fps.target = None;
+        let detected = pin.fps.pace();
+        pin.fps.applied = i64::from(detected) * WHEEL_FPS_UNITS_PER_FRAME;
+        pace = Some(detected);
+    });
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            if media.media_type.is_animation() {
+                media.animation.wanted = None;
+                media.last_frame_time = Instant::now();
+            }
+        }
+    }
+
+    note_playback_trace!("fps reset {}", pace.unwrap_or(0));
+    render_layered_preview(hwnd);
+}
+
 /// A press on a pin's FPS popup: the knob is taken hold where the hand landed, and the pace is
 /// drawn there.
-pub(super) unsafe fn pinned_fps_press(hwnd: HWND, x: i32, y: i32) -> bool {
+///
+/// A press that is the second of a pair is the slider being put back to the file's own pace rather
+/// than a pace being set from the row it landed on (see `reset_pin_fps`). `double_click` is the
+/// caller's answer rather than this arm's own, because asking again would remember the press twice
+/// and there would never be a pair (see `pinned_press_on`).
+pub(super) unsafe fn pinned_fps_press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bool {
     let Some(popup) = pinned_fps_geometry() else {
         return false;
     };
@@ -1003,6 +1070,11 @@ pub(super) unsafe fn pinned_fps_press(hwnd: HWND, x: i32, y: i32) -> bool {
         || y >= popup.panel.bottom
     {
         return false;
+    }
+
+    if double_click {
+        reset_pin_fps(hwnd);
+        return true;
     }
 
     let _ = SetCapture(hwnd);
@@ -1062,7 +1134,13 @@ pub(super) unsafe fn pinned_fps_release(hwnd: HWND, window: &dyn PinWindow) -> b
 /// `AnimationPlayback::delay_scale`).
 pub(super) fn set_pin_fps(pace: u32) {
     let pace = pace.clamp(1, current_animated_fps_max());
-    with_pin(|pin| pin.fps.wanted = Some(pace));
+    with_pin(|pin| {
+        pin.fps.wanted = Some(pace);
+        // A drag or a tray row is a pace in hand: it is played at once, and no glide left over from
+        // a wheel notch before it is carried on with (see `ramp_pin_fps`).
+        pin.fps.target = None;
+        pin.fps.applied = i64::from(pace) * WHEEL_FPS_UNITS_PER_FRAME;
+    });
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         if let Some(media) = media.as_mut() {
             if media.media_type.is_animation() {
@@ -1112,6 +1190,9 @@ unsafe fn set_pin_fps_open(hwnd: HWND, open: bool) {
             pin.fps.dragging = false;
             pin.fps.held = None;
         }
+        // The hook reads the published box rather than this lock, so the panel's own box has to be
+        // out before the next notch arrives (see `publish_pin_fps_region`).
+        publish_pin_fps_region(Some(pin));
     }
 
     if open {
@@ -1139,9 +1220,16 @@ pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
     set_pin_volume_open(hwnd, !open);
 }
 
-/// Open the volume popup where it is not already open: what a wheel notch over the
-/// volume button does before it moves the level, so the slider it is turning is the one
-/// the user sees (see `take_pin_volume_delta`).
+/// Open the FPS popup where it is not already open: what a wheel notch over the FPS button does
+/// before it moves the pace, so the slider it is turning is the one the user sees (see
+/// `take_pin_fps_delta`).
+pub(super) unsafe fn open_pin_fps(hwnd: HWND) {
+    set_pin_fps_open(hwnd, true);
+}
+
+/// Open the volume popup where it is not already open: what a wheel notch over the volume button
+/// does before it moves the level, so the slider it is turning is the one the user sees (see
+/// `take_pin_volume_delta`).
 pub(super) unsafe fn open_pin_volume(hwnd: HWND) {
     set_pin_volume_open(hwnd, true);
 }
@@ -1355,16 +1443,38 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
     // `pin_double_click_press`).
     let double_click = pin_double_click_press(x, y);
 
-    // A panel the pace is being set on is over the media the press would otherwise be aimed at, so
-    // it is answered before the bands and the corners are (see `pinned_fps_press`).
-    if pinned_fps_press(hwnd, x, y) {
-        return true;
-    }
-
+    // **An edge of the window is the window's before any panel floating over it**, since a panel is
+    // not a frame and a press in the frame's band is the only place a resize can begin. A panel hung
+    // off a bar reaches toward the window's right and bottom edges, and a press in that band taken by
+    // the panel is a window that cannot be resized from two of its four sides while the panel is up.
+    //
+    // A pair on an edge belongs to the window's own road, as it always has: what a pair means is
+    // settled by the arms a press carries the window from (see `press_carries_the_pin`), which the
+    // `!double_click` below is what keeps the pan from taking the first press of.
     let Some(caption) = pinned_caption_geometry() else {
         return false;
     };
     let framed = caption.frame != PinFrame::None;
+
+    if framed {
+        let edge =
+            pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.resize_edge(x, y)));
+        if let Some(edge) = edge {
+            begin_pin_drag(hwnd, window, PinDragAction::Resize(edge), true);
+            return true;
+        }
+    }
+
+    // A panel the pace is being set on floats over the media the press would otherwise be aimed at,
+    // so it is answered before the bands and the corners are (see `pinned_fps_press`). The level's
+    // panel is the same answer one control along, and it is answered here rather than by
+    // `press_the_pin` so that a panel over an edge is still the edge's (see `pinned_volume_press`).
+    if pinned_fps_press(hwnd, x, y, double_click) {
+        return true;
+    }
+    if pinned_volume_press(hwnd, x, y) {
+        return true;
+    }
 
     // Anything but the volume button itself puts its popup away: the panel floats over the media,
     // and a hand that has come for the picture, the title bar or an edge is not a hand on the
@@ -1401,19 +1511,6 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
     // `pin_playlist::press`).
     if pin_playlist::press(hwnd, x, y, double_click) {
         return true;
-    }
-
-    if framed {
-        let edge = {
-            let Some(pinned) = pin_state() else {
-                return false;
-            };
-            pinned.pin().and_then(|pin| pin.resize_edge(x, y))
-        };
-        if let Some(edge) = edge {
-            begin_pin_drag(hwnd, window, PinDragAction::Resize(edge), true);
-            return true;
-        }
     }
 
     if y < caption.height {
@@ -1513,8 +1610,7 @@ pub(super) unsafe fn press_the_pin(
     window: &dyn PinWindow,
     wants_the_keyboard: bool,
 ) -> bool {
-    let answered =
-        unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
+    let answered = unsafe { pinned_press_on(hwnd, x, y, window) };
 
     if wants_the_keyboard {
         unsafe { pin_take_focus(hwnd, window) };

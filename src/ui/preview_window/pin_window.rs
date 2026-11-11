@@ -408,6 +408,9 @@ pub(super) fn install(pin: PinnedPreview) {
         // first notch after a take-up is answered rather than waiting for the tick to publish it
         // (see `publish_pin_volume_region`).
         super::pin_input::publish_pin_volume_region(Some(&pin));
+        // And the pace's own box, for the same reason one control along (see
+        // `publish_pin_fps_region`).
+        super::pin_input::publish_pin_fps_region(Some(&pin));
         // And the file it is showing, published here because the side that asks what is pinned is a
         // process of its own (see `seam::publish_the_pinned_path`).
         crate::app::seam::publish_the_pinned_path(Some(pin.path.as_path()));
@@ -535,6 +538,7 @@ impl PinState {
         // without this lock, and a box left standing takes notches meant for whatever is behind it
         // (see `publish_pin_volume_region`).
         super::pin_input::clear_pin_volume_region();
+        super::pin_input::clear_pin_fps_region();
         let PinState::Up(mut up) = std::mem::replace(self, PinState::Ending(reason)) else {
             // A pin that is not up is already over, and the end it is being given is recorded
             // rather than refused: two roads racing on the same pin is normal (the watchdog and
@@ -973,6 +977,7 @@ pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
         Some(pin) => install(pin),
         None => {
             super::pin_input::clear_pin_volume_region();
+            super::pin_input::clear_pin_fps_region();
             if let Some(mut state) = pin_state() {
                 *state = PinState::Down;
                 publish_pin_up(false);
