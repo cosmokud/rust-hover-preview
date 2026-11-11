@@ -38,6 +38,22 @@ pub(super) fn mpv_program(chosen: &str, installs: &[PathBuf]) -> Option<PathBuf>
     codecs::resolve_mpv(chosen, installs)
 }
 
+/// The `mpv.exe` a stream beside a bubble is begun with: the same resolution a launch makes, since it
+/// is the same player and the same pick, and **nothing at all on a machine without mpv** — which is
+/// the caller's cue to read the file with FFmpeg instead (see `bubble_stream`).
+///
+/// There is deliberately no `codecs::mpv_available()` gate here: the route that reaches this is mpv's,
+/// which a machine without the player never takes, and the list of installs is the whole of the
+/// question a launch asks as well (see `mpv_program`).
+pub(super) fn mpv_program_for_the_stream() -> Option<PathBuf> {
+    let chosen = CONFIG
+        .lock()
+        .map(|config| config.mpv_path.clone())
+        .unwrap_or_default();
+
+    mpv_program(&chosen, &codecs::mpv_installs())
+}
+
 /// A player this app has to loop itself: which one it is, what it is playing, the second it was
 /// begun at, how long the file is, and when it was begun.
 ///
@@ -115,6 +131,28 @@ pub(super) fn forget_video_loop(pid: u32) {
     if let Ok(mut slot) = VIDEO_LOOP.lock() {
         if slot.as_ref().is_some_and(|loop_| loop_.pid == pid) {
             *slot = None;
+        }
+    }
+}
+
+/// Give the loop this app is measuring the length the player itself stated, where the file's own
+/// header was not read by anything on this side.
+///
+/// **It is the arm the loop needs to wrap at all.** A rewind is due a tenth of a second before a length
+/// this app knows (see `rewind_due`), so a film nothing measured is a film that plays to its end and
+/// stands there however `End of File` is set — and mpv, which is holding the file, has read its header
+/// and will say how long it is (see `mpv_ipc::duration` and `pin_playback::settle_pin_duration`).
+///
+/// The pid guard is this file's usual one: a length coming back for a player that has been replaced is
+/// not a length for the one on screen.
+pub(super) fn note_the_loop_length(pid: u32, duration: f64) {
+    if !(duration.is_finite() && duration > 0.0) {
+        return;
+    }
+
+    if let Ok(mut slot) = VIDEO_LOOP.lock() {
+        if let Some(loop_) = slot.as_mut().filter(|loop_| loop_.pid == pid) {
+            loop_.duration = Some(duration);
         }
     }
 }

@@ -47,6 +47,12 @@ pub(super) fn pinned_playhead() -> Option<f64> {
 
 /// How long the pinned file plays: the length the probe read, or the engine's own answer where
 /// the engine is the one that knows.
+///
+/// **It is a read of what this app has already written down**, and never a question put to the player
+/// on the thread that draws: a bar is drawn from a paint, and a paint that waited on a pipe would be a
+/// frame lost for a number. The one length a player is asked for is filled in ahead of the paint — on
+/// the tick, once per player — by `settle_pin_duration`, which is where a container this side could not
+/// read its own header of gets its total (see `mpv_ipc::duration`).
 pub(super) fn pin_duration(transport: &PinTransport) -> Option<f64> {
     transport.duration.or_else(|| {
         (current_media_type() == Some(MediaType::NativeVideo))
@@ -54,6 +60,62 @@ pub(super) fn pin_duration(transport: &PinTransport) -> Option<f64> {
             .flatten()
     })
 }
+
+/// Ask the player on screen how long its film is, once per player, where this app has no length for it
+/// at all: the one fact only the player knows (see `mpv_ipc::duration`).
+///
+/// **Once per player, and never again**: a container nothing on this side could read is a container the
+/// player read its own header of, and a player that does not answer is one this app draws a bar with no
+/// total for rather than one it asks again on every tick. The latch is the player's own id, so a
+/// relaunch is asked again and a film the probe did answer for is never asked at all.
+pub(super) fn settle_pin_duration() {
+    if current_media_type() != Some(MediaType::Video) {
+        return;
+    }
+
+    let Some((path, _, transport, _)) = pinned_playback_state() else {
+        return;
+    };
+    if transport.duration.is_some() || video_route(&path) != VideoRoute::Mpv {
+        return;
+    }
+
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if pid == 0 || DURATION_ASKED.load(Ordering::SeqCst) == pid {
+        return;
+    }
+
+    DURATION_ASKED.store(pid, Ordering::SeqCst);
+
+    if let Some(duration) = mpv_duration(pid) {
+        update_pin_transport(|transport| {
+            if transport.duration.is_none() {
+                transport.duration = Some(duration);
+            }
+        });
+        // And the record the loop is measured by, which is the same number: a pass read against a
+        // length that is not there is a film that never wraps and an end of file that never comes
+        // (see `video_hw` and `video_retire`).
+        video_hw::note_the_loop_length(pid, duration);
+    }
+}
+
+/// How long the film mpv behind `pid` is playing, in seconds — the one length that exists for a
+/// container this side could not read.
+///
+/// It is the player's own header, asked over the pipe it listens on, and nothing at all for a pid that
+/// is nobody's player here: FFmpeg's player reports nothing at all, which is the half of this that has
+/// no answer to give (see `mpv_ipc::duration`).
+fn mpv_duration(pid: u32) -> Option<f64> {
+    if pid == 0 || !mpv_ipc::answers_properties(pid) {
+        return None;
+    }
+
+    mpv_ipc::duration(pid)
+}
+
+/// The player whose length has been asked for, so that it is asked once (see `settle_pin_duration`).
+static DURATION_ASKED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Whether a pinned preview is playing: the engine's own answer, or whether a player of this
 /// app's is running.

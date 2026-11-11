@@ -1,7 +1,7 @@
 //! What the app asks of a running engine — start, stop, pause, seek, resize — and the file-level
 //! probes that decide whether one is started at all. See the module above for the reasoning.
 
-use super::frame_copy::{open_stream, surface, unpack_pair};
+use super::frame_copy::{open_stream, presentation_duration, surface, unpack_pair};
 use super::session::{Session, Take};
 use crate::formats::{codecs, head};
 use once_cell::sync::Lazy;
@@ -191,7 +191,53 @@ thread_local! {
 /// asked before there is anything to play: the reader opens the file, reports the first
 /// video stream's own media type and is dropped, so a hover that is turned down costs a
 /// header parse rather than a player.
+///
+/// It is [`header`]'s shape half alone: a caller that wants the film's length as well as its
+/// size asks for the header itself (see `probe_video_geometry`).
+///
+/// It is asked of by the media engine's own measurements rather than by the app, whose geometry
+/// probe reads the header directly: a size and nothing else is exactly what a perf run of the frame
+/// pipeline needs (see `tests::video_take_cost`).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
+    let header = header(path)?;
+
+    Some(displayed_shape(
+        header.frame_width,
+        header.frame_height,
+        header.aspect,
+    ))
+}
+
+/// What a film's own header says about it, read by the media stack rather than by an external
+/// program: the size of the frame, the shape of one of its pixels, and how long the file plays.
+///
+/// **It is the shape and the length a film needs before any player is begun, and neither needs
+/// FFprobe to answer.** The reader is opened over the file, reports the first video stream's own
+/// media type, is asked for the media source's presentation length — which is the container's
+/// answer rather than a decoder's — and is dropped. It is the same parse the engine's own
+/// `dimensions` has always been, widened by the one fact the length is, so that a machine with no
+/// FFmpeg on it can still place a film mpv plays and draw a seekbar against it.
+///
+/// **No decoder chain is built here**, which is what separates it from `can_play`: the header is
+/// the container's, so a file this machine cannot decode still has one this can read.
+#[derive(Clone, Copy)]
+pub struct Header {
+    /// The frame's own size, in the file's pixels — not the size it is displayed at, which
+    /// `displayed_shape` is the rule for.
+    pub frame_width: u32,
+    pub frame_height: u32,
+    /// The shape of one pixel as the file states it, `(1, 1)` where it says nothing usable.
+    pub aspect: (u32, u32),
+    /// How long the file plays, where the container says.
+    pub duration: Option<f64>,
+}
+
+/// The header of `path`, read by the media stack Windows has (see [`Header`]).
+///
+/// It is `dimensions` with the two facts it was always opening the file for but never answered:
+/// the pixel shape as a ratio rather than already applied, and the container's own length.
+pub fn header(path: &Path) -> Option<Header> {
     if !codecs::mf_started() {
         return None;
     }
@@ -209,13 +255,20 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
         return None;
     }
 
-    let aspect = unsafe { media_type.GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO) }.unwrap_or(1 << 32);
+    // A file that states no ratio states the square pixel, which is what the layout assumes for
+    // one (see `displayed_shape`).
+    let aspect = unsafe { media_type.GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO) }
+        .ok()
+        .map(unpack_pair)
+        .filter(|(n, d)| *n > 0 && *d > 0)
+        .unwrap_or((1, 1));
 
-    Some(displayed_shape(
+    Some(Header {
         frame_width,
         frame_height,
-        unpack_pair(aspect),
-    ))
+        aspect,
+        duration: presentation_duration(&reader),
+    })
 }
 
 /// The shape a frame is displayed at, given its own size and the shape of one of its pixels.
