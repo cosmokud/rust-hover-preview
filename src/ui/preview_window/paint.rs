@@ -231,17 +231,22 @@ pub(super) fn a_documents_band_is_the_viewers(media: MediaType, owner: isize) ->
     media == MediaType::Pdf && crate::engines::pdf_viewer::is_up_for(owner)
 }
 
-/// Whether the pin's band is a document's to fill on every road this window draws it — the viewer
-/// standing in it, **or one on its way to it** (see `engines::pdf_viewer::the_band_belongs_to_the_document`).
+/// Whether the pin's band is a document's to fill on every road this window draws it.
 ///
-/// **A document that is still arriving is already the band's.** What a pinned document shows while
-/// Chromium comes up is the frame it will stand in, not a raster of page one: a walk to the next file
-/// would otherwise read as two loads — a page image, then the document — and the image is the one
-/// thing the file that was asked for is not going to look like. The static raster keeps its place as
-/// the fallback for a document that never comes, which is a viewer this app has stopped asking for
-/// (see `Life::closed`).
+/// **It is the row and the file's kind, and nothing about a viewer.** `PDF → Pin Mode → Full Mode` hands
+/// every pinned page to Chromium, so the band is the document's from the moment the pin is taken up
+/// rather than from the moment a browser arrives: a frame filled from a raster of page one there is a
+/// page standing where a document is about to be, which is the two-loads flicker a walk used to read
+/// as. And a raster is not even in hand to fill it with any more — a pinned page is loaded as a kind
+/// and nothing more (see `media_data::a_documents_media`).
+///
+/// The owner is not asked because the answer is the same for every pin: a page's band is the
+/// document's while the row says the document is Chromium's, and it is the same question the placement
+/// road asks with the viewer lists in hand (see `engines::pdf_viewer`). Where the row is off, the band
+/// is the single page this app reads and draws itself, exactly as before.
 pub(super) fn the_document_holds_the_band(media: MediaType, owner: isize) -> bool {
-    media == MediaType::Pdf && crate::engines::pdf_viewer::the_band_belongs_to_the_document(owner)
+    let _ = owner;
+    media == MediaType::Pdf && crate::engines::pdf_viewer::pdf_full_mode()
 }
 
 /// Whether the chrome's own rows of a pinned window are the pin's claim rather than its chrome:
@@ -281,7 +286,7 @@ pub(super) fn chrome_rows_are_hit_testable(overlay: bool) -> bool {
 /// press on a picture is the pin's own (see `film_band_is_hit_testable`). A pinned document's
 /// band is the fourth, and the one painted *whole*: Chromium's viewer stands in the middle of
 /// it and the margin the viewer is inset by is the pin's own frame (see
-/// `a_documents_band_is_the_viewers` and `PIN_DOCUMENT_MARGIN_PIXELS`).
+/// `the_document_holds_the_band` and `PIN_DOCUMENT_MARGIN_PIXELS`).
 pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock, taken only where a resize step is being
     // measured (see `pin_resize_probe`).

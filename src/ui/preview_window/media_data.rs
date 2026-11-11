@@ -799,6 +799,23 @@ pub(super) fn engine_font_media() -> MediaData {
     }
 }
 
+/// A pinned page read by Chromium's own viewer as `MediaData`: the kind, and no frame of this app's
+/// at all.
+///
+/// **It is a page the pin does not draw.** `PDF → Pin Mode → Full Mode` hands a pinned document to the
+/// browser standing in the band (see `engines::pdf_viewer`), and what is on screen there is Chromium's
+/// window over this app's frame: nothing of the file is rasterised here, so what this carries is the
+/// kind the pin's chrome is worked out by and a frame that stands for "the browser's page". A single
+/// pixel is the whole of it on purpose — the band is filled from it nowhere, because the band is the
+/// document's (see `paint::the_document_holds_the_band`), and the one road that wants a picture of a
+/// document is the bubble a a collapsed pin leaves, which reads the page itself (see
+/// `pin_bubble::grab_bubble_frame`).
+pub(super) fn a_documents_media() -> MediaData {
+    let frame = Arc::new(ImageFrame::new(vec![0u8; 4], 1, 1, 0));
+
+    static_image_media(frame, MediaType::Pdf)
+}
+
 /// The media a pinned window is given for a file the engine draws, when the hover it was
 /// taken up from left none behind: the same kind, carrying the same nothing.
 ///

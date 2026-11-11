@@ -963,7 +963,14 @@ pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
     }
     BUBBLE_FRAME_READY.store(false, Ordering::Release);
 
-    if current_media_type() != Some(MediaType::Video) {
+    // **Two kinds have a picture this side does not hold, and both are read off the file for the bubble**:
+    // a film somebody else's player is drawing, which is a frame at the second the bar was showing (see
+    // `grab_video_frame`), and a pinned page, whose picture is Chromium's window — the one kind whose
+    // band no frame of this app's ever fills (see `a_documents_media`). Every other kind's picture is in
+    // the media already, and the bubble samples it (see `bubble_thumbnail`).
+    let kind = current_media_type();
+
+    if !matches!(kind, Some(MediaType::Video) | Some(MediaType::Pdf)) {
         return;
     }
 
@@ -983,8 +990,16 @@ pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
         return;
     }
 
+    let a_page = kind == Some(MediaType::Pdf);
+
     std::thread::spawn(move || {
-        if let Some(pixels) = grab_video_frame(&path, at, side) {
+        let pixels = if a_page {
+            grab_the_pages_first(side)
+        } else {
+            grab_video_frame(&path, at, side)
+        };
+
+        if let Some(pixels) = pixels {
             if let Ok(mut frame) = BUBBLE_FRAME.lock() {
                 *frame = Some(BubbleFrame { pixels, side });
             }
@@ -992,6 +1007,32 @@ pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
 
         BUBBLE_FRAME_READY.store(true, Ordering::Release);
     });
+}
+
+/// One frame of a pinned page's first page, cut to the `side × side` square a bubble is drawn in.
+///
+/// **The bubble's picture of a document is not a frame of this app's**, because a pinned page has none:
+/// the pinned media carries the kind and nothing more, and Chromium's window has no frame to copy (see
+/// `a_documents_media`). So the file is read once — a page is decoded here the way a hover draws one,
+/// at the bubble's own size — and the picture the circle shows is the page it stands for. The read is a
+/// thread's, because it is a file opened and a page rendered rather than a frame in hand, and the
+/// bubble is up before it answers.
+pub(super) fn grab_the_pages_first(side: u32) -> Option<Vec<u8>> {
+    let path = pinned_path()?;
+
+    // The reader is `Windows.Data.Pdf`, which needs an apartment of its own, and this is a thread
+    // that has none: the same call a hover's or a pin's loader takes before its first read (see
+    // `pdf_preview::initialize_apartment`).
+    pdf_preview::initialize_apartment();
+
+    let (pixels, width, height) = pdf_preview::render_first_page(&path, side, side)?;
+
+    let media = static_image_media(
+        Arc::new(ImageFrame::new(pixels, width, height, 0)),
+        MediaType::Pdf,
+    );
+
+    bubble_thumbnail(&media, side)
 }
 
 /// Keep a frame read beside a film's player as the picture the bubble falls back to, in place of
@@ -2110,6 +2151,18 @@ pub(super) fn bubble_art(side: u32) -> (BubbleArtOwned, pin_chrome::BubbleMark) 
         MediaType::NativeVideo => bubble_thumbnail(media, side)
             .map(|pixels| BubbleArtOwned::Picture(pixels, side, side, None))
             .unwrap_or(BubbleArtOwned::None),
+        // **A pinned page holds no frame of this app's, so one is taken for the bubble here**. It is the
+        // one kind whose picture is Chromium's window rather than a frame this side holds (see
+        // `a_documents_media`), and a bubble has no band for a viewer to stand in — what it is is a
+        // circle of picture. The page is read on a thread of its own, for the reason a film's frame is:
+        // it is a file read off the tick that collapses the window, and the bubble is up before it.
+        MediaType::Pdf => {
+            let frame = BUBBLE_FRAME.lock().ok().and_then(|frame| frame.clone());
+
+            frame
+                .map(|frame| BubbleArtOwned::Picture(frame.pixels, frame.side, frame.side, None))
+                .unwrap_or(BubbleArtOwned::None)
+        }
         // The bands of this app's own sound where this machine reads them, and the mixer's own
         // peak where it will not: the same row of bars, drawn from the answer this machine has
         // (see `audio_meter` and `BubbleArtOwned`).

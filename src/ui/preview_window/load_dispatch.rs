@@ -133,6 +133,22 @@ pub(super) fn load_media_of_kind(
         Some(PreviewType::Videos) => {
             load_video_thumbnail(path, max_width, max_height, preview_scale)
         }
+        // **A page Chromium draws has no page of this app's to read.** `PDF → Pin Mode → Full Mode`
+        // hands a pinned document to the browser standing in the band, so the raster of page one is a
+        // decode of the file that is then thrown away — a walk to the next document read the whole
+        // thing twice, once for an image nothing showed and once for the document itself (see
+        // `engines::pdf_viewer`). What the pin is built on here is the kind and a page's own shape,
+        // and the browser loads the file instead (see `a_documents_media`).
+        //
+        // **A hover is that page, and this is asked of the pin rather than of the kind.** A card the
+        // pointer is on is one page of the file and there is nothing else a card can show, so the
+        // raster is the hover's whole answer — and `chromium_draws` is the pin's own question, asked
+        // where its placement asks it too (see `pinned`).
+        Some(PreviewType::Ebook)
+            if pinned() && crate::engines::pdf_viewer::chromium_draws(path) =>
+        {
+            Some(a_documents_media())
+        }
         // A book is one kind with two readers, and which of the two a file is, is asked of the
         // table that names them rather than assumed here: a page is the PDF engine's, a comic is
         // the first plate read out of the container it is published in, and a comic reached by

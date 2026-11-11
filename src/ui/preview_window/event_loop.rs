@@ -1135,12 +1135,12 @@ pub fn run_preview_window() {
                 }
 
                 // **A pinned document's band owes one for the same reason and on the same road.** What
-                // the pin fills that band with is asked of the viewer rather than of the file's kind
-                // (`a_documents_band_is_the_viewers`): while none stands in it the band is the raster of
-                // page one, and once one does it is the caption's colour around the document. The
-                // viewer's thread is the one that learns a document has stood up or been let go of, and
-                // this is the thread that draws the frame around it — so the debt is flagged there and
-                // spent here, woken on the channel's own event rather than left for the next tick (see
+                // the pin fills that band with is the document's frame rather than a page this app
+                // draws (`the_document_holds_the_band`), and a page committing in the middle of it — or
+                // being let go of, which leaves the frame around nothing — changes the pixels the
+                // browser is compositing over. The viewer's thread is the one that learns it, and this is
+                // the thread that draws the frame around it — so the debt is flagged there and spent
+                // here, woken on the channel's own event rather than left for the next tick (see
                 // `engines::pdf_viewer::the_band_owes_a_repaint`).
                 if crate::engines::pdf_viewer::take_the_band_repaint() {
                     last_pin_repaint = Instant::now();
@@ -4431,6 +4431,20 @@ pub fn run_preview_window() {
                                 if let Ok(mut current) = CURRENT_MEDIA.lock() {
                                     *current = Some(media);
                                 }
+                            }
+                        }
+
+                        // **And a page Chromium draws has no frame of this app's either**, for the same
+                        // reason and at the same point: a pin taken up off a hover is taken up on the
+                        // hover's own raster of page one, which the document standing in the band then
+                        // covers — and which the band's paint must never be filled from (see
+                        // `the_document_holds_the_band`). The pinned page's media is the kind alone (see
+                        // `a_documents_media`).
+                        if current_media_type() == Some(MediaType::Pdf)
+                            && crate::engines::pdf_viewer::chromium_draws(&path)
+                        {
+                            if let Ok(mut current) = CURRENT_MEDIA.lock() {
+                                *current = Some(a_documents_media());
                             }
                         }
 

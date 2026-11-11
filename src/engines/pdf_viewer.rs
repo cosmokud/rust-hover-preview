@@ -22,9 +22,11 @@
 //! thread; the next pin begins a fresh browser.
 //!
 //! **A viewer that never arrives shows nothing.** The window is created hidden and revealed only
-//! when `NavigationCompleted` says the document loaded. What is on screen until then — and what
-//! stays on screen for good where the engine or the navigation fails — is the static raster the pin
-//! was already showing, so a pin is never a white window.
+//! when `NavigationCompleted` says the document loaded, so a pin is never a white window: what stands
+//! in the band until a page is up is the pin's own frame, and a viewer the engine or the navigation
+//! refuses is closed and leaves that frame standing (see `paint::the_document_holds_the_band`). No
+//! raster of page one is read for a pin at all — the page is Chromium's to draw, and the decode that
+//! filled the band with one was the two-loads flicker a walk read as (see `media_data::a_documents_media`).
 //!
 //! **And it is revealed at a box that came with it.** The box an ask is made with is the band that
 //! stood when the file was picked, and a pin taken up on another file moves its band after that: a
@@ -33,9 +35,13 @@
 //! arrived *and* a box has been published for its pin since it was created (see `Life::navigated`),
 //! and the pin's roads keep publishing one while it is arriving (see `is_arriving_for`).
 //!
-//! **One pin holds one document.** A file asked for in a pin that was showing another takes the
-//! standing viewer down before the new one is made, so a walk of two files can never leave two
-//! windows in one band (see `Seat::replaced_by`).
+//! **One pin holds one document, and a walk between two of them is a navigation.** A file asked for
+//! in a pin that was showing another *kind* takes the standing viewer down before the new one is
+//! made, so a walk of two files can never leave two windows in one band (see `Seat::replaced_by`).
+//! Two pages are the other road: the standing browser is navigated onto the file that arrived, and it
+//! keeps the page it was showing up until the new one commits — so a step of a walk is one document
+//! replacing another rather than a band emptied and filled again (see `Host::navigates_to`, and
+//! `a_walk_between_documents_keeps_the_viewer` for the pair the answer is asked of).
 //!
 //! **And the document holds the caret, because the wheel is the document's.** A viewer is a window
 //! the keyboard is not in until something puts it there, and a wheel turned over a window that is
@@ -52,9 +58,9 @@
 //! it goes on with the rest of its move (see `place`, `wait_for_the_take`).
 //!
 //! **And the frame around the document owes a paint the moment the document stands up.** What the pin
-//! fills the band with is asked of `is_up_for` rather than of the file's kind (`a_documents_band_is_the_viewers`),
-//! so a pin whose viewer has just been revealed is a band whose pixels have just changed — and the
-//! viewer thread is the one that learns it, and the preview loop's thread the one that paints it (see
+//! fills the band with is the document's frame on every road (`paint::the_document_holds_the_band`),
+//! but a page *committing* is still a band whose pixels have just changed — and the viewer thread is the
+//! one that learns it, and the preview loop's thread the one that paints it (see
 //! `the_band_owes_a_repaint`).
 
 use std::path::{Path, PathBuf};
@@ -65,7 +71,8 @@ use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment, ICoreWebView2_3,
+    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
+    ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2_3,
     COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
 };
 use webview2_com::NavigationCompletedEventHandler;
@@ -264,13 +271,13 @@ fn publish_the_live_owners(owners: Vec<isize>) {
 
     ANY_VIEWER_UP.store(any, Ordering::Release);
 
-    // **A band whose middle is Chromium's owes a paint the moment that answer changes.** What the pin
-    // fills that band with is asked of this list and not of the file's kind (see
-    // `a_documents_band_is_the_viewers`): while no viewer stands in it the band is the raster of page
-    // one the pin was taken up with, and once one does it is the caption's colour around the document.
-    // So the pass a viewer is revealed in — and the one it is let go of in — is a paint owed to the pin
-    // whose answer just changed: a frame left as it was is a document standing in the white of the page
-    // it was taken up on, until something else happens to ask for a paint.
+    // **A band whose middle is Chromium's owes a paint the moment a page commits in it.** What the pin
+    // fills that band with is the document's frame whatever this list says (see
+    // `paint::the_document_holds_the_band`) — what this list changes is which of the browser's windows
+    // stands in the middle of it, and a frame drawn before a reveal is a frame with nothing in it that
+    // has just become a frame with a page in it, which nothing on the pin's own tick asks for again.
+    // So the pass a viewer is revealed in — and the one it is let go of in, where the frame is what is
+    // left — is a paint owed to the pin whose answer just changed.
     if changed {
         the_band_owes_a_repaint();
     }
@@ -312,11 +319,10 @@ fn publish_the_arriving_owners(owners: Vec<isize>) {
 
     ANY_VIEWER_ARRIVING.store(arriving, Ordering::Release);
 
-    // **And what the band is painted from has changed with it.** A pin's band is a document's to fill
-    // from the moment one is on its way (see `the_band_belongs_to_the_document`), so a document that
-    // has just been asked for is the frame drawn where a raster of page one stands — and a document
-    // that arrived is the frame around the page rather than the raster under it, which is the same
-    // debt `publish_the_live_owners` leaves on its own change.
+    // **And what the band is painted from has changed with it.** A document that has just been asked
+    // for is one whose arrival is a frame to paint around once it commits, and a document that arrived
+    // is the page the middle of that frame now holds — the same debt `publish_the_live_owners` leaves on
+    // its own change (see `is_arriving_for`).
     if changed {
         the_band_owes_a_repaint();
     }
@@ -860,6 +866,20 @@ impl Seat {
         self.placed = true;
     }
 
+    /// Whether this seat is the one a file asked for in its pin **steps onto rather than replaces**:
+    /// the viewer standing in the band is a page's, and so is the file arriving (see
+    /// `a_walk_between_documents_keeps_the_viewer`).
+    ///
+    /// **Only a viewer that is on the screen is one a walk keeps.** One still arriving has no page
+    /// standing in the band for the next one to replace, and one suspended has its window off the
+    /// screen: those are the roads a document is begun again on (see `Command::Open`).
+    fn a_walk_keeps_it(&self, path: &Path, owner: isize) -> bool {
+        self.owner == owner
+            && self.path != path
+            && self.life == Life::Shown
+            && a_walk_between_documents_keeps_the_viewer(&self.path, path)
+    }
+
     /// Whether this viewer is the one a file asked for in its pin replaces: **one pin holds one
     /// document**, so the file a walk has just left is taken down before the one it steps onto is
     /// made (see `Command::Open`).
@@ -878,6 +898,14 @@ struct Host {
     /// What `NavigationCompleted` said, sent by the handler on this same thread and taken by the
     /// thread's own pass (see `settle`).
     answer: Receiver<bool>,
+    /// The registration of the handler that sends into `answer`, removed before the next one is added:
+    /// **a viewer steps onto a document per step of a walk**, and a handler left registered is one that
+    /// fires on every navigation the viewer makes from then on, sending into a channel nobody reads (see
+    /// `navigates_to`).
+    navigation: Option<(
+        ICoreWebView2NavigationCompletedEventHandler,
+        EventRegistrationToken,
+    )>,
     /// Whether the browser has been asked to suspend, so the ask is made once (see `suspend`).
     suspended: bool,
 }
@@ -947,7 +975,7 @@ impl Host {
 
         let (sender, answer) = mpsc::channel::<bool>();
 
-        unsafe {
+        let navigation = unsafe {
             let handler =
                 NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
                     let mut arrived = windows::Win32::Foundation::BOOL(0);
@@ -978,7 +1006,9 @@ impl Host {
                 let _ = DestroyWindow(hwnd);
                 return None;
             }
-        }
+
+            (handler, token)
+        };
 
         trace(&format!("pdf: navigating to {}", path.display()));
 
@@ -989,6 +1019,7 @@ impl Host {
             webview,
             deadline,
             answer,
+            navigation: Some(navigation),
             suspended: false,
         })
     }
@@ -1050,6 +1081,94 @@ impl Host {
         }
     }
 
+    /// Put this standing viewer onto another document of the same pin: one browser, one window, one
+    /// box, and only the page in it replaced.
+    ///
+    /// **It is the whole of what a walk is.** The window is not taken down, no environment is asked
+    /// for and no controller is made, so nothing of this app's is drawn in the band between the two
+    /// documents: what stands there until Chromium paints the next page is the page before it, and a
+    /// step of a walk reads as one document replacing another rather than as a band emptied and
+    /// filled again (see `a_walk_between_documents_keeps_the_viewer`).
+    ///
+    /// **The answer is a new channel and a new registration**, because the one this viewer was begun
+    /// with was answered and closed by the document it was asked for — and a closed channel read as
+    /// "nothing arrived" is a viewer closed on the first pass of the file it has just stepped onto. The
+    /// handler that answered that one is taken off the browser first, so a viewer that steps through
+    /// a folder has one registration rather than one per file it has read (see `Host::navigation`).
+    /// The seat is put back to `Arriving` with the box its pin has already published, so the reveal is the
+    /// commit of the new document rather than a second placement (see `Life::navigated`).
+    ///
+    /// Nothing is hid on this road and the document before it is not told to stop: Chromium keeps
+    /// the page it is showing up until the one it is asked for commits.
+    fn navigates_to(&mut self, path: &Path) -> bool {
+        let Some(url) = file_url(path) else {
+            return false;
+        };
+
+        let (sender, answer) = mpsc::channel::<bool>();
+        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
+            let mut arrived = windows::Win32::Foundation::BOOL(0);
+            // SAFETY: the callback is Chromium's and the answer it carries is read rather than
+            // kept; nothing behind it is state of this thread's.
+            unsafe {
+                let _ = args.is_some_and(|args| args.IsSuccess(&mut arrived).is_ok());
+            }
+            let _ = sender.send(arrived.as_bool());
+            Ok(())
+        }));
+
+        let mut token = EventRegistrationToken::default();
+        let wide_url = wide(&url);
+
+        unsafe {
+            if let Some((previous, previous_token)) = self.navigation.take() {
+                let _ = self.webview.remove_NavigationCompleted(previous_token);
+                drop(previous);
+            }
+
+            if self
+                .webview
+                .add_NavigationCompleted(&handler, &mut token)
+                .is_err()
+            {
+                return false;
+            }
+
+            if self.webview.Navigate(PCWSTR(wide_url.as_ptr())).is_err() {
+                return false;
+            }
+        }
+
+        self.navigation = Some((handler, token));
+
+        self.answer = answer;
+        self.deadline = Instant::now() + NAVIGATION_TIMEOUT;
+        self.seat.path = path.to_path_buf();
+        self.seat.arrived = false;
+        // **And the box it arrives at is one its pin published since this navigation began**, on the
+        // same rule a newborn viewer follows: the box the seat is carrying is the band the pin stood at
+        // for the file before this one, and a walk between two pages of different shapes lays the pin
+        // out at the new file's box. The ask for the viewer publishes that box in the same call that
+        // makes this one (see `pin_lifecycle::place_pinned_siblings`), and the navigation cannot have
+        // completed before the pass has taken it up — the browser's own messages are pumped after the
+        // boxes of the pass, never before them.
+        self.seat.placed = false;
+        self.seat.life = Life::Arriving;
+
+        note(&format!(
+            "navigate owner={} to {} at {}x{}+{}+{}",
+            self.seat.owner,
+            path.display(),
+            self.seat.area.width,
+            self.seat.area.height,
+            self.seat.area.x,
+            self.seat.area.y
+        ));
+        trace(&format!("pdf: stepping to {}", path.display()));
+
+        true
+    }
+
     /// Whether the document is on the screen at all, which is what decides between drawing and
     /// being suspended.
     ///
@@ -1106,11 +1225,10 @@ impl Host {
         self.set_bounds();
 
         // **And the band this window stands in is a paint owed the pin, before the caret is asked for.**
-        // What the pin fills that band with is asked of the list this reader is published in
-        // (`a_documents_band_is_the_viewers`), so a frame drawn before this reveal is the page's white
-        // still standing around a document that is now there — and nothing on the pin's own tick asks
-        // for another. The debt is left here rather than painted here because the pin's frame is the
-        // preview loop's, which is another thread (see `the_band_owes_a_repaint`).
+        // A page that has just committed is a rectangle that was the pin's frame and is now the
+        // document's, and nothing on the pin's own tick asks for the frame to be drawn again about it.
+        // The debt is left here rather than painted here because the pin's frame is the preview
+        // loop's, which is another thread (see `the_band_owes_a_repaint`).
         the_band_owes_a_repaint();
 
         // **And the caret goes into the document, which is what the wheel then belongs to.** A notch
@@ -1349,14 +1467,26 @@ pub(crate) fn pdf_full_mode() -> bool {
         .unwrap_or(true)
 }
 
-/// Whether the pin's band is a document's to fill: the viewer stands in it, **or one is on its way**
-/// (see `paint::the_document_holds_the_band`).
+/// Whether a walk from the document a pin is showing to the document it is about to show is a
+/// navigation of the browser standing in the band rather than a browser taken down and another
+/// begun — which is the whole of what makes a step of a walk read as one document replacing another
+/// rather than as a band emptied and filled again (see `Host::navigates_to`).
 ///
-/// The arriving half is the second one for the reason a walk needs it: a document asked for takes a
-/// browser start and a navigation, and a band that falls back to the raster for that long reads as two
-/// loads — a page image, then the document — for a file that was asked for as a document.
-pub(crate) fn the_band_belongs_to_the_document(owner: isize) -> bool {
-    is_up_for(owner) || is_arriving_for(owner)
+/// **Both files, and the row.** The viewer is kept only where the *next* file is one this app hands to
+/// Chromium and the one it is showing is one too: a step off a document onto a picture is a browser
+/// that has to go, and the file arriving is the pin's own window from there. A band that is not a
+/// document's at all (the row off) holds no viewer for a walk to keep.
+pub(crate) fn a_walk_between_documents_keeps_the_viewer(showing: &Path, coming: &Path) -> bool {
+    chromium_draws(showing) && chromium_draws(coming)
+}
+
+/// Whether this file is one a pin hands to Chromium's viewer: a page, and `PDF → Pin Mode → Full
+/// Mode` on (see `pdf_full_mode`).
+///
+/// Read where a walk asks whether its browser is kept and where a pinned document's frame is worked
+/// out, and nowhere else.
+pub(crate) fn chromium_draws(path: &Path) -> bool {
+    pdf_full_mode() && crate::readers::pdf_preview::is_pdf_file(path)
 }
 
 /// Whether a placement is owed for this pin's band rather than one already made — the one question the
@@ -1534,56 +1664,74 @@ fn viewer_thread(commands: Receiver<Command>) {
         match commands.recv_timeout(wait) {
             Ok(Command::Shutdown) => break,
             Ok(Command::Open { path, owner, area }) => {
-                // **The pin's other document goes before this one is made.** A walk asks for the file
-                // it steps onto in the pin that was showing the file it stepped off, and one pin holds
-                // one document: the outgoing window is destroyed here, before the incoming one exists
-                // to be revealed, so a walk can never leave two windows standing in one band (see
-                // `Seat::replaced_by` and `Command::Close`).
-                for host in hosts
-                    .iter_mut()
-                    .filter(|host| host.seat.replaced_by(&path, owner))
-                {
-                    host.close();
-                }
-                hosts.retain(|host| !host.seat.life.is_closed());
+                // **A walk between two documents is a navigation rather than a newborn viewer.** The
+                // standing browser is stepped onto the file that arrived and the band is never empty
+                // in between: what the pin shows while the next page comes is the page before it (see
+                // `Host::navigates_to` and `a_walk_between_documents_keeps_the_viewer`). Every other
+                // ask is the road it always was — the pin's other document goes before this one is
+                // made (see `Seat::replaced_by`).
+                let stepped = {
+                    match hosts
+                        .iter_mut()
+                        .find(|host| host.seat.a_walk_keeps_it(&path, owner))
+                    {
+                        Some(host) => host.navigates_to(&path),
+                        None => false,
+                    }
+                };
 
-                if environment.is_none() {
-                    // The browser the runtime starts is this app's child whatever engine asked for
-                    // it: one begun here is written down like the hover engine's, so a run that
-                    // ends badly leaves no browser of its own behind (see `app::engine_processes`).
-                    let before = engine_processes::processes_named_by_parent(
-                        engine_processes::BROWSER_IMAGE,
-                        std::process::id(),
-                    );
-
-                    let deadline = Instant::now() + NAVIGATION_TIMEOUT;
-                    environment = create_environment(&folder, deadline, BROWSER_ARGUMENTS);
+                if !stepped {
+                    // **The pin's other document goes before this one is made.** A walk asks for the
+                    // file it steps onto in the pin that was showing the file it stepped off, and one
+                    // pin holds one document: the outgoing window is destroyed here, before the
+                    // incoming one exists to be revealed, so a walk can never leave two windows
+                    // standing in one band (see `Seat::replaced_by` and `Command::Close`).
+                    for host in hosts
+                        .iter_mut()
+                        .filter(|host| host.seat.replaced_by(&path, owner))
+                    {
+                        host.close();
+                    }
+                    hosts.retain(|host| !host.seat.life.is_closed());
 
                     if environment.is_none() {
-                        trace("pdf: no environment");
-                    }
+                        // The browser the runtime starts is this app's child whatever engine asked for
+                        // it: one begun here is written down like the hover engine's, so a run that
+                        // ends badly leaves no browser of its own behind (see `app::engine_processes`).
+                        let before = engine_processes::processes_named_by_parent(
+                            engine_processes::BROWSER_IMAGE,
+                            std::process::id(),
+                        );
 
-                    for pid in engine_processes::processes_named_by_parent(
-                        engine_processes::BROWSER_IMAGE,
-                        std::process::id(),
-                    ) {
-                        if !before.contains(&pid) {
-                            trace(&format!("pdf: browser {pid}"));
-                            engine_processes::record(engine_processes::BROWSER_IMAGE, pid);
+                        let deadline = Instant::now() + NAVIGATION_TIMEOUT;
+                        environment = create_environment(&folder, deadline, BROWSER_ARGUMENTS);
+
+                        if environment.is_none() {
+                            trace("pdf: no environment");
+                        }
+
+                        for pid in engine_processes::processes_named_by_parent(
+                            engine_processes::BROWSER_IMAGE,
+                            std::process::id(),
+                        ) {
+                            if !before.contains(&pid) {
+                                trace(&format!("pdf: browser {pid}"));
+                                engine_processes::record(engine_processes::BROWSER_IMAGE, pid);
+                            }
                         }
                     }
-                }
 
-                let host = environment
-                    .as_ref()
-                    .and_then(|environment| Host::create(environment, &path, owner, area));
+                    let host = environment
+                        .as_ref()
+                        .and_then(|environment| Host::create(environment, &path, owner, area));
 
-                if host.is_none() {
-                    trace(&format!("pdf: no viewer for {}", path.display()));
-                }
+                    if host.is_none() {
+                        trace(&format!("pdf: no viewer for {}", path.display()));
+                    }
 
-                if let Some(host) = host {
-                    hosts.push(host);
+                    if let Some(host) = host {
+                        hosts.push(host);
+                    }
                 }
             }
             // The box travels in the cells beside the channel rather than in the command, so this arm
@@ -1875,11 +2023,11 @@ mod tests {
     /// **A band whose middle is Chromium's owes a paint the moment that answer changes, and not one
     /// before it.**
     ///
-    /// What the pin fills the band with is asked of the viewer rather than of the file's kind (`a_documents_band_is_the_viewers`
-    /// in the preview's own paint), so the pass a document is revealed in is the pass the pin's frame
-    /// around it is owed — and the one it is let go of in. A pass that published the same list it
-    /// published before changed nothing of what the band holds, and asks for none: a paint a tick for a
-    /// document standing still is a frame nobody asked for (see `the_band_owes_a_repaint`).
+    /// What the pin fills the band with is the document's frame on every road (`paint::the_document_holds_the_band`
+    /// in the preview's own paint), so the pass a document is revealed in is the pass the pin is owed a
+    /// paint by — the middle of that frame has just come to hold a page. A pass that published the same
+    /// list it published before changed nothing of what the band holds, and asks for none: a paint a tick
+    /// for a document standing still is a frame nobody asked for (see `the_band_owes_a_repaint`).
     #[test]
     fn a_band_owes_a_paint_when_the_viewer_in_it_comes_or_goes() {
         let _room = the_viewers_room();
@@ -2133,9 +2281,13 @@ mod tests {
     /// The ask that steps onto the second file names the band that stood when it was made, and the pin
     /// is taken up at the box of the document it shows now *after* that: a viewer revealed at the box it
     /// was created with is a window of its own beside the pin until a box change snaps it in. So the box
-    /// a document arrives at is the last one its pin published, the file a walk left is taken down before
-    /// the one it stepped onto is made, and exactly one viewer is left (see `Life::navigated`,
-    /// `Seat::place` and `Seat::replaced_by`).
+    /// a document arrives at is the last one its pin published, and exactly one viewer is left (see
+    /// `Life::navigated`, `Seat::place` and `Seat::replaced_by`).
+    ///
+    /// And **the file a walk left is not taken down: it is stepped onto**, which is the whole of what
+    /// keeps the band from being emptied between the two documents — the same browser navigated, with the
+    /// page it was showing standing until the next one commits (see `Seat::a_walk_keeps_it` and
+    /// `Host::navigates_to`).
     #[test]
     fn a_walk_of_two_pdfs_leaves_one_viewer_in_the_band() {
         let pin = 9_100_011;
@@ -2154,11 +2306,26 @@ mod tests {
             height: 284,
         };
 
-        // What the thread's `Command::Open` answers, in that order: the pin's other document goes, this
-        // one is created at the box the ask named.
-        fn open(seats: &mut Vec<Seat>, path: &str, owner: isize, area: Area) {
+        // What the thread's `Command::Open` answers, in that order: what the standing viewer is stepped
+        // onto, or — where it is not one the walk keeps — the pin's other document let go of and this
+        // one created at the box the ask named.
+        fn open(seats: &mut Vec<Seat>, path: &str, owner: isize, area: Area) -> bool {
+            let stepped = seats
+                .iter_mut()
+                .find(|seat| seat.a_walk_keeps_it(Path::new(path), owner));
+
+            if let Some(seat) = stepped {
+                seat.path = PathBuf::from(path);
+                seat.arrived = false;
+                seat.life = Life::Arriving;
+                seat.place(area);
+                return true;
+            }
+
             seats.retain(|seat| !seat.replaced_by(Path::new(path), owner));
             seats.push(Seat::create(Path::new(path), owner, area));
+
+            false
         }
 
         // What the pass answers once the document has arrived and the box has come with it.
@@ -2171,7 +2338,7 @@ mod tests {
 
         // **A document that arrived before its pin's box did is not shown**: the box it was created with
         // is the band of the file before it.
-        open(&mut seats, "a.pdf", pin, the_band_before);
+        assert!(!open(&mut seats, "a.pdf", pin, the_band_before));
         assert_eq!(
             arrive(&mut seats[0]),
             Step::Nothing,
@@ -2185,14 +2352,16 @@ mod tests {
             "the box it arrived at is its pin's"
         );
 
-        // And the walk: another file in the same pin, at the band that stood when it was asked for.
-        open(&mut seats, "b.pdf", pin, the_band_before);
-        assert_eq!(
-            seats.len(),
-            1,
-            "the file the walk left is gone before this one is made"
+        // **And the walk is a navigation of that same viewer**, which is the whole of why the band is
+        // never emptied between the two documents: the seat is kept, it is arriving again, and the page
+        // it was showing stands until the next one arrives.
+        assert!(
+            open(&mut seats, "b.pdf", pin, the_band_before),
+            "a step onto another page is the standing viewer navigated"
         );
+        assert_eq!(seats.len(), 1, "and one pin leaves one viewer in the band");
         assert_eq!(seats[0].path, Path::new("b.pdf"));
+        assert!(seats[0].life.is_arriving(), "and it is on its way");
 
         seats[0].place(the_inset_band);
         assert_eq!(arrive(&mut seats[0]), Step::Reveal);
@@ -2201,6 +2370,19 @@ mod tests {
             "the viewer stands in the band the pin has now"
         );
         assert!(seats[0].life.is_up());
+
+        // **A step onto a file that is not a page of Chromium's is not one it keeps.** The viewer is
+        // taken down and another document asked for, which is the road a walk off a document onto a
+        // picture has always been.
+        let mut seats = vec![Seat::create(Path::new("b.pdf"), pin, the_inset_band)];
+        seats[0].life = Life::Shown;
+        assert!(!open(&mut seats, "c.png", pin, the_band_before));
+        assert_eq!(
+            seats.len(),
+            1,
+            "the file the walk left is gone before this one is made"
+        );
+        assert_eq!(seats[0].path, Path::new("c.png"));
 
         // Another pin's document is another document, and no file of this pin's takes it down.
         let other = Seat::create(Path::new("b.pdf"), 9_100_012, the_inset_band);

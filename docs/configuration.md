@@ -214,6 +214,7 @@ spinner_delay_ms=250
 
 - `pdf_full_mode`: `true` (default) hands a pinned PDF to WebView2's own viewer, so the document is worked in — it scrolls, searches, selects and zooms as it does in a browser, and the pin's chrome is the frame around it. `false` makes a pinned PDF exactly what a hover of the same file is: the single page this app reads and draws itself, in the pin's band, with no browser and no second window in the pin's path.
   - Read where a document would be asked for and where one is let go of, so the row is answered under a pin that is up: turning it off closes the viewer on the tick that follows and draws the page where it stood, and turning it back on asks for a viewer again.
+  - On, a pinned page is never rasterised and a walk between two documents navigates the one browser rather than taking it down and beginning another, so what stands in the band between the two files is the page before it.
   - The tray's **PDF → Pin Mode → Full Mode** writes it.
 - `pdf_autofocus`: `true` (default) puts the caret in a pinned document's viewer as it is revealed and as it is resumed, so a notch over the page scrolls it and `Ctrl`, `Ctrl+F` and the arrows are the document's own. `false` keeps the keyboard in the pin: its key table answers the arrows so a folder walks with them, and a notch over the page is handed to the browser by this app rather than delivered to a window Windows has not put in front.
   - Read at each reveal and resume, so a row moved under a pin that is up is answered by the next one.
