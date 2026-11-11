@@ -210,19 +210,36 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     }
 
     let aspect = unsafe { media_type.GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO) }.unwrap_or(1 << 32);
-    let (aspect_width, aspect_height) = unpack_pair(aspect);
 
-    // A pixel that is not square makes the picture a different shape from its frame, and
-    // which axis grows is whichever the ratio takes past one — a DVD's 720 x 480 is shown
-    // as 4:3 by a pixel that is wider than it is tall.
-    let (width, height) = match (aspect_width, aspect_height) {
-        (0, _) | (_, 0) => (frame_width, frame_height),
-        (w, h) if w > h => (frame_width.saturating_mul(w) / h, frame_height),
-        (w, h) if h > w => (frame_width, frame_height.saturating_mul(h) / w),
-        _ => (frame_width, frame_height),
-    };
+    Some(displayed_shape(
+        frame_width,
+        frame_height,
+        unpack_pair(aspect),
+    ))
+}
 
-    Some((width, height))
+/// The shape a frame is displayed at, given its own size and the shape of one of its pixels.
+///
+/// A pixel that is not square makes the picture a different shape from its frame, and which
+/// axis grows is whichever the ratio takes past one — a DVD's 720 x 480 is shown as 4:3 by a
+/// pixel that is wider than it is tall, and a file that stores 1080 x 1080 through a 9:16 pixel
+/// is a portrait film. Both players read the same ratio from different places (the source
+/// reader here, FFprobe's `sample_aspect_ratio` there), so this rule is stated once.
+pub fn displayed_shape(width: u32, height: u32, aspect: (u32, u32)) -> (u32, u32) {
+    let (n, d) = (u64::from(aspect.0), u64::from(aspect.1));
+    if width == 0 || height == 0 || n == 0 || d == 0 || n == d {
+        return (width, height);
+    }
+
+    // Rounded half up rather than truncated, and never down to nothing: a zero-height shape is
+    // not a picture, and `d > n` only ever grows the height.
+    if n > d {
+        let shown = ((u64::from(width) * n + d / 2) / d) as u32;
+        (shown.max(1), height)
+    } else {
+        let shown = ((u64::from(height) * d + n / 2) / n) as u32;
+        (width, shown.max(1))
+    }
 }
 
 /// The part of a video's own frame a preview is drawn from: the rectangle the geometry probe's
@@ -269,6 +286,12 @@ pub struct Picture {
 /// A crop as the rectangle the engine's frame transfer is asked for — the same region, in the
 /// normalized coordinates that call takes — or nothing at all for a rectangle with no area in
 /// it or a frame with no size.
+///
+/// **The frame this is normalized over is the raw one**, the decoded frame as the file holds it,
+/// while the surface it is transferred into is the displayed shape (`Picture::width/height`, which
+/// the file's pixel aspect has already been applied to — see [`displayed_shape`]). The two are
+/// deliberately different spaces: the rectangle is cut out of the frame in the frame's pixels, and
+/// the engine draws it into a surface whose size is the shape the picture is shown at.
 pub(super) fn source_rect(crop: Crop) -> Option<MFVideoNormalizedRect> {
     if crop.width == 0 || crop.height == 0 || crop.frame_width == 0 || crop.frame_height == 0 {
         return None;

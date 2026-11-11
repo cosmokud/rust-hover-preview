@@ -349,6 +349,9 @@ fn start(wanted: Wanted) -> Stream {
 /// The scale and the crop are the same pair every other bubble's picture is cut to (see
 /// `grab_video_frame`): the square the circle is inscribed in, filled rather than letterboxed, so
 /// that a bubble shows the middle of the film rather than a stripe across the middle of the circle.
+/// **The pixels are squared first**, `scale=iw*sar:ih,setsar=1`, because the cover crop weighs a
+/// frame in its own space: a film stored through a 9:16 pixel is a portrait picture and the middle
+/// of it is not the middle of its square frame (see `grab_a_frame` in `pin_bubble`).
 fn stream_args(path: &Path, at: f64, side: u32) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
@@ -364,7 +367,7 @@ fn stream_args(path: &Path, at: f64, side: u32) -> Vec<String> {
             "-an".to_string(),
             "-vf".to_string(),
             format!(
-                "scale={side}:{side}:force_original_aspect_ratio=increase,crop={side}:{side},fps={BUBBLE_STREAM_FPS}"
+                "scale=iw*sar:ih,setsar=1,scale={side}:{side}:force_original_aspect_ratio=increase,crop={side}:{side},fps={BUBBLE_STREAM_FPS}"
             ),
             // Raw BGRA on the pipe, which is what the bubble paints with: a picture is not encoded
             // and decoded again across a process boundary when the bytes are what is wanted either
@@ -543,7 +546,7 @@ mod tests {
                 // No sound: the film's own player is making it.
                 "-an",
                 "-vf",
-                "scale=44:44:force_original_aspect_ratio=increase,crop=44:44,fps=25",
+                "scale=iw*sar:ih,setsar=1,scale=44:44:force_original_aspect_ratio=increase,crop=44:44,fps=25",
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
