@@ -3,6 +3,7 @@ pub(crate) mod app_icon;
 pub(crate) mod detach;
 pub(crate) mod dialogs;
 pub(crate) mod engine_processes;
+pub(crate) mod local_env;
 pub(crate) mod seam;
 pub(crate) mod single_instance;
 pub(crate) mod startup;
