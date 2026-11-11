@@ -518,6 +518,23 @@ pub fn refresh() {
     crate::formats::f3d_render::refresh();
 }
 
+/// Whether the FFMPEG engine is deliberately turned off via environment variable.
+///
+/// Checked via `RHP_DISABLE_FFMPEG` or `DISABLE_FFMPEG`. Accepts truthy values:
+/// `1`, `true`, `yes`, `on`. Used for diagnosis to force fallback to native or alternative engines.
+pub fn ffmpeg_disabled() -> bool {
+    let is_truthy = |var: &str| {
+        std::env::var(var)
+            .ok()
+            .map(|val| {
+                let val = val.trim().to_ascii_lowercase();
+                val == "1" || val == "true" || val == "yes" || val == "on"
+            })
+            .unwrap_or(false)
+    };
+    is_truthy("RHP_DISABLE_FFMPEG") || is_truthy("DISABLE_FFMPEG")
+}
+
 /// Whether `ffplay.exe` is on this machine, and so whether a video preview is played by
 /// FFmpeg rather than by the engine Windows has.
 ///
@@ -525,6 +542,10 @@ pub fn refresh() {
 /// the `PATH` is a list of directories rather than a question. [`refresh`] is what asks it
 /// again.
 pub fn ffplay_available() -> bool {
+    if ffmpeg_disabled() {
+        return false;
+    }
+
     if let Ok(cached) = FFPLAY.lock() {
         if let Some(answer) = *cached {
             return answer;
@@ -548,6 +569,10 @@ pub fn ffplay_available() -> bool {
 /// card and refused the file a preview for the whole run, on a machine that could read the file
 /// perfectly well. Kept between hovers and cleared by [`refresh`] the way the player's is.
 pub fn ffprobe_available() -> bool {
+    if ffmpeg_disabled() {
+        return false;
+    }
+
     if let Ok(cached) = FFPROBE.lock() {
         if let Some(answer) = *cached {
             return answer;
@@ -593,6 +618,10 @@ pub fn mpv_available() -> bool {
 /// arrives while the app is running is picked up by the next opening of the menu rather than at
 /// the next restart (see [`refresh`]).
 pub fn normalize_available() -> bool {
+    if ffmpeg_disabled() {
+        return false;
+    }
+
     if let Ok(cached) = NORMALIZE.lock() {
         if let Some(answer) = *cached {
             return answer;
@@ -684,6 +713,9 @@ fn initialize_apartment() {
 /// Spawning the player to ask whether it exists would be a program started to answer a
 /// question about a program, and the `PATH` already holds the answer.
 fn find_ffplay() -> Option<PathBuf> {
+    if ffmpeg_disabled() {
+        return None;
+    }
     find_program(FFPLAY_NAME)
 }
 
@@ -780,6 +812,10 @@ pub fn resolve_mpv(chosen: Option<&Path>, installs: &[PathBuf]) -> Option<PathBu
 /// Spawning the program to ask whether it exists would be a program started to answer a
 /// question about a program, and the `PATH` already holds the answer.
 pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
+    if ffmpeg_disabled() && (name == FFMPEG_NAME || name == FFPLAY_NAME || name == FFPROBE_NAME) {
+        return None;
+    }
+
     let mut folders: Vec<PathBuf> = Vec::new();
 
     if let Some(own_folder) = std::env::current_exe()
@@ -1432,5 +1468,24 @@ mod tests {
             None,
             "a chosen path that has gone with nothing installed is nothing to run"
         );
+    }
+
+    #[test]
+    fn ffmpeg_disabled_flag_detection() {
+        std::env::remove_var("RHP_DISABLE_FFMPEG");
+        std::env::remove_var("DISABLE_FFMPEG");
+        assert!(!ffmpeg_disabled());
+
+        std::env::set_var("RHP_DISABLE_FFMPEG", "1");
+        assert!(ffmpeg_disabled());
+        std::env::remove_var("RHP_DISABLE_FFMPEG");
+
+        std::env::set_var("DISABLE_FFMPEG", "true");
+        assert!(ffmpeg_disabled());
+        std::env::remove_var("DISABLE_FFMPEG");
+
+        std::env::set_var("RHP_DISABLE_FFMPEG", "0");
+        assert!(!ffmpeg_disabled());
+        std::env::remove_var("RHP_DISABLE_FFMPEG");
     }
 }
