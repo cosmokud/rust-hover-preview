@@ -1471,6 +1471,25 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
 /// that draws it in full mode (see the arms below). It is also what says what the box is a box *of* —
 /// a window's own room, or the size a picture has been zoomed to — and so what scale the file is
 /// decoded at.
+/// The scale a box change reads the file at, which is the one question the road decides rather than
+/// the kind — with one exception, and it is a picture that plays (see `relayout_pinned_media`).
+pub(super) fn relayout_scale(kind: Option<MediaType>, road: PinRelayoutRoad) -> PreviewScale {
+    if road == PinRelayoutRoad::Zoom {
+        return PreviewScale::Percent(100);
+    }
+    // **A picture that plays is read at its own size whatever box it is drawn in.** Its frames are
+    // held rather than one page rasterized for the box, so a box it was dragged out to would have the
+    // decode invent every pixel above the file's own — and a run of those is past the room the pin
+    // holds it in, which gives frames back behind the playhead, which is a track a hand can no longer
+    // reach every place of (see `release_played_frames` and `frame_of_file_start`). The band stretches
+    // the frame the pin holds into the box it stands in, so nothing on screen is given up for it (see
+    // `compose_media_into_band`).
+    if kind.is_some_and(|kind| kind.is_animation()) {
+        return PreviewScale::Percent(100);
+    }
+    PreviewScale::FitToScreen
+}
+
 pub(super) fn relayout_pinned_media(
     path: &Path,
     content: ScreenRegion,
@@ -1480,20 +1499,6 @@ pub(super) fn relayout_pinned_media(
 ) -> Option<PinRelayout> {
     let width = (content.2 - content.0).max(1) as u32;
     let height = (content.3 - content.1).max(1) as u32;
-
-    // What the box is a box *of*, which is the one thing the road decides besides the kind: a window
-    // given another box is laid out in that box, and a picture the wheel has taken past its window is
-    // laid out for its own pixels instead.
-    //
-    // A zoom past the size the file holds has nothing left to decode — the pixels are one for one
-    // already, and every one past them would be an invention — and a zoom *under* that size is a picture
-    // that would be decoded larger than the file it came from if the room were the whole of the
-    // question. `Percent(100)` is exactly that pair: the fit of the file into the box, and never a scale
-    // above one (see `scale_in_room`).
-    let scale = match road {
-        PinRelayoutRoad::Zoom => PreviewScale::Percent(100),
-        PinRelayoutRoad::TakeUp | PinRelayoutRoad::BoxChange => PreviewScale::FitToScreen,
-    };
 
     // What is on screen, read in one look: what it is decides which arm answers below, how big its
     // frame is decides whether this box owes it anything at all (see `box_is_covered`), and the place
@@ -1513,6 +1518,28 @@ pub(super) fn relayout_pinned_media(
             })
         })
         .unwrap_or((None, None, 0));
+
+    // What the box is a box *of*, which is the one thing the road decides besides the kind: a window
+    // given another box is laid out in that box, and a picture the wheel has taken past its window is
+    // laid out for its own pixels instead.
+    //
+    // A zoom past the size the file holds has nothing left to decode — the pixels are one for one
+    // already, and every one past them would be an invention — and a zoom *under* that size is a picture
+    // that would be decoded larger than the file it came from if the room were the whole of the
+    // question. `Percent(100)` is exactly that pair: the fit of the file into the box, and never a scale
+    // above one (see `scale_in_room`).
+    //
+    // **And a picture that plays is read at its own size on every road**, which is the one thing about a
+    // box change the other kinds have no equivalent of: its frames are *held*, so a box it is dragged
+    // out to would have the decode invent every pixel above the file's own. A 400-pixel animation in a
+    // maximized window is some thousands of pixels across and a dozen megabytes a frame, and a few
+    // hundred of those are past the room it is held in — so the frames behind the playhead are given
+    // back, and a run that has given its frames back is a track whose places a hand can no longer all
+    // reach: the ones given back are places a drag skips over, and a run whose wrap has nothing to wrap
+    // to is a picture that stands still (see `release_played_frames`, `frame_of_file_start` and
+    // `show_the_frame_of`). What is drawn is untouched by it, since the band stretches the frame the pin
+    // holds into whatever box the window is (see `compose_media_into_band`).
+    let scale = relayout_scale(kind, road);
 
     // Only a box change carries the place: a take-up is a file this window has not stood on, and a
     // zoom is the one road a picture that plays takes without a decode at all (see `PinRelayoutRoad`).
