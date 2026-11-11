@@ -1690,7 +1690,7 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
 
         let mut relayout = Some(PinRelayout {
             path: path.clone(),
-            cancel: Arc::new(AtomicBool::new(false)),
+            cancel: Some(Arc::new(AtomicBool::new(false))),
             answer: answers,
             decoded: None,
         });
@@ -1760,7 +1760,7 @@ fn a_box_change_that_lands_carries_the_place_a_playing_frame_had_got_to() {
     answer.send(Some(behind)).ok();
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
-        cancel: Arc::new(AtomicBool::new(false)),
+        cancel: Some(Arc::new(AtomicBool::new(false))),
         answer: answers,
         decoded: None,
     });
@@ -1839,7 +1839,7 @@ fn a_box_change_waits_for_its_answer_to_reach_the_place_the_pin_has_played_to() 
     // it is drawn over, whatever box it was decoded for.
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
-        cancel: Arc::new(AtomicBool::new(false)),
+        cancel: Some(Arc::new(AtomicBool::new(false))),
         answer: answer_from(5, 7),
         decoded: None,
     });
@@ -1860,7 +1860,7 @@ fn a_box_change_waits_for_its_answer_to_reach_the_place_the_pin_has_played_to() 
     // Its own stream decodes its way up to that place, and then it is the frame installed.
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
-        cancel: Arc::new(AtomicBool::new(false)),
+        cancel: Some(Arc::new(AtomicBool::new(false))),
         answer: answer_from(5, 9),
         decoded: None,
     });
@@ -1933,7 +1933,7 @@ fn a_released_playhead_is_carried_as_exactly_as_a_held_one() {
 
     let mut relayout = Some(PinRelayout {
         path: path.clone(),
-        cancel: Arc::new(AtomicBool::new(false)),
+        cancel: Some(Arc::new(AtomicBool::new(false))),
         answer: answers,
         decoded: None,
     });
@@ -2051,4 +2051,85 @@ fn right_of_bounds() -> ScreenBounds {
         right: first.right + (first.right - first.left),
         bottom: first.bottom,
     }
+}
+
+/// **The answer a box change installs is a run still being filled, and the flag its decode is
+/// stopped by is the flag its stream reads.** A relayout is dropped the moment its answer is taken
+/// out of it, and `pin_media_load` hands one arc to the decode thread *and* into the media it
+/// answers with as that media's `stream_cancel` — so a stop flag left set on the way out told the
+/// media just installed to stop where it stood. What that left on the window was a run holding
+/// nothing but its startup frames and marking itself fully loaded with the file's head never
+/// among them: a picture that never wraps and never leaves the frame the box change found it on
+/// (see `frame_of_file_start` and `advance_frame`).
+#[test]
+fn an_installed_answer_leaves_the_stream_it_brought_running() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let frame = |file_index: usize| {
+        let mut frame = ImageFrame::new(vec![0u8; 4], 1, 1, 100);
+        frame.file_index = file_index;
+        Arc::new(frame)
+    };
+
+    let path = PathBuf::from("a-frame-installed-while-it-streams.gif");
+    let mut pin = overlay_pin((100, 100, 500, 400), PinChrome::always());
+    pin.path = path.clone();
+    stand_pin(Some(pin));
+
+    // The pin is part-way through its file, on frames a box the window no longer has was decoded for.
+    let mut playing = static_image_media(frame(40), MediaType::AnimatedGif);
+    playing.frames = (40..42).map(frame).collect();
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(playing);
+    }
+
+    // The answer, and the stop flag its decode holds — the same arc the media it answers with
+    // carries, which is what `pin_media_load` hands both of them.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (answer, answers) = channel();
+    let mut decoded = static_image_media(frame(41), MediaType::AnimatedGif);
+    decoded.frames = (41..43).map(frame).collect();
+    decoded.stream_cancel = Some(Arc::clone(&cancel));
+    answer.send(Some(decoded)).ok();
+
+    let mut relayout = Some(PinRelayout {
+        path: path.clone(),
+        cancel: Some(Arc::clone(&cancel)),
+        answer: answers,
+        decoded: None,
+    });
+    assert!(
+        take_pin_relayout(&mut relayout),
+        "the answer of a relayout standing on the pin's own file is installed"
+    );
+    assert!(relayout.is_none(), "and the ask it answered goes with it");
+    assert!(
+        !cancel.load(Ordering::Acquire),
+        "the flag its decode was stopped by is not the flag its stream is stopped by"
+    );
+
+    let streaming = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media.as_ref().map(|media| {
+            (
+                media.current_frame_of_file(),
+                media
+                    .stream_cancel
+                    .as_ref()
+                    .is_some_and(|cancel| cancel.load(Ordering::Acquire)),
+            )
+        })
+    });
+    assert_eq!(
+        streaming,
+        Some((Some(41), false)),
+        "the installed media opens on the place the pin was at, with the stream that answers for \
+         the rest of the file still walking it"
+    );
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous;
+    }
+    stand_pin(previous_pin);
 }

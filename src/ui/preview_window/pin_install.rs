@@ -1637,7 +1637,7 @@ pub(super) fn relayout_pinned_media(
             Some(PinRelayout {
                 path: path.to_path_buf(),
                 answer: pin_media_load(path, width, height, dpi, scale, place, Arc::clone(&cancel)),
-                cancel,
+                cancel: Some(cancel),
                 decoded: None,
             })
         }
@@ -1762,8 +1762,17 @@ pub(super) struct PinRelayout {
     /// decode still running is told to stop here when the ask it belongs to is put down — a box
     /// that changed a second time asks for a decode of its own, and one left walking the file for a
     /// place nobody is asking about any more is a walk the whole relayout waits behind (see
-    /// `ask_for_a_pin_relayout`).
-    pub(super) cancel: Arc<AtomicBool>,
+    /// `take_pin_relayout`).
+    ///
+    /// **It is taken away once the answer is installed, and it is an `Option` for exactly that.**
+    /// `pin_media_load` hands this same arc to the decoder thread *and* into the media it answers
+    /// with, as that media's `stream_cancel` — so the flag that stops a relayout nothing is waiting
+    /// for any more is the flag the installed media's own stream reads. A relayout that has answered
+    /// is dropped the moment its answer is taken out of it, and setting the flag there told the
+    /// media it had just installed to stop: a run no further frame ever arrived in, holding its
+    /// startup frames and marking itself fully loaded with no file's head among them, which is a
+    /// picture that holds its last frame for ever (see `MediaData::frame_of_file_start`).
+    pub(super) cancel: Option<Arc<AtomicBool>>,
     /// The answer, once it has arrived, kept here while it is behind the pin: the decode began at
     /// the place the box change found the pin at, so it is a frame or three short of the place the
     /// pin has played to by the time it lands, and what it is short of is waited for rather than
@@ -1778,7 +1787,12 @@ impl Drop for PinRelayout {
     fn drop(&mut self) {
         // A decode still in flight is stopped where it stands, and one that has answered has its
         // stream stopped: either way nothing is left walking a file for a place nobody asked for.
-        self.cancel.store(true, Ordering::Release);
+        //
+        // The flag is asked for rather than set, because an answer that was *installed* is an
+        // answer whose stream is the media's now and is taken away from here (see `PinRelayout`).
+        if let Some(cancel) = self.cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
         if let Some(media) = self.decoded.as_mut() {
             media.cancel_background_work();
         }
@@ -1866,6 +1880,14 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
         media.cancel_background_work();
         return false;
     }
+
+    // **The stop flag is taken away from the relayout here, and that is the whole of what
+    // installing an answer is.** The decode this answer came off holds this very flag as its
+    // stream's stop flag, and the relayout is dropped the moment its answer is taken out of it —
+    // so a flag left standing here is a media told to stop on the tick it was installed, which is
+    // a run that never grows past its startup frames and a picture stuck on the frame the box
+    // change found it on (see `PinRelayout`).
+    pending.cancel.take();
 
     let media = keep_text_place(media);
     let media = keep_animation_place(media);
