@@ -110,6 +110,9 @@ pub(super) fn load_animated_gif(
     }
 
     if reached_end {
+        // A run read to its end is the whole of its file at this size; where the pin already held
+        // another run of the same file, this one takes its places rather than standing beside it (see
+        // `keep_animation_place`).
         return Some(MediaData {
             frames: initial_frames,
             shared_frames: None,
@@ -397,8 +400,13 @@ pub(super) fn load_animated_apng(
     }
 
     if reached_end {
+        // A run read to its end is the whole of its file at this size; where the pin already held
+        // another run of the same file, this one takes its places rather than standing beside it (see
+        // `keep_animation_place`).
+        let mut frames = initial_frames;
+        frames.sort_by_key(|frame| frame.file_index);
         return Some(MediaData {
-            frames: initial_frames,
+            frames,
             shared_frames: None,
             all_frames_loaded: None,
             current_frame: 0,
@@ -692,8 +700,13 @@ pub(super) fn load_animated_webp(
     }
 
     if reached_end {
+        // A run read to its end is the whole of its file at this size; where the pin already held
+        // another run of the same file, this one takes its places rather than standing beside it (see
+        // `keep_animation_place`).
+        let mut frames = initial_frames;
+        frames.sort_by_key(|frame| frame.file_index);
         return Some(MediaData {
-            frames: initial_frames,
+            frames,
             shared_frames: None,
             all_frames_loaded: None,
             current_frame: 0,

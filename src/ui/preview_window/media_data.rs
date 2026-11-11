@@ -514,6 +514,14 @@ impl MediaData {
     /// meaning anything once the decoder is done with the file — there is nothing
     /// left to hold back, and the frames it finished with are frames of the
     /// animation whatever is in hand.
+    ///
+    /// A place the run already holds is that place sharpened rather than a second frame pushed
+    /// beside it. A box change keeps the whole of the run the pin was playing around the frames its
+    /// own decode answers with (see `merge_the_run`), and that decode goes on answering the same
+    /// file's places in the same order — so each frame that arrives takes the place of the one drawn
+    /// for the box before it. Pushed instead, they would hold the file's head and its tail twice,
+    /// one under the other, and the playhead would be moved off every place a hand names by however
+    /// many duplicates arrived behind it (see `show_the_frame_of`).
     pub(super) fn sync_shared_frames(&mut self) {
         let Some(shared) = self.shared_frames.clone() else {
             return;
@@ -524,9 +532,19 @@ impl MediaData {
             let result = shared.lock();
             if let Ok(mut streamed) = result {
                 if !streamed.queue.is_empty() {
-                    // A streamed frame is made by the decoder thread and handed over once,
-                    // so wrapping it here is the only allocation it ever needs.
-                    self.frames.extend(streamed.queue.drain(..).map(Arc::new));
+                    // A streamed frame is made by the decoder thread and handed over once, so wrapping
+                    // it here is the only allocation it ever needs.
+                    for frame in streamed.queue.drain(..) {
+                        let frame = Arc::new(frame);
+                        match self
+                            .frames
+                            .iter()
+                            .position(|held| held.file_index == frame.file_index)
+                        {
+                            Some(at) => self.frames[at] = frame,
+                            None => self.frames.push(frame),
+                        }
+                    }
                 }
             }
         }

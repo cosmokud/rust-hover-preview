@@ -1910,6 +1910,23 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
         existing.cancel_background_work();
     }
     *current = Some(media);
+    let installed_kind = current.as_ref().map(|media| media.media_type);
+    let installed_size = current
+        .as_ref()
+        .map(|media| (media.current_width(), media.current_height()));
+    drop(current);
+
+    // And the run the index reads is the run of the box the window has *now*: a box change is the
+    // same picture drawn at another size, and a run of the size it was is a run to read again (see
+    // `pin_index`). A take-up starts the index on the road that knows the box the pin arrived at,
+    // since it has no answer of this shape at all.
+    if let (Some(total), Some(kind), Some(size)) = (
+        crate::formats::animation_frames::timeline(&pending.path).map(|run| run.frames()),
+        installed_kind,
+        installed_size,
+    ) {
+        pin_index::start(&pending.path, kind, total, size);
+    }
 
     true
 }
@@ -2003,11 +2020,16 @@ pub(super) fn keep_animation_place(media: MediaData) -> MediaData {
     // the same picture at the same pace, and a picture put back to its file's own pace on every
     // scrub would be a slider that did nothing but snap (see `AnimationPlayback`).
     media.animation.wanted = old.animation.wanted;
-    // The landing is the frame the place names, or the first one past it where the answer's own
-    // stream has already overtaken the pin — a frame skipped, which a picture that plays does not
-    // show, rather than the answer's first frame, which would be the picture put back. A place no
-    // frame of the answer is at or past is the newest frame it holds, which is the least of the
-    // ways to be behind (see `take_pin_relayout`, which waits for one that is not).
+    // **The whole of the run the pin was playing survives the box change**, and the answer's own
+    // startup frames take the places in it they name. A decode asked for by a box change answers
+    // `ANIMATION_STARTUP_FRAMES` frames from the place the pin was at, which is a picture whose run
+    // begins four frames past where the file does and stops there until the rest arrives: a hand on
+    // the track then finds no frame for every place the file has but that little run does not, and
+    // the playhead put down on one of them names a place the run no longer holds. Held instead, the
+    // old frames are still the file's positions — the same file, the same order, another size — and
+    // the frames that arrive at this size take their places in it
+    // (see `MediaData::sync_shared_frames`).
+    merge_the_run(&mut media, &old.frames);
     media.current_frame = wanted.map_or(0, |wanted| {
         media
             .frames
@@ -2019,4 +2041,42 @@ pub(super) fn keep_animation_place(media: MediaData) -> MediaData {
         .checked_sub(served)
         .unwrap_or_else(Instant::now);
     media
+}
+
+/// Hold the run the pin was playing around the answer a box change brought, and point the answer at
+/// the place inside it.
+///
+/// **A frame carries the place it has in the file and not its place in the list** (see
+/// `ImageFrame::file_index`), which is what lets one file's run be put together out of two decodes:
+/// the answer's frames are the file at the box the window now has, and the run it is put into is the
+/// same file at the box it had. What is kept is the finer of the two at every place — a frame drawn
+/// for a box the window has is the one the window is drawn at, and a frame drawn for the box before
+/// it is a picture of the size the window is no longer — and the playhead is left naming the place it
+/// was, rather than whichever of the two lists it happens to have landed among.
+fn merge_the_run(media: &mut MediaData, old: &[Arc<ImageFrame>]) {
+    if old.is_empty() || media.frames.is_empty() {
+        return;
+    }
+
+    let mut frames: Vec<Arc<ImageFrame>> = Vec::with_capacity(old.len() + media.frames.len());
+    for held in old {
+        if frames
+            .iter()
+            .any(|frame: &Arc<ImageFrame>| frame.file_index == held.file_index)
+        {
+            continue;
+        }
+        frames.push(Arc::clone(held));
+    }
+    for answer_frame in media.frames.drain(..) {
+        match frames
+            .iter()
+            .position(|held| held.file_index == answer_frame.file_index)
+        {
+            Some(at) => frames[at] = answer_frame,
+            None => frames.push(answer_frame),
+        }
+    }
+    frames.sort_by_key(|frame| frame.file_index);
+    media.frames = frames;
 }
