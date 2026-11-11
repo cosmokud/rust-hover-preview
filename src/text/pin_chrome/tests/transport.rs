@@ -813,9 +813,9 @@ fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
     assert!(fps_thumb_row(track, max / 2, max) < track.bottom);
     assert!(fps_thumb_row(track, max / 2, max) > track.top);
 
-    // The panel is the level's own shape widened by what it has to hold: a number written across
-    // its top is a figure read in a panel of its own width, and the two are one panel otherwise
-    // (see `FPS_PANEL_WIDTH` and `fps_popup_text_rect`).
+    // The panel is the level's own across as well: the figure is written *over* the groove rather
+    // than beside it, so the room it needs is the room the panel already has above its groove (see
+    // `fps_popup_from_button` and `fps_popup_text_rect`).
     let volume = volume_popup_from_button(
         RECT {
             top: layout.fps.top + 400,
@@ -825,7 +825,16 @@ fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
         800,
         96,
     );
-    assert!(popup.panel.right - popup.panel.left > volume.panel.right - volume.panel.left);
+    assert_eq!(
+        popup.panel.right - popup.panel.left,
+        volume.panel.right - volume.panel.left,
+        "the pace's panel is the level's panel across"
+    );
+    assert_eq!(
+        popup.track.right - popup.track.left,
+        volume.track.right - volume.track.left,
+        "and the groove inside it is the level's own"
+    );
     let text = fps_popup_text_rect(&popup, 96);
     assert!(
         text.right - text.left
@@ -837,6 +846,78 @@ fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
             ),
         "the room the pace is written in holds the figure the slider can be taken to"
     );
+}
+
+/// The pace's panel is the level's own panel across — the figure is written over its groove rather
+/// than beside it — and what its taller top buys is two gaps: one over the figures and one under
+/// them, so that a run of ink is not butted against either the panel's edge or the groove's (see
+/// `fps_popup_text_rect`).
+///
+/// The groove is the level's in every other way, inset off the panel's own ends and never shorter
+/// than half of it: the room above it is taken out of the groove's top rather than added to it, so
+/// a pace's slider is a shorter slider rather than a taller panel.
+#[test]
+fn the_pace_is_written_between_two_gaps_over_a_groove_of_the_levels_own_width() {
+    let button = RECT {
+        left: 600,
+        top: 500,
+        right: 622,
+        bottom: 522,
+    };
+
+    for dpi in [96, 192] {
+        let popup = fps_popup_from_button(button, 1200, dpi);
+        let volume = volume_popup_from_button(button, 1200, dpi);
+        let text = fps_popup_text_rect(&popup, dpi);
+        let scale = dpi as f32 / 96.0;
+        let gap = text_paint::scaled(FPS_PANEL_TEXT_GAP, scale).max(1);
+        let cell = text_paint::scaled(
+            text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+            scale,
+        )
+        .max(1);
+
+        assert_eq!(
+            popup.panel.right - popup.panel.left,
+            volume.panel.right - volume.panel.left,
+            "the pace's panel is the level's panel across at {dpi} dpi"
+        );
+        assert_eq!(
+            popup.track.right - popup.track.left,
+            volume.track.right - volume.track.left,
+            "and its groove is the level's own"
+        );
+        assert_eq!(
+            popup.panel.top, volume.panel.top,
+            "the panel's own box is unmoved: only what is inside it is"
+        );
+
+        let over = text.top - popup.panel.top;
+        assert!(
+            over >= 1 && over <= gap,
+            "the gap over the figures is a gap rather than an edge at {dpi} dpi: {over}"
+        );
+        let under = popup.track.top - text.bottom;
+        assert!(
+            under >= gap - 1,
+            "and the gap under it is no less than the gap asked for at {dpi} dpi: {under}"
+        );
+        assert!(over > 0 && under > 0, "both gaps are there at {dpi} dpi");
+
+        // Never taller than one line of the strip's own text, and never squeezed to none.
+        assert!(
+            text.bottom - text.top <= cell.max(gap),
+            "the figures are one line at {dpi} dpi"
+        );
+        assert!(text.bottom > text.top, "and a line is drawn at {dpi} dpi");
+
+        let panel_span = popup.panel.bottom - popup.panel.top;
+        let track_span = popup.track.bottom - popup.track.top;
+        assert!(
+            track_span * 2 >= panel_span,
+            "the groove is never shorter than half its panel: {track_span} of {panel_span}"
+        );
+    }
 }
 
 /// The pace is written over its own panel in blue and with nothing of the page behind it: the

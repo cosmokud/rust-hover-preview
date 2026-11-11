@@ -32,10 +32,10 @@ use windows::Win32::Foundation::RECT;
 /// to be: the thumb and its collar, and a couple of pixels of panel either side of them.
 pub(super) const VOLUME_PANEL_WIDTH: i32 = 24;
 const VOLUME_PANEL_HEIGHT: i32 = 98;
-/// The room a pace's panel takes at a display's scale: the volume panel widened by the figures it
-/// has to hold, because what a pace's panel says is a number written across the top of it and a
-/// number in a level's own narrow panel is a figure read out of a slot (see `paint_fps_popup_text`).
-const FPS_PANEL_WIDTH: i32 = 46;
+/// The gap over the pace's figure and the gap under it, both in logical pixels: the figure is
+/// written *above* the groove rather than beside it, so it is held off the panel's own top edge and
+/// then off the groove's top by this much either way (see `fps_popup_text_rect`).
+pub(super) const FPS_PANEL_TEXT_GAP: i32 = 6;
 /// How far the groove is held off each end of the panel, which is the room the thumb takes at
 /// either end of it: a thumb that was clipped by the panel at 100% would be a level drawn short,
 /// and anything beyond that room is panel being drawn over a picture it is covering.
@@ -399,20 +399,50 @@ pub(crate) fn volume_popup_layout(
 /// `audio_preview::CardControl::Volume`), and a second panel for it would be a second set of
 /// numbers for one control this app has once.
 pub(crate) fn volume_popup_from_button(button: RECT, width: i32, dpi: u32) -> VolumePopup {
-    popup_from_button(button, width, dpi, VOLUME_PANEL_WIDTH)
+    popup_from_button(button, width, dpi, VOLUME_PANEL_WIDTH, 0)
 }
 
 /// The panel a bar's pace button opens, hung from that button's own box: the level's panel in
-/// every way but the room across it, since what a pace's panel holds is a number written over its
-/// groove and a number in a level's own narrow panel would be a figure read out of a slot.
+/// every way, across it included — the figure is written over the groove rather than beside it, so
+/// a wider panel would be a wider panel covering the picture for nothing (see
+/// `paint_fps_popup_text`).
+///
+/// What it does hold more of is the room above its groove: the gap over the figure, the figure's
+/// own line and the gap under it — three parts, of which the inset the groove is already held off
+/// the panel's top is one, so the groove begins lower by the rest of them.
 ///
 /// It is placed from the button the same way and for the same reason - the panel a press is
 /// answered against is the panel that is drawn (see `paint_fps_popup`).
 pub(crate) fn fps_popup_from_button(button: RECT, width: i32, dpi: u32) -> VolumePopup {
-    popup_from_button(button, width, dpi, FPS_PANEL_WIDTH)
+    let scale = dpi as f32 / 96.0;
+    let gap = text_paint::scaled(FPS_PANEL_TEXT_GAP, scale).max(1);
+    let cell = text_paint::scaled(
+        text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+        scale,
+    )
+    .max(1);
+    let inset = text_paint::scaled(VOLUME_PANEL_INSET, scale);
+
+    popup_from_button(
+        button,
+        width,
+        dpi,
+        VOLUME_PANEL_WIDTH,
+        (gap * 2 + cell - inset).max(0),
+    )
 }
 
-fn popup_from_button(button: RECT, width: i32, dpi: u32, panel_width_in: i32) -> VolumePopup {
+/// `top_inset_extra` is how far lower than the level's own inset the groove begins, for a panel whose
+/// top holds something above it: the figure a pace writes there is `fps_popup_text_rect`'s, and a
+/// groove under it that began at the plain inset would leave the figure no room but the panel's
+/// edge. The bottom inset does not move with it, so the groove is shorter by it rather than moved.
+fn popup_from_button(
+    button: RECT,
+    width: i32,
+    dpi: u32,
+    panel_width_in: i32,
+    top_inset_extra: i32,
+) -> VolumePopup {
     let scale = dpi as f32 / 96.0;
 
     let panel_width = text_paint::scaled(panel_width_in, scale).max(8);
@@ -446,9 +476,14 @@ fn popup_from_button(button: RECT, width: i32, dpi: u32, panel_width_in: i32) ->
         .min(((panel.bottom - panel.top) - 8) / 2)
         .max(1);
     let center = (panel.left + panel.right) / 2;
+    // Held at least a few pixels tall whatever the extra asks for, since a groove squeezed to
+    // nothing is a slider no hand can aim at.
+    let top = (panel.top + inset + top_inset_extra)
+        .max(panel.top + inset)
+        .min(panel.bottom - inset - 8);
     let track = RECT {
         left: center - track_width / 2,
-        top: panel.top + inset,
+        top,
         right: center - track_width / 2 + track_width,
         bottom: panel.bottom - inset,
     };
@@ -1601,9 +1636,10 @@ pub(crate) fn paint_fps_popup_text(
     }
 }
 
-/// Where the pace a popup is holding is written, given the popup and the room one line of the
-/// strip's own text takes at that scale: the row above the groove's top, which is the one room in
-/// the panel the thumb never reaches.
+/// Where the pace a popup is holding is written: the row `FPS_PANEL_TEXT_GAP` under the panel's own
+/// top edge, and no taller than the room between it and a second gap above the groove's top — so the
+/// figure is ink between two gaps rather than butted against either, with the groove's own place left
+/// exactly where `popup_from_button` put it.
 pub(crate) fn fps_popup_text_rect(popup: &VolumePopup, dpi: u32) -> RECT {
     let scale = dpi as f32 / 96.0;
     let cell = text_paint::scaled(
@@ -1611,12 +1647,15 @@ pub(crate) fn fps_popup_text_rect(popup: &VolumePopup, dpi: u32) -> RECT {
         scale,
     )
     .max(1);
-    let top = (popup.panel.top + 1).max(0);
+    let gap = text_paint::scaled(FPS_PANEL_TEXT_GAP, scale).max(1);
+    let top = (popup.panel.top + gap).max(0);
 
     RECT {
         left: popup.panel.left + 1,
         top,
         right: popup.panel.right - 1,
-        bottom: (top + cell).min(popup.track.top.max(top + cell)),
+        // A pixel of the figure is still drawn on a panel squeezed under its own gaps: a number no
+        // room is left for is a slider whose value cannot be read.
+        bottom: (top + cell).min(popup.track.top - gap).max(top + 1),
     }
 }

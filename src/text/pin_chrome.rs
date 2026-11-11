@@ -87,8 +87,8 @@ pub(crate) use transport::volume_popup_layout;
 #[cfg(test)]
 use transport::{
     draw_pause_glyph, draw_play_glyph, draw_track_step, fps_popup_text_rect, fps_thumb_row,
-    size_in, strip_gap, volume_thumb_row, VOLUME_COLLAR_PIXELS, VOLUME_PANEL_GAP,
-    VOLUME_PANEL_WIDTH, VOLUME_THUMB_RADIUS,
+    size_in, strip_gap, volume_thumb_row, FPS_PANEL_TEXT_GAP, VOLUME_COLLAR_PIXELS,
+    VOLUME_PANEL_GAP, VOLUME_PANEL_WIDTH, VOLUME_THUMB_RADIUS,
 };
 #[cfg(test)]
 use windows::Win32::Foundation::RECT;
