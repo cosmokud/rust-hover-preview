@@ -301,13 +301,14 @@ fn start(wanted: Wanted) -> Stream {
 
     #[cfg(not(test))]
     {
-        // No `-hwaccel` on this child either: the flag is the same one that kills ffplay's own
-        // renderer, and a second decode of a film on a core costs the bubble a frame rate nobody
-        // looks at (see `video_hw_accel_wanted`). A pipe this cannot open is a bubble left on its
-        // still, which is the picture the bubble always has.
-        let args = stream_args(&wanted.key.path, wanted.at, wanted.key.side);
+        let (program, args) = stream_command(&wanted.key.path, wanted.at, wanted.key.side);
+        if program.as_os_str().is_empty() {
+            // Nothing can write these frames on this machine: the bubble keeps its still, and the key
+            // is refused so that no process is asked for on the next tick either (see `stream_command`).
+            return Stream::Refused(wanted.key);
+        }
 
-        let spawned = engine_processes::hidden_command("ffmpeg")
+        let spawned = engine_processes::hidden_command(&program)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -327,6 +328,10 @@ fn start(wanted: Wanted) -> Stream {
         let latest = Arc::new(Mutex::new(None));
         let reader = Arc::clone(&latest);
         let side = wanted.key.side;
+        // **The thread that reads is the last thing to hold the pipe**, and the child is what `end`
+        // kills: a stream begun from mpv is a process of this app's like any other, and it is never the
+        // player on screen — it is begun with no pipe name at all, so no command can reach it (see
+        // `mpv_ipc`, whose pid guard would refuse one anyway).
         std::thread::spawn(move || read_frames(stdout, side, reader));
 
         Stream::Running(Running {
@@ -335,6 +340,70 @@ fn start(wanted: Wanted) -> Stream {
             latest,
         })
     }
+}
+
+/// The program and the arguments a stream is begun with: **the film's own player where that player is
+/// one that can write frames out**, and FFmpeg's where it is not.
+///
+/// This is the half of the bubble that used to be FFmpeg's whatever the film was: an mpv film's frames
+/// are decoded by mpv itself, with the same `lavfi` graph FFmpeg's player is handed (it is the same
+/// libavfilter underneath), so an mpv pin's bubble costs no `ffmpeg.exe` at all — which is the whole
+/// point of the mpv route being a route (see `video_route`).
+#[cfg_attr(test, allow(dead_code))] // reached only from a `start` a test build refuses (see `Stream::Running`)
+fn stream_command(path: &Path, at: f64, side: u32) -> (PathBuf, Vec<String>) {
+    if video_route(path) == VideoRoute::Mpv {
+        if let Some(program) = video_hw::mpv_program_for_the_stream() {
+            return (program, mpv_stream_args(path, at, side));
+        }
+    }
+
+    // **A machine with no `ffmpeg.exe` is a stream that cannot be begun at all**, which is the refusal
+    // the bubble already has an answer for: it keeps its still. Asking is what keeps a process from
+    // being spawned for a name that is not there (see `codecs::ffmpeg_available`).
+    if !crate::formats::codecs::ffmpeg_available() {
+        return (PathBuf::new(), Vec::new());
+    }
+
+    (PathBuf::from("ffmpeg"), stream_args(path, at, side))
+}
+
+/// The command mpv is given to write a film's frames: the film from the second the player is at, cut
+/// to the bubble's own square, in the pixel order the bubble paints with.
+///
+/// **It is `stream_args` in mpv's spelling, and the differences are the two facts mpv names for
+/// itself**: no sound (`--aid=no`, which is FFmpeg's `-an`), and no window (`--vo=lavc`, which is the
+/// encoder a `--of=rawvideo` output implies — a stream must never put a window on screen). The graph
+/// is the same one, minus `reset_sar`: it is a vf2 (FFmpeg's libavfilter) option mpv's `lavfi` bridge
+/// does not carry, so the ratio is squared with `setsar=1` after the cover's own scale instead, which
+/// is the same statement — the cover is weighed in square-pixel space (see `stream_args`).
+#[cfg_attr(test, allow(dead_code))] // reached only from `stream_command`
+fn mpv_stream_args(path: &Path, at: f64, side: u32) -> Vec<String> {
+    let mut args = vec![
+        path.to_string_lossy().into_owned(),
+        "--no-config".to_string(),
+        "--no-input-default-bindings".to_string(),
+        // No sound: the film's own player is making it, and a second soundtrack would be two copies of
+        // one film's audio heard at once.
+        "--aid=no".to_string(),
+        "--ao=null".to_string(),
+        // No window of any kind: what this process writes is a pipe.
+        "--vo=lavc".to_string(),
+    ];
+
+    // The same rule the other player's seek follows: a stream begun at the beginning is given no
+    // `--start` rather than `--start=0`.
+    if at > 0.0 {
+        args.push(format!("--start={at:.3}"));
+    }
+
+    args.push(format!(
+        "--vf=lavfi=[scale={side}:{side}:force_original_aspect_ratio=increase,setsar=1,crop={side}:{side},format=bgra,fps={BUBBLE_STREAM_FPS}]"
+    ));
+    args.push("--o=-".to_string());
+    args.push("--of=rawvideo".to_string());
+    args.push("--ovc=rawvideo".to_string());
+
+    args
 }
 
 /// The command a stream is begun with: the film from the second the player is at, read at the rate a

@@ -581,7 +581,7 @@ pub fn audio_probe(path: &Path) -> Option<audio_track::Track> {
 /// and a reader that will not answer, are one answer here: nothing, which is a card drawn
 /// without a length and a hover that starts a sound at its beginning rather than at a share of
 /// a length nothing knows.
-fn presentation_duration(reader: &IMFSourceReader) -> Option<f64> {
+pub(crate) fn presentation_duration(reader: &IMFSourceReader) -> Option<f64> {
     let hundred_nanoseconds = unsafe {
         reader.GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
     }
