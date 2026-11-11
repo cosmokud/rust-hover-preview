@@ -59,6 +59,13 @@ thread_local! {
     /// the popup's footprint rather than the whole window. It is cleared before each use, because
     /// what is carried off it is the popup on a transparency the strip shows through.
     pub(super) static VOLUME_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+/// The membrane a pinned picture's FPS popup is painted on, for the reason the volume panel's is —
+/// and because its figure is written through GDI, which needs a device context of its own.
+///
+/// The pace's panel is painted where the volume panel's is: over a band of whatever draws the
+/// picture, so it rides in a strip of its own exactly as the volume panel does (see
+/// `pin_chrome_strips` and `VOLUME_SURFACE`).
+pub(super) static FPS_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
     /// The membrane a caption's tooltip is written on. It is the size of the whole window rather
     /// than of a strip, because a name is measured and drawn through GDI and needs a device
     /// context of its own, and it is kept between paints for the reason the surfaces above are:

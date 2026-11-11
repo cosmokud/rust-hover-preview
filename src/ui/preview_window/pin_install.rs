@@ -779,6 +779,27 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     // the user closed (see `pin_media_failed_before_a_frame`).
     *install.player_started = (media.media_type == MediaType::Video).then(Instant::now);
 
+    // The frames a picture that plays was taken up with are frames this pin can show again without
+    // walking the file: a drag that comes back to the part of the file that has been on screen is
+    // served from them (see `pin_scrub`).
+    if media.media_type.is_animation() {
+        pin_scrub::remember(&path, &media.frames);
+    }
+    // And a picture whose every frame costs a walk to reach — a GIF's and an animated WebP's — is
+    // read once in the background, at the size this pin draws it, so that a hand on its track is
+    // shown whatever frame it names at once (see `pin_index`). A box change asks for it again on
+    // its own road, which is the one that knows the box the picture has been laid out at.
+    if let (Some(total), Some(kind)) = (
+        crate::formats::animation_frames::timeline(&path).map(|run| run.frames()),
+        Some(media.media_type),
+    ) {
+        pin_index::start(
+            &path,
+            kind,
+            total,
+            (media.current_width(), media.current_height()),
+        );
+    }
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(media);
     }
@@ -881,6 +902,10 @@ impl PinLoad {
             update.dpi,
             PreviewScale::FitToScreen,
             0,
+            // A take-up is the first ask of a pin that has just been built: there is nothing of its
+            // own for this to supersede, so the flag it carries is never set (see the ask slot, which
+            // is where a superseded decode is actually stopped).
+            Arc::new(AtomicBool::new(false)),
         );
 
         PinLoad {
@@ -973,6 +998,7 @@ pub(super) fn pin_media_load(
     dpi: u32,
     scale: PreviewScale,
     resume_at: usize,
+    cancel: Arc<AtomicBool>,
 ) -> Receiver<Option<MediaData>> {
     let (answer, answers) = channel();
     let path = path.to_path_buf();
@@ -1001,7 +1027,7 @@ pub(super) fn pin_media_load(
                 scale,
                 dpi,
                 reader_size,
-                Arc::new(AtomicBool::new(false)),
+                Arc::clone(&cancel),
                 resume_at,
             )
         }))
@@ -1291,6 +1317,11 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
         // opposite reasons: the engine answers every question the bar asks,
         // and FFmpeg's player answers the two that are keys.
         transport_live: pin_transport_live(kind),
+        transport_animated: is_played_picture(kind),
+        // A picture that plays is paused by this app's own loop rather than by a player: its bar
+        // carries a button even though nothing behind it can be told anything (see
+        // `PinnedPreview::transport_controllable`).
+        transport_controllable: is_played_picture(kind),
         frame: pin_frame(kind),
         overlay,
         hides_chrome,
@@ -1355,7 +1386,17 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             // since before the pin existed, and its own clock starts
             // here — which is the best that can be said about a player
             // that reports nothing at all (see `PinTransport`).
-            duration,
+            // The length the probe read, and — for a picture that plays — the length of its own
+            // run of frames, which is a walk of the container rather a watch of nothing: there is
+            // no player behind the bar to report one (see `animation_frames`).
+            duration: duration.or_else(|| {
+                is_played_picture(kind)
+                    .then(|| {
+                        crate::formats::animation_frames::timeline(path)
+                            .map(|timeline| timeline.seconds())
+                    })
+                    .flatten()
+            }),
             started: (kind == Some(MediaType::Video)).then_some((Instant::now(), reached)),
             // Which subtitle track this pin opens on, which is the
             // player's own choice for the file until a key says
@@ -1364,6 +1405,17 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
             // `video_subtitles`).
             subtitle: video_subtitles(path).chosen(),
             ..Default::default()
+        },
+        // The file's own pace, read out of its frames before the window stands on it — the same
+        // walk the bar's track is measured by (see `animation_frames` and `PinFps`).
+        fps: PinFps {
+            detected: is_played_picture(kind)
+                .then(|| {
+                    crate::formats::animation_frames::timeline(path).map(|timeline| timeline.rate())
+                })
+                .flatten()
+                .unwrap_or(0.0),
+            ..PinFps::default()
         },
         // A level carried onto a file of the same kind is that file's
         // own and is carried; one carried onto a file of another kind
@@ -1418,7 +1470,8 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
 /// not doing — and a page of text's box change owes no read at all, where its take-up is owed the one
 /// that draws it in full mode (see the arms below). It is also what says what the box is a box *of* —
 /// a window's own room, or the size a picture has been zoomed to — and so what scale the file is
-/// decoded at.
+/// decoded at, which is read from `the_scale_a_road_lays_out_at` (its one exception is a picture
+/// that plays).
 pub(super) fn relayout_pinned_media(
     path: &Path,
     content: ScreenRegion,
@@ -1450,7 +1503,10 @@ pub(super) fn relayout_pinned_media(
         .unwrap_or((None, None, 0));
 
     // What the box is a box *of*, which the road and the kind decide between them (see
-    // `the_scale_a_road_lays_out_at`).
+    // `the_scale_a_road_lays_out_at`). A zoom past the size the file holds has nothing left to
+    // decode, and a picture that plays — whose frames are *held* rather than one frame stretched —
+    // is read at its own size on every road, so a box change or a take-up of one is the band
+    // stretching the run it holds rather than a decode inventing the pixels above it.
     let scale = the_scale_a_road_lays_out_at(road, kind);
 
     // Only a box change carries the place: a take-up is a file this window has not stood on, and a
@@ -1571,11 +1627,15 @@ pub(super) fn relayout_pinned_media(
         // put an unbounded stretch of unpumped loop in front of a window the hand was
         // still dragging; it is now answered a tick or more later by `take_pin_relayout`,
         // and the band is filled from the frame that is there until it lands.
-        Some(_) => Some(PinRelayout {
-            path: path.to_path_buf(),
-            answer: pin_media_load(path, width, height, dpi, scale, place),
-            decoded: None,
-        }),
+        Some(_) => {
+            let cancel = Arc::new(AtomicBool::new(false));
+            Some(PinRelayout {
+                path: path.to_path_buf(),
+                answer: pin_media_load(path, width, height, dpi, scale, place, Arc::clone(&cancel)),
+                cancel: Some(cancel),
+                decoded: None,
+            })
+        }
         None => None,
     }
 }
@@ -1656,20 +1716,24 @@ fn box_is_covered(
 /// still picture is drawn from while its decode is in flight. And it is the same sentence
 /// `PinRelayoutRoad::Zoom` already says, for the same reason.
 ///
-/// `Percent(100)` is that pair for both roads: the fit, capped at a factor of one, so a box smaller
-/// than the file still shrinks it and a bigger one never enlarges it (see `scale_in_room`). Every
-/// other kind keeps the room the road gives it: a take-up is a file laid out for the display, and a
-/// box change of a page, a still picture, a listing, a card, a film or a sound is one laid out for
-/// the box its window is at.
+/// `Percent(100)` is the fit of the file into the box, and never a scale above one (see
+/// `scale_in_room`), so a bigger box never invents pixels and a smaller one still shrinks it — which
+/// is also the answer a zoom has always given. Every other kind keeps the room the road gives it: a
+/// take-up is a file laid out for the display, and a box change of a page, a still picture, a listing,
+/// a card, a film or a sound is one laid out for the box its window is at.
 pub(super) fn the_scale_a_road_lays_out_at(
     road: PinRelayoutRoad,
     kind: Option<MediaType>,
 ) -> PreviewScale {
+    // **A picture that plays is read at its own size whatever road it is laid out on.** A take-up is
+    // the same run of held frames a box change is, so it is the same answer: a window it arrives in,
+    // or was dragged out to, stretches the frames it holds rather than paying for a decode of them at
+    // that size (see `PinRelayoutRoad` and `compose_media_into_band`).
+    if kind.is_some_and(|kind| kind.is_animation()) {
+        return PreviewScale::Percent(100);
+    }
     match road {
         PinRelayoutRoad::Zoom => PreviewScale::Percent(100),
-        PinRelayoutRoad::BoxChange if kind.is_some_and(|kind| kind.is_animation()) => {
-            PreviewScale::Percent(100)
-        }
         PinRelayoutRoad::TakeUp | PinRelayoutRoad::BoxChange => PreviewScale::FitToScreen,
     }
 }
@@ -1724,6 +1788,21 @@ pub(super) struct PinRelayout {
     pub(super) path: PathBuf,
     /// Where the answer arrives, asked for at the place the pin was at when the box changed.
     pub(super) answer: Receiver<Option<MediaData>>,
+    /// The decode's own stop flag: the answer sitting on a channel is a decode already done, and a
+    /// decode still running is told to stop here when the ask it belongs to is put down — a box
+    /// that changed a second time asks for a decode of its own, and one left walking the file for a
+    /// place nobody is asking about any more is a walk the whole relayout waits behind (see
+    /// `take_pin_relayout`).
+    ///
+    /// **It is taken away once the answer is installed, and it is an `Option` for exactly that.**
+    /// `pin_media_load` hands this same arc to the decoder thread *and* into the media it answers
+    /// with, as that media's `stream_cancel` — so the flag that stops a relayout nothing is waiting
+    /// for any more is the flag the installed media's own stream reads. A relayout that has answered
+    /// is dropped the moment its answer is taken out of it, and setting the flag there told the
+    /// media it had just installed to stop: a run no further frame ever arrived in, holding its
+    /// startup frames and marking itself fully loaded with no file's head among them, which is a
+    /// picture that holds its last frame for ever (see `MediaData::frame_of_file_start`).
+    pub(super) cancel: Option<Arc<AtomicBool>>,
     /// The answer, once it has arrived, kept here while it is behind the pin: the decode began at
     /// the place the box change found the pin at, so it is a frame or three short of the place the
     /// pin has played to by the time it lands, and what it is short of is waited for rather than
@@ -1736,6 +1815,14 @@ impl Drop for PinRelayout {
     /// asked for one of its own, or the pin is gone. Its frames are a thread of this app's, so it is
     /// told to stop here rather than left decoding for a window that no longer wants them.
     fn drop(&mut self) {
+        // A decode still in flight is stopped where it stands, and one that has answered has its
+        // stream stopped: either way nothing is left walking a file for a place nobody asked for.
+        //
+        // The flag is asked for rather than set, because an answer that was *installed* is an
+        // answer whose stream is the media's now and is taken away from here (see `PinRelayout`).
+        if let Some(cancel) = self.cancel.take() {
+            cancel.store(true, Ordering::Release);
+        }
         if let Some(media) = self.decoded.as_mut() {
             media.cancel_background_work();
         }
@@ -1855,18 +1942,57 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     if adds_nothing {
         let mut media = media;
         media.cancel_background_work();
+        pending.cancel.take();
         return false;
     }
 
+    // **The stop flag is taken away from the relayout here, and that is the whole of what
+    // installing an answer is.** The decode this answer came off holds this very flag as its
+    // stream's stop flag, and the relayout is dropped the moment its answer is taken out of it —
+    // so a flag left standing here is a media told to stop on the tick it was installed, which is
+    // a run that never grows past its startup frames and a picture stuck on the frame the box
+    // change found it on (see `PinRelayout`).
+    pending.cancel.take();
+
     let media = keep_text_place(media);
     let media = keep_animation_place(media);
+    // The frames this answer carries are frames of the file that can be shown again without walking
+    // it: a hand that comes back to a place it has already been is not walked there twice (see
+    // `pin_scrub`).
+    if media.media_type.is_animation() {
+        pin_scrub::remember(&pending.path, &media.frames);
+    }
     let Ok(mut current) = CURRENT_MEDIA.lock() else {
         return false;
     };
+    // A picture a hand paused stays paused across the decode a seek asked for: the answer is a new
+    // media, and the button at the bar's start is a state of the file rather than of the run the
+    // decode happened to land (see `hold_the_picture_itself`).
+    let paused = current.as_ref().is_some_and(|existing| existing.paused);
+    let mut media = media;
+    media.paused = paused;
     if let Some(ref mut existing) = *current {
         existing.cancel_background_work();
     }
     *current = Some(media);
+    let installed_kind = current.as_ref().map(|media| media.media_type);
+    let installed_size = current
+        .as_ref()
+        .map(|media| (media.current_width(), media.current_height()));
+    drop(current);
+
+    // And the run the index reads is the run of the box the window has *now*: a box change is the
+    // same picture drawn at another size, and a run of the size it was is a run to read again (see
+    // `pin_index`). It answers nothing for a picture whose own run holds every place of the file —
+    // which is the ordinary case a resize leaves (see `keep_animation_place`) — and it is the run
+    // a hand reads for one too long to be held whole, which the merged run alone cannot be.
+    if let (Some(total), Some(kind), Some(size)) = (
+        crate::formats::animation_frames::timeline(&pending.path).map(|run| run.frames()),
+        installed_kind,
+        installed_size,
+    ) {
+        pin_index::start(&pending.path, kind, total, size);
+    }
 
     true
 }
@@ -1956,11 +2082,20 @@ pub(super) fn keep_animation_place(media: MediaData) -> MediaData {
     let served = old.last_frame_time.elapsed();
 
     let mut media = media;
-    // The landing is the frame the place names, or the first one past it where the answer's own
-    // stream has already overtaken the pin — a frame skipped, which a picture that plays does not
-    // show, rather than the answer's first frame, which would be the picture put back. A place no
-    // frame of the answer is at or past is the newest frame it holds, which is the least of the
-    // ways to be behind (see `take_pin_relayout`, which waits for one that is not).
+    // The pace a hand asked for travels with the place: a decode begun at a frame a hand chose is
+    // the same picture at the same pace, and a picture put back to its file's own pace on every
+    // scrub would be a slider that did nothing but snap (see `AnimationPlayback`).
+    media.animation.wanted = old.animation.wanted;
+    // **The whole of the run the pin was playing survives the box change**, and the answer's own
+    // startup frames take the places in it they name. A decode asked for by a box change answers
+    // `ANIMATION_STARTUP_FRAMES` frames from the place the pin was at, which is a picture whose run
+    // begins four frames past where the file does and stops there until the rest arrives: a hand on
+    // the track then finds no frame for every place the file has but that little run does not, and
+    // the playhead put down on one of them names a place the run no longer holds. Held instead, the
+    // old frames are still the file's positions — the same file, the same order, another size — and
+    // the frames that arrive at this size take their places in it
+    // (see `MediaData::sync_shared_frames`).
+    merge_the_run(&mut media, &old.frames);
     media.current_frame = wanted.map_or(0, |wanted| {
         media
             .frames
@@ -1972,4 +2107,42 @@ pub(super) fn keep_animation_place(media: MediaData) -> MediaData {
         .checked_sub(served)
         .unwrap_or_else(Instant::now);
     media
+}
+
+/// Hold the run the pin was playing around the answer a box change brought, and point the answer at
+/// the place inside it.
+///
+/// **A frame carries the place it has in the file and not its place in the list** (see
+/// `ImageFrame::file_index`), which is what lets one file's run be put together out of two decodes:
+/// the answer's frames are the file at the box the window now has, and the run it is put into is the
+/// same file at the box it had. What is kept is the finer of the two at every place — a frame drawn
+/// for a box the window has is the one the window is drawn at, and a frame drawn for the box before
+/// it is a picture of the size the window is no longer — and the playhead is left naming the place it
+/// was, rather than whichever of the two lists it happens to have landed among.
+fn merge_the_run(media: &mut MediaData, old: &[Arc<ImageFrame>]) {
+    if old.is_empty() || media.frames.is_empty() {
+        return;
+    }
+
+    let mut frames: Vec<Arc<ImageFrame>> = Vec::with_capacity(old.len() + media.frames.len());
+    for held in old {
+        if frames
+            .iter()
+            .any(|frame: &Arc<ImageFrame>| frame.file_index == held.file_index)
+        {
+            continue;
+        }
+        frames.push(Arc::clone(held));
+    }
+    for answer_frame in media.frames.drain(..) {
+        match frames
+            .iter()
+            .position(|held| held.file_index == answer_frame.file_index)
+        {
+            Some(at) => frames[at] = answer_frame,
+            None => frames.push(answer_frame),
+        }
+    }
+    frames.sort_by_key(|frame| frame.file_index);
+    media.frames = frames;
 }

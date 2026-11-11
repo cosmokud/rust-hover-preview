@@ -1,5 +1,72 @@
 use super::*;
 
+/// The bar as these tests ask for it: the room the clock before the track is given is the width
+/// of its own digits, and none of these tests is about the clock — so every call below reads the
+/// bar through the room a bar with no length in it would have, and the tests that are about the
+/// clock ask `clock_width` themselves.
+fn a_bar(width: i32, height: i32, dpi: u32, interactive: bool, animated: bool) -> BarShape {
+    BarShape {
+        width,
+        height,
+        dpi,
+        interactive,
+        animated,
+        controllable: false,
+        clock: clock_width(None, dpi),
+    }
+}
+
+fn transport_layout(
+    width: i32,
+    height: i32,
+    dpi: u32,
+    interactive: bool,
+    animated: bool,
+) -> crate::text::pin_chrome::transport::TransportLayout {
+    a_bar(width, height, dpi, interactive, animated).layout()
+}
+
+/// The same bar, with the button this app's own hold is on it: what a picture that plays carries
+/// (see `BarShape::controllable`).
+fn picture_bar(width: i32, height: i32, dpi: u32) -> BarShape {
+    BarShape {
+        width,
+        height,
+        dpi,
+        interactive: false,
+        animated: true,
+        controllable: true,
+        clock: clock_width(None, dpi),
+    }
+}
+
+fn transport_part_at(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    dpi: u32,
+    interactive: bool,
+    animated: bool,
+) -> Option<TransportPart> {
+    super::transport_part_at(a_bar(width, height, dpi, interactive, animated), x, y)
+}
+
+fn transport_share_at(
+    x: i32,
+    width: i32,
+    height: i32,
+    dpi: u32,
+    interactive: bool,
+    animated: bool,
+) -> f64 {
+    super::transport_share_at(a_bar(width, height, dpi, interactive, animated), x)
+}
+
+fn volume_popup_layout(width: i32, strip_top: i32, strip_height: i32, dpi: u32) -> VolumePopup {
+    super::volume_popup_layout(width, strip_top, strip_height, dpi, clock_width(None, dpi))
+}
+
 /// The popup the transport bar's own button opens, and the same panel hung from that button
 /// given directly, are one panel and not two: a sound's card opens the very same one from a
 /// button drawn on its own row, so a level that was placed one way there and another way on
@@ -8,7 +75,7 @@ use super::*;
 fn the_popup_hung_from_a_button_is_the_one_the_transport_bar_opens() {
     for (width, height, top) in [(600, 30, 0), (600, 40, 200), (320, 30, 55)] {
         for dpi in [96, 144] {
-            let strip = transport_layout(width, height, dpi, true).volume;
+            let strip = transport_layout(width, height, dpi, true, false).volume;
             let button = RECT {
                 top: strip.top + top,
                 bottom: strip.bottom + top,
@@ -141,9 +208,9 @@ fn the_buttons_sit_against_the_right_edge_in_the_order_windows_has_them() {
 
 #[test]
 fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
-    let layout = transport_layout(800, 30, 96, true);
+    let layout = transport_layout(800, 30, 96, true, false);
     let middle = (layout.bar.left + layout.bar.right) / 2;
-    let share = transport_share_at(middle, 800, 30, 96, true);
+    let share = transport_share_at(middle, 800, 30, 96, true, false);
     assert!(
         (share - 0.5).abs() < 0.05,
         "the middle of the bar is half of it"
@@ -151,8 +218,8 @@ fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
 
     // A press past either end is the end it is past, which is what keeps a drag from asking
     // for a second of a file that is not there.
-    assert_eq!(transport_share_at(0, 800, 30, 96, true), 0.0);
-    assert_eq!(transport_share_at(800, 800, 30, 96, true), 1.0);
+    assert_eq!(transport_share_at(0, 800, 30, 96, true, false), 0.0);
+    assert_eq!(transport_share_at(800, 800, 30, 96, true, false), 1.0);
 }
 
 /// A thumb is drawn where the bar *draws* the playhead, and a press is read against the bar the
@@ -164,13 +231,13 @@ fn a_transport_bar_is_taken_hold_of_where_it_was_pressed() {
 #[test]
 fn a_press_puts_the_thumb_under_the_hand_wherever_it_landed() {
     for (width, height, dpi) in [(800, 30, 96), (640, 40, 144), (480, 30, 96)] {
-        let layout = transport_layout(width, height, dpi, true);
-        let span = (layout.bar.right - layout.bar.left) as f64;
+        let layout = transport_layout(width, height, dpi, true, false);
+        let span = (layout.bar.right - layout.bar.left - 1).max(1);
 
         for x in layout.bar.left..layout.bar.right {
-            let share = transport_share_at(x, width, height, dpi, true);
+            let share = transport_share_at(x, width, height, dpi, true, false);
             // Where `paint_transport` draws the thumb for that share.
-            let thumb = layout.bar.left + (span * share).round() as i32;
+            let thumb = layout.bar.left + (f64::from(span) * share).round() as i32;
 
             assert_eq!(
                 thumb, x,
@@ -178,6 +245,14 @@ fn a_press_puts_the_thumb_under_the_hand_wherever_it_landed() {
                 layout.bar.left, layout.bar.right,
             );
         }
+
+        // And the last column of the track is the end of the file rather than a step short of it:
+        // a press there is the one place a hand means the file's last frame.
+        assert_eq!(
+            transport_share_at(layout.bar.right - 1, width, height, dpi, true, false),
+            1.0,
+            "the track's own last column is the end at {width}x{height} dpi {dpi}"
+        );
     }
 }
 
@@ -186,8 +261,8 @@ fn a_press_puts_the_thumb_under_the_hand_wherever_it_landed() {
 /// as the media engine does — by being started again at it.
 #[test]
 fn the_volume_button_answers_on_a_bar_with_no_other_controls() {
-    let live = transport_layout(800, 30, 96, true);
-    let readout = transport_layout(800, 30, 96, false);
+    let live = transport_layout(800, 30, 96, true, false);
+    let readout = transport_layout(800, 30, 96, false, false);
 
     // It keeps its own box at the right edge of the strip, and it is the same box whether or
     // not the bar carries a play button: a control that moved because the engine changed would
@@ -206,11 +281,11 @@ fn the_volume_button_answers_on_a_bar_with_no_other_controls() {
     let x = (live.volume.left + live.volume.right) / 2;
     let y = (live.volume.top + live.volume.bottom) / 2;
     assert_eq!(
-        transport_part_at(x, y, 800, 30, 96, true),
+        transport_part_at(x, y, 800, 30, 96, true, false),
         Some(TransportPart::Volume)
     );
     assert_eq!(
-        transport_part_at(x, y, 800, 30, 96, false),
+        transport_part_at(x, y, 800, 30, 96, false, false),
         Some(TransportPart::Volume),
         "and on a bar whose player cannot be told anything"
     );
@@ -228,7 +303,7 @@ fn the_volume_button_answers_on_a_bar_with_no_other_controls() {
 fn a_volume_popup_is_placed_over_its_button_and_read_bottom_up() {
     let (width, strip_top, strip_height) = (800, 400, 30);
     let popup = volume_popup_layout(width, strip_top, strip_height, 96);
-    let button = transport_layout(width, strip_height, 96, true).volume;
+    let button = transport_layout(width, strip_height, 96, true, false).volume;
 
     // Above the bar, centered on the button that opened it, and clear of the button itself.
     assert_eq!(
@@ -299,7 +374,7 @@ fn a_volume_popup_is_centered_on_its_button() {
         (320, 30, 55, 96),
         (1920, 40, 100, 144),
     ] {
-        let strip = transport_layout(width, height, dpi, true).volume;
+        let strip = transport_layout(width, height, dpi, true, false).volume;
         let button = RECT {
             top: strip.top + strip_top,
             bottom: strip.bottom + strip_top,
@@ -373,22 +448,22 @@ fn a_volume_popup_is_kept_inside_a_narrow_window() {
 
 #[test]
 fn the_parts_of_a_transport_bar_are_hit_where_they_are_drawn() {
-    let layout = transport_layout(800, 30, 96, true);
+    let layout = transport_layout(800, 30, 96, true, false);
 
     let play = (layout.play.left + layout.play.right) / 2;
     assert_eq!(
-        transport_part_at(play, 15, 800, 30, 96, true),
+        transport_part_at(play, 15, 800, 30, 96, true, false),
         Some(TransportPart::Play)
     );
 
     let bar = (layout.bar.left + layout.bar.right) / 2;
     assert_eq!(
-        transport_part_at(bar, 15, 800, 30, 96, true),
+        transport_part_at(bar, 15, 800, 30, 96, true, false),
         Some(TransportPart::Seek)
     );
 
     // Nothing is hit where nothing is drawn.
-    assert_eq!(transport_part_at(2, 2, 800, 30, 96, true), None);
+    assert_eq!(transport_part_at(2, 2, 800, 30, 96, true, false), None);
 }
 
 /// A bar whose player cannot be told anything is a read-out: FFmpeg's player reports no
@@ -397,8 +472,8 @@ fn the_parts_of_a_transport_bar_are_hit_where_they_are_drawn() {
 /// the strip does rather than after a control that is not there.
 #[test]
 fn a_bar_with_no_controls_has_none_to_press() {
-    let dead = transport_layout(800, 30, 96, false);
-    let live = transport_layout(800, 30, 96, true);
+    let dead = transport_layout(800, 30, 96, false, false);
+    let live = transport_layout(800, 30, 96, true, false);
 
     assert_eq!(dead.elapsed.left, 10, "the clock begins at the padding");
     assert_eq!(
@@ -418,10 +493,10 @@ fn a_bar_with_no_controls_has_none_to_press() {
     // And neither the button's place nor the track answers a press.
     let play = (live.play.left + live.play.right) / 2;
     let bar = (dead.bar.left + dead.bar.right) / 2;
-    assert_eq!(transport_part_at(play, 15, 800, 30, 96, false), None);
-    assert_eq!(transport_part_at(bar, 15, 800, 30, 96, false), None);
+    assert_eq!(transport_part_at(play, 15, 800, 30, 96, false, false), None);
+    assert_eq!(transport_part_at(bar, 15, 800, 30, 96, false, false), None);
     assert_eq!(
-        transport_part_at(play, 15, 800, 30, 96, true),
+        transport_part_at(play, 15, 800, 30, 96, true, false),
         Some(TransportPart::Play)
     );
 }
@@ -490,6 +565,7 @@ fn draws_the_marks_of_a_bar() {
                 text_paint::scaled(30, scale),
                 dpi,
                 true,
+                false,
             );
             layout.play.bottom - layout.play.top
         };
@@ -556,4 +632,570 @@ fn draws_the_marks_of_a_bar() {
             println!("{}", path.display());
         }
     }
+}
+
+/// The clock beside the track is the width of its own digits and written against the track: a box
+/// of a fixed width is a clock either held a label's worth of nothing away from the track or pushed
+/// off the strip's own padding, and both of those are one read-out with a gap in it (see
+/// `clock_width`).
+#[test]
+fn a_clock_is_given_the_room_of_its_own_digits() {
+    for dpi in [96, 144, 192] {
+        let scale = dpi as f32 / 96.0;
+        let surface = DibSurface::create(320, 40).expect("a surface to measure on");
+        let style = caption_style([255, 255, 255]);
+
+        // Every length a clock is written at, held and measured: the room is never less than the
+        // run (a room short of it clips the hours off the front of a film) and never much more
+        // (a room wider than it is the gap this exists to remove).
+        for seconds in [
+            None,
+            Some(5.0),
+            Some(65.0),
+            Some(600.0),
+            Some(3_725.0),
+            Some(7_325.0),
+        ] {
+            let room = clock_width(seconds, dpi);
+            let measured = measure_text(&surface, &style, &clock_text(seconds), scale);
+            assert!(
+                room >= measured,
+                "at dpi {dpi} {seconds:?} is written in {measured} columns and given {room}"
+            );
+            assert!(
+                room <= measured + text_paint::scaled(3, scale),
+                "at dpi {dpi} {seconds:?} is given {} columns for {measured} of ink",
+                room
+            );
+        }
+
+        // And the track is laid out around the room of the clock run in it: one gap between the
+        // run's own end and the track, at every width a strip is drawn at.
+        for seconds in [Some(5.0), Some(7_325.0)] {
+            let clock = clock_width(seconds, dpi);
+            let width = text_paint::scaled(800, scale);
+            let layout = BarShape {
+                width,
+                height: 30,
+                dpi,
+                interactive: false,
+                animated: true,
+                controllable: false,
+                clock,
+            }
+            .layout();
+            assert_eq!(layout.elapsed.right - layout.elapsed.left, clock);
+            assert_eq!(layout.elapsed.left, text_paint::scaled(10, scale));
+            assert_eq!(layout.elapsed.right + strip_gap(scale), layout.bar.left);
+            assert_eq!(layout.total.right - layout.total.left, clock);
+            assert_eq!(
+                layout.bar.right + strip_gap(scale),
+                layout.total.left,
+                "the length is written against the track the same way"
+            );
+        }
+    }
+}
+
+/// The pace's button is the far end of the bar a picture that plays carries, and the level's is the
+/// far end of every other bar: a file of frames has no sound for a level to be a level of, so the
+/// two are never on one strip — a second control beside a picture that plays would be a button that
+/// does nothing (see `TransportPart::Volume`).
+#[test]
+fn a_picture_that_plays_carries_one_control_at_the_far_end_and_never_two() {
+    for (width, height) in [(320, 30), (600, 30), (600, 40), (1920, 48), (220, 26)] {
+        for dpi in [96, 144, 192] {
+            let picture = transport_layout(width, height, dpi, true, true);
+            let film = transport_layout(width, height, dpi, true, false);
+
+            // One square, at the strip's own right edge, and the same square the level's button is
+            // on a film's bar: a hand finds the far control where it always was.
+            assert_eq!(
+                picture.fps, film.volume,
+                "at {width}x{height} dpi {dpi} the pace is not where the level was"
+            );
+            assert_eq!(
+                picture.volume.left, picture.volume.right,
+                "at {width}x{height} dpi {dpi} a picture that plays drew a level's button"
+            );
+            assert_eq!(
+                film.fps.left, film.fps.right,
+                "at {width}x{height} dpi {dpi} a film drew a pace's button"
+            );
+            assert!(
+                picture.fps.left >= 0 && picture.fps.right <= width,
+                "at {width}x{height} dpi {dpi} the pace's button is off the bar"
+            );
+
+            // And nothing on a picture's bar is the level: every column of it, and every row wide
+            // enough to hold the square, is answered by something else or by nothing at all.
+            for x in 0..width {
+                for y in [0, height / 2, height - 1] {
+                    assert_ne!(
+                        transport_part_at(x, y, width, height, dpi, true, true),
+                        Some(TransportPart::Volume),
+                        "at {width}x{height} dpi {dpi} a column of a picture's bar is a level"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A point on the FPS button is answered before anyone else's, and a bar drawn without one has
+/// nothing of the pace's at that point at all.
+#[test]
+fn the_fps_button_is_hit_where_it_is_drawn() {
+    let layout = transport_layout(800, 30, 96, true, true);
+    let middle = (layout.fps.left + layout.fps.right) / 2;
+
+    assert_eq!(
+        transport_part_at(middle, 15, 800, 30, 96, true, true),
+        Some(TransportPart::Fps)
+    );
+    // A film's bar has no pace to set, and the same column of it is the level's button - one
+    // control at the far end, whichever bar it is on.
+    assert_eq!(
+        transport_part_at(middle, 15, 800, 30, 96, true, false),
+        Some(TransportPart::Volume),
+        "a film's bar has a level where a picture's has a pace"
+    );
+
+    // And the track stops short of the button, so a press near the end of the strip is a control
+    // rather than a seek.
+    assert_ne!(
+        transport_part_at(layout.fps.left, 15, 800, 30, 96, true, true),
+        Some(TransportPart::Seek)
+    );
+}
+
+/// The pace's slider reads one frame a second at the bottom of its groove and the ceiling at the
+/// top, and every whole frame in between: a groove whose ends were not those two would be a slider
+/// a hand cannot reach either end of.
+#[test]
+fn the_pace_slider_reads_one_frame_a_second_up_to_the_ceiling() {
+    let layout = transport_layout(800, 30, 96, true, true);
+    let popup = fps_popup_from_button(
+        RECT {
+            top: layout.fps.top + 400,
+            bottom: layout.fps.bottom + 400,
+            ..layout.fps
+        },
+        800,
+        96,
+    );
+    let track = popup.track;
+    // The top this app's own setting names, which is the ceiling the slider is read against
+    // rather than a second one of its own (see `animated_fps_max`).
+    let max = DEFAULT_ANIMATED_FPS_MAX;
+
+    assert_eq!(max, 180, "the pace this app opens at is a setting");
+    assert_eq!(fps_at(track.bottom, track, max), 1, "the bottom is one");
+    assert_eq!(
+        fps_at(track.top, track, max),
+        max,
+        "and the top is all of it"
+    );
+    let quarter = fps_at(track.bottom - (track.bottom - track.top) / 4, track, max);
+    assert!(
+        (43..=49).contains(&quarter),
+        "a quarter of the way up is a quarter of the pace above one, and not all of it: {quarter}"
+    );
+
+    // And a point off the groove is held at its ends rather than read past them.
+    assert_eq!(fps_at(track.bottom + 500, track, max), 1);
+    assert_eq!(fps_at(track.top - 500, track, max), max);
+
+    // The knob is drawn where the pace it holds is: the two ends of the groove again, and a pace
+    // in between the row between them.
+    assert_eq!(fps_thumb_row(track, 1, max), track.bottom);
+    assert_eq!(fps_thumb_row(track, max, max), track.top);
+    assert!(fps_thumb_row(track, max / 2, max) < track.bottom);
+    assert!(fps_thumb_row(track, max / 2, max) > track.top);
+
+    // The panel is the level's own across as well: the figure is written *over* the groove rather
+    // than beside it, so the room it needs is the room the panel already has above its groove (see
+    // `fps_popup_from_button` and `fps_popup_text_rect`).
+    let volume = volume_popup_from_button(
+        RECT {
+            top: layout.fps.top + 400,
+            bottom: layout.fps.bottom + 400,
+            ..layout.fps
+        },
+        800,
+        96,
+    );
+    assert_eq!(
+        popup.panel.right - popup.panel.left,
+        volume.panel.right - volume.panel.left,
+        "the pace's panel is the level's panel across"
+    );
+    assert_eq!(
+        popup.track.right - popup.track.left,
+        volume.track.right - volume.track.left,
+        "and the groove inside it is the level's own"
+    );
+    let text = fps_popup_text_rect(&popup, 96);
+    assert!(
+        text.right - text.left
+            >= measure_text(
+                &DibSurface::create(40, 20).expect("a surface to measure on"),
+                &caption_style([255, 255, 255]),
+                "180",
+                1.0,
+            ),
+        "the room the pace is written in holds the figure the slider can be taken to"
+    );
+}
+
+/// The pace's panel is the level's own panel across — the figure is written over its groove rather
+/// than beside it — and what its taller top buys is two gaps: one over the figures and one under
+/// them, so that a run of ink is not butted against either the panel's edge or the groove's (see
+/// `fps_popup_text_rect`).
+///
+/// The groove is the level's in every other way, inset off the panel's own ends and never shorter
+/// than half of it: the room above it is taken out of the groove's top rather than added to it, so
+/// a pace's slider is a shorter slider rather than a taller panel.
+#[test]
+fn the_pace_is_written_between_two_gaps_over_a_groove_of_the_levels_own_width() {
+    let button = RECT {
+        left: 600,
+        top: 500,
+        right: 622,
+        bottom: 522,
+    };
+
+    for dpi in [96, 192] {
+        let popup = fps_popup_from_button(button, 1200, dpi);
+        let volume = volume_popup_from_button(button, 1200, dpi);
+        let text = fps_popup_text_rect(&popup, dpi);
+        let scale = dpi as f32 / 96.0;
+        let gap = text_paint::scaled(FPS_PANEL_TEXT_GAP, scale).max(1);
+        let cell = text_paint::scaled(
+            text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
+            scale,
+        )
+        .max(1);
+
+        assert_eq!(
+            popup.panel.right - popup.panel.left,
+            volume.panel.right - volume.panel.left,
+            "the pace's panel is the level's panel across at {dpi} dpi"
+        );
+        assert_eq!(
+            popup.track.right - popup.track.left,
+            volume.track.right - volume.track.left,
+            "and its groove is the level's own"
+        );
+        assert_eq!(
+            popup.panel.top, volume.panel.top,
+            "the panel's own box is unmoved: only what is inside it is"
+        );
+
+        let over = text.top - popup.panel.top;
+        assert!(
+            over >= 1 && over <= gap,
+            "the gap over the figures is a gap rather than an edge at {dpi} dpi: {over}"
+        );
+        let under = popup.track.top - text.bottom;
+        assert!(
+            under >= gap - 1,
+            "and the gap under it is no less than the gap asked for at {dpi} dpi: {under}"
+        );
+        assert!(over > 0 && under > 0, "both gaps are there at {dpi} dpi");
+
+        // Never taller than one line of the strip's own text, and never squeezed to none.
+        assert!(
+            text.bottom - text.top <= cell.max(gap),
+            "the figures are one line at {dpi} dpi"
+        );
+        assert!(text.bottom > text.top, "and a line is drawn at {dpi} dpi");
+
+        let panel_span = popup.panel.bottom - popup.panel.top;
+        let track_span = popup.track.bottom - popup.track.top;
+        assert!(
+            track_span * 2 >= panel_span,
+            "the groove is never shorter than half its panel: {track_span} of {panel_span}"
+        );
+    }
+}
+
+/// The pace is written over its own panel in blue and with nothing of the page behind it: the
+/// figures are ink on a flat panel, and the panel's own alpha byte is handed back under them (see
+/// `paint_fps_popup_text`).
+///
+/// It is judged on the strip a layered window carries rather than on the figure alone, because the
+/// two faults it is written against are faults of what is *under* the figure: a run whose
+/// background came from the caption's page instead of the panel is a patch of another colour around
+/// a number, and a run that left GDI's zero alpha behind it is a number cut out of the panel it is
+/// read on.
+#[test]
+fn the_pace_is_written_in_blue_with_no_panel_of_its_own_behind_it() {
+    let shift = |rect: RECT, by: (i32, i32)| RECT {
+        left: rect.left - by.0,
+        top: rect.top - by.1,
+        right: rect.right - by.0,
+        bottom: rect.bottom - by.1,
+    };
+    let button = RECT {
+        left: 600,
+        top: 500,
+        right: 622,
+        bottom: 522,
+    };
+    let (width, height, text, strip_width, popup) = {
+        let popup = fps_popup_from_button(button, 1200, 96);
+        let bounds = volume_popup_bounds(&popup, 1200, 700);
+        let by = (bounds.left, bounds.top);
+        (
+            bounds.right - bounds.left,
+            bounds.bottom - bounds.top,
+            shift(fps_popup_text_rect(&popup, 96), by),
+            (bounds.right - bounds.left).max(1),
+            VolumePopup {
+                panel: shift(popup.panel, by),
+                track: shift(popup.track, by),
+            },
+        )
+    };
+
+    // The strip a pace's panel is painted into, with or without the figures written over it, so
+    // that what the figures did to the panel can be told apart from the panel itself.
+    let painted = |figures: bool| {
+        let palette = ChromePalette {
+            background: [24, 26, 32],
+            foreground: [240, 240, 240],
+            accent: [86, 182, 194],
+            blue: [97, 175, 239],
+            number: [209, 154, 102],
+            dark: true,
+        };
+        let surface = DibSurface::create(width as u32, height as u32)
+            .expect("a strip to paint a pace's panel into");
+        let len = (width.max(1) * height.max(1) * 4) as usize;
+        {
+            let pixels = unsafe { std::slice::from_raw_parts_mut(surface.bits(), len) };
+            pixels.fill(0);
+            paint_fps_popup(pixels, strip_width, &palette, &popup, 180, 180, false);
+        }
+
+        // The panel's own alpha byte under the figures, before they are written over it.
+        let under = alphas(surface.bits(), strip_width, text, height);
+        if figures {
+            paint_fps_popup_text(&surface, &palette, &popup, 180, 96);
+        }
+        let pixels = unsafe { std::slice::from_raw_parts(surface.bits(), len) }.to_vec();
+
+        (pixels, under)
+    };
+
+    let (bare, _) = painted(false);
+    let (page, under) = painted(true);
+
+    // **Nothing of the run is a panel of its own.** What it writes is the figure and the figure
+    // only: the pixels it leaves alone are still the panel's, and none of them is outside the room
+    // the pace is written in — a run whose background came from the page would be a rectangle of
+    // another colour around a number, and every pixel of its box would have changed.
+    let box_ = |x: i32, y: i32| ((y * strip_width + x) * 4) as usize;
+    let mut changed = 0;
+    for y in 0..height {
+        for x in 0..strip_width {
+            let at = box_(x, y);
+            if page[at..at + 3] == bare[at..at + 3] {
+                continue;
+            }
+            assert!(
+                x >= text.left && x < text.right && y >= text.top && y < text.bottom,
+                "the run painted outside the room the pace is written in, at ({x}, {y})"
+            );
+            changed += 1;
+        }
+    }
+    let room = ((text.right - text.left).max(0) * (text.bottom - text.top).max(0)) as usize;
+    assert!(changed > 0, "the pace was not written at all");
+    assert!(
+        changed < room,
+        "the run filled its box with a background of its own: {changed} of {room} pixels changed"
+    );
+
+    // And the panel's alpha is handed back under the figures rather than left at the zero GDI draws
+    // through: a strip carries per-pixel alpha, so a run that sealed it would be a hole in the panel.
+    assert_eq!(
+        under,
+        alphas(page.as_ptr(), strip_width, text, height),
+        "the run hands the panel's own alpha back"
+    );
+
+    // And the figure is the theme's blue: the bluest pixel of the room leans to it by a wide margin
+    // over the panel it is written on, which no run in the panel's own colour could be.
+    let bluest = (text.top.max(0)..text.bottom.min(height))
+        .flat_map(|y| (text.left.max(0)..text.right.min(strip_width)).map(move |x| (x, y)))
+        .map(|(x, y)| page[box_(x, y)..][..4].to_vec())
+        .max_by_key(|pixel| i32::from(pixel[0]) - i32::from(pixel[2]))
+        .expect("the room the pace is written in");
+    assert!(
+        i32::from(bluest[0]) - i32::from(bluest[2]) > 60,
+        "the bluest pixel of the pace is not blue: {bluest:?}"
+    );
+}
+
+/// The alpha byte of every pixel in `rect`, row by row, off a strip's own premultiplied BGRA.
+fn alphas(bits: *const u8, width: i32, rect: RECT, height: i32) -> Vec<u8> {
+    let pixels =
+        unsafe { std::slice::from_raw_parts(bits, (width.max(1) * height.max(1) * 4) as usize) };
+    let mut found = Vec::new();
+    for y in rect.top.max(0)..rect.bottom.min(height) {
+        for x in rect.left.max(0)..rect.right.min(width) {
+            found.push(pixels[((y * width + x) * 4) as usize + 3]);
+        }
+    }
+    found
+}
+
+/// The count of frames under a hand is written over the track's own beginning, is written only
+/// while a hand is on the track, and is not written where the thumb is: the strip has no room
+/// beside the clock that a drag may take, so the run is drawn where the track begins and the track
+/// is whole again when the hand lets go (see `paint_frame_count`).
+#[test]
+fn the_frames_under_a_hand_are_written_over_the_track_until_the_hand_lets_go() {
+    let palette = ChromePalette {
+        background: [24, 26, 32],
+        foreground: [240, 240, 240],
+        accent: [86, 182, 194],
+        blue: [97, 175, 239],
+        number: [209, 154, 102],
+        dark: true,
+    };
+    let (width, height, dpi) = (600, 30, 96);
+    let paint = |frames: Option<(usize, usize)>, position: f64| -> Vec<u8> {
+        let surface = DibSurface::create(width as u32, height as u32).expect("a strip");
+        let len = (width * height * 4) as usize;
+        let state = TransportState {
+            interactive: false,
+            playing: true,
+            position: Some(position),
+            duration: Some(21.0),
+            hovered: None,
+            pressed: None,
+            volume: 0,
+            volume_open: false,
+            animated: true,
+            controllable: false,
+            fps_open: false,
+            frames,
+        };
+        unsafe {
+            std::slice::from_raw_parts_mut(surface.bits(), len).fill(0);
+        }
+        paint_transport(&surface, &palette, &state, dpi);
+        unsafe { std::slice::from_raw_parts(surface.bits(), len) }.to_vec()
+    };
+    let at = |x: i32, y: i32| ((y * width + x) * 4) as usize;
+    let layout = BarShape {
+        width,
+        height,
+        dpi,
+        interactive: false,
+        animated: true,
+        controllable: false,
+        clock: clock_width(Some(21.0), dpi),
+    }
+    .layout();
+    let (left, right) = (layout.bar.left, layout.bar.right);
+
+    let quiet = paint(None, 10.0);
+    let dragging = paint(Some((212, 1021)), 10.0);
+
+    // The run stands in the track's own first columns, in the ink this app writes numbers in.
+    let numbered = (0..height)
+        .flat_map(|y| (left..(left + 60).min(right)).map(move |x| (x, y)))
+        .any(|(x, y)| {
+            let pixel = &dragging[at(x, y)..];
+            // A strip is premultiplied BGRA, and the ink here is the theme's digits.
+            let ink = [palette.number[2], palette.number[1], palette.number[0]];
+            pixel[..3]
+                .iter()
+                .zip(ink.iter())
+                .all(|(drawn, ink)| (*drawn as i32 - *ink as i32).abs() <= 6)
+        });
+    assert!(
+        numbered,
+        "the count of frames is not written over the track"
+    );
+    assert!(
+        quiet != dragging,
+        "the count is written whether or not a hand is on the track"
+    );
+
+    // And a hand at the very start of a file is a thumb rather than a mark written under it: with
+    // the thumb in the room the run would take, nothing is written at all.
+    assert_eq!(
+        paint(Some((1, 1021)), 0.0),
+        paint(None, 0.0),
+        "a count written under the thumb of the hand that is on it"
+    );
+}
+
+/// The pace's panel is the volume panel, hung from a button of its own: inside the window, over the
+/// media rather than over the button that opened it, and with a groove to drag.
+#[test]
+fn the_pace_popup_is_inside_the_window_and_floats_above_its_button() {
+    for (width, height) in [(600, 30), (320, 30), (1920, 48)] {
+        for dpi in [96, 144] {
+            let layout = transport_layout(width, height, dpi, true, true);
+            let button = RECT {
+                top: layout.fps.top + height,
+                bottom: layout.fps.bottom + height,
+                ..layout.fps
+            };
+            let popup = fps_popup_from_button(button, width, dpi);
+
+            assert!(popup.panel.left >= 0 && popup.panel.right <= width);
+            // The panel floats over the media rather than over the button that opened it — unless
+            // the window is too short to hold it above the button, which is where the panel's own
+            // floor puts it at the window's top edge instead (see `volume_popup_from_button`).
+            assert!(
+                popup.panel.bottom <= button.top || popup.panel.top == 0,
+                "the panel covers the button that opened it"
+            );
+            assert!(popup.track.bottom > popup.track.top, "a groove to drag");
+        }
+    }
+}
+
+/// **A picture that plays carries a button at the start of its bar, and it is this app's own hold.**
+///
+/// The button is the one a film's bar has, in the same place and the same size, and the mark it
+/// shows is the pause while the frames are being walked — a picture nobody has paused is a picture
+/// that is playing, and there is no player behind it to say either way (see
+/// `BarShape::controllable` and `the_picture_is_paused`).
+#[test]
+fn a_picture_that_plays_carries_a_button_at_the_start_of_its_bar() {
+    let picture = picture_bar(600, 30, 96).layout();
+    let film = transport_layout(600, 30, 96, true, false);
+
+    assert_eq!(
+        picture.play, film.play,
+        "the button a picture carries is where a film's button is"
+    );
+    let centre = (picture.play.left + picture.play.right) / 2;
+    assert_eq!(
+        super::transport_part_at(picture_bar(600, 30, 96), centre, 15),
+        Some(TransportPart::Play),
+        "and it is the button a press on it finds"
+    );
+
+    // The clock and the track begin after it, exactly as they do on a film's bar: a strip whose
+    // controls were laid out two ways would be a track that moves when the file changes kind.
+    assert_eq!(picture.elapsed, film.elapsed);
+    assert_eq!(picture.bar, film.bar);
+
+    // And a bar nobody can press anything on — no player and no hold — carries no button at all,
+    // which is the read-out every other kind is drawn as.
+    let read_only = a_bar(600, 30, 96, false, false).layout();
+    assert_eq!(read_only.elapsed.left, text_paint::scaled(10, 0.96 + 0.04));
+    assert_eq!(
+        super::transport_part_at(a_bar(600, 30, 96, false, false), centre, 15),
+        None
+    );
 }

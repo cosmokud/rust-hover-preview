@@ -13,13 +13,13 @@
 
 use super::commands::{
     open_config_file, reset_lists_from_tray, reset_settings_from_tray, restore_pin_mode,
-    set_afk_timer, set_animated_scale, set_audio_scale, set_audio_seek, set_audio_volume,
-    set_avoid_mode, set_dds_background, set_decode_budget_gb, set_design_background,
-    set_design_scale, set_document_cache_mb, set_document_scale, set_ebook_scale, set_f3d_idle,
-    set_follow_cursor, set_font_background, set_font_scale, set_general_disk_cache_mb,
-    set_hover_delay, set_html_background, set_image_background, set_image_cache_mb,
-    set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode, set_model_scale,
-    set_mpv_engine_idle, set_mpv_path, set_office_engine, set_office_engine_idle,
+    set_afk_timer, set_animated_scale, set_animated_webp_budget_mb, set_audio_scale,
+    set_audio_seek, set_audio_volume, set_avoid_mode, set_dds_background, set_decode_budget_gb,
+    set_design_background, set_design_scale, set_document_cache_mb, set_document_scale,
+    set_ebook_scale, set_f3d_idle, set_follow_cursor, set_font_background, set_font_scale,
+    set_general_disk_cache_mb, set_hover_delay, set_html_background, set_image_background,
+    set_image_cache_mb, set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode,
+    set_model_scale, set_mpv_engine_idle, set_mpv_path, set_office_engine, set_office_engine_idle,
     set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek, set_pin_nav_audio,
     set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_preview_scale,
     set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
@@ -37,25 +37,26 @@ use super::commands::{
     toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
 };
 use super::ids::{
-    AFK_TIMER_CHOICES_SECS, AUDIO_SCALE_CHOICES, AUDIO_SEEK_CHOICES, AVOID_CHOICES,
-    BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, CODEC_COMMANDS, DDS_BACKGROUND_CHOICES,
-    DECODE_BUDGET_CHOICES_GB, DISK_CACHE_SIZE_CHOICES_MB, DOCUMENT_SCALE_CHOICES,
-    ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE,
-    ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE,
-    ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE,
-    ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED, ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE,
-    ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE,
-    ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
-    ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
-    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
-    ID_TRAY_EVERYTHING_PREVIEWS, ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE, ID_TRAY_FONT_100,
-    ID_TRAY_FONT_110, ID_TRAY_FONT_125, ID_TRAY_FONT_150, ID_TRAY_FONT_175, ID_TRAY_FONT_200,
-    ID_TRAY_FONT_250, ID_TRAY_FONT_300, ID_TRAY_FONT_400, ID_TRAY_FONT_70, ID_TRAY_FONT_80,
-    ID_TRAY_FONT_90, ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE,
-    ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE,
-    ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE,
-    ID_TRAY_INSTALL_BASE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
-    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
+    AFK_TIMER_CHOICES_SECS, ANIMATED_WEBP_BUDGET_CHOICES_MB, AUDIO_SCALE_CHOICES,
+    AUDIO_SEEK_CHOICES, AVOID_CHOICES, BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, CODEC_COMMANDS,
+    DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB, DISK_CACHE_SIZE_CHOICES_MB,
+    DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE,
+    ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_ANIMATED_WEBP_BUDGET_BASE, ID_TRAY_AUDIO_LOOP,
+    ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_SHUFFLE,
+    ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE, ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED,
+    ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE, ID_TRAY_DDS_BACKGROUND_BASE,
+    ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
+    ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
+    ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
+    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_EVERYTHING_PREVIEWS,
+    ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE, ID_TRAY_FONT_100, ID_TRAY_FONT_110, ID_TRAY_FONT_125,
+    ID_TRAY_FONT_150, ID_TRAY_FONT_175, ID_TRAY_FONT_200, ID_TRAY_FONT_250, ID_TRAY_FONT_300,
+    ID_TRAY_FONT_400, ID_TRAY_FONT_70, ID_TRAY_FONT_80, ID_TRAY_FONT_90,
+    ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
+    ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
+    ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_INSTALL_BASE,
+    ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
+    ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_PIN,
     ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
@@ -610,6 +611,16 @@ unsafe extern "system" fn tray_window_proc(
                         .contains(&cmd) =>
                     {
                         set_decode_budget_gb(cmd - ID_TRAY_DECODE_BUDGET_BASE)
+                    }
+                    // And the room a pinned picture's run of frames is given, by the
+                    // position it was listed at: the one ceiling here that bounds
+                    // what is kept rather than what one decode may ask for.
+                    cmd if (ID_TRAY_ANIMATED_WEBP_BUDGET_BASE
+                        ..ID_TRAY_ANIMATED_WEBP_BUDGET_BASE
+                            + ANIMATED_WEBP_BUDGET_CHOICES_MB.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_animated_webp_budget_mb(cmd - ID_TRAY_ANIMATED_WEBP_BUDGET_BASE)
                     }
                     // A share of the display a document is drawn at, by the position it
                     // was listed at: the vector scale, and the two page scales beside it.
