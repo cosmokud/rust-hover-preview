@@ -3172,6 +3172,40 @@ pub(super) fn open_the_pins_pdf_viewer(
     crate::engines::pdf_viewer::open(path, window.0 as isize, the_documents_area(content, dpi));
 }
 
+/// Whether a document the pin's band holds is standing somewhere other than that band, which is a
+/// placement owed rather than one already made (see `engines::pdf_viewer::a_move_is_owed`).
+///
+/// **The two moves are separate windows of two threads, and this is what tests that they agree.** A
+/// road that re-boxes a pin moves the pin's own window in one call and publishes the box for the
+/// document in another — a centring, a maximize, a restore, a step of a walk, a display change, a
+/// swap — and the second of them is a round trip into a thread that may be mid-navigation. What a
+/// lost placement leaves is a document standing beside the pin it belongs to, with nothing of the
+/// pin's left to ask again until a box change the hand has to cause.
+///
+/// Asked of the band the pin has now and the box the document was last put at, and of nothing else:
+/// a tick where the two agree pays two reads, and one where they do not is the tick that repairs the
+/// pair (see the loop's own road, and `engines::pdf_viewer::a_move_is_owed`).
+pub(super) fn the_pins_document_stands_off_its_band() -> bool {
+    if !the_bands_pdf_viewer_is_owed() {
+        return false;
+    }
+
+    let owner = pinned_window();
+
+    // The fast path is the cheap one: a pin whose document is not up has nothing to be off.
+    if owner.is_invalid() || !crate::engines::pdf_viewer::is_up_for(owner.0 as isize) {
+        return false;
+    }
+
+    let Some(content) = pinned_content() else {
+        return false;
+    };
+
+    let area = the_documents_area(content, dpi_at(content.0, content.1));
+
+    crate::engines::pdf_viewer::a_move_is_owed(owner.0 as isize, area)
+}
+
 pub(super) fn place_pinned_siblings() {
     let Some(content) = pinned_content() else {
         return;

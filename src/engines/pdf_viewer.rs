@@ -97,6 +97,40 @@ const VIEWER_CLASS: PCWSTR = w!("RhpPdfViewer");
 /// scrollbar out of a document the user is meant to scroll.
 const BROWSER_ARGUMENTS: &str = "--host-resolver-rules=\"MAP * ~NOTFOUND\"";
 
+/// Whether the placement road writes itself down, which `RHP_PDF_TRACE` asks for.
+///
+/// **The one question a viewer that tails its pin is answered by** is where the time between the
+/// pin's ask and the viewer's `SetWindowPos` went, and the two are a thread apart with a browser
+/// between them: the ask, the pass that takes it up, and the two calls that pass makes are each
+/// stamped here, so one reproduction reads as a timeline rather than as an argument. The stamp is
+/// epoch milliseconds, the clock `pin_trace`'s own file keeps, so the two can be read against each
+/// other.
+///
+/// Nothing is written unless the variable is set, and a run that does not set it pays one read of a
+/// `Lazy` at each of those points.
+static TRACING: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_PDF_TRACE").is_some());
+
+/// One line of that timeline, or nothing at all where the run did not ask for one.
+fn note(message: &str) {
+    if !*TRACING {
+        return;
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("rhp-pdf-trace.log"))
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{now:.3} {message}");
+    }
+}
+
 /// How long a viewer may take to arrive before the pin is read as one that will not: a local PDF
 /// through the runtime's own reader is a browser start and a file read, so what is past this is a
 /// navigation that is not coming (see `Host::settle`).
@@ -393,6 +427,12 @@ pub(crate) fn place(owner: isize, area: Area) {
     }
 
     let pairing = is_up_for(owner);
+    let asked_at = Instant::now();
+
+    note(&format!(
+        "place owner={owner} up={} area={}x{}+{}+{}",
+        pairing as u8, area.width, area.height, area.x, area.y
+    ));
 
     // **A box a viewer already stands at is a box owed nothing.** A road that places and then places
     // again — the pin's own commit at the new box followed by the band's, which is what a centring, a
@@ -410,6 +450,7 @@ pub(crate) fn place(owner: isize, area: Area) {
     // left a box in the cell that is not the one asked for now, and skipping the ask would leave the
     // viewer at the box the hand passed through rather than at the one it came home to.
     if pairing && a_box_is_not_in_flight(owner) && a_viewer_stands_at(owner, area) {
+        note("place owed nothing: the viewer stands at that box");
         return;
     }
 
@@ -424,8 +465,36 @@ pub(crate) fn place(owner: isize, area: Area) {
     // channel it was reading alive but deaf, and a pin waiting on it would pay the bound on every step
     // of a drag for a move that is never coming (see `ask_for_a_pass`).
     if ask_for_a_pass() && pairing {
-        wait_for_the_take(taken_before);
+        let caught_up = wait_for_the_take(taken_before);
+
+        note(&format!(
+            "place waited {:.2}ms caught_up={}",
+            asked_at.elapsed().as_secs_f64() * 1000.0,
+            caught_up as u8
+        ));
     }
+}
+
+/// Whether this pin's viewer is on the screen and stands somewhere other than `area`, which is a move
+/// owed rather than one already made (see `a_viewer_stands_at`).
+///
+/// **It is the question a tick asks, and the whole of what a placement that never reached the take-up
+/// is repaired by.** The pin's window and the document standing in it are two windows of two threads,
+/// and every road that re-boxes a pin asks their placement separately: a centring, a maximize, a step
+/// of a walk and a display change all move the pin's window and then publish the box for the viewer,
+/// and each of them is a hop into a thread that may be in the middle of a navigation. A placement that
+/// is lost on that road leaves a document standing beside its pin with nothing of the pin's left to ask
+/// again — until the next box change, which is the box the hand has to cause.
+///
+/// Asked of two facts and no window: whether a viewer is up for this pin, and whether the box it stands
+/// at is this one. A tick where they agree pays two reads of a list.
+///
+/// A box still on its way is not asked for again, and that is what keeps the question from being asked
+/// on every tick of a thread that is slow to reach its pass: the take-up that carries it out is the
+/// answer to this question, so an ask already in the cell is a reason to wait for it rather than a
+/// reason to ask a second time (see `a_box_is_not_in_flight`).
+pub(crate) fn a_move_is_owed(owner: isize, area: Area) -> bool {
+    is_up_for(owner) && a_box_is_not_in_flight(owner) && !a_viewer_stands_at(owner, area)
 }
 
 /// Whether this pin's viewer already stands at `area` — the box its last take-up carried out (see
@@ -1104,12 +1173,30 @@ impl Host {
         self.seat.place(area);
 
         if !self.seat.life.is_up() {
+            note(&format!(
+                "take owner={} not up: the box is kept for the reveal",
+                self.seat.owner
+            ));
             // A box asked for before the document arrived is the one it arrives in (see `reveal`).
             return;
         }
 
+        let moving = Instant::now();
         self.put_the_window();
+        let moved = moving.elapsed();
+        let bounds = Instant::now();
         self.set_bounds();
+
+        note(&format!(
+            "take owner={} area={}x{}+{}+{} move={:.2}ms bounds={:.2}ms",
+            self.seat.owner,
+            area.width,
+            area.height,
+            area.x,
+            area.y,
+            moved.as_secs_f64() * 1000.0,
+            bounds.elapsed().as_secs_f64() * 1000.0
+        ));
     }
 
     /// Stop drawing, and keep the document: a suspended browser is one still there to be resumed,
@@ -1147,6 +1234,10 @@ impl Host {
         the_band_owes_a_repaint();
 
         self.suspended = true;
+        note(&format!(
+            "suspend owner={} (the pin is not on the screen)",
+            self.seat.owner
+        ));
         trace(&format!("pdf: suspended {}", self.seat.path.display()));
     }
 
@@ -1176,6 +1267,14 @@ impl Host {
         // And the band is Chromium's again, which is the same paint a reveal owes it (see
         // `the_band_owes_a_repaint`).
         the_band_owes_a_repaint();
+        note(&format!(
+            "resume owner={} at {}x{}+{}+{}",
+            self.seat.owner,
+            self.seat.area.width,
+            self.seat.area.height,
+            self.seat.area.x,
+            self.seat.area.y
+        ));
 
         trace(&format!("pdf: resumed {}", self.seat.path.display()));
     }
@@ -1294,6 +1393,8 @@ fn viewer_thread(commands: Receiver<Command>) {
             Duration::from_millis(5)
         };
 
+        let pass_began = Instant::now();
+
         match commands.recv_timeout(wait) {
             Ok(Command::Shutdown) => break,
             Ok(Command::Open { path, owner, area }) => {
@@ -1373,6 +1474,14 @@ fn viewer_thread(commands: Receiver<Command>) {
         // pin the box belongs to is moved — a drag of one pin is no box of another — and an arriving
         // viewer is given the box rather than moved to it (see `Seat::place`).
         let boxes = take_the_boxes();
+
+        if !boxes.is_empty() {
+            note(&format!(
+                "pass woke after {:.2}ms with {} box(es)",
+                pass_began.elapsed().as_secs_f64() * 1000.0,
+                boxes.len()
+            ));
+        }
 
         for (owner, area) in &boxes {
             for host in hosts.iter_mut().filter(|host| host.seat.owner == *owner) {
