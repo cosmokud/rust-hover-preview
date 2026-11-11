@@ -140,9 +140,7 @@ Runs on any processor Windows 11 itself supports: the build asks for SSE4.2 and 
 
 ### Optional: Enable Video Preview with mpv
 
-For smoother playback and a better picture, install mpv: videos then play through it automatically, using your graphics card, with subtitles just working — including any `.srt` file beside the video.
-
-The app finds `mpv.exe` beside itself, in your `PATH`, in `MPV Player` under Program Files, and in SVP 4's `mpv64`; where more than one is found, **Components → Videos → MPV** lets you pick which one plays.
+For smoother playback and a better picture, install mpv: videos then play through it automatically, using your graphics card, with subtitles just working. The app finds `mpv.exe` beside itself, in your `PATH`, in `MPV Player` under Program Files, and in SVP 4's `mpv64`; where more than one is found, **Components → Videos → MPV** lets you pick which one plays.
 
 **Option A: winget**
 
