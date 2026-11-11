@@ -363,7 +363,21 @@ pub(super) fn pin_keyboard_wanted_back(claimed: bool, has_focus: bool) -> bool {
 /// `Ctrl` with it is the document's own zoom. Asking the pin's window for the keyboard back then is
 /// this app taking it off the page it just put it in — a document no wheel scrolls and every key
 /// typed into it eaten by the pin's own table. So a document's band answers nothing here.
+///
+/// **Nothing here may stall a hand that is carrying the window.** A drag holds the pointer and is on
+/// this thread's own message pump, so the window work below would stand between that hand and the
+/// next move it makes — the press now records its ask and this tick is the second road that answers
+/// it (see `take_the_keyboard_the_press_asked_for`). A press whose release never arrives (a capture
+/// lost to another window) therefore still has its keyboard asked for here.
 pub(super) unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
+    if crate::ui::preview_window::pin_drag::pin_is_dragging() {
+        return false;
+    }
+
+    if take_the_keyboard_the_press_asked_for(hwnd, &Win32PinWindow) {
+        return true;
+    }
+
     if the_document_holds_the_caret() {
         return false;
     }

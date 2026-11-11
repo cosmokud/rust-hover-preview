@@ -742,6 +742,10 @@ pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
     // a hover the hook has already answered, and one is due the moment the pin is gone rather
     // than after the delay a re-hover of the same file is given (see `PIN_RESUMED`).
     PIN_RESUMED.store(true, Ordering::Release);
+    // And a keyboard a press recorded but never asked for: the press it belonged to is of a window
+    // that is no longer there, and the next pin's first press records its own (see
+    // `pin_model::ask_the_keyboard_after_the_press`).
+    super::pin_model::forget_the_keyboard_ask();
 
     // What the pin left behind that is not the pin: the walk the planner is working on, the
     // bubble's drag latch and the box a drag had left the window at. Each is somebody else's
@@ -967,6 +971,9 @@ pub(super) fn stand_pin(pin: Option<PinnedPreview>) {
     // The front a pin owes is part of what is stood here: a test that arms it is a test that has to
     // give it back, and every one that does not begins without it (see `arm_pin_to_the_front`).
     super::PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+    // And so is a keyboard ask, for the same reason: a press whose release a test never asks leaves
+    // one standing, and the next test's release would spend it (see `pin_model::KEYBOARD_ASKED`).
+    super::pin_model::forget_the_keyboard_ask();
     match pin {
         // `install` publishes the box the wheel hook reads, so a notch can be handed to the hook
         // without a preview loop having turned (see `app::seam::PIN_VOLUME_REGION`).
