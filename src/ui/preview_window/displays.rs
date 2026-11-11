@@ -141,8 +141,13 @@ pub(super) fn work_area_at(x: i32, y: i32) -> ScreenBounds {
     display_at(&DESKTOPS, x, y).work_area
 }
 
-/// The primary display's work area, which is the corner a player's `--geometry` is measured from
-/// rather than the monitor's own (see `pin_film_thumbnail::the_source_launch_origin`).
+/// The primary display's work area, by the corner of the desk: the same answer `work_area_at(0, 0)`
+/// gives, written where a caller means the primary rather than the display under a point.
+///
+/// **No launch asks it.** A film kept for a host is begun off every display and moved onto its box once
+/// its source has drawn, so there is no geometry to offset by a work area's origin (see
+/// `pin_film_thumbnail::the_source_launch_origin`).
+#[allow(dead_code)]
 pub(super) fn the_primary_work_area() -> ScreenBounds {
     work_area_at(0, 0)
 }
