@@ -114,6 +114,61 @@ pub(super) unsafe fn pin_take_focus(hwnd: HWND, window: &dyn PinWindow) {
     take_keyboard(behind, pin_is_focused());
 }
 
+/// Whether a press has recorded that the keyboard is its to ask for, and not yet been answered:
+/// the press itself asks nothing of the window (see `ask_the_keyboard_after_the_press`).
+static KEYBOARD_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// Record the keyboard as the press's to ask for, at the release rather than at the press.
+///
+/// **The press is the pointer's, and the keyboard is the hand's afterwards.** A press on a pin
+/// begins a drag or a resize, and what carries it is the pointer being taken for this window —
+/// so the moves that follow the press arrive here. The keyboard is window-manager work that is
+/// synchronous and can be long: `SetForegroundWindow` and `SetFocus` deliver messages back into
+/// this thread, and the window the keyboard is taken from is often enough a window of this app's
+/// own that the ordinary window behind it has to be found (see `pin_take_focus`). Asked at the
+/// press, it stands between the press and every move already queued behind it, and the drag
+/// trails the cursor until the pin is the window the user is in — after which no press asks
+/// anything (`WM_LBUTTONDOWN`). So the press only records the ask, and the release makes it
+/// (see `take_the_keyboard_the_press_asked_for`).
+///
+/// The standing latch is also the tick's to spend, for a press whose release never comes: a
+/// capture lost to another window ends the drag without a release of this app's (see
+/// `pin_ask_keyboard_back`).
+pub(super) fn ask_the_keyboard_after_the_press() {
+    KEYBOARD_ASKED.store(true, Ordering::Release);
+}
+
+/// Drop a standing ask. A pin coming down takes it with it: the press it belonged to is of a
+/// window that is no longer there, and the next pin's first press asks for its own.
+pub(super) fn forget_the_keyboard_ask() {
+    KEYBOARD_ASKED.store(false, Ordering::Release);
+}
+
+/// Make the keyboard ask the release recorded, answering whether this call made it: the latch is
+/// taken, so a tick and a release racing over one press ask for it once.
+///
+/// Answer no where the ask is not the pin's to make — nothing was recorded, no pin is up, the
+/// document holds the caret (see `pin_chrome_layout::the_document_holds_the_caret`), or the pin
+/// already holds the keyboard — and otherwise it is the one claim `pin_take_focus` knows how to
+/// make, with all of its note about asking on the answer rather than on the asking.
+pub(super) unsafe fn take_the_keyboard_the_press_asked_for(
+    hwnd: HWND,
+    window: &dyn PinWindow,
+) -> bool {
+    if !KEYBOARD_ASKED.swap(false, Ordering::AcqRel) || !pinned() {
+        return false;
+    }
+
+    // A document's caret is the document's: the same stand-down the tick follows, and the reason
+    // the release does not pay for window work on a PDF's behalf (see `pin_ask_keyboard_back`).
+    if super::pin_chrome_layout::the_document_holds_the_caret() || pin_is_focused() {
+        return false;
+    }
+
+    unsafe { pin_take_focus(hwnd, window) };
+    true
+}
+
 /// Give the pin the **caret** without taking the foreground: what an activation of the pair's film
 /// host asks for (see `pin_film_host::answer_an_activation_of_the_host`).
 ///
