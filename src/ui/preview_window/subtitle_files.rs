@@ -693,6 +693,10 @@ fn wait_for_end(extraction: &Arc<Extraction>, timeout: Duration) {
 /// `SUBTITLE_EXTRACTION_TIMEOUT_SECS` is killed and reaped, and the answer is that it did not
 /// finish, which is what a later launch is told as well (see `finish`).
 fn copy_out(args: &[String], workdir: &Path, extraction: &Extraction) -> bool {
+    if crate::formats::codecs::ffmpeg_disabled() {
+        return false;
+    }
+
     let child = engine_processes::hidden_command("ffmpeg")
         .args(args)
         .current_dir(workdir)

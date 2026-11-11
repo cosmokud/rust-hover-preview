@@ -442,6 +442,44 @@ pub(super) fn set_paused(pid: u32, paused: bool) -> bool {
     )
 }
 
+/// Take a picture of the film mpv is drawing, into the named file: mpv's own `screenshot-to-file`,
+/// down the same pipe every other command here goes.
+///
+/// **It is how a bubble shows a picture of a film nobody on this side holds.** The film is drawn in a
+/// window of mpv's, and the frame a collapsed pin's circle is painted from is read out of the player
+/// rather than out of the file — which is the difference between a preview needing `ffmpeg.exe` and
+/// one that needs nothing but the player it is already showing (see `pin_bubble::grab_bubble_frame`).
+///
+/// `"video"` is the frame without the on-screen subtitles, which is the picture the film is rather
+/// than the lettering a bubble is too small to read.
+pub(super) fn screenshot_to_file(pid: u32, file: &std::path::Path) -> bool {
+    write(
+        pid,
+        format!(
+            r#"{{"command":["screenshot-to-file",{},"video"],"async":true}}"#,
+            a_json_string(&file.to_string_lossy()),
+        ) + "\n",
+    )
+}
+
+/// Ask mpv how long the file it is playing is, in seconds — the seekbar's own total where this app
+/// has not read one from the file itself.
+///
+/// **It is the one fact a film's bar cannot be drawn without that only the player knows**, and the only
+/// answer there is for a container the media stack will not open: a file nothing on this side could
+/// measure is a file the player holding it has measured (see `pin_playback::pin_duration`).
+///
+/// The question is asked on the thread that is about to draw the bar, so its patience is a frame's
+/// rather than a hover's: a player that has not answered in `A_DURATION_WAIT` is a bar drawn with no
+/// total, which is the answer every unread film used to give.
+pub(super) fn duration(pid: u32) -> Option<f64> {
+    get_property_within(pid, "duration", A_DURATION_WAIT).and_then(|answer| answer.parse().ok())
+}
+
+/// How long the length above is waited for: longer than a frame's read and shorter than anything a
+/// hover pays, since it is asked on the thread that is about to draw the bar (see `duration`).
+const A_DURATION_WAIT: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Hold mpv's own window above every other window, or let it go back into the ordinary band.
 ///
 /// **It is the pin's `Pin Mode → Always On Top` asked of a player that was begun before the pin

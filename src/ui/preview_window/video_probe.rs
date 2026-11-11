@@ -660,12 +660,15 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // fallback on runs them for a film the engine will not take, which is the one it hands on, so
     // the player that gets it is given a geometry rather than a bare window.
     //
-    // **mpv is the case between the two: it wants the header and neither of FFmpeg's passes.**
+    // **mpv is the case between the two: it wants a header and neither of FFmpeg's passes.**
     // mpv draws the picture uncropped and finds its own sidecars, so `collect_video_crop_candidates`
     // decodes frames and `sidecar_for` walks the folder for answers mpv never reads — while the
-    // header leg it does need carries the box's width and height and the length the loop and the
-    // pin read, and names the subtitle streams in that same pass. So the header runs and the other
-    // two legs do not.
+    // shape the box is placed at and the length the loop and the pin read are one read of the file's
+    // own header. **That read is the media stack's rather than FFprobe's**, which is the whole of
+    // what keeps mpv independent of FFmpeg: a container's shape is in a source reader's media type
+    // and its length in the media source's presentation attribute, so a machine with no FFmpeg on it
+    // at all can still answer both (see `video_player::header`). FFprobe's pass is the
+    // fall-through for a container the stack will not open, not the road.
     let native = {
         // The choice the preview being probed for was built under rather than the setting of
         // now, which is the same read `video_route` makes: a probe run under one engine and a
@@ -688,33 +691,61 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // neither FFprobe nor the detector (see `video_route`).
     let mpv = video_route(path) == VideoRoute::Mpv;
 
-    // What the media engine answers with: a shape, and nothing else. No duration, because the
-    // engine does not know one until the file is playing (see `pin_duration`), and no subtitle
-    // streams, because a frame-server player has none to name (see `video_player`).
+    // What the media engine's own read of the file answers with: the shape, and the length the
+    // container states (see `video_player::header`). No subtitle streams, because the read that
+    // names them is FFprobe's and this one never asks (see `video_player`).
     let engine_header = || {
-        // `dimensions` has already applied the file's pixel aspect to the pair it answers, so this
-        // header's shape is the displayed one and its ratio is the square pixel — nothing may
-        // re-apply a ratio here. An engine frame is delivered without a filter chain in front of
-        // it (see `probe_video_geometry`'s crop note), so the proportion is the engine's own and
-        // has already been taken; only FFmpeg's player, which is handed the raw frame, is told
-        // about a pixel aspect (see the `vf` chain in `start_video_playback_where`).
-        video_player::dimensions(path).map(|(width, height)| VideoHeader {
-            width,
-            height,
-            aspect: (1, 1),
-            duration: None,
-            subtitles: SubtitleStreams::default(),
-            // Nothing read the header, so nothing knows a codec name — which is the same answer
-            // the extraction takes as "no track to copy" (see `extraction_due`).
-            subtitle_codecs: Vec::new(),
-            attachment_codecs: Vec::new(),
+        // `header` answers the frame's own size and the ratio beside it, so the displayed shape is
+        // made here — nothing below may re-apply a ratio. An engine frame is delivered without a
+        // filter chain in front of it (see `probe_video_geometry`'s crop note), so the proportion is
+        // the engine's own and has already been taken; only FFmpeg's player, which is handed the raw
+        // frame, is told about a pixel aspect (see the `vf` chain in `start_video_playback_where`).
+        video_player::header(path).map(|header| {
+            let (width, height) = video_player::displayed_shape(
+                header.frame_width,
+                header.frame_height,
+                header.aspect,
+            );
+            VideoHeader {
+                width,
+                height,
+                aspect: (1, 1),
+                // **The length the container states rather than nothing.** The engine does not know
+                // one until the file is playing, but the *container* does, and that is what a pinned
+                // film's bar is drawn against (see `pin_duration`).
+                duration: header.duration,
+                subtitles: SubtitleStreams::default(),
+                // Nothing read the streams, so nothing knows a codec name — which is the same
+                // answer the extraction takes as "no track to copy" (see `extraction_due`).
+                subtitle_codecs: Vec::new(),
+                attachment_codecs: Vec::new(),
+            }
         })
     };
 
     let (header, candidates, sidecar) = if native {
         (engine_header(), Default::default(), None)
     } else if mpv {
-        (probe_video_header(path), Default::default(), None)
+        // The media stack's own read first, because it is this app's and needs nothing installed;
+        // FFprobe's pass only where the container is one the stack will not open, which is the file
+        // that would otherwise be placed with no box and given no length at all.
+        (
+            video_player::header(path)
+                .map(|header| VideoHeader {
+                    width: header.frame_width,
+                    height: header.frame_height,
+                    // The ratio is stated rather than applied, because FFmpeg's player is the one
+                    // told about a pixel aspect while mpv applies the file's own (see `mpv_args`).
+                    aspect: header.aspect,
+                    duration: header.duration,
+                    subtitles: SubtitleStreams::default(),
+                    subtitle_codecs: Vec::new(),
+                    attachment_codecs: Vec::new(),
+                })
+                .or_else(|| probe_video_header(path)),
+            Default::default(),
+            None,
+        )
     } else {
         std::thread::scope(|scope| {
             let header = scope.spawn(|| probe_video_header(path));

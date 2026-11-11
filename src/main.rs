@@ -102,6 +102,8 @@ fn write_startup_step(path: &Path, line: &str) {
 }
 
 fn main() {
+    app::local_env::load();
+
     // Taken first, so that what the steps below are measured from is the process's own start
     // rather than the first moment anything looked at the clock (see `StartupTrace`).
     let mut trace = StartupTrace::new();

@@ -1024,6 +1024,11 @@ pub fn run_preview_window() {
                 // video FFmpeg plays is something this app asserted (see `settle_pinned_transport`).
                 settle_pinned_transport();
                 settle_pending_hold();
+                // And the length a bar is drawn against, where this app read none from the file and the
+                // player on screen did from its container: asked once per player rather than on every
+                // paint, because a question put to a pipe on the thread that draws is a frame lost for a
+                // number (see `settle_pin_duration`).
+                settle_pin_duration();
                 // And the topmost band a step between two films holds is given back where no picture
                 // ever changed hands inside the player-start bound: a hold with no release is a pin
                 // over every program on a setting that says it must not be (see `PIN_STEP_BAND_HELD`).
