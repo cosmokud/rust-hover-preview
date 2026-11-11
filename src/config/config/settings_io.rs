@@ -209,6 +209,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
     (
         "Performance",
         &[
+            "animated_webp_budget_mb",
             "decode_budget_gb",
             "document_cache_mb",
             "general_disk_cache_mb",
@@ -250,6 +251,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "text_scroll_far_edge_grace_pixels",
             "ttc_face",
             "webp_playback_fps",
+            "animated_fps_max",
             "min_reader",
         ],
     ),

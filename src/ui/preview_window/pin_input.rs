@@ -116,6 +116,11 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
         return;
     }
 
+    // And a drag of the pace's knob, which is a pace being aimed the same way (see `pinned_fps_drag`).
+    if pinned_fps_drag(hwnd, y) {
+        return;
+    }
+
     // A drag along the transport bar, which is a seek being aimed rather than a window being
     // moved (see `pinned_transport_drag`).
     if pinned_transport_drag(hwnd, x) {
@@ -164,16 +169,7 @@ pub(super) unsafe fn pinned_mouse_move(hwnd: HWND, x: i32, y: i32) {
     // The same question of the transport bar, which is the other strip a pointer lights up.
     let transport_hovered = pinned_transport_geometry().and_then(|bar| {
         (bar.wanted && y >= bar.top)
-            .then(|| {
-                pin_chrome::transport_part_at(
-                    x,
-                    y - bar.top,
-                    bar.width,
-                    bar.height,
-                    bar.dpi,
-                    bar.live,
-                )
-            })
+            .then(|| pin_chrome::transport_part_at(bar.shape(), x, y - bar.top))
             .flatten()
     });
     let transport_changed = pin_state()
@@ -307,9 +303,34 @@ pub(super) struct PinnedTransportBar {
     /// Whether the player behind the bar can be told anything, which is whether its parts are the
     /// pointer's to press at all (see `PinnedPreview::transport_live`).
     pub(super) live: bool,
+    /// Whether the button at the bar's start is this app's own hold rather than a player's pause
+    /// (see `PinnedPreview::transport_controllable`).
+    pub(super) controllable: bool,
+    /// Whether the bar belongs to a picture that plays rather than a film: its seek is the file's
+    /// frames, and its FPS button is the first of the bar's two own controls (see `PinFps`).
+    pub(super) animated: bool,
     /// Whether the bar is showing, which is the same question the caption's buttons are answered
     /// by: a bar that is not drawn is not a bar a press may act on (see `PinnedCaption::wanted`).
     pub(super) wanted: bool,
+    /// The room the clock before the track is given, which is the width of its own digits: the
+    /// track is laid out around it, so a press read against a bar the clocks were not measured for
+    /// would be a press read against a track that is not drawn (see `clock_width`).
+    pub(super) clock: i32,
+}
+
+impl PinnedTransportBar {
+    /// The strip this bar was laid out in, as a question about its parts is asked.
+    pub(super) fn shape(&self) -> pin_chrome::BarShape {
+        pin_chrome::BarShape {
+            width: self.width,
+            height: self.height,
+            dpi: self.dpi,
+            interactive: self.live,
+            animated: self.animated,
+            controllable: self.controllable,
+            clock: self.clock,
+        }
+    }
 }
 
 pub(super) fn pinned_transport_geometry() -> Option<PinnedTransportBar> {
@@ -334,7 +355,10 @@ pub(super) fn pinned_transport_bar_of(pin: &PinnedPreview) -> Option<PinnedTrans
         height: band,
         dpi: pin.dpi,
         live: pin.transport_live,
+        controllable: pin.transport_controllable,
+        animated: pin.transport_animated,
         wanted: pin.chrome.bar,
+        clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
     })
 }
 
@@ -352,23 +376,48 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
         return false;
     }
 
-    let Some(part) =
-        pin_chrome::transport_part_at(x, y - bar.top, bar.width, bar.height, bar.dpi, bar.live)
-    else {
+    let Some(part) = pin_chrome::transport_part_at(bar.shape(), x, y - bar.top) else {
         return false;
     };
 
     match part {
         pin_chrome::TransportPart::Play => {
+            // A picture that plays is paused where it is pressed or resumed where it was stopped,
+            // the way a film's button is: the press is the button lit, and the release is what it
+            // does (see `pinned_transport_release`).
             update_pin_transport(|transport| transport.pressed = Some(part));
         }
         pin_chrome::TransportPart::Seek => {
-            let share = pin_chrome::transport_share_at(x, bar.width, bar.height, bar.dpi, bar.live);
+            let share = pin_chrome::transport_share_at(bar.shape(), x);
             let aim = pin_state().and_then(|pinned| {
                 pinned
                     .pin()
                     .and_then(|pin| pin_seconds_at(&pin.transport, share))
             });
+
+            // A picture that plays is not measured in seconds of a player behind it: the track
+            // runs from its first frame to its last, and a press on it names the frame to take the
+            // file to (see `AnimationPlayback` and `pin_frame_share`).
+            //
+            // **The press holds the picture where the hand landed and takes it to that frame at
+            // once**, which is the whole of what a drag of one is: a frame at a time, under a hand
+            // that is reading them, and the picture standing still until the hand lets go (see
+            // `hold_the_picture_on_its_frame`).
+            if bar.animated {
+                let Some(frame) = pin_frame_share(share) else {
+                    return false;
+                };
+
+                hold_the_picture_on_its_frame(true);
+                update_pin_fps(|fps| {
+                    fps.seeking = Some(share);
+                    fps.seeking_frame = Some(frame);
+                });
+                take_the_picture_to_frame(frame);
+                let _ = SetCapture(hwnd);
+                render_layered_preview(hwnd);
+                return true;
+            }
 
             // **A press with no second to seek to claims nothing at all, and that is the whole of
             // what this arm refuses.** There is no aim to move and no film to hold, so nothing
@@ -405,6 +454,9 @@ pub(super) unsafe fn pinned_transport_press(hwnd: HWND, x: i32, y: i32) -> bool 
         pin_chrome::TransportPart::Volume => {
             update_pin_transport(|transport| transport.pressed = Some(part));
         }
+        pin_chrome::TransportPart::Fps => {
+            update_pin_transport(|transport| transport.pressed = Some(part));
+        }
     }
 
     let _ = SetCapture(hwnd);
@@ -426,19 +478,52 @@ pub(super) fn pin_seconds_at(transport: &PinTransport, share: f64) -> Option<f64
 
 /// Carry a drag along the transport bar: the playhead follows the hand, and the file is taken
 /// there only when the pointer lets go.
+///
+/// A picture that plays is the exception and the whole of why a drag of one is a scrub: its track
+/// names frames rather than seconds of a player, so the frame under the hand is shown while the
+/// hand is still moving — one frame at a time, out of the run the media already holds (see
+/// `show_the_frame_of_the_file`).
 pub(super) unsafe fn pinned_transport_drag(hwnd: HWND, x: i32) -> bool {
     let Some(bar) = pinned_transport_geometry() else {
         return false;
     };
 
-    let dragging =
-        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.transport.seeking.is_some()));
+    let dragging = pin_state().and_then(|pinned| {
+        pinned
+            .pin()
+            .map(|pin| pin.transport.seeking.is_some() || pin.fps.seeking.is_some())
+    });
 
     if dragging != Some(true) {
         return false;
     }
 
-    let share = pin_chrome::transport_share_at(x, bar.width, bar.height, bar.dpi, bar.live);
+    let share = pin_chrome::transport_share_at(bar.shape(), x);
+    if bar.animated {
+        let frame = pin_frame_share(share);
+        let previous =
+            pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.fps.seeking_frame));
+        with_pin(|pin| {
+            pin.fps.seeking = Some(share);
+            pin.fps.seeking_frame = frame;
+        });
+
+        // A move inside the frame the hand is already on is a playhead that has not moved in the
+        // file, which is a frame painted for nothing.
+        if previous != frame {
+            if let Some(frame) = frame {
+                // **The picture is shown the frame at once where the run holds it**, and the
+                // nearest frame that is where it does not: a hand on the track is shown where the
+                // file is going while the stream that is already filling the run catches up, rather
+                // than a picture left standing on the frame the drag began on. Nothing is decoded
+                // and nothing is installed for it (see `show_the_frame_of_the_file`).
+                let _ = show_the_frame_of_the_file(frame);
+            }
+        }
+        render_layered_preview(hwnd);
+        return true;
+    }
+
     update_pin_transport(|transport| transport.seeking = pin_seconds_at(transport, share));
     render_layered_preview(hwnd);
     true
@@ -452,7 +537,7 @@ pub(super) unsafe fn pinned_transport_release(
     y: i32,
     window: &dyn PinWindow,
 ) -> bool {
-    let (part, seeking, transport) = {
+    let (part, seeking, seeking_frame, transport) = {
         // An arm that declines does not touch the pointer, and this arm declining is the ordinary
         // case: a release on the caption is a hand on a title bar, and the bar has nothing to say
         // about it. Letting go of the pointer here would re-enter `pin_capture_lost` before the
@@ -469,10 +554,11 @@ pub(super) unsafe fn pinned_transport_release(
 
         let part = pin.transport.pressed.take();
         let seeking = pin.transport.seeking;
-        (part, seeking, pin.transport)
+        let seeking_frame = pin.fps.seeking;
+        (part, seeking, seeking_frame, pin.transport)
     };
 
-    if part.is_none() && seeking.is_none() {
+    if part.is_none() && seeking.is_none() && seeking_frame.is_none() {
         return false;
     }
 
@@ -487,25 +573,27 @@ pub(super) unsafe fn pinned_transport_release(
         let still_on_it = pinned_transport_geometry()
             .map(|bar| {
                 y >= bar.top
-                    && pin_chrome::transport_part_at(
-                        x,
-                        y - bar.top,
-                        bar.width,
-                        bar.height,
-                        bar.dpi,
-                        bar.live,
-                    ) == Some(part)
+                    && pin_chrome::transport_part_at(bar.shape(), x, y - bar.top) == Some(part)
             })
             .unwrap_or(false);
 
         if still_on_it {
+            // Whether that button is this app's own hold, which is a question about the bar and
+            // not about the part: a picture that plays carries the hold, and a film the player's
+            // pause (see `PinnedPreview::transport_controllable`).
+            let controllable = pinned_transport_geometry()
+                .map(|bar| bar.controllable)
+                .unwrap_or(false);
             match part {
                 pin_chrome::TransportPart::Play => {
-                    if let Some((path, content, _, _)) = pinned_playback_state() {
+                    if controllable {
+                        toggle_the_picture_playback();
+                    } else if let Some((path, content, _, _)) = pinned_playback_state() {
                         toggle_pinned_playback(&path, content, transport);
                     }
                 }
                 pin_chrome::TransportPart::Volume => toggle_pin_volume(hwnd),
+                pin_chrome::TransportPart::Fps => toggle_pin_fps(hwnd),
                 pin_chrome::TransportPart::Seek => {}
             }
         }
@@ -520,6 +608,30 @@ pub(super) unsafe fn pinned_transport_release(
     // playing under the hand until this moment — the press ends nothing (see
     // `pinned_transport_press`) — and it goes on being the picture while the replacement opens the
     // file: the registration standing in the pin's host is what covers a relaunch.
+    // A picture that plays settles on the frame the hand stopped on, which is the frame the drag was
+    // already showing — the frame painted beside the run in hand, or the run's own nearest one — and
+    // it plays on from there rather than from where the hand began (see `settle_the_picture_on`).
+    if let Some(share) = seeking_frame {
+        let aim = pin_frame_share(share);
+        update_pin_fps(|fps| {
+            fps.seeking = None;
+            fps.seeking_frame = None;
+            if fps.open {
+                fps.dragging = false;
+                fps.held = None;
+            }
+        });
+        hold_the_picture_on_its_frame(false);
+        if let Some(frame) = aim {
+            // The frame painted beside the run goes with the hand, and the picture plays on from the
+            // nearest frame the file has given it: nothing is decoded and nothing installed for it
+            // (see `settle_the_picture_on`).
+            settle_the_picture_on(frame);
+        }
+        render_layered_preview(hwnd);
+        return true;
+    }
+
     if let Some(seconds) = seeking {
         // The aim is put back into the transport before any road below can paint from it: letting go
         // of the pointer above re-entered `pin_capture_lost`, and that road takes the aim with it —
@@ -594,7 +706,10 @@ pub(super) fn pinned_volume_panel(pin: &PinnedPreview) -> Option<pin_chrome::Vol
 /// being turned and the popup is kept open while the pointer is on it (see
 /// `app::seam::PIN_VOLUME_REGION` and `refresh_pin_volume`).
 pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
-    if pin.collapsed {
+    // A picture that plays has no level and no button to open one: a file of frames has no sound
+    // for a level to be a level of, and a speaker drawn there would be a control that does nothing
+    // (see `transport_layout`).
+    if pin.collapsed || pin.transport_animated {
         return None;
     }
 
@@ -602,7 +717,17 @@ pub(super) fn pinned_volume_button(pin: &PinnedPreview) -> Option<RECT> {
         let (width, height) = pin.window_size();
         let band = pinned_transport_height(pin.dpi, true);
         let strip_top = (height - band).max(0);
-        let in_strip = pin_chrome::transport_layout(width, band, pin.dpi, true).volume;
+        let in_strip = pin_chrome::BarShape {
+            width,
+            height: band,
+            dpi: pin.dpi,
+            interactive: true,
+            animated: false,
+            controllable: false,
+            clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
+        }
+        .layout()
+        .volume;
         Some(RECT {
             top: in_strip.top + strip_top,
             bottom: in_strip.bottom + strip_top,
@@ -647,6 +772,37 @@ pub(super) fn publish_pin_volume_region(pin: Option<&PinnedPreview>) {
 /// Take the published box away, for a pin that is no longer up (see `publish_pin_volume_region`).
 pub(super) fn clear_pin_volume_region() {
     crate::app::seam::PIN_VOLUME_REGION.publish(None);
+}
+
+/// Publish the box a wheel notch over `pin`'s pace control belongs to, or clear it where there is
+/// no pin (see `PIN_FPS_REGION` and `publish_pin_volume_region` for what this is not being asked
+/// through the lock).
+///
+/// It is the union of the button and, while it is up, the panel hanging off it, so that the first
+/// notch after the panel opens is answered by the panel rather than by nothing.
+pub(super) fn publish_pin_fps_region(pin: Option<&PinnedPreview>) {
+    let region = pin.and_then(|pin| {
+        let button = pinned_fps_button(pin)?;
+        let panel = if pin.fps.open {
+            pinned_fps_panel(pin)?.panel
+        } else {
+            button
+        };
+        let window = pin.window_box();
+        Some((
+            window.0 + button.left.min(panel.left),
+            window.1 + button.top.min(panel.top),
+            window.0 + button.right.max(panel.right),
+            window.1 + button.bottom.max(panel.bottom),
+        ))
+    });
+
+    crate::app::seam::PIN_FPS_REGION.publish(region);
+}
+
+/// Take the published box away, for a pin that is no longer up (see `publish_pin_fps_region`).
+pub(super) fn clear_pin_fps_region() {
+    crate::app::seam::PIN_FPS_REGION.publish(None);
 }
 
 /// Where a pinned sound's card's volume button opens its panel from, in the window's own
@@ -796,6 +952,255 @@ pub(super) unsafe fn pinned_volume_release(hwnd: HWND, window: &dyn PinWindow) -
     true
 }
 
+/// Whether the pointer is on the FPS button of a bar that has one.
+pub(super) fn pin_point_is_fps_button(x: i32, y: i32) -> bool {
+    pinned_transport_geometry().is_some_and(|bar| {
+        y >= bar.top
+            && pin_chrome::transport_part_at(bar.shape(), x, y - bar.top)
+                == Some(pin_chrome::TransportPart::Fps)
+    })
+}
+
+/// The popup a pin's FPS button opens, as the pointer's questions about it need it: where it is,
+/// or nothing while it is not up.
+///
+/// It hangs off the FPS button's own box, the way the volume panel hangs off the volume button's,
+/// and the two are one panel placed from two boxes rather than two panels (see
+/// `pin_chrome::volume_popup_from_button`).
+pub(super) fn pinned_fps_geometry() -> Option<pin_chrome::VolumePopup> {
+    let pinned = pin_state()?;
+    pinned_fps_panel(pinned.pin()?)
+}
+
+/// Where this pin's FPS button opens its panel from (see `pinned_fps_geometry`).
+pub(super) fn pinned_fps_panel(pin: &PinnedPreview) -> Option<pin_chrome::VolumePopup> {
+    // A drag holds the box it began on, for the volume panel's own reason: chrome and card re-lay
+    // out under the hand, and a groove moved would draw the knob away from the pointer.
+    if pin.fps.dragging {
+        return pin.fps.held;
+    }
+    let (width, _) = pin.window_size();
+    Some(pin_chrome::fps_popup_from_button(
+        pinned_fps_button(pin)?,
+        width,
+        pin.dpi,
+    ))
+}
+
+/// Where the FPS button is drawn, in the window's own coordinates.
+pub(super) fn pinned_fps_button(pin: &PinnedPreview) -> Option<RECT> {
+    if pin.collapsed || !pin.transport_animated {
+        return None;
+    }
+    let (width, height) = pin.window_size();
+    let band = pinned_transport_height(pin.dpi, true);
+    let strip_top = (height - band).max(0);
+    let in_strip = pin_chrome::BarShape {
+        width,
+        height: band,
+        dpi: pin.dpi,
+        interactive: false,
+        animated: true,
+        // The pace's button is the bar's far end, which a picture that plays carries beside its
+        // own hold — neither of them the player's (see `BarShape::controllable`).
+        controllable: pin.transport_controllable,
+        clock: pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
+    }
+    .layout()
+    .fps;
+    Some(RECT {
+        top: in_strip.top + strip_top,
+        bottom: in_strip.bottom + strip_top,
+        ..in_strip
+    })
+}
+
+/// Whether the FPS knob is being held.
+pub(super) fn pin_fps_dragging() -> bool {
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.fps.dragging))
+        .unwrap_or(false)
+}
+
+/// Take the pace back to the file's own: what a double-click on the pace's slider does.
+///
+/// A pace a hand set is a pace a second press takes back to the file's — the zero of this slider is
+/// the file rather than a level of nothing, so a reset is `wanted` cleared to `None` and the pace the
+/// pin opened at standing again (see `PinFps::detected`). The picture is rebased onto the clock here
+/// rather than left where it stood, because a drag or a wheel long enough to move the pace a long way
+/// would otherwise have the loop catch up a stretch of frames in one tick. The panel stays up: the
+/// press was on it, and what it says next is the file's own pace.
+pub(super) unsafe fn reset_pin_fps(hwnd: HWND) {
+    let mut pace = None;
+    with_pin(|pin| {
+        pin.fps.wanted = None;
+        pin.fps.target = None;
+        let detected = pin.fps.pace();
+        pin.fps.applied = i64::from(detected) * WHEEL_FPS_UNITS_PER_FRAME;
+        pace = Some(detected);
+    });
+
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            if media.media_type.is_animation() {
+                media.animation.wanted = None;
+                media.last_frame_time = Instant::now();
+            }
+        }
+    }
+
+    note_playback_trace!("fps reset {}", pace.unwrap_or(0));
+    render_layered_preview(hwnd);
+}
+
+/// A press on a pin's FPS popup: the knob is taken hold where the hand landed, and the pace is
+/// drawn there.
+///
+/// A press that is the second of a pair is the slider being put back to the file's own pace rather
+/// than a pace being set from the row it landed on (see `reset_pin_fps`). `double_click` is the
+/// caller's answer rather than this arm's own, because asking again would remember the press twice
+/// and there would never be a pair (see `pinned_press_on`).
+pub(super) unsafe fn pinned_fps_press(hwnd: HWND, x: i32, y: i32, double_click: bool) -> bool {
+    let Some(popup) = pinned_fps_geometry() else {
+        return false;
+    };
+    if x < popup.panel.left
+        || x >= popup.panel.right
+        || y < popup.panel.top
+        || y >= popup.panel.bottom
+    {
+        return false;
+    }
+
+    if double_click {
+        reset_pin_fps(hwnd);
+        return true;
+    }
+
+    let _ = SetCapture(hwnd);
+    with_pin(|pin| {
+        pin.fps.dragging = true;
+        pin.fps.held = Some(popup);
+    });
+    let pace = pin_chrome::fps_at(y, popup.track, current_animated_fps_max());
+    set_pin_fps(pace);
+    render_layered_preview(hwnd);
+    true
+}
+
+/// Carry a drag of the FPS knob: the knob follows the hand, and the picture's pace follows it.
+pub(super) unsafe fn pinned_fps_drag(hwnd: HWND, y: i32) -> bool {
+    if !pin_fps_dragging() {
+        return false;
+    }
+    let Some(popup) = pinned_fps_geometry() else {
+        return false;
+    };
+    let pace = pin_chrome::fps_at(y, popup.track, current_animated_fps_max());
+    if pin_fps_pace() != Some(pace) {
+        note_playback_trace!("fps drag {} pace {}", y, pace);
+    }
+    set_pin_fps(pace);
+    render_layered_preview(hwnd);
+    true
+}
+
+/// A release on a pin's FPS popup: the knob is let go, and the pace it was left at stands.
+pub(super) unsafe fn pinned_fps_release(hwnd: HWND, window: &dyn PinWindow) -> bool {
+    let dragging = {
+        let Some(mut pinned) = pin_state() else {
+            return false;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return false;
+        };
+        let dragging = pin.fps.dragging;
+        pin.fps.dragging = false;
+        pin.fps.held = None;
+        dragging
+    };
+    if !dragging {
+        return false;
+    }
+
+    release_the_pointer(window, hwnd.0 as isize);
+    render_layered_preview(hwnd);
+    true
+}
+
+/// Put the pace a hand asked for onto the picture on screen, and onto the frames it is to play from
+/// here: the delays the file's own frames wait are scaled by the pace asked for against the pace the
+/// file keeps, so that the relationship between them stays where its author put it (see
+/// `AnimationPlayback::delay_scale`).
+pub(super) fn set_pin_fps(pace: u32) {
+    let pace = pace.clamp(1, current_animated_fps_max());
+    with_pin(|pin| {
+        pin.fps.wanted = Some(pace);
+        // A drag or a tray row is a pace in hand: it is played at once, and no glide left over from
+        // a wheel notch before it is carried on with (see `ramp_pin_fps`).
+        pin.fps.target = None;
+        pin.fps.applied = i64::from(pace) * WHEEL_FPS_UNITS_PER_FRAME;
+    });
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            if media.media_type.is_animation() {
+                media.animation.wanted = Some(pace);
+            }
+        }
+    }
+}
+
+/// Open the FPS popup, or put it away: what a click on the FPS button does.
+pub(super) unsafe fn toggle_pin_fps(hwnd: HWND) {
+    let open = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.fps.open))
+        .unwrap_or(false);
+    set_pin_fps_open(hwnd, !open);
+}
+
+/// Put the FPS popup away, answering whether it was open — which is whether the window owes a
+/// repaint for it.
+pub(super) fn close_pin_fps() -> bool {
+    let mut closed = false;
+    if let Some(mut pinned) = pin_state() {
+        if let Some(pin) = pinned.pin_mut() {
+            closed = pin.fps.open;
+            pin.fps.open = false;
+            pin.fps.dragging = false;
+            pin.fps.held = None;
+        }
+    }
+    closed
+}
+
+unsafe fn set_pin_fps_open(hwnd: HWND, open: bool) {
+    {
+        let Some(mut pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return;
+        };
+        if pin.fps.open == open {
+            return;
+        }
+
+        pin.fps.open = open;
+        if !open {
+            pin.fps.dragging = false;
+            pin.fps.held = None;
+        }
+        // The hook reads the published box rather than this lock, so the panel's own box has to be
+        // out before the next notch arrives (see `publish_pin_fps_region`).
+        publish_pin_fps_region(Some(pin));
+    }
+
+    if open {
+        raise_pinned_window(hwnd);
+    }
+    render_layered_preview(hwnd);
+}
+
 /// Open the volume popup, or put it away: what a click on the volume button does.
 ///
 /// Opening it puts the pin's window above the player's, because what the panel floats over is the
@@ -815,9 +1220,16 @@ pub(super) unsafe fn toggle_pin_volume(hwnd: HWND) {
     set_pin_volume_open(hwnd, !open);
 }
 
-/// Open the volume popup where it is not already open: what a wheel notch over the
-/// volume button does before it moves the level, so the slider it is turning is the one
-/// the user sees (see `take_pin_volume_delta`).
+/// Open the FPS popup where it is not already open: what a wheel notch over the FPS button does
+/// before it moves the pace, so the slider it is turning is the one the user sees (see
+/// `take_pin_fps_delta`).
+pub(super) unsafe fn open_pin_fps(hwnd: HWND) {
+    set_pin_fps_open(hwnd, true);
+}
+
+/// Open the volume popup where it is not already open: what a wheel notch over the volume button
+/// does before it moves the level, so the slider it is turning is the one the user sees (see
+/// `take_pin_volume_delta`).
 pub(super) unsafe fn open_pin_volume(hwnd: HWND) {
     set_pin_volume_open(hwnd, true);
 }
@@ -1031,16 +1443,50 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
     // `pin_double_click_press`).
     let double_click = pin_double_click_press(x, y);
 
+    // **An edge of the window is the window's before any panel floating over it**, since a panel is
+    // not a frame and a press in the frame's band is the only place a resize can begin. A panel hung
+    // off a bar reaches toward the window's right and bottom edges, and a press in that band taken by
+    // the panel is a window that cannot be resized from two of its four sides while the panel is up.
+    //
+    // A pair on an edge belongs to the window's own road, as it always has: what a pair means is
+    // settled by the arms a press carries the window from (see `press_carries_the_pin`), which the
+    // `!double_click` below is what keeps the pan from taking the first press of.
     let Some(caption) = pinned_caption_geometry() else {
         return false;
     };
     let framed = caption.frame != PinFrame::None;
 
+    if framed {
+        let edge =
+            pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.resize_edge(x, y)));
+        if let Some(edge) = edge {
+            begin_pin_drag(hwnd, window, PinDragAction::Resize(edge), true);
+            return true;
+        }
+    }
+
+    // A panel the pace is being set on floats over the media the press would otherwise be aimed at,
+    // so it is answered before the bands and the corners are (see `pinned_fps_press`). The level's
+    // panel is the same answer one control along, and it is answered here rather than by
+    // `press_the_pin` so that a panel over an edge is still the edge's (see `pinned_volume_press`).
+    if pinned_fps_press(hwnd, x, y, double_click) {
+        return true;
+    }
+    if pinned_volume_press(hwnd, x, y) {
+        return true;
+    }
+
     // Anything but the volume button itself puts its popup away: the panel floats over the media,
     // and a hand that has come for the picture, the title bar or an edge is not a hand on the
     // level. The button is left out because a click on it is what puts the popup away — closing it
     // here would have the release open it straight back up (see `pinned_transport_release`).
+    // Both panels are put away by a press anywhere but the two buttons they came out of, since
+    // either floats over the media a press is usually aimed at (see `pin_point_is_volume_button`
+    // and `pin_point_is_fps_button`).
     if !pin_point_is_volume_button(x, y) && close_pin_volume() {
+        render_layered_preview(hwnd);
+    }
+    if !pin_point_is_fps_button(x, y) && close_pin_fps() {
         render_layered_preview(hwnd);
     }
 
@@ -1076,19 +1522,9 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
         render_layered_preview(hwnd);
     }
 
-    if framed {
-        let edge = {
-            let Some(pinned) = pin_state() else {
-                return false;
-            };
-            pinned.pin().and_then(|pin| pin.resize_edge(x, y))
-        };
-        if let Some(edge) = edge {
-            begin_pin_drag(hwnd, window, PinDragAction::Resize(edge), true);
-            return true;
-        }
-    }
-
+    // The window's own edge was asked about at the top of this function, before any panel floating
+    // over it, so a press in the frame's band has already begun its resize and is not asked again
+    // here (see the edge arm above and `pinned_caption_geometry`).
     if y < caption.height {
         // A press on the caption is the page letting go of the reader's focus: its walk, its buttons
         // and the empty drag area alike, which is the whole of the scope the user chose for this. Every
@@ -1186,8 +1622,7 @@ pub(super) unsafe fn press_the_pin(
     window: &dyn PinWindow,
     wants_the_keyboard: bool,
 ) -> bool {
-    let answered =
-        unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
+    let answered = unsafe { pinned_press_on(hwnd, x, y, window) };
 
     if wants_the_keyboard {
         unsafe { pin_take_focus(hwnd, window) };
@@ -1366,6 +1801,12 @@ pub(super) unsafe fn pinned_release(hwnd: HWND, x: i32, y: i32, window: &dyn Pin
     // it is the one press on a pinned window that is let go of somewhere other than where it began
     // (see `pinned_volume_press`).
     if pinned_volume_release(hwnd, window) {
+        return true;
+    }
+
+    // And a drag of the pace's knob, which is the same gesture on the other of the bar's two own
+    // controls (see `pinned_fps_press`).
+    if pinned_fps_release(hwnd, window) {
         return true;
     }
 

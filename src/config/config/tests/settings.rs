@@ -317,7 +317,11 @@ fn the_engine_settings_are_written_under_a_heading_of_their_own() {
     ] {
         assert!(under_engine.contains(key), "`{key}` is under `Engine`");
     }
-    for key in ["decode_budget_gb", "image_cache_mb"] {
+    for key in [
+        "animated_webp_budget_mb",
+        "decode_budget_gb",
+        "image_cache_mb",
+    ] {
         assert!(!under_engine.contains(key), "`{key}` is not under `Engine`");
     }
 

@@ -94,6 +94,7 @@ pub(crate) struct ViewerFacts {
     text_scroll_delta: AtomicI32,
     pin_zoom_delta: AtomicI32,
     pin_volume_delta: AtomicI32,
+    pin_fps_delta: AtomicI32,
     pin_text_size_delta: AtomicI32,
     pin_playlist_delta: AtomicI32,
     preview_under_pointer: AtomicU32,
@@ -139,6 +140,7 @@ pub(crate) struct ViewerFacts {
     pin_path_writing: AtomicU32,
     /// The five boxes, each packed the way `PublishedRegion` packs one (see there).
     pin_volume_region: AtomicU64,
+    pin_fps_region: AtomicU64,
     text_scroll_region: AtomicU64,
     text_size_region: AtomicU64,
     pin_zoom_region: AtomicU64,
@@ -200,6 +202,7 @@ impl ViewerFacts {
             text_scroll_delta: AtomicI32::new(0),
             pin_zoom_delta: AtomicI32::new(0),
             pin_volume_delta: AtomicI32::new(0),
+            pin_fps_delta: AtomicI32::new(0),
             pin_text_size_delta: AtomicI32::new(0),
             pin_playlist_delta: AtomicI32::new(0),
             preview_under_pointer: AtomicU32::new(0),
@@ -225,6 +228,7 @@ impl ViewerFacts {
             pin_path_len: AtomicU32::new(0),
             pin_path_writing: AtomicU32::new(0),
             pin_volume_region: AtomicU64::new(NO_REGION),
+            pin_fps_region: AtomicU64::new(NO_REGION),
             text_scroll_region: AtomicU64::new(NO_REGION),
             text_size_region: AtomicU64::new(NO_REGION),
             pin_zoom_region: AtomicU64::new(NO_REGION),
@@ -1480,6 +1484,11 @@ pub(crate) static PIN_ZOOM_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.pin_
 /// where the pointer is over the volume popup or the button that opens it.
 pub(crate) static PIN_VOLUME_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.pin_volume_delta);
 
+/// Wheel notches handed to a pin's pace control, on the same terms as the volume count
+/// above: signed (up is faster), swapped to zero by the reader, and added to only where
+/// the pointer is over the pace's panel or the button that opens it.
+pub(crate) static PIN_FPS_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.pin_fps_delta);
+
 /// Wheel notches handed to a pinned page's own text size, on the same terms again: a notch turned
 /// over a page with `Ctrl` held is how large that page is drawn rather than where it is (see
 /// `text_size_after_notches`).
@@ -1562,6 +1571,18 @@ pub(crate) fn presses_elsewhere() -> u64 {
 /// wheel units (120 to a notch). Signed, up being louder.
 pub(crate) fn take_pin_volume_delta() -> i32 {
     PIN_VOLUME_DELTA.swap(0, Ordering::AcqRel)
+}
+
+/// Wheel notches a pin's pace control has been given since this was last called, in wheel units
+/// (120 to a notch). Signed, up being faster.
+pub(crate) fn take_pin_fps_delta() -> i32 {
+    PIN_FPS_DELTA.swap(0, Ordering::AcqRel)
+}
+
+/// Whether a pace notch is waiting to be read, so the preview loop can keep its frame cadence for
+/// the glide it began (see `pin_volume_delta_pending`).
+pub(crate) fn pin_fps_delta_pending() -> bool {
+    PIN_FPS_DELTA.load(Ordering::Acquire) != 0
 }
 
 /// Whether a volume notch is waiting to be read, so the preview loop can keep its frame cadence
@@ -2955,6 +2976,15 @@ fn unpack_a_box(packed: u64) -> Option<(i32, i32, i32, i32)> {
 /// it hangs from, or just the button while it is closed.
 pub(crate) static PIN_VOLUME_REGION: PublishedRegion =
     PublishedRegion::of(|facts| &facts.pin_volume_region);
+
+/// The box a wheel notch over a pin's pace control belongs to: the open popup's panel and the button
+/// it hangs from, or just the button while it is closed (see `PIN_VOLUME_REGION`).
+///
+/// It is asked of before `PIN_ZOOM_REGION`, and that order is the whole of the picture's own lockout:
+/// the box published there is the whole pin, so a notch over a panel floating on the picture is the
+/// pace's and never the zoom's (see `wheel_input::pin_takes_the_wheel`).
+pub(crate) static PIN_FPS_REGION: PublishedRegion =
+    PublishedRegion::of(|facts| &facts.pin_fps_region);
 
 /// The box a wheel notch over a scrollable text preview belongs to: the journey from where the hover was
 /// opened to the preview itself, or the pinned window's box where what is pinned is a page.

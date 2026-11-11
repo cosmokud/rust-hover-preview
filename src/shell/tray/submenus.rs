@@ -30,8 +30,9 @@ use crate::app::dialogs;
 use crate::app::winget;
 use crate::config::config::{
     AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
-    PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS, DEFAULT_AUDIO_SEEK,
-    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MINIMIZE_TO,
+    PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS,
+    DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
+    DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MINIMIZE_TO,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_IMAGE,
     DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE,
     DEFAULT_VIDEO_ENGINE_FALLBACK,
@@ -149,8 +150,10 @@ pub(super) fn enable_preview_label(toggle_key: &str) -> String {
     format!("Enable Preview ({})", pin_key_label(toggle_key))
 }
 
-/// The label a `Decode Budget` item carries: the ceiling it stands for, in the unit
-/// that reads best for it, with the one the app starts at marked.
+/// The label a `Decode Budget → Ceiling` item carries: the ceiling it stands for, in the
+/// unit that reads best for it, with the one the app starts at marked. It is named for what it
+/// bounds — the ceiling on one hover's read or decode — because the submenu it is listed under
+/// holds a setting about what is kept as well (see `animated_webp_budget_label`).
 pub(super) fn decode_budget_label(gigabytes: f32) -> String {
     let label = if gigabytes < 1.0 {
         format!("{} MB", (gigabytes * 1024.0).round() as u32)
@@ -159,6 +162,18 @@ pub(super) fn decode_budget_label(gigabytes: f32) -> String {
     };
 
     default_label(&label, gigabytes == DEFAULT_DECODE_BUDGET_GB)
+}
+
+/// The label a `Memory → Animated WEBP` item carries: the room it gives a pinned picture's
+/// held run of frames, in megabytes, with the one the app starts at marked.
+pub(super) fn animated_webp_budget_label(megabytes: u32) -> String {
+    let label = if megabytes >= 1024 {
+        format!("{} GB", megabytes / 1024)
+    } else {
+        format!("{megabytes} MB")
+    };
+
+    default_label(&label, megabytes == DEFAULT_ANIMATED_WEBP_BUDGET_MB)
 }
 
 /// The `Avoid` submenu: how far a preview is kept off the item it is about, with the

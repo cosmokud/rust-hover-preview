@@ -94,6 +94,7 @@ fn a_real_font_cuts_the_name_where_the_measured_width_runs_out() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: false,
     };
@@ -321,6 +322,7 @@ fn a_caption_too_narrow_for_close_still_paints_its_bar() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: false,
     };
@@ -378,6 +380,7 @@ fn a_name_is_not_said_beside_buttons_a_caption_has_given_up() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: false,
     };
@@ -502,6 +505,7 @@ fn a_caption_is_opaque_everywhere_it_is_painted() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: false,
     };
@@ -557,6 +561,7 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: false,
     };
@@ -564,6 +569,7 @@ fn a_caption_is_repainted_when_anything_it_is_drawn_from_changes() {
         background: [30, 30, 30],
         foreground: [220, 220, 220],
         accent: [10, 140, 240],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };
@@ -1204,6 +1210,7 @@ fn a_window_s_own_states_are_said_in_the_ink_they_are_read_in() {
         background: [40, 44, 52],
         foreground: [171, 178, 191],
         accent: [97, 175, 239],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };
@@ -1411,6 +1418,7 @@ fn a_page_says_it_is_read_only_and_a_caption_for_another_kind_does_not() {
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: false,
     };
@@ -1481,6 +1489,7 @@ fn a_name_stops_at_the_pill_and_is_only_given_up_where_the_pill_takes_its_room()
         background: [250, 250, 250],
         foreground: [30, 30, 30],
         accent: [10, 90, 200],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: false,
     };
@@ -1569,6 +1578,7 @@ fn the_pills_ring_closes_at_the_end_the_words_stop_at() {
         background: [30, 32, 40],
         foreground: [220, 220, 220],
         accent: [80, 170, 240],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };

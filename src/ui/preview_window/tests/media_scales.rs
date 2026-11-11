@@ -350,23 +350,45 @@ fn a_media_decoded_at_a_place_wraps_onto_the_frame_carrying_the_file_s_first() {
     );
 }
 
-/// **A media whose head a decode never delivered wraps onto its own first frame.** A decode cancelled before the
-/// pass that begins at the file's first frame leaves no frame carrying frame zero — what it answered is installed
-/// as it came — so the wrap falls back to the first frame in hand rather than stalling on the end of the list.
+/// **A frame the media has in hand is a playhead put down on it.** A hand dragging a picture's
+/// track names a frame per column of it, and a decode per column is a drag that lags the hand it is
+/// following — so a picture whose frames were all decoded is taken to one by moving the playhead,
+/// and a frame it does not hold is answered "not in hand" rather than moved to the nearest one
+/// (see `MediaData::show_the_frame`).
 #[test]
-fn a_media_whose_head_was_never_delivered_wraps_onto_its_own_first_frame() {
-    let mut media = a_playing_media(&[5, 6, 7]);
-    media.current_frame = media.frames.len() - 1;
-    media.last_frame_time = Instant::now() - Duration::from_millis(1001);
+fn a_frame_in_hand_is_a_playhead_put_down_on_it() {
+    let mut media = a_playing_media(&[5, 6, 7, 0, 1, 2, 3, 4]);
+    media.last_frame_time = Instant::now() - Duration::from_millis(500);
 
     assert!(
-        media.advance_frame(),
-        "a file that ends on the part it began in the middle of still plays round"
+        media.show_the_frame(2),
+        "a frame of the file this media holds"
     );
     assert_eq!(
-        (media.current_frame, media.current_frame_of_file()),
-        (0, Some(5)),
-        "to its own first frame, which is the nearest thing it has to the start of the file"
+        media.current_frame_of_file(),
+        Some(2),
+        "the frame the file carries that id at"
+    );
+    assert_eq!(
+        media.current_frame, 5,
+        "at the place in the list it has, which is not the id it carries"
+    );
+
+    // The frame the hand put the picture on begins now: a delay counted from the frame before it
+    // would hold it for a stretch of somebody else's.
+    assert!(
+        media.last_frame_time.elapsed() < Duration::from_millis(50),
+        "the frame the hand took the picture to is a frame that begins here"
+    );
+
+    // And a frame the file has and this media does not is answered as not in hand, which is the
+    // caller's cue to ask for a decode: a playhead moved to the nearest frame instead is a picture
+    // left on a frame nobody named.
+    assert!(!media.show_the_frame(9), "a frame this media does not hold");
+    assert_eq!(
+        media.current_frame_of_file(),
+        Some(2),
+        "and it did not move"
     );
 }
 
@@ -766,6 +788,9 @@ fn every_animated_kind_drains_its_queue() {
             loading_start: None,
             text_state: None,
             audio_scale: None,
+            animation: AnimationPlayback::default(),
+            paused: false,
+            shown_for_the_hand: None,
         };
 
         assert!(
