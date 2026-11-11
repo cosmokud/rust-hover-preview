@@ -2015,10 +2015,15 @@ pub(super) fn show_the_frame_of(path: &Path, frame: usize) -> bool {
         return false;
     };
 
-    // **A frame of a run the media holds whole is a playhead put down on it.** Every frame of the
-    // file is in hand, so the picture plays on from where the hand left it through the rest of the
-    // file, and nothing is decoded again for it (see `MediaData::show_the_frame`).
-    if media.is_fully_loaded() && media.show_the_frame(frame) {
+    // **A run that holds the place is the answer, whether or not the file has finished streaming
+    // into it.** A box change leaves the run the pin was already playing, whole, with the frames its
+    // own decode answers with taking their places in it (see `keep_animation_place` and
+    // `merge_the_run`) — so every place the file has is a frame the run holds, and a hand that names
+    // one is shown exactly that place rather than the nearest frame of whatever little of the file
+    // has been decoded at the box the window now has. Waiting for the whole of the file before the
+    // run is asked at all is what made a drag after a resize precise only once the stream had
+    // finished, and a frame or three off for as long as it had not.
+    if media.show_the_frame(frame) {
         media.shown_for_the_hand = None;
         return true;
     }
@@ -2034,24 +2039,43 @@ pub(super) fn show_the_frame_of(path: &Path, frame: usize) -> bool {
         return true;
     }
 
-    // The nearest frame the index or the scrub holds is the next answer, and it is still shown
-    // beside the media: a hand on the track is painted where the file is going rather than left on
-    // the frame the drag began on, and the playhead the file plays from does not move for it.
-    if let Some((at, held)) =
-        pin_index::nearest(path, frame).or_else(|| pin_scrub::nearest(path, frame))
-    {
-        media.shown_for_the_hand = Some(held);
-        return at == frame;
-    }
+    // **The nearest frame is the nearest of every run this pin holds, not the nearest of the first
+    // one asked.** A box change restarts the index at the box the window has now
+    // (see `take_pin_relayout`), and a hand that moves while that walk is still filling would
+    // otherwise be shown the nearest frame of the little of it that has been read — a place several
+    // frames off the one it named, seen as the thumb skipping over frames it never painted.
+    let own = media
+        .nearest_frame_to(frame)
+        .map(|(at, held)| (at, held, true));
+    let borrowed = pin_index::nearest(path, frame)
+        .into_iter()
+        .chain(pin_scrub::nearest(path, frame))
+        .min_by_key(|(at, _)| at.abs_diff(frame))
+        .map(|(at, held)| (at, held, false));
+    let nearest = match (own, borrowed) {
+        (Some(own), Some(borrowed)) => {
+            if own.0.abs_diff(frame) <= borrowed.0.abs_diff(frame) {
+                Some(own)
+            } else {
+                Some(borrowed)
+            }
+        }
+        (own, borrowed) => own.or(borrowed),
+    };
 
-    // Nothing at all is held, so there is nothing to paint beside the media: what is left is this
-    // media's own nearest frame, which is a playhead put down where it already is rather than a
-    // frame borrowed from somewhere else.
-    media.shown_for_the_hand = None;
-    let Some((at, _)) = media.nearest_frame_to(frame) else {
+    let Some((at, held, of_the_run)) = nearest else {
         return false;
     };
-    media.show_the_frame(at);
+
+    // A frame of the run is the playhead put down where it already stands — the least of the ways to
+    // be short of the place named. One from an index or a scrub is painted beside the media instead,
+    // and the playhead the file plays from does not move for it.
+    if of_the_run {
+        media.show_the_frame(at);
+        media.shown_for_the_hand = None;
+    } else {
+        media.shown_for_the_hand = Some(held);
+    }
 
     at == frame
 }
@@ -2070,10 +2094,10 @@ pub(super) fn take_the_picture_to_frame(frame: usize) {
 /// Let go of a picture a hand has been dragging or has clicked: the frame it was left on is the
 /// frame the picture carries on from.
 ///
-/// What a hand leaves the picture on is the nearest frame the file has given it, and the rest
-/// arrives with the stream: the frame shown beside the media is dropped
-/// (`MediaData::shown_for_the_hand`), and the playhead is put down on the nearest frame the run in
-/// hand has. A run that does not hold that frame is left where it is and plays on from there —
+/// What a hand leaves the picture on is the frame of the run it holds at the place the hand stopped,
+/// and the rest arrives with the stream: the frame painted beside the media is dropped
+/// (`MediaData::shown_for_the_hand`), and the playhead is put down on the frame the run has of that
+/// place. A run that does not hold the place at all is left where it is and plays on from there —
 /// nothing is decoded for a release, and nothing is installed over the media.
 pub(super) fn settle_the_picture_on(frame: usize) {
     let Ok(mut media) = CURRENT_MEDIA.lock() else {
@@ -2085,17 +2109,16 @@ pub(super) fn settle_the_picture_on(frame: usize) {
 
     media.shown_for_the_hand = None;
 
-    // **A run still filling is the one that reaches the frame itself.** Its playhead is left alone:
-    // moving it off a place whose frames are still arriving is the picture restarted part-way
-    // through the file, which is the tail replayed rather than the file played.
-    if !media.is_fully_loaded() {
-        return;
-    }
-
     if media.current_frame_of_file() == Some(frame) {
         return;
     }
 
+    // **The playhead is put down on the place the hand left, whether or not the stream has finished**
+    // — the run a box change leaves is the whole of the file's places, with the frames drawn for the
+    // box the window has now taking their places as they land (see `keep_animation_place`). Leaving
+    // the playhead alone on a run that is not fully loaded is what made a release after a resize seek
+    // nowhere at all: the picture went on playing from wherever the resize had put it, so the frame
+    // the hand let go on was a frame the picture never reached.
     if let Some((at, _)) = media.nearest_frame_to(frame) {
         media.show_the_frame(at);
     }
