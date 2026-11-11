@@ -158,6 +158,11 @@ pub(super) fn probed_picture(path: &Path, width: u32, height: u32) -> video_play
 
 /// How long a video plays, as the probe that measured it read. A container that does not say is
 /// answered with nothing, which is a transport bar with no length to draw a playhead against.
+///
+/// **It is the file's own answer, and it is on no player's road.** The read that fills it is the
+/// media stack's header for every route except the one that hands a film to FFmpeg's player, so a
+/// machine with no FFmpeg on it still has a length for every film mpv plays — where a length taken
+/// from `ffprobe` alone left mpv's seekbar with no total at all (see `probe_video_geometry`).
 pub(super) fn video_duration(path: &Path) -> Option<f64> {
     match cached_video_geometry(path) {
         Some(ProbedGeometry::Measured(geometry)) => geometry.duration,

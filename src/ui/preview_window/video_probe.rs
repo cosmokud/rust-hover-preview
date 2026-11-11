@@ -71,8 +71,13 @@ pub(super) fn wait_bounded(mut child: Child, timeout: Duration) -> Option<Output
 ///
 /// So one `ffprobe`, no stream selection, asking for every field any of the three wants.
 pub(super) struct VideoHeader {
+    /// The **frame** size, in the file's own pixels: not the shape it is displayed at, which is
+    /// `displayed_shape`'s business (see `aspect`).
     pub(super) width: u32,
     pub(super) height: u32,
+    /// The shape of one pixel as the file states it, which is what makes a 1080 x 1080 frame a
+    /// 9:16 picture. `(1, 1)` where the file says nothing usable, which is the square pixel.
+    pub(super) aspect: (u32, u32),
     pub(super) duration: Option<f64>,
     pub(super) subtitles: SubtitleStreams,
     /// The codec name of every subtitle stream, by subtitle-relative index, which is what the
@@ -127,6 +132,10 @@ pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
             // the header already holds, so asking for it here saves the second read of the file
             // the extraction's command would otherwise be built from (see `parse_stream_codecs`).
             //
+            // `sample_aspect_ratio` is asked of every stream too, and prints `N/A` for a stream
+            // that is not a picture — the ratio is the other half of the shape the header answers
+            // (see `parse_pixel_aspect` and `displayed_shape`).
+            //
             // Both of those, and `stream_disposition=default` (which is what marks the player's
             // own first choice, see `parse_subtitle_streams`), exist in the list for the
             // subtitle answers alone — so where the `Subtitles` switch is off they are
@@ -136,9 +145,9 @@ pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
             // `codec_type=subtitle` is still asked of every stream and so still prints).
             "-show_entries",
             if subtitles_wanted() {
-                "stream=index,codec_type,codec_name,width,height:stream_disposition=default:format=duration"
+                "stream=index,codec_type,codec_name,width,height,sample_aspect_ratio:stream_disposition=default:format=duration"
             } else {
-                "stream=index,codec_type,width,height:format=duration"
+                "stream=index,codec_type,width,height,sample_aspect_ratio:format=duration"
             },
             "-of",
             "default=noprint_wrappers=1",
@@ -160,6 +169,9 @@ pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
     Some(VideoHeader {
         width,
         height,
+        // The frame pair above and the ratio here are the two halves of the displayed shape,
+        // and the ratio is read off the same first video stream rather than of any stream.
+        aspect: parse_pixel_aspect(&output_str).unwrap_or((1, 1)),
         duration,
         subtitles: parse_subtitle_streams(&output_str),
         subtitle_codecs,
@@ -167,7 +179,11 @@ pub(super) fn probe_video_header(path: &PathBuf) -> Option<VideoHeader> {
     })
 }
 
-/// The shape of the first picture a probe's flat answer describes, and how long the file is.
+/// The **frame** of the first picture a probe's flat answer describes, and how long the file is.
+///
+/// The shape answered here is the frame's own, in the file's pixels — the shape it is *displayed*
+/// at is that frame corrected by the file's pixel aspect, which `parse_pixel_aspect` reads beside
+/// this and `displayed_shape` applies (see `probe_video_geometry`).
 ///
 /// **Only the first video stream is read, and that is the whole of what this half of the parser
 /// is for.** Asking for the whole header means every stream prints its own `width` and `height`,
@@ -232,6 +248,44 @@ pub(super) fn parse_video_picture(probe: &str) -> Option<(u32, u32, Option<f64>)
 
     let (width, height) = picture?;
     Some((width, height, duration))
+}
+
+/// The shape of one pixel as the first video stream of a probe's flat answer states it, or
+/// `None` where the file says nothing usable about it.
+///
+/// `sample_aspect_ratio` is printed for every stream, so it is read the same way the frame pair
+/// is — off the first video stream alone — and a stream that is not a picture prints `N/A`, which
+/// parses to nothing here rather than to a ratio. A file that states `0:1` is stated as nothing
+/// too: a pixel of no width is not a shape. `(1, 1)` — the square pixel — is the caller's default,
+/// because a ratio the file never stated is a file that shows its frame as it holds it.
+pub(super) fn parse_pixel_aspect(probe: &str) -> Option<(u32, u32)> {
+    let mut aspect = None;
+    let mut wants_picture = false;
+    let mut seen_video = false;
+
+    for line in probe.lines() {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            continue;
+        };
+
+        match key.trim() {
+            // The same first-video-stream rule the frame pair is read with: a subtitle stream
+            // printing `N/A` here is not an answer about the picture.
+            "codec_type" => {
+                wants_picture = value.trim() == "video" && !seen_video;
+                seen_video |= value.trim() == "video";
+            }
+            "sample_aspect_ratio" if wants_picture => {
+                aspect = value.trim().split_once(':').and_then(|(n, d)| {
+                    let (n, d) = (n.trim().parse::<u32>().ok()?, d.trim().parse::<u32>().ok()?);
+                    (n > 0 && d > 0).then_some((n, d))
+                });
+            }
+            _ => {}
+        }
+    }
+
+    aspect
 }
 
 /// The subtitle streams of a probe's flat answer: how many there are and which the player would
@@ -606,12 +660,15 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // fallback on runs them for a film the engine will not take, which is the one it hands on, so
     // the player that gets it is given a geometry rather than a bare window.
     //
-    // **mpv is the case between the two: it wants the header and neither of FFmpeg's passes.**
+    // **mpv is the case between the two: it wants a header and neither of FFmpeg's passes.**
     // mpv draws the picture uncropped and finds its own sidecars, so `collect_video_crop_candidates`
     // decodes frames and `sidecar_for` walks the folder for answers mpv never reads — while the
-    // header leg it does need carries the box's width and height and the length the loop and the
-    // pin read, and names the subtitle streams in that same pass. So the header runs and the other
-    // two legs do not.
+    // shape the box is placed at and the length the loop and the pin read are one read of the file's
+    // own header. **That read is the media stack's rather than FFprobe's**, which is the whole of
+    // what keeps mpv independent of FFmpeg: a container's shape is in a source reader's media type
+    // and its length in the media source's presentation attribute, so a machine with no FFmpeg on it
+    // at all can still answer both (see `video_player::header`). FFprobe's pass is the
+    // fall-through for a container the stack will not open, not the road.
     let native = {
         // The choice the preview being probed for was built under rather than the setting of
         // now, which is the same read `video_route` makes: a probe run under one engine and a
@@ -634,26 +691,61 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // neither FFprobe nor the detector (see `video_route`).
     let mpv = video_route(path) == VideoRoute::Mpv;
 
-    // What the media engine answers with: a shape, and nothing else. No duration, because the
-    // engine does not know one until the file is playing (see `pin_duration`), and no subtitle
-    // streams, because a frame-server player has none to name (see `video_player`).
+    // What the media engine's own read of the file answers with: the shape, and the length the
+    // container states (see `video_player::header`). No subtitle streams, because the read that
+    // names them is FFprobe's and this one never asks (see `video_player`).
     let engine_header = || {
-        video_player::dimensions(path).map(|(width, height)| VideoHeader {
-            width,
-            height,
-            duration: None,
-            subtitles: SubtitleStreams::default(),
-            // Nothing read the header, so nothing knows a codec name — which is the same answer
-            // the extraction takes as "no track to copy" (see `extraction_due`).
-            subtitle_codecs: Vec::new(),
-            attachment_codecs: Vec::new(),
+        // `header` answers the frame's own size and the ratio beside it, so the displayed shape is
+        // made here — nothing below may re-apply a ratio. An engine frame is delivered without a
+        // filter chain in front of it (see `probe_video_geometry`'s crop note), so the proportion is
+        // the engine's own and has already been taken; only FFmpeg's player, which is handed the raw
+        // frame, is told about a pixel aspect (see the `vf` chain in `start_video_playback_where`).
+        video_player::header(path).map(|header| {
+            let (width, height) = video_player::displayed_shape(
+                header.frame_width,
+                header.frame_height,
+                header.aspect,
+            );
+            VideoHeader {
+                width,
+                height,
+                aspect: (1, 1),
+                // **The length the container states rather than nothing.** The engine does not know
+                // one until the file is playing, but the *container* does, and that is what a pinned
+                // film's bar is drawn against (see `pin_duration`).
+                duration: header.duration,
+                subtitles: SubtitleStreams::default(),
+                // Nothing read the streams, so nothing knows a codec name — which is the same
+                // answer the extraction takes as "no track to copy" (see `extraction_due`).
+                subtitle_codecs: Vec::new(),
+                attachment_codecs: Vec::new(),
+            }
         })
     };
 
     let (header, candidates, sidecar) = if native {
         (engine_header(), Default::default(), None)
     } else if mpv {
-        (probe_video_header(path), Default::default(), None)
+        // The media stack's own read first, because it is this app's and needs nothing installed;
+        // FFprobe's pass only where the container is one the stack will not open, which is the file
+        // that would otherwise be placed with no box and given no length at all.
+        (
+            video_player::header(path)
+                .map(|header| VideoHeader {
+                    width: header.frame_width,
+                    height: header.frame_height,
+                    // The ratio is stated rather than applied, because FFmpeg's player is the one
+                    // told about a pixel aspect while mpv applies the file's own (see `mpv_args`).
+                    aspect: header.aspect,
+                    duration: header.duration,
+                    subtitles: SubtitleStreams::default(),
+                    subtitle_codecs: Vec::new(),
+                    attachment_codecs: Vec::new(),
+                })
+                .or_else(|| probe_video_header(path)),
+            Default::default(),
+            None,
+        )
     } else {
         std::thread::scope(|scope| {
             let header = scope.spawn(|| probe_video_header(path));
@@ -717,6 +809,7 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     let VideoHeader {
         width: src_w,
         height: src_h,
+        aspect: src_aspect,
         duration: src_duration,
         subtitles,
         subtitle_codecs,
@@ -800,6 +893,12 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // are told about a crop in different terms: FFmpeg's player in pixels, and the media engine
     // as a share of the frame the rectangle was cut from (see `video_player::Crop`).
     //
+    // **The crop stays in the file's own pixels while the shape is the one it is displayed at**,
+    // which is the split `frame_width/frame_height` beside `width/height` carries: FFmpeg's player
+    // is told the rectangle in the frame's pixels and squares the pixels itself afterwards (see the
+    // `vf` chain in `start_video_playback_where`), and the engine is told the rectangle as a share
+    // of the raw frame while the destination is the displayed shape (see `Crop::frame_width`).
+    //
     // The sidecar is held beside the shape rather than looked for again at the launch, which is
     // the whole of what it is here for: `video_sidecar` reads it from this cache entry, so the
     // launch draws a film beside a subtitle file without ever touching the folder again. The
@@ -807,9 +906,10 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
     // than when the extraction finishes, because both answers are one lookup for the launch and
     // the folder is what the next probe would ask again anyway.
     let geometry = if let Some(crop) = crop {
+        let (width, height) = video_player::displayed_shape(crop.width, crop.height, src_aspect);
         VideoGeometry {
-            width: crop.width,
-            height: crop.height,
+            width,
+            height,
             frame_width: src_w,
             frame_height: src_h,
             crop: Some(crop),
@@ -827,9 +927,10 @@ pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
             subtitle_extraction_failed: false,
         }
     } else {
+        let (width, height) = video_player::displayed_shape(src_w, src_h, src_aspect);
         VideoGeometry {
-            width: src_w,
-            height: src_h,
+            width,
+            height,
             frame_width: src_w,
             frame_height: src_h,
             crop: None,

@@ -20,9 +20,9 @@
 //! lived in one file.
 
 use super::super::ids::{
-    AUDIO_SEEK_CHOICES, AVOID_CHOICES, BITMAP_SCALE_CHOICES, DECODE_BUDGET_CHOICES_GB,
-    DISK_CACHE_SIZE_CHOICES_MB, IMAGE_CACHE_SIZE_CHOICES_MB, TICK_CHOICES_MS,
-    TIMING_DELAY_CHOICES_MS, TRAY_CUSTOM_THEMES,
+    ANIMATED_WEBP_BUDGET_CHOICES_MB, AUDIO_SEEK_CHOICES, AVOID_CHOICES, BITMAP_SCALE_CHOICES,
+    DECODE_BUDGET_CHOICES_GB, DISK_CACHE_SIZE_CHOICES_MB, IMAGE_CACHE_SIZE_CHOICES_MB,
+    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CUSTOM_THEMES,
 };
 use super::super::submenus::{
     afk_timer_secs_at, audio_scale_at, background_at, dds_background_at, document_scale_at,
@@ -34,11 +34,11 @@ use crate::app::seam::{
     refresh_preview, refresh_preview_types, send_preview, trim_subtitle_cache, PreviewMessage,
 };
 use crate::config::config::{
-    sanitize_decode_budget_gb, sanitize_document_cache_mb, sanitize_general_disk_cache_mb,
-    sanitize_image_cache_mb, sanitize_image_disk_cache_mb, sanitize_text_font_scale_percent,
-    sanitize_tick_ms, AudioSeek, AvoidMode, MarkdownMode, OfficeEngine, PinMinimizeTo,
-    PinNavFileTypes, PreviewScale, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
-    VOLUME_CHOICES,
+    sanitize_animated_webp_budget_mb, sanitize_decode_budget_gb, sanitize_document_cache_mb,
+    sanitize_general_disk_cache_mb, sanitize_image_cache_mb, sanitize_image_disk_cache_mb,
+    sanitize_text_font_scale_percent, sanitize_tick_ms, AudioSeek, AvoidMode, MarkdownMode,
+    OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewScale, PreviewType, TextTheme,
+    TriggerKeyMode, VideoEngine, VOLUME_CHOICES,
 };
 use crate::formats::codecs;
 use crate::{app::startup, CONFIG};
@@ -540,6 +540,22 @@ pub(in super::super) fn set_decode_budget_gb(index: u16) {
 
     if let Ok(mut config) = CONFIG.lock() {
         config.decode_budget_gb = sanitize_decode_budget_gb(gigabytes);
+        config.save();
+    }
+}
+
+/// The room one pinned picture's held run of frames may take, in megabytes.
+///
+/// Nothing on screen is rebuilt by it: every ask for the run reads the setting as it runs, so the
+/// next pin is answered under the new room whatever it is — a smaller one simply holds its frames
+/// at a smaller size than a larger one did (see `pin_index`).
+pub(in super::super) fn set_animated_webp_budget_mb(index: u16) {
+    let Some(megabytes) = ANIMATED_WEBP_BUDGET_CHOICES_MB.get(index as usize).copied() else {
+        return;
+    };
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.animated_webp_budget_mb = sanitize_animated_webp_budget_mb(megabytes);
         config.save();
     }
 }

@@ -11,22 +11,22 @@
 //! handlers a click reaches are in `commands`.
 
 use super::ids::{
-    BACKGROUND_CHOICES, DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB,
-    DISK_CACHE_SIZE_CHOICES_MB, FONT_SIZE_CHOICES, HTML_BACKGROUND_CHOICES,
-    ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE,
-    ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE,
-    ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED, ID_TRAY_CHECK_UPDATES, ID_TRAY_DDS_BACKGROUND_BASE,
-    ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
-    ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
-    ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
-    ID_TRAY_EVERYTHING_PREVIEWS, ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE, ID_TRAY_FONT_BACKGROUND_BASE,
-    ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE,
-    ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
-    ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
-    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_IDLE_BASE,
-    ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG,
-    ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
-    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ANIMATED_WEBP_BUDGET_CHOICES_MB, BACKGROUND_CHOICES, DDS_BACKGROUND_CHOICES,
+    DECODE_BUDGET_CHOICES_GB, DISK_CACHE_SIZE_CHOICES_MB, FONT_SIZE_CHOICES,
+    HTML_BACKGROUND_CHOICES, ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_ANIMATED_WEBP_BUDGET_BASE,
+    ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE,
+    ID_TRAY_AVOID_BASE, ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED, ID_TRAY_CHECK_UPDATES,
+    ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE,
+    ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
+    ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
+    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_EVERYTHING_PREVIEWS, ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE,
+    ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
+    ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
+    ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE,
+    ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE,
+    ID_TRAY_MPV_IDLE_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME,
+    ID_TRAY_OPEN_CONFIG, ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN,
+    ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
     ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE,
     ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
@@ -47,25 +47,27 @@ use super::ids::{
     TRAY_CUSTOM_THEMES, ZOOM_BACKGROUND_CHOICES,
 };
 use super::submenus::{
-    append_afk_timer_menu, append_audio_scale_menu, append_avoid_menu, append_background_menu,
-    append_bitmap_scale_menu, append_codecs_menu, append_document_scale_menu,
-    append_engine_idle_menu, append_labeled_item, append_loop_item, append_office_engine_menu,
-    append_pin_mode_menu, append_pin_nav_menu, append_pin_seek_menu_renamed,
-    append_seek_menu_renamed, append_shuffle_item, append_tick_menu, append_video_engine_menu,
-    cache_size_label, decode_budget_label, default_label, enable_preview_label, pin_key_label,
-    pin_minimize_label, pin_update_label, remember_volume_label, system_menu_label,
-    timing_delay_menu, update_available_label, MF_RADIOCHECK,
+    animated_webp_budget_label, append_afk_timer_menu, append_audio_scale_menu, append_avoid_menu,
+    append_background_menu, append_bitmap_scale_menu, append_codecs_menu,
+    append_document_scale_menu, append_engine_idle_menu, append_labeled_item, append_loop_item,
+    append_office_engine_menu, append_pin_mode_menu, append_pin_nav_menu,
+    append_pin_seek_menu_renamed, append_seek_menu_renamed, append_shuffle_item, append_tick_menu,
+    append_video_engine_menu, cache_size_label, decode_budget_label, default_label,
+    enable_preview_label, pin_key_label, pin_minimize_label, pin_update_label,
+    remember_volume_label, system_menu_label, timing_delay_menu, update_available_label,
+    MF_RADIOCHECK,
 };
 
 use crate::app::seam::{send_preview, PreviewMessage};
 use crate::app::updates;
 use crate::config::config::{
-    sanitize_decode_budget_gb, sanitize_text_font_scale_percent, EngineIdle, MarkdownMode,
-    PinMinimizeTo, PreviewType, TextTheme, TriggerKeyMode, VideoEngine, DEFAULT_ANIMATED_SCALE,
-    DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME,
-    DEFAULT_AVOID_MODE, DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED, DEFAULT_CHECK_FOR_UPDATES,
-    DEFAULT_DDS_BACKGROUND, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND,
-    DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
+    sanitize_animated_webp_budget_mb, sanitize_decode_budget_gb, sanitize_text_font_scale_percent,
+    EngineIdle, MarkdownMode, PinMinimizeTo, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
+    DEFAULT_ANIMATED_SCALE, DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_LOOP,
+    DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AUDIO_VOLUME, DEFAULT_AVOID_MODE,
+    DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED, DEFAULT_CHECK_FOR_UPDATES, DEFAULT_DDS_BACKGROUND,
+    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
+    DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
     DEFAULT_EVERYTHING_PREVIEWS, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
     DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HOVER_DELAY_MS,
     DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
@@ -1616,19 +1618,20 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Volume"),
     );
 
-    // Add the "Performance" submenu: what the app costs while it is working — the memory it
-    // holds on to between hovers. It is the block above `Engine`, where the engines
-    // themselves are named: what is here is what is spent while they work.
+    // Add the "Performance" submenu: what the app costs while it is working — what it holds on to
+    // between hovers, on disk and in memory, and what one file may be answered for. It is the block
+    // above `Engine`, where the engines themselves are named: what is here is what is spent while
+    // they work. Its two largest children are `Disk Cache` and `Memory`, which is the one
+    // distinction that decides which of them a setting belongs under.
     let performance_menu = CreatePopupMenu().unwrap();
 
-    // Add the "Cache" submenu: what a preview's own data may cost between hovers — the frames
-    // a decoded image was shown as, which are held in memory; the pages a document was drawn
-    // as, which are files under the temp folder; the pictures the image converter developed
-    // a file into, which are files of their own beside those; and the small subtitle files a
-    // film's own embedded tracks were copied into, font attachments included, which is what
-    // makes a hover of such a film a read of a few dozen kilobytes rather than a stream of the
-    // whole film — each of them listed largest first, with the size its own cache starts at
-    // marked, and each of them saying which of the two kinds of storage it is.
+    // Add the "Disk Cache" submenu: what a preview's own *files* may cost between hovers — the
+    // pages a document was drawn as, which are files under the temp folder; the pictures the
+    // image converter developed a file into, which are files of their own beside those; and the
+    // small subtitle files a film's own embedded tracks were copied into, font attachments
+    // included, which is what makes a hover of such a film a read of a few dozen kilobytes rather
+    // than a stream of the whole film — each of them listed largest first, with the size its own
+    // cache starts at marked. What a preview holds in *memory* is under `Memory` below it.
     let (image_cache_mb, document_cache_mb, image_disk_cache_mb, general_disk_cache_mb) = CONFIG
         .lock()
         .map(|c| {
@@ -1646,45 +1649,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_GENERAL_DISK_CACHE_MB,
         ));
 
-    let cache_menu = CreatePopupMenu().unwrap();
+    let disk_cache_menu = CreatePopupMenu().unwrap();
 
-    // The labels are built once per cache and kept for as long as its sizes menu is
-    // being filled out: `AppendMenuW` is handed a pointer, so the wide strings have
-    // to outlive the call that lists them. Which size is the default is the one
-    // thing they say that differs between the caches.
-    for (name, base, held, default_mb, choices) in [
-        (
-            w!("Image (RAM)"),
-            ID_TRAY_IMAGE_CACHE_BASE,
-            image_cache_mb,
-            DEFAULT_IMAGE_CACHE_MB,
-            &IMAGE_CACHE_SIZE_CHOICES_MB[..],
-        ),
-        (
-            w!("Document (Disk)"),
-            ID_TRAY_DOCUMENT_CACHE_BASE,
-            document_cache_mb,
-            DEFAULT_DOCUMENT_CACHE_MB,
-            &DISK_CACHE_SIZE_CHOICES_MB[..],
-        ),
-        (
-            w!("Image (Disk)"),
-            ID_TRAY_IMAGE_DISK_CACHE_BASE,
-            image_disk_cache_mb,
-            DEFAULT_IMAGE_DISK_CACHE_MB,
-            &DISK_CACHE_SIZE_CHOICES_MB[..],
-        ),
-        (
-            w!("General (Disk)"),
-            ID_TRAY_GENERAL_DISK_CACHE_BASE,
-            general_disk_cache_mb,
-            DEFAULT_GENERAL_DISK_CACHE_MB,
-            &DISK_CACHE_SIZE_CHOICES_MB[..],
-        ),
-    ] {
-        let sizes_menu = CreatePopupMenu().unwrap();
-
-        let cache_labels: Vec<Vec<u16>> = choices
+    // One sizes menu, built for whichever cache is asking: `AppendMenuW` is handed a pointer, so
+    // the wide strings have to outlive the call that lists them, and each size's label says the
+    // one thing that differs between the caches — the size its own cache starts at.
+    let sizes_menu = |base: u16, held: u32, default_mb: u32, choices: &[u32]| {
+        let menu = unsafe { CreatePopupMenu().unwrap() };
+        let labels: Vec<Vec<u16>> = choices
             .iter()
             .map(|megabytes| {
                 cache_size_label(*megabytes, default_mb)
@@ -1695,49 +1667,89 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             .collect();
 
         for (index, _) in choices.iter().enumerate() {
-            let _ = AppendMenuW(
-                sizes_menu,
-                MF_STRING,
-                (base + index as u16) as usize,
-                PCWSTR(cache_labels[index].as_ptr()),
-            );
+            let _ = unsafe {
+                AppendMenuW(
+                    menu,
+                    MF_STRING,
+                    (base + index as u16) as usize,
+                    PCWSTR(labels[index].as_ptr()),
+                )
+            };
         }
 
-        // A size the menu does not offer — one a hand-edited `config.ini` asked for
-        // — leaves every item unmarked rather than marking the nearest one.
+        // A size the menu does not offer — one a hand-edited `config.ini` asked for — leaves every
+        // item unmarked rather than marking the nearest one.
         if let Some(index) = choices.iter().position(|megabytes| *megabytes == held) {
-            let _ = CheckMenuRadioItem(
-                sizes_menu,
-                base as u32,
-                (base + choices.len() as u16 - 1) as u32,
-                (base + index as u16) as u32,
-                MF_BYCOMMAND.0,
-            );
+            let _ = unsafe {
+                CheckMenuRadioItem(
+                    menu,
+                    base as u32,
+                    (base + choices.len() as u16 - 1) as u32,
+                    (base + index as u16) as u32,
+                    MF_BYCOMMAND.0,
+                )
+            };
         }
 
+        menu
+    };
+
+    // The frames a decoded picture is shown as, which are held in RAM between hovers: the one
+    // cache of the four that is not on disk, and the reason it is listed under `Memory` rather
+    // than under `Disk Cache` beside the other three (see `memory_menu` below).
+    let image_menu = sizes_menu(
+        ID_TRAY_IMAGE_CACHE_BASE,
+        image_cache_mb,
+        DEFAULT_IMAGE_CACHE_MB,
+        &IMAGE_CACHE_SIZE_CHOICES_MB[..],
+    );
+
+    for (name, base, held, default_mb, choices) in [
+        (
+            w!("Document"),
+            ID_TRAY_DOCUMENT_CACHE_BASE,
+            document_cache_mb,
+            DEFAULT_DOCUMENT_CACHE_MB,
+            &DISK_CACHE_SIZE_CHOICES_MB[..],
+        ),
+        (
+            w!("Image"),
+            ID_TRAY_IMAGE_DISK_CACHE_BASE,
+            image_disk_cache_mb,
+            DEFAULT_IMAGE_DISK_CACHE_MB,
+            &DISK_CACHE_SIZE_CHOICES_MB[..],
+        ),
+        (
+            w!("General"),
+            ID_TRAY_GENERAL_DISK_CACHE_BASE,
+            general_disk_cache_mb,
+            DEFAULT_GENERAL_DISK_CACHE_MB,
+            &DISK_CACHE_SIZE_CHOICES_MB[..],
+        ),
+    ] {
+        let sizes = sizes_menu(base, held, default_mb, choices);
         let _ = AppendMenuW(
-            cache_menu,
+            disk_cache_menu,
             MF_STRING | MF_POPUP,
-            sizes_menu.0 as usize,
+            sizes.0 as usize,
             name,
         );
     }
 
-    let _ = AppendMenuW(
-        performance_menu,
-        MF_STRING | MF_POPUP,
-        cache_menu.0 as usize,
-        w!("Cache"),
-    );
-
-    // Add the "Decode Budget" submenu: the ceiling on what one hover may decode or read
-    // for rather than on what is kept — a picture's decode, a document's bytes, the page
-    // Office exported. It is the one setting that bounds a file rather than a cache, and
-    // the only one whose smaller sizes are for a machine with less memory to spare.
-    let decode_budget_gb = CONFIG
-        .lock()
-        .map(|c| sanitize_decode_budget_gb(c.decode_budget_gb))
-        .unwrap_or(DEFAULT_DECODE_BUDGET_GB);
+    // Add the "Memory" submenu, which is everything here that is spent in RAM rather than on
+    // disk: the frames a decoded image is shown as, which are held between hovers; the ceiling
+    // one hover may decode or read *for*; and the room a pinned picture's held run of frames is
+    // given, which is what a hand on its track is shown a frame of without walking the file (see
+    // `pin_index`). The two ceilings were one item — `Decode Budget` — until a run of frames
+    // needed a room of its own, and the name stays with the ceiling it has always meant.
+    let wrapped = CONFIG.lock().map(|c| {
+        (
+            sanitize_decode_budget_gb(c.decode_budget_gb),
+            sanitize_animated_webp_budget_mb(c.animated_webp_budget_mb),
+        )
+    });
+    let (decode_budget_gb, animated_webp_budget_mb) =
+        wrapped.unwrap_or((DEFAULT_DECODE_BUDGET_GB, DEFAULT_ANIMATED_WEBP_BUDGET_MB));
 
     let budget_menu = CreatePopupMenu().unwrap();
 
@@ -1760,8 +1772,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         );
     }
 
-    // A ceiling the menu does not offer — one a hand-edited `config.ini` asked for —
-    // leaves every item unmarked rather than marking the nearest one.
+    // A ceiling the menu does not offer — one a hand-edited `config.ini` asked for — leaves every
+    // item unmarked rather than marking the nearest one.
     if let Some(index) = DECODE_BUDGET_CHOICES_GB
         .iter()
         .position(|gigabytes| *gigabytes == decode_budget_gb)
@@ -1775,11 +1787,70 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         );
     }
 
+    // And the room a pinned picture's run of frames is given, as a submenu of its own beside the
+    // ceiling: it is what a drag of an animated picture spends, and what a machine with less
+    // memory to spare turns down first.
+    let animated_webp_menu = CreatePopupMenu().unwrap();
+    let animated_webp_labels: Vec<Vec<u16>> = ANIMATED_WEBP_BUDGET_CHOICES_MB
+        .iter()
+        .map(|megabytes| {
+            animated_webp_budget_label(*megabytes)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, _) in ANIMATED_WEBP_BUDGET_CHOICES_MB.iter().enumerate() {
+        let _ = AppendMenuW(
+            animated_webp_menu,
+            MF_STRING,
+            (ID_TRAY_ANIMATED_WEBP_BUDGET_BASE + index as u16) as usize,
+            PCWSTR(animated_webp_labels[index].as_ptr()),
+        );
+    }
+
+    if let Some(index) = ANIMATED_WEBP_BUDGET_CHOICES_MB
+        .iter()
+        .position(|megabytes| *megabytes == animated_webp_budget_mb)
+    {
+        let _ = CheckMenuRadioItem(
+            animated_webp_menu,
+            ID_TRAY_ANIMATED_WEBP_BUDGET_BASE as u32,
+            (ID_TRAY_ANIMATED_WEBP_BUDGET_BASE + ANIMATED_WEBP_BUDGET_CHOICES_MB.len() as u16 - 1)
+                as u32,
+            (ID_TRAY_ANIMATED_WEBP_BUDGET_BASE + index as u16) as u32,
+            MF_BYCOMMAND.0,
+        );
+    }
+
+    // What is held in memory between hovers and what one file may be answered for drawn into: the
+    // cache first, where a hand reaches for a size, and the two ceilings under it.
+    let memory_menu = CreatePopupMenu().unwrap();
     let _ = AppendMenuW(
-        performance_menu,
+        memory_menu,
+        MF_STRING | MF_POPUP,
+        image_menu.0 as usize,
+        w!("Image"),
+    );
+    let _ = AppendMenuW(
+        memory_menu,
         MF_STRING | MF_POPUP,
         budget_menu.0 as usize,
         w!("Decode Budget"),
+    );
+    let _ = AppendMenuW(
+        memory_menu,
+        MF_STRING | MF_POPUP,
+        animated_webp_menu.0 as usize,
+        w!("Animated WEBP"),
+    );
+
+    let _ = AppendMenuW(
+        performance_menu,
+        MF_STRING | MF_POPUP,
+        memory_menu.0 as usize,
+        w!("Memory"),
     );
 
     // Add the "Explorer Poll" submenu: how often the loop looks at the

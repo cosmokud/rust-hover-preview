@@ -504,14 +504,8 @@ fn a_models_band_leaves_the_chrome_and_the_frame_to_the_pin() {
     let (play_x, play_y) = (0..bar.width)
         .map(|x| (x, bar.top + bar.height / 2))
         .find(|(x, y)| {
-            pin_chrome::transport_part_at(
-                *x,
-                *y - bar.top,
-                bar.width,
-                bar.height,
-                bar.dpi,
-                bar.live,
-            ) == Some(pin_chrome::TransportPart::Play)
+            pin_chrome::transport_part_at(bar.shape(), *x, *y - bar.top)
+                == Some(pin_chrome::TransportPart::Play)
         })
         .expect("a live bar draws a play button");
     assert!(

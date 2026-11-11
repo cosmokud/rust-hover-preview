@@ -98,6 +98,26 @@ pub(super) struct MediaData {
     /// Nothing at all for a media of another kind, whose frame is not a
     /// sound's card and is never painted from the configuration.
     pub(super) audio_scale: Option<PreviewScale>,
+    /// The pace this picture plays at, for one that plays: its own, and the one a hand asked for
+    /// at the pin's FPS control (see `AnimationPlayback`).
+    pub(super) animation: AnimationPlayback,
+    /// Whether this picture is held on its own frame rather than playing, for one a hand paused at
+    /// the pin's own button: the loop that walks the frames leaves one that is held where it is
+    /// until the button is pressed again (see `MediaData::holds_its_frame`).
+    ///
+    /// It is a field of the media rather than of the pin because a decode begun at a frame lands a
+    /// media of its own, exactly as the drag's own hold is an atomic rather than a flag on the
+    /// media (see `PICTURE_HELD_ON_ITS_FRAME`) — and because the loop's walk is a question about
+    /// the media alone.
+    pub(super) paused: bool,
+    /// The frame a hand on a picture's track is shown while the frame it named is not in the run yet:
+    /// one frame taken from the index or the scrub, with this media's playhead and stream untouched
+    /// (see `show_the_frame_of`).
+    ///
+    /// It is not a playhead. A hand's frame is a place being read rather than where the file plays
+    /// from, so `current_frame_of_file` never reads it while `current_frame` — and every repaint,
+    /// bubble and zoom drawn from the frame on screen — does.
+    pub(super) shown_for_the_hand: Option<Arc<ImageFrame>>,
 }
 
 /// Paint a band of a layered window one flat opaque colour, for a window whose media is not there.
@@ -147,6 +167,34 @@ pub(super) fn fill_band_hit_testable(out: &mut [u8], width: u32, origin_y: u32, 
     fill_band(out, width, origin_y, height, [1, 1, 1, 1]);
 }
 
+/// Paint that least pixel over the holes of a band, leaving every pixel that is anything at all
+/// exactly as it was.
+///
+/// It is `fill_band_hit_testable`'s claim confined to what is *nothing*: a row of a band is not
+/// always the pin's to claim whole, because a pixel a picture painted is the picture's — so what is
+/// written here is only ever the pixel whose coverage is zero, and a pixel with any coverage at all
+/// is a pixel Windows already hit-tests as this window's (see `claim_the_holes_under_the_strips`).
+pub(super) fn claim_the_holes(out: &mut [u8], width: u32, origin_y: u32, height: u32) {
+    let stride = width as usize * 4;
+    if stride == 0 {
+        return;
+    }
+
+    let rows = out.len() / stride;
+    let first = (origin_y as usize).min(rows);
+    let last = (origin_y as usize + height as usize).min(rows);
+    for row in first..last {
+        let Some(pixels) = out.get_mut(row * stride..row * stride + stride) else {
+            return;
+        };
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            if pixel[3] == 0 {
+                *pixel = [1, 1, 1, 1];
+            }
+        }
+    }
+}
+
 /// Paint a band of a layered window with the backdrop its media is composited over, for the rows and
 /// the columns a picture has been carried off.
 ///
@@ -167,7 +215,11 @@ pub(super) fn fill_band_hit_testable(out: &mut [u8], width: u32, origin_y: u32, 
 ///
 /// A transparent backdrop is written as the band's own emptiness, which is what the caller has
 /// already left there — the same pixels either way, and the fill is the one road that has a colour
-/// to place per *column* and so cannot be folded into the flat one above.
+/// to place per *column* and so cannot be folded into the flat one above. What the emptiness is
+/// given instead is the pin's least claim, because it is emptiness *of a picture the pin is drawn
+/// by* and not a hole to the desktop: a picture with transparency in it is a band windows hands
+/// the press to whatever stands behind it while the window is being carried past the picture's own
+/// rows (see `claim_the_holes`).
 pub(super) fn fill_band_backdrop(
     out: &mut [u8],
     width: u32,
@@ -236,7 +288,14 @@ fn fill_backdrop_span(
     // as the caller left the band — the emptiness above, which a layered window shows the desktop
     // through — and not written as the black the colour table would make of it.
     let (b, g, r) = match background {
-        TransparentBackground::Transparent => return,
+        TransparentBackground::Transparent => {
+            for pixel in span.as_chunks_mut::<4>().0.iter_mut() {
+                if pixel[3] == 0 {
+                    *pixel = [1, 1, 1, 1];
+                }
+            }
+            return;
+        }
         TransparentBackground::Black => (0, 0, 0),
         TransparentBackground::White => (255, 255, 255),
         TransparentBackground::Checkerboard => {
@@ -277,15 +336,27 @@ fn fill_band(out: &mut [u8], width: u32, origin_y: u32, height: u32, flat: [u8; 
 
 impl MediaData {
     /// The frame on screen, which a document the engine draws does not have.
+    ///
+    /// A frame a hand is shown from the index or the scrub is the frame on screen for as long as the
+    /// hand is there (see `shown_for_the_hand`), which is what makes a repaint, a bubble and a zoom
+    /// follow it without asking.
     pub(super) fn current_frame(&self) -> Option<&ImageFrame> {
-        self.frames.get(self.current_frame).map(AsRef::as_ref)
+        match &self.shown_for_the_hand {
+            Some(frame) => Some(frame.as_ref()),
+            None => self.frames.get(self.current_frame).map(AsRef::as_ref),
+        }
     }
 
     /// The place the frame on screen is at in its own file, which is the place a picture that plays
     /// carries across a decode — never the frame's index among the frames in hand, which a release
     /// and a decode begun part-way through the file both move (see `ImageFrame::file_index`).
+    ///
+    /// And never a frame a hand is being shown (`shown_for_the_hand`): that is a place being read,
+    /// not where the file plays from.
     pub(super) fn current_frame_of_file(&self) -> Option<usize> {
-        self.current_frame().map(|frame| frame.file_index)
+        self.frames
+            .get(self.current_frame)
+            .map(|frame| frame.file_index)
     }
 
     /// The index among the frames in hand of the frame carrying the file's first frame, which is
@@ -293,14 +364,69 @@ impl MediaData {
     ///
     /// The frames are the file's in play order and not from its first frame — a decode begun at a
     /// place answers the file's tail and then its head — so the start of the file is found by the
-    /// index each frame carries rather than by its place in the list. A media whose head a cancelled
-    /// decode never delivered has no frame carrying `0`, and its own first frame is the nearest thing
-    /// it has to a start.
-    fn frame_of_file_start(&self) -> usize {
+    /// index each frame carries rather than by its place in the list.
+    ///
+    /// `None` for a run whose head was never delivered: a decode begun part-way whose head pass was
+    /// cancelled, so the run holds the file's tail and nothing else. Such a run has no start to wrap
+    /// to — wrapping to its own first frame is a picture that plays its tail and then replays it for
+    /// good — so nothing wraps to it (see `advance_frame`).
+    fn frame_of_file_start(&self) -> Option<usize> {
+        self.frames.iter().position(|frame| frame.file_index == 0)
+    }
+
+    /// The frame of this media nearest `index` in the file, with where it is: what a hand is shown
+    /// while the frame it named is still being decoded (see `show_the_frame_of_the_file`).
+    pub(super) fn nearest_frame_to(&self, index: usize) -> Option<(usize, Arc<ImageFrame>)> {
         self.frames
             .iter()
-            .position(|frame| frame.file_index == 0)
-            .unwrap_or(0)
+            .map(|frame| (frame.file_index.abs_diff(index), frame.file_index, frame))
+            .min_by_key(|(distance, file_index, _)| (*distance, *file_index))
+            .map(|(_, file_index, frame)| (file_index, Arc::clone(frame)))
+    }
+
+    /// How much of this media's frames may be held at once.
+    ///
+    /// **A pinned picture is held whole up to the budget the tray's `Performance → Memory → Animated
+    /// WEBP` row names**, which is what leaves the run it decoded the single source of truth a drag,
+    /// a click and a release all read: a run that fits is decoded once and every frame of it stays,
+    /// so a frame a hand names is a playhead put down on it rather than a decode begun again (see
+    /// `show_the_frame_of` and `retained_room`'s counterpart in `pin_index`, which reads a run this
+    /// one cannot hold). A hover keeps the constant, since a hover is never dragged.
+    pub(super) fn retained_room(&self) -> usize {
+        if self.media_type.is_animation() && super::pinned() {
+            crate::config::config::animated_webp_budget_bytes()
+        } else {
+            ANIMATION_RETAINED_BYTES
+        }
+    }
+
+    /// Put the playhead on the frame the file carries `index` at, answering whether that frame is
+    /// one of those in hand.
+    ///
+    /// A picture whose frames have all been decoded is taken to one by moving the playhead rather
+    /// than by decoding the file again from that place: a hand dragging a bar across a picture of a
+    /// few thousand frames asks for a frame per column of the track, and a decode per column is a
+    /// drag that lags the hand it is following (see `show_the_frame_of_the_file`). A frame of a file
+    /// that is still streaming is answered "not in hand", which is the caller's cue to show the
+    /// nearest frame it has instead of this one.
+    pub(super) fn show_the_frame(&mut self, index: usize) -> bool {
+        if !self.media_type.is_animation() {
+            return false;
+        }
+        let Some(at) = self
+            .frames
+            .iter()
+            .position(|frame| frame.file_index == index)
+        else {
+            return false;
+        };
+
+        self.current_frame = at;
+        // The clock is set to now rather than left where it stood: the frame the hand put the
+        // picture on is a frame that begins here, and a delay counted from the frame before it
+        // would hold it for a stretch of somebody else's.
+        self.last_frame_time = Instant::now();
+        true
     }
 
     pub(super) fn current_pixels(&self) -> &[u8] {
@@ -446,19 +572,46 @@ impl MediaData {
     /// meaning anything once the decoder is done with the file — there is nothing
     /// left to hold back, and the frames it finished with are frames of the
     /// animation whatever is in hand.
+    ///
+    /// A place the run already holds is that place sharpened rather than a second frame pushed
+    /// beside it. A box change keeps the whole of the run the pin was playing around the frames its
+    /// own decode answers with (see `merge_the_run`), and that decode goes on answering the same
+    /// file's places in the same order — so each frame that arrives takes the place of the one drawn
+    /// for the box before it. Pushed instead, they would hold the file's head and its tail twice,
+    /// one under the other, and the playhead would be moved off every place a hand names by however
+    /// many duplicates arrived behind it (see `show_the_frame_of`).
     pub(super) fn sync_shared_frames(&mut self) {
         let Some(shared) = self.shared_frames.clone() else {
             return;
         };
 
         let retained_bytes: usize = self.frames.iter().map(|frame| frame.pixels.len()).sum();
-        if retained_bytes < ANIMATION_RETAINED_BYTES || self.is_fully_loaded() {
+        if retained_bytes < self.retained_room() || self.is_fully_loaded() {
             let result = shared.lock();
             if let Ok(mut streamed) = result {
                 if !streamed.queue.is_empty() {
-                    // A streamed frame is made by the decoder thread and handed over once,
-                    // so wrapping it here is the only allocation it ever needs.
-                    self.frames.extend(streamed.queue.drain(..).map(Arc::new));
+                    // A streamed frame is made by the decoder thread and handed over once, so wrapping
+                    // it here is the only allocation it ever needs.
+                    //
+                    // **A place the run already holds is that place sharpened rather than a second
+                    // frame pushed beside it.** A box change keeps the whole of the run the pin was
+                    // playing around the frames its own decode answers with (see `merge_the_run`), and
+                    // that decode goes on answering the same file's places in the same order — so each
+                    // frame that arrives takes the place of the one drawn for the box before it.
+                    // Pushed instead, they would hold the file's head and its tail twice, one under the
+                    // other, and the playhead would be moved off every place a hand names by however
+                    // many duplicates arrived behind it (see `show_the_frame_of`).
+                    for frame in streamed.queue.drain(..) {
+                        let frame = Arc::new(frame);
+                        match self
+                            .frames
+                            .iter()
+                            .position(|held| held.file_index == frame.file_index)
+                        {
+                            Some(at) => self.frames[at] = frame,
+                            None => self.frames.push(frame),
+                        }
+                    }
                 }
             }
         }
@@ -482,8 +635,8 @@ impl MediaData {
     /// Two things have to hold before a frame is given back, and both of them are
     /// about a promise the player makes to itself: the frames that are dropped are
     /// frames that have to be decoded again. The window has to be full, which is
-    /// the only thing a release is for — an animation that fits in
-    /// `ANIMATION_RETAINED_BYTES` is held whole, plays from beginning to end and
+    /// the only thing a release is for — an animation that fits `retained_room` is held
+    /// whole, plays from beginning to end and
     /// wraps back into the frame it started on, and the file is read once for all
     /// of it. And the decoder has to still be working, which is settled under the
     /// same lock the decoder takes as it ends a pass: a decoder that has finished
@@ -498,7 +651,7 @@ impl MediaData {
             return;
         }
 
-        if retained_bytes < ANIMATION_RETAINED_BYTES {
+        if retained_bytes < self.retained_room() {
             return;
         }
 
@@ -527,6 +680,15 @@ impl MediaData {
         // Pull in any new frames from streaming decode
         self.sync_shared_frames();
 
+        // **A picture a hand paused stands on the frame it was paused on.** The button at the start
+        // of its bar holds it here rather than anywhere a player could be told, so the walk below is
+        // not asked to move it at all (see `hold_the_picture_itself`). The frames a held picture
+        // takes in above are taken all the same — the decode is the file's own and stops on its own
+        // queue — so letting go plays on from the frames already in hand.
+        if self.paused {
+            return false;
+        }
+
         let frame_count = self.frames.len();
         if frame_count <= 1 {
             return false;
@@ -540,6 +702,7 @@ impl MediaData {
             let delay = Duration::from_millis(effective_frame_delay_ms(
                 &self.media_type,
                 self.frames[self.current_frame].delay_ms,
+                self.animation,
             ) as u64);
             if self.last_frame_time.elapsed() >= delay {
                 let next = self.current_frame + 1;
@@ -553,7 +716,18 @@ impl MediaData {
                     // the file's first frame: looping back to the list's first frame is only right
                     // for a file whose list begins at zero, since a decode begun at a place answers
                     // the file's tail and then its head.
-                    self.current_frame = self.frame_of_file_start();
+                    //
+                    // A run whose head was never delivered has no such frame, and it is held where
+                    // it stands rather than wrapped: wrapping to its own first frame is the file's
+                    // tail replayed from the top for as long as the picture is up — the cycle a
+                    // cancelled head pass used to turn into.
+                    let Some(start) = self.frame_of_file_start() else {
+                        self.last_frame_time = Instant::now()
+                            .checked_sub(delay)
+                            .unwrap_or_else(Instant::now);
+                        break;
+                    };
+                    self.current_frame = start;
                     self.last_frame_time += delay;
                     advanced = true;
                 } else {
@@ -587,6 +761,7 @@ impl MediaData {
         let waiting_for = Duration::from_millis(effective_frame_delay_ms(
             &self.media_type,
             self.frames[self.current_frame].delay_ms,
+            self.animation,
         ) as u64)
             + Duration::from_secs(1);
         if self.last_frame_time.elapsed() > waiting_for {
@@ -787,6 +962,9 @@ pub(super) fn engine_svg_media() -> MediaData {
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
+        paused: false,
+        shown_for_the_hand: None,
     }
 }
 
@@ -855,5 +1033,8 @@ pub(super) fn static_image_media(frame: Arc<ImageFrame>, kind: MediaType) -> Med
         loading_start: None,
         text_state: None,
         audio_scale: None,
+        animation: AnimationPlayback::default(),
+        paused: false,
+        shown_for_the_hand: None,
     }
 }

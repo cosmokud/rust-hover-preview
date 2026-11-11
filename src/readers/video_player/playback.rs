@@ -1,7 +1,7 @@
 //! What the app asks of a running engine — start, stop, pause, seek, resize — and the file-level
 //! probes that decide whether one is started at all. See the module above for the reasoning.
 
-use super::frame_copy::{open_stream, surface, unpack_pair};
+use super::frame_copy::{open_stream, presentation_duration, surface, unpack_pair};
 use super::session::{Session, Take};
 use crate::formats::{codecs, head};
 use once_cell::sync::Lazy;
@@ -191,7 +191,53 @@ thread_local! {
 /// asked before there is anything to play: the reader opens the file, reports the first
 /// video stream's own media type and is dropped, so a hover that is turned down costs a
 /// header parse rather than a player.
+///
+/// It is [`header`]'s shape half alone: a caller that wants the film's length as well as its
+/// size asks for the header itself (see `probe_video_geometry`).
+///
+/// It is asked of by the media engine's own measurements rather than by the app, whose geometry
+/// probe reads the header directly: a size and nothing else is exactly what a perf run of the frame
+/// pipeline needs (see `tests::video_take_cost`).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
+    let header = header(path)?;
+
+    Some(displayed_shape(
+        header.frame_width,
+        header.frame_height,
+        header.aspect,
+    ))
+}
+
+/// What a film's own header says about it, read by the media stack rather than by an external
+/// program: the size of the frame, the shape of one of its pixels, and how long the file plays.
+///
+/// **It is the shape and the length a film needs before any player is begun, and neither needs
+/// FFprobe to answer.** The reader is opened over the file, reports the first video stream's own
+/// media type, is asked for the media source's presentation length — which is the container's
+/// answer rather than a decoder's — and is dropped. It is the same parse the engine's own
+/// `dimensions` has always been, widened by the one fact the length is, so that a machine with no
+/// FFmpeg on it can still place a film mpv plays and draw a seekbar against it.
+///
+/// **No decoder chain is built here**, which is what separates it from `can_play`: the header is
+/// the container's, so a file this machine cannot decode still has one this can read.
+#[derive(Clone, Copy)]
+pub struct Header {
+    /// The frame's own size, in the file's pixels — not the size it is displayed at, which
+    /// `displayed_shape` is the rule for.
+    pub frame_width: u32,
+    pub frame_height: u32,
+    /// The shape of one pixel as the file states it, `(1, 1)` where it says nothing usable.
+    pub aspect: (u32, u32),
+    /// How long the file plays, where the container says.
+    pub duration: Option<f64>,
+}
+
+/// The header of `path`, read by the media stack Windows has (see [`Header`]).
+///
+/// It is `dimensions` with the two facts it was always opening the file for but never answered:
+/// the pixel shape as a ratio rather than already applied, and the container's own length.
+pub fn header(path: &Path) -> Option<Header> {
     if !codecs::mf_started() {
         return None;
     }
@@ -209,20 +255,44 @@ pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
         return None;
     }
 
-    let aspect = unsafe { media_type.GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO) }.unwrap_or(1 << 32);
-    let (aspect_width, aspect_height) = unpack_pair(aspect);
+    // A file that states no ratio states the square pixel, which is what the layout assumes for
+    // one (see `displayed_shape`).
+    let aspect = unsafe { media_type.GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO) }
+        .ok()
+        .map(unpack_pair)
+        .filter(|(n, d)| *n > 0 && *d > 0)
+        .unwrap_or((1, 1));
 
-    // A pixel that is not square makes the picture a different shape from its frame, and
-    // which axis grows is whichever the ratio takes past one — a DVD's 720 x 480 is shown
-    // as 4:3 by a pixel that is wider than it is tall.
-    let (width, height) = match (aspect_width, aspect_height) {
-        (0, _) | (_, 0) => (frame_width, frame_height),
-        (w, h) if w > h => (frame_width.saturating_mul(w) / h, frame_height),
-        (w, h) if h > w => (frame_width, frame_height.saturating_mul(h) / w),
-        _ => (frame_width, frame_height),
-    };
+    Some(Header {
+        frame_width,
+        frame_height,
+        aspect,
+        duration: presentation_duration(&reader),
+    })
+}
 
-    Some((width, height))
+/// The shape a frame is displayed at, given its own size and the shape of one of its pixels.
+///
+/// A pixel that is not square makes the picture a different shape from its frame, and which
+/// axis grows is whichever the ratio takes past one — a DVD's 720 x 480 is shown as 4:3 by a
+/// pixel that is wider than it is tall, and a file that stores 1080 x 1080 through a 9:16 pixel
+/// is a portrait film. Both players read the same ratio from different places (the source
+/// reader here, FFprobe's `sample_aspect_ratio` there), so this rule is stated once.
+pub fn displayed_shape(width: u32, height: u32, aspect: (u32, u32)) -> (u32, u32) {
+    let (n, d) = (u64::from(aspect.0), u64::from(aspect.1));
+    if width == 0 || height == 0 || n == 0 || d == 0 || n == d {
+        return (width, height);
+    }
+
+    // Rounded half up rather than truncated, and never down to nothing: a zero-height shape is
+    // not a picture, and `d > n` only ever grows the height.
+    if n > d {
+        let shown = ((u64::from(width) * n + d / 2) / d) as u32;
+        (shown.max(1), height)
+    } else {
+        let shown = ((u64::from(height) * d + n / 2) / n) as u32;
+        (width, shown.max(1))
+    }
 }
 
 /// The part of a video's own frame a preview is drawn from: the rectangle the geometry probe's
@@ -269,6 +339,12 @@ pub struct Picture {
 /// A crop as the rectangle the engine's frame transfer is asked for — the same region, in the
 /// normalized coordinates that call takes — or nothing at all for a rectangle with no area in
 /// it or a frame with no size.
+///
+/// **The frame this is normalized over is the raw one**, the decoded frame as the file holds it,
+/// while the surface it is transferred into is the displayed shape (`Picture::width/height`, which
+/// the file's pixel aspect has already been applied to — see [`displayed_shape`]). The two are
+/// deliberately different spaces: the rectangle is cut out of the frame in the frame's pixels, and
+/// the engine draws it into a surface whose size is the shape the picture is shown at.
 pub(super) fn source_rect(crop: Crop) -> Option<MFVideoNormalizedRect> {
     if crop.width == 0 || crop.height == 0 || crop.frame_width == 0 || crop.frame_height == 0 {
         return None;

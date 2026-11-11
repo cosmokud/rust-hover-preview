@@ -5,10 +5,11 @@ use crate::formats::lists;
 use crate::readers::tone_map::Curve;
 
 use super::defaults::{
-    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_MARK_OFFSET_Y,
-    DEFAULT_AUDIO_VOLUME, DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED, DEFAULT_CHECK_FOR_UPDATES,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_EVERYTHING_PREVIEWS,
-    DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
+    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_FPS_MAX, DEFAULT_ANIMATED_SCALE_PERCENT,
+    DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_MARK_OFFSET_Y, DEFAULT_AUDIO_VOLUME,
+    DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED, DEFAULT_CHECK_FOR_UPDATES, DEFAULT_DECODE_BUDGET_GB,
+    DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_EVERYTHING_PREVIEWS, DEFAULT_F3D_PATH,
+    DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH,
     DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
     DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE, DEFAULT_PIN_ZOOM_BOUNCE_GATE,
@@ -223,6 +224,9 @@ pub struct AppConfig {
     /// Vertical pixel alignment offset for the audio preview mark beside the filename.
     pub audio_mark_offset_y: f32,
     pub webp_playback_fps: u32,
+    /// The top a pinned animation's FPS slider opens at: 1 frame a second at the bottom of
+    /// it, the file's own pace where it is drawn, and this at the top (see `PinFps`).
+    pub animated_fps_max: u32,
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
     /// cache off, so every preview is decoded again.
     pub image_cache_mb: u32,
@@ -651,8 +655,18 @@ pub struct AppConfig {
     ///
     /// The one setting here that bounds a file rather than a cache: a reader is
     /// handed it before it allocates, so a file larger than the budget is answered
-    /// with no preview instead of with memory the app may not get.
+    /// with no preview instead of with memory the app may not get. The tray lists it
+    /// as `Decode Budget → Ceiling`, under the room an animated WebP's run of frames
+    /// is given (see `animated_webp_budget_mb`).
     pub decode_budget_gb: f32,
+    /// What one pinned picture's held run of frames may take, in megabytes.
+    ///
+    /// A picture that plays is read once, in the background, and every frame of it is kept so
+    /// that a hand on its track is shown whatever frame it names at once (see `pin_index`). This
+    /// is what bounds that run: the frames are held at the pin's own size while they fit, and at
+    /// the largest size that does when they do not. It is `Memory → Animated WEBP` in the
+    /// tray, and it is the one setting under that submenu that is about what is *kept*.
+    pub animated_webp_budget_mb: u32,
     /// Whether a video is decoded on the graphics card rather than on a core, which is the
     /// `Video` row under `Performance → Hardware Acceleration` in the tray.
     ///
@@ -825,6 +839,7 @@ impl Default for AppConfig {
             pin_zoom_bounce_power: DEFAULT_PIN_ZOOM_BOUNCE_POWER,
             audio_mark_offset_y: DEFAULT_AUDIO_MARK_OFFSET_Y,
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
+            animated_fps_max: DEFAULT_ANIMATED_FPS_MAX,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
             image_background: DEFAULT_IMAGE_BACKGROUND,
             zoom_background: DEFAULT_ZOOM_BACKGROUND,
@@ -891,6 +906,7 @@ impl Default for AppConfig {
             libreoffice_idle: EngineIdle::Away,
             afk_timer_seconds: DEFAULT_AFK_TIMER_SECS,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
+            animated_webp_budget_mb: DEFAULT_ANIMATED_WEBP_BUDGET_MB,
             video_hw_accel: DEFAULT_VIDEO_HW_ACCEL,
             hdr_tone_map: DEFAULT_HDR_TONE_MAP,
             hdr_exposure: DEFAULT_HDR_EXPOSURE,

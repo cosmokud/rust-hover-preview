@@ -15,6 +15,17 @@ use super::setting_types::{OfficeEngine, VideoEngine};
 pub(super) const CONFIG_SECTION: &str = "settings";
 pub const DEFAULT_WEBP_PLAYBACK_FPS: u32 = 90;
 pub const MAX_WEBP_PLAYBACK_FPS: u32 = 90;
+/// The top a pinned animation's FPS slider opens at unless the file says otherwise:
+/// the fastest pace a picture that plays is offered by this app's own control.
+///
+/// It is a ceiling rather than a pace: a file that plays slower than this plays at the pace it was
+/// written at, and a hand that asks for more is answered up to here. A `config.ini` of the user's
+/// own may name another top for it, up to `MAX_ANIMATED_FPS_MAX` (see `sanitize_animated_fps_max`).
+pub const DEFAULT_ANIMATED_FPS_MAX: u32 = 180;
+/// The ceiling a hand-edited `animated_fps_max` is reduced to. Past a display's own
+/// refresh there is nothing a frame a second more can be seen at, and the figure
+/// leaves room for a file whose own pace is read out on the way up to it.
+pub const MAX_ANIMATED_FPS_MAX: u32 = 960;
 /// The volume a video is played at unless the file says otherwise: silent, so a hover
 /// never makes a sound the pointer did not ask for.
 pub const DEFAULT_VIDEO_VOLUME: u32 = 0;
@@ -397,6 +408,21 @@ pub const MAX_GENERAL_DISK_CACHE_MB: u32 = 131072;
 pub const DEFAULT_DECODE_BUDGET_GB: f32 = 1.0;
 pub const MIN_DECODE_BUDGET_GB: f32 = 0.25;
 pub const MAX_DECODE_BUDGET_GB: f32 = 64.0;
+/// How much of an animated WebP's (or a GIF's) run of frames one pinned window may hold decoded,
+/// in megabytes.
+///
+/// It is a ceiling on what is *kept* rather than on what one decode may ask for, which is why it is
+/// a setting of its own under `Performance → Decode Budget`: the run is what a hand on a picture's
+/// track is shown a frame of without walking the file to it, and the whole of it has to be in
+/// memory for that to be a frame of memory rather than a decode (see `pin_index`). The frames are
+/// held at the pin's own size while they fit and at the largest size that does when they do not, so
+/// the ceiling decides how sharp a dragged picture is and never whether the drag works.
+///
+/// Half a gigabyte by default: a few hundred frames at a preview's box, and small enough that a
+/// long animation does not become the reason the app is using memory.
+pub const DEFAULT_ANIMATED_WEBP_BUDGET_MB: u32 = 512;
+pub const MIN_ANIMATED_WEBP_BUDGET_MB: u32 = 64;
+pub const MAX_ANIMATED_WEBP_BUDGET_MB: u32 = 8192;
 /// The curve a picture whose samples are light is brought into eight bits with: an EXR, a
 /// Radiance HDR and a float texture hold light rather than levels, so what they need is
 /// the transfer function a PNG has already been through and a curve that brings a range
@@ -466,6 +492,13 @@ pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
         1..=MAX_WEBP_PLAYBACK_FPS => value,
         _ => MAX_WEBP_PLAYBACK_FPS,
     }
+}
+
+/// The top of a pinned animation's FPS slider: `1` is left as it is, because a picture
+/// held on one frame a second is a thing a hand can ask for, and anything past the
+/// ceiling is reduced to it rather refused.
+pub fn sanitize_animated_fps_max(value: u32) -> u32 {
+    value.clamp(1, MAX_ANIMATED_FPS_MAX)
 }
 
 /// The decoded-image cache size in megabytes. `0` is a cache that is switched
@@ -606,6 +639,33 @@ pub fn sanitize_decode_budget_gb(value: f32) -> f32 {
     } else {
         value.clamp(MIN_DECODE_BUDGET_GB, MAX_DECODE_BUDGET_GB)
     }
+}
+
+/// The room one pinned picture's held run of frames may take, in megabytes.
+///
+/// A value that is not a number, or one that is zero, falls back to the default for the reason
+/// every other ceiling here does: a run of nothing is a picture whose track cannot be dragged at
+/// all, which is the failure this setting exists to bound rather than to cause. Anything past the
+/// ceiling is clamped to it.
+pub fn sanitize_animated_webp_budget_mb(value: u32) -> u32 {
+    if value == 0 {
+        DEFAULT_ANIMATED_WEBP_BUDGET_MB
+    } else {
+        value.clamp(MIN_ANIMATED_WEBP_BUDGET_MB, MAX_ANIMATED_WEBP_BUDGET_MB)
+    }
+}
+
+/// What one pinned picture's held run of frames may take, in bytes.
+///
+/// Read from the configuration each time it is asked for rather than captured, the way the decode
+/// budget is: an edit applies to the next pin without a restart.
+pub fn animated_webp_budget_bytes() -> usize {
+    let megabytes = crate::CONFIG
+        .lock()
+        .map(|config| sanitize_animated_webp_budget_mb(config.animated_webp_budget_mb))
+        .unwrap_or(DEFAULT_ANIMATED_WEBP_BUDGET_MB);
+
+    megabytes as usize * 1024 * 1024
 }
 
 /// The stops a picture whose samples are light is shifted by. A value that is not a number

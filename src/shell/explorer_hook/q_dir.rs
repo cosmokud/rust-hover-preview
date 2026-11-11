@@ -20,7 +20,8 @@
 
 use windows::core::PCWSTR;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, FindWindowExW, GetParent, SendMessageTimeoutW, SMTO_ABORTIFHUNG, SMTO_BLOCK,
+    EnumChildWindows, FindWindowExW, GetGUIThreadInfo, GetParent, GetWindowThreadProcessId,
+    SendMessageTimeoutW, GUITHREADINFO, SMTO_ABORTIFHUNG, SMTO_BLOCK,
 };
 
 use super::*;
@@ -255,6 +256,67 @@ pub(super) fn item_path(
     );
 
     answer
+}
+
+/// The list the **keyboard's own** focus is on, out of the frame the keyboard is driving — or nothing
+/// where that frame is no Q-Dir frame, or where no pane is holding the focus.
+///
+/// **A pane holds the keyboard itself.** Q-Dir puts the file's own `SysListView32` down as the focused
+/// window of its thread, so `GetGUIThreadInfo` names the list a key pressed at that moment goes to. The
+/// panes beside it are drawn the same way and hold no focus, which is what tells the pane the user is
+/// walking from the panes that merely have a row selected from before: Q-Dir leaves a pane's selection
+/// exactly as it was when **a click in another pane** moved to it, and one of those is drawn in the
+/// shell's grey inactive colour rather than the blue of the listing the keyboard is in (measured on
+/// 12.83: `active` and `focus` both name the pane's list, and every other pane is a list with a row
+/// still selected).
+///
+/// The focus is read of the **thread** rather than of the foreground window, because the two are not the
+/// same question: `GetFocus` answers for the thread that calls it — the app's own — and the window in
+/// front is not the thread's to answer for.
+///
+/// A frame whose list the keyboard is in and whose panes say nothing about a focus answers nothing here,
+/// which is left to the caller rather than to a second rule: a pane that is not the one the keyboard is
+/// in must never be previewed in, so a guess is worse than no preview at all.
+pub(super) fn focused_list(hwnd: HWND) -> Option<HWND> {
+    let frame = crate::shell::window_classes::the_frame_of(hwnd);
+    if frame.is_invalid() || !crate::app::seam::a_q_dir_is_previewed(frame) {
+        return None;
+    }
+
+    let mut q_dir_pid = 0u32;
+    // Safety: asks the desktop which thread draws the frame it gave the handle of, into this
+    // function's own integer and dereferencing nothing.
+    let thread = unsafe { GetWindowThreadProcessId(frame, Some(&mut q_dir_pid)) };
+    if thread == 0 {
+        return None;
+    }
+
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    // Safety: the struct is this frame's own and is filled by the call it is handed to; it names no
+    // window of another process's to be read through, it is asked about one.
+    if unsafe { GetGUIThreadInfo(thread, &mut info) }.is_err() {
+        return None;
+    }
+
+    let focus = info.hwndFocus;
+    if focus.is_invalid() || crate::shell::window_classes::the_frame_of(focus) != frame {
+        return None;
+    }
+
+    // The list the focused window **is**, or the one it is drawn in: Q-Dir leaves the pane its whole
+    // focus — the list on 12.83 — and a shell that puts the focus on a window holding it is the same
+    // pane either way.
+    let list = the_q_dir_list_of(focus)?;
+
+    // **And the window handed in is answered only where it is that pane's own.** A frame is asked about
+    // whichever pane holds the keyboard, and a window inside one of its panes is asked about that pane:
+    // the other panes hold no keyboard, so nothing of theirs is a listing a key was pressed in.
+    let relates = hwnd_is_same_or_ancestor(list, hwnd) || hwnd_is_same_or_ancestor(hwnd, list);
+
+    relates.then_some(list)
 }
 
 /// The list a pane draws its rows in, out of the window an item of it reports as its own.

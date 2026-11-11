@@ -54,18 +54,22 @@ pub(crate) use menu::{
 };
 pub(crate) use page_marks::paint_text_caret;
 pub(crate) use playlist::{
-    name_travel, paint_playlist, playlist_edge_at, playlist_layout, playlist_row, playlist_row_at,
-    playlist_row_height, playlist_scroll_at, playlist_scroll_max, playlist_step_pick,
-    playlist_thumb_grab, playlist_track_holds, PlaylistBand, PlaylistEdge, PlaylistLayout,
-    PlaylistRow, WHEEL_ROWS as PLAYLIST_WHEEL_ROWS,
+    name_travel, paint_playlist, playlist_edge_at, playlist_layout, playlist_reach, playlist_row,
+    playlist_row_at, playlist_row_height, playlist_scroll_at, playlist_scroll_max, playlist_shown,
+    playlist_step_pick, playlist_thumb_grab, playlist_track_holds, search_close_holds,
+    search_field_holds, search_field_top, search_index_at, snapped_playlist_height, PlaylistBand,
+    PlaylistEdge, PlaylistLayout, PlaylistRow, PlaylistSearch, WHEEL_ROWS as PLAYLIST_WHEEL_ROWS,
 };
 pub(crate) use primitives::{fill_disc, fill_ring, stroke_segment, surface_pixels, ChromePalette};
 pub(crate) use transport::{
-    paint_card_control, paint_transport, paint_volume_popup, transport_layout, transport_part_at,
-    transport_share_at, volume_popup_bounds, volume_popup_from_button, volume_share_at,
+    clock_width, fps_at, fps_popup_from_button, paint_card_control, paint_fps_popup,
+    paint_fps_popup_text, paint_transport, paint_volume_popup, transport_part_at,
+    transport_share_at, volume_popup_bounds, volume_popup_from_button, volume_share_at, BarShape,
     ControlGlyph, TransportPart, TransportState, VolumePopup,
 };
 
+#[cfg(test)]
+use crate::config::config::DEFAULT_ANIMATED_FPS_MAX;
 #[cfg(test)]
 use crate::text::text_paint::{self, DibSurface};
 #[cfg(test)]
@@ -83,8 +87,9 @@ use primitives::{
 pub(crate) use transport::volume_popup_layout;
 #[cfg(test)]
 use transport::{
-    draw_pause_glyph, draw_play_glyph, draw_track_step, size_in, volume_thumb_row,
-    VOLUME_COLLAR_PIXELS, VOLUME_PANEL_GAP, VOLUME_PANEL_WIDTH, VOLUME_THUMB_RADIUS,
+    draw_pause_glyph, draw_play_glyph, draw_track_step, fps_popup_text_rect, fps_thumb_row,
+    size_in, strip_gap, volume_thumb_row, FPS_PANEL_TEXT_GAP, VOLUME_COLLAR_PIXELS,
+    VOLUME_PANEL_GAP, VOLUME_PANEL_WIDTH, VOLUME_THUMB_RADIUS,
 };
 #[cfg(test)]
 use windows::Win32::Foundation::RECT;

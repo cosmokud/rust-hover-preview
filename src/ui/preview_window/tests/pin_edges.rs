@@ -627,6 +627,9 @@ fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
         dragging: None,
         transport: PinTransport::default(),
         volume: PinVolume::default(),
+        transport_animated: false,
+        transport_controllable: false,
+        fps: PinFps::default(),
         audio_hovered: None,
         audio_pressed: None,
         audio_window_buttons: false,
@@ -1335,4 +1338,118 @@ fn a_bound_fills_an_engine_drawn_file_up_as_well_as_down() {
 
     stand_pin(previous_pin);
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// **A press in an edge band of the window is the window's even where a panel floating over the media
+/// reaches it.** The pace's panel hangs off the far end of a picture's bar and reaches toward the
+/// window's right and bottom edges, so a press there taken by the panel is a window that cannot be
+/// resized from two of its four sides while the slider is up (see `pinned_press_on`).
+///
+/// The press a panel away from every edge still takes the pace, which is the half that says the
+/// panel is answered at all rather than dropped for the frame around it.
+#[test]
+fn a_press_in_the_frame_band_of_the_pace_panel_resizes_the_window() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    // A picture at a box whose bottom edge the panel hangs over: the panel is `VOLUME_PANEL_HEIGHT`
+    // tall and reaches past a window this short, which is the overlap the report is about.
+    let content = (100, 100, 400, 190);
+    let mut pin = with_pin_zoom(overlay_pin(content, PinChrome::always()), 1.0);
+    pin.transport_bar = true;
+    pin.transport_animated = true;
+    pin.fps.open = true;
+    pin.fps.detected = 24.0;
+    let panel = pinned_fps_panel(&pin)
+        .expect("a picture that plays carries a pace panel")
+        .panel;
+    let (_, height) = pin.window_size();
+    stand_pin(Some(pin));
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        let mut media = create_loading_media(300, 90);
+        media.media_type = MediaType::AnimatedGif;
+        *current = Some(media);
+    }
+
+    let hwnd = HWND(0x1000 as *mut _);
+    // The recorder stands in for the window a drag is measured against, which is the machinery a test
+    // has no desktop for (see `PinWindow` and `RecordedPinWindow`).
+    let window = RecordedPinWindow::with(
+        hwnd.0 as isize,
+        Some((content.0 + 2, content.1 + 2)),
+        Some(content),
+    );
+    let at = |x: i32, y: i32| {
+        pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.resize_edge(x, y)))
+            .expect("a pin standing")
+    };
+    let pace = pin_fps_pace();
+
+    // Inside the panel, and inside the window's bottom edge band.
+    let (x, y) = ((panel.left + panel.right) / 2, height - 2);
+    assert!(
+        x >= panel.left && x < panel.right && y >= panel.top && y < panel.bottom,
+        "the point is inside the panel as well: {panel:?}"
+    );
+    assert_eq!(
+        at(x, y),
+        Some(PinResize {
+            left: false,
+            top: false,
+            right: false,
+            bottom: true,
+        }),
+        "and it is on the window's bottom edge"
+    );
+    let answered = unsafe { pinned_press_on(hwnd, x, y, &window) };
+    assert!(answered, "the press is answered");
+    assert!(
+        matches!(
+            pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging)),
+            Some(PinDrag {
+                action: PinDragAction::Resize(edge),
+                ..
+            }) if edge.bottom && !edge.left && !edge.top && !edge.right
+        ),
+        "and it begins the resize of the bottom edge rather than a drag of the pace"
+    );
+    assert!(!pin_fps_dragging(), "the knob is not taken hold of");
+    assert_eq!(pin_fps_pace(), pace, "and the pace is left where it was");
+
+    // The drag the edge began is let go of before the pace is asked, so that what the second press
+    // answers is read off the press alone.
+    with_pin(|pin| pin.dragging = None);
+    assert!(
+        pin_state()
+            .and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging))
+            .is_none(),
+        "nothing is carried before the second press"
+    );
+
+    // The same panel, away from every edge: the pace is what a press there is. The panel is taller
+    // than this box, so the row used is one of its own that is inside all four bands.
+    let (x, y) = ((panel.left + panel.right) / 2, panel.top + 40);
+    assert_eq!(at(x, y), None, "a point of the panel off the frame");
+    assert!(
+        unsafe { pinned_press_on(hwnd, x, y, &window) },
+        "the press is answered"
+    );
+    assert!(pin_fps_dragging(), "and the knob is taken hold of");
+    assert!(
+        pin_state()
+            .and_then(|pinned| pinned.pin().and_then(|pin| pin.dragging))
+            .is_none(),
+        "with no drag of the window begun"
+    );
+
+    with_pin(|pin| {
+        pin.fps.dragging = false;
+        pin.fps.held = None;
+    });
+    stand_pin(previous_pin);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
 }

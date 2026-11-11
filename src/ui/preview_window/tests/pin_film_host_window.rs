@@ -886,9 +886,16 @@ fn an_owned_pin_takes_a_hovered_film_up_by_promoting_its_host() {
             .any(|line| line.contains("pause")),
         "the film is neither frozen nor released: it simply carries on"
     );
+    // **The one read a take-up owes is the crop's own question**: what area the player says it is
+    // drawing the film into, asked once for the client the source answers with (see
+    // `pin_film_thumbnail::the_pictures_area`). Nothing a second launch would ask for is asked — no
+    // frame, no position, no output state — and no player is begun for it.
+    let reads = mpv_ipc::noted_reads();
     assert!(
-        mpv_ipc::noted_reads().is_empty(),
-        "and no frame is read back off it for a second launch"
+        reads
+            .iter()
+            .all(|read| read == &format!("{}:osd-dimensions", hover.pid)),
+        "no frame is read back off it for a second launch: {reads:?}"
     );
     assert_eq!(
         hover_film_host::hover_film_host(),

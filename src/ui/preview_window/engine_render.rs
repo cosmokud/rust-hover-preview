@@ -186,6 +186,14 @@ pub(super) fn named_as(path: &Path, kind: PreviewType) -> bool {
         .unwrap_or(false)
 }
 
+/// The top of a pinned picture's FPS slider, as the setting names it (see `animated_fps_max`).
+pub(super) fn current_animated_fps_max() -> u32 {
+    CONFIG
+        .lock()
+        .map(|cfg| sanitize_animated_fps_max(cfg.animated_fps_max))
+        .unwrap_or(DEFAULT_ANIMATED_FPS_MAX)
+}
+
 pub(super) fn current_webp_playback_fps() -> u32 {
     CONFIG
         .lock()

@@ -487,6 +487,10 @@ pub(super) fn refresh_pin_chrome(
     // because the tick is where the panel's own state is asked of the pin rather than of a lock the
     // hook cannot take (see `publish_pin_volume_region`).
     publish_pin_volume_region(Some(pin));
+    // And the pace's control, published on the same clock for the same reason: the hook asks the box
+    // before it asks the picture's own, so a notch over a pace panel is never the zoom's (see
+    // `PIN_FPS_REGION`).
+    publish_pin_fps_region(Some(pin));
 
     // The card's menu is asked about on this clock as well: it is a panel over the card, and
     // where the pointer is on it is a question the same tick answers — the row under the hand
@@ -567,7 +571,9 @@ pub(super) fn refresh_pin_chrome(
         // that draws one is held up by it, though — a sound's popup hangs off a button on the
         // card rather than off a strip, and `bar` for a kind with no strip would otherwise be
         // stuck true for as long as the popup is open.
-        let bar = pin.transport_bar && (bar || pin.volume.open);
+        // A strip the popup came out of stays showing while it is open, whichever of the bar's two
+        // own controls opened it (see `TransportPart::Volume` and `TransportPart::Fps`).
+        let bar = pin.transport_bar && (bar || pin.volume.open || pin.fps.open);
 
         shown = (pin.chrome.caption, pin.chrome.bar) != (caption, bar);
         pin.chrome.caption = caption;
@@ -1110,6 +1116,125 @@ pub(super) const PIN_VOLUME_SETTLE_TICKS: u32 = 15;
 /// A wheel's own units per percent of the level: one 120-unit notch is still exactly
 /// `VOLUME_WHEEL_STEP` percent (`WHEEL_DELTA / VOLUME_WHEEL_STEP`).
 pub(super) const WHEEL_LEVEL_UNITS_PER_PERCENT: i64 = WHEEL_DELTA as i64 / VOLUME_WHEEL_STEP as i64;
+
+/// The pace's own fine units: one whole frame, which is what one wheel notch moves it by. A level is a
+/// percent and a pace is a count of frames a second, so the notch a hand turns is one frame either way
+/// and a smooth wheel's sub-notch travel is kept as the fraction of one it reported.
+pub(super) const WHEEL_FPS_UNITS_PER_FRAME: i64 = WHEEL_DELTA as i64;
+
+/// One wheel message's travel added to a requested pace held in wheel units, so that a smooth wheel
+/// or a precision touchpad moves the pace continuously rather than only once a whole notch has
+/// accumulated. A pace has no zero: the bottom of its range is one frame a second and the top is the
+/// file's own ceiling, so that is where it is held.
+pub(super) fn fps_after_wheel_delta(units: i64, delta: i32, max: u32) -> i64 {
+    let top = i64::from(max.max(1));
+    (units + i64::from(delta)).clamp(WHEEL_FPS_UNITS_PER_FRAME, top * WHEEL_FPS_UNITS_PER_FRAME)
+}
+
+/// The whole pace a wheel-unit request is drawn and played at, rounded to the nearest frame.
+pub(super) fn fps_from_wheel_units(units: i64) -> u32 {
+    let per = WHEEL_FPS_UNITS_PER_FRAME;
+    ((units + per / 2) / per).max(1) as u32
+}
+
+/// Which wheel-unit pace a notch in hand is added to: the carry it kept, but only where the carry
+/// still belongs to the pace the pin is at.
+///
+/// The level's own re-base one control along, and for the level's own reason: a drag or a tray row
+/// moved the pace since, and applying the notch to that carry would move the knob back to where the
+/// older pace was. A glide in flight is the pin's own pace still on its way to where the wheel asked,
+/// so its carry is where the wheel is going and is kept whole (see `ramp_pin_fps`).
+pub(super) fn fps_wheel_base_units(carry: Option<i64>, pace: u32) -> i64 {
+    let fresh = i64::from(pace) * WHEEL_FPS_UNITS_PER_FRAME;
+    match carry {
+        Some(units) if fps_from_wheel_units(units) == pace => units,
+        _ => fresh,
+    }
+}
+
+/// Ask the pin's pace to go to `units`, a wheel's request in its own fine units (one frame a notch):
+/// the slider is drawn at once from where the pace is and the applied pace glides there on the next
+/// ticks (see `ramp_pin_fps`).
+pub(super) fn set_pin_fps_target(units: i64) {
+    let top = i64::from(current_animated_fps_max().max(1));
+    let target = units.clamp(WHEEL_FPS_UNITS_PER_FRAME, top * WHEEL_FPS_UNITS_PER_FRAME);
+    note_playback_trace!("fps target {}", fps_from_wheel_units(target));
+    with_pin(|pin| {
+        // The glide begins where the slider is drawn, which is what `pace()` answers before `target`
+        // is set — hence the order (see `PinFps::pace`).
+        let shown = i64::from(pin.fps.pace());
+        pin.fps.applied = shown * WHEEL_FPS_UNITS_PER_FRAME;
+        pin.fps.target = Some(target);
+    });
+}
+
+/// Step the applied pace one tick toward a wheel's target, never past it and never backwards.
+///
+/// The level's glide one control along, and for its reason: a notch that landed on its pace the
+/// moment it was turned would be a notch that jumped, and the picture's delays are re-scaled only
+/// once the pace has arrived (see `ramp_pin_fps` and `PinFps::pace`). The last tick writes the exact
+/// target, so a whole notch settles on precisely one frame rather than near it.
+pub(super) fn ramp_pin_fps() {
+    let pace = {
+        let Some(mut pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return;
+        };
+        let fps = &mut pin.fps;
+        let Some(target) = fps.target else {
+            return;
+        };
+
+        let gap = target - fps.applied;
+        if gap == 0 {
+            fps.target = None;
+            return;
+        }
+
+        // A share of the gap, and at least one fine unit while any gap is left: a small gap would
+        // otherwise round to no step at all and the pace would stick short of its target.
+        let share = (gap as f32 * PIN_VOLUME_RAMP_SHARE).round() as i64;
+        let step = share.abs().max(1) * gap.signum();
+        let applied = fps.applied + step;
+        let landed = applied == target;
+        let applied = if landed { target } else { applied };
+        fps.applied = applied;
+        // The pace the slider shows is written as it goes, so the glide that lands leaves the pace it
+        // landed on behind rather than falling back on whatever a hand set before it.
+        fps.wanted = Some(fps_from_wheel_units(applied));
+        if landed {
+            fps.target = None;
+        }
+        fps_from_wheel_units(applied)
+    };
+
+    // The picture is played at the pace the slider has got to, which is what the delay scale is read
+    // from: a pace only written at the end of the glide would be a picture that jumped a frame time
+    // once the knob stopped (see `AnimationPlayback::delay_scale`).
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        if let Some(media) = media.as_mut() {
+            if media.media_type.is_animation() {
+                media.animation.wanted = Some(pace);
+            }
+        }
+    }
+}
+
+/// Whether a pace is still on its way: a wheel's target not yet reached, or a wheel notch waiting to
+/// be read. It is what keeps the loop at the frame cadence while a wheel is turning the pace — the
+/// glide is only as smooth as the ticks it lands on, and the pin's own wait is four times the frame's
+/// (see `pin_volume_is_moving`).
+pub(super) fn pin_fps_is_moving() -> bool {
+    if crate::app::seam::pin_fps_delta_pending() {
+        return true;
+    }
+
+    pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.fps.target.is_some()))
+        .unwrap_or(false)
+}
 
 /// One wheel message's travel added to a requested level held in wheel units, so that a smooth
 /// wheel or a precision touchpad moves the level continuously rather than only once a whole

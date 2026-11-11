@@ -30,14 +30,8 @@ pub(super) fn message_point(lparam: LPARAM) -> (i32, i32) {
 pub(super) fn pin_point_is_volume_button(x: i32, y: i32) -> bool {
     let on_the_bar = pinned_transport_geometry().is_some_and(|bar| {
         y >= bar.top
-            && pin_chrome::transport_part_at(
-                x,
-                y - bar.top,
-                bar.width,
-                bar.height,
-                bar.dpi,
-                bar.live,
-            ) == Some(pin_chrome::TransportPart::Volume)
+            && pin_chrome::transport_part_at(bar.shape(), x, y - bar.top)
+                == Some(pin_chrome::TransportPart::Volume)
     });
 
     on_the_bar
