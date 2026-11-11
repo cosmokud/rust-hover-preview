@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **A film whose pixels are not square is shown portrait rather than squashed** — a file that stores 1080 x 1080 pixels it is displayed as 9:16 was laid out as a square box and the picture inside it was drawn squashed, because only the frame size was measured and the pixel shape the file states was thrown away. The preview now takes the shape the film is displayed at in the hover, the pin and the bubble, and the picture is resampled to square pixels at that shape, so a portrait film is shown portrait.
 - **A pinned picture with transparency under its chrome can be pressed again** — a `.png` or an `.apng` with alpha in the rows the caption and the transport bar are drawn in left those pixels empty, and a layered window is hit-tested by the shape of its pixels, so the strips were drawn over a hole the press fell through: the title bar and the seek bar came out under a hand that could not click a single button on them. Every road a pinned band is composed by now writes the pin's least claim — one part in 255, which is a change no eye can see — on the pixels the picture left with no coverage and no other, so a pixel the picture painted stays the picture's and a hole in it is the pin's. The hover's own window is untouched: the pixels its picture leaves empty are still what a click reaches the listing through.
 
 ## [0.5.3] - 2026-11-10

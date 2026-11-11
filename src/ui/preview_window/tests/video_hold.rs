@@ -1028,3 +1028,130 @@ fn a_sidecar_beside_a_subtitled_film_is_drawn_in_preference_to_its_own_tracks() 
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The shape a file is *displayed* at is its frame corrected by the shape of its own pixel, and
+/// that is the shape a preview is placed at — a file storing 1080 x 1080 through a 9:16 pixel is
+/// a portrait film, not a square one.
+///
+/// The rule is `displayed_shape`'s, shared with the media engine's own measurement, and it only
+/// ever grows the axis the ratio points at: a square pixel changes nothing, and a ratio the file
+/// never stated (or stated as zero) is a file shown as it holds its frame.
+#[test]
+fn the_displayed_shape_of_a_frame_is_its_own_shape_corrected_by_its_pixel() {
+    assert_eq!(
+        video_player::displayed_shape(1080, 1080, (9, 16)),
+        (1080, 1920),
+        "a 1080 x 1080 frame shown through a 9:16 pixel is a 9:16 portrait picture, which is the \
+         shape the file is displayed at and therefore the shape its box is placed at"
+    );
+    assert_eq!(
+        video_player::displayed_shape(720, 480, (64, 45)),
+        (1024, 480),
+        "and a DVD's frame is shown wider than it holds: 720 x 480 through 64:45 is 1024 x 480, \
+         rounded half up rather than truncated"
+    );
+    assert_eq!(
+        video_player::displayed_shape(1920, 1080, (1, 1)),
+        (1920, 1080),
+        "a square pixel is the frame it is in, which is what every ordinary file answers"
+    );
+    assert_eq!(
+        video_player::displayed_shape(1920, 1080, (0, 1)),
+        (1920, 1080),
+        "and a ratio of no width is a ratio the file never stated, not a shape of nothing"
+    );
+    assert_eq!(
+        video_player::displayed_shape(0, 1080, (9, 16)),
+        (0, 1080),
+        "and a frame with an axis of nothing is left as it is rather than grown out of a pane"
+    );
+}
+
+/// The pixel aspect comes out of the same one pass as the frame, and the streams that are not
+/// pictures printing `N/A` neither become the ratio nor erase the frame's own pair.
+///
+/// The capture is one FFprobe wrote for a film storing 1080 x 1080 that displays as 9:16, with a
+/// subtitle stream and an audio stream printed after its picture: the shape of the file is the
+/// *pair* of answers below, and `displayed_shape` is what joins them into the box a hover is
+/// placed at.
+#[test]
+fn an_anamorphic_file_answers_the_pixel_shape_of_its_first_picture() {
+    let probe = "index=0\n\
+                 codec_type=video\n\
+                 codec_name=h264\n\
+                 width=1080\n\
+                 height=1080\n\
+                 sample_aspect_ratio=9:16\n\
+                 DISPOSITION:default=1\n\
+                 index=1\n\
+                 codec_type=audio\n\
+                 codec_name=aac\n\
+                 sample_aspect_ratio=N/A\n\
+                 DISPOSITION:default=1\n\
+                 index=2\n\
+                 codec_type=subtitle\n\
+                 codec_name=subrip\n\
+                 width=N/A\n\
+                 height=N/A\n\
+                 sample_aspect_ratio=N/A\n\
+                 DISPOSITION:default=0\n\
+                 duration=1440.500000\n";
+
+    assert_eq!(
+        parse_video_picture(probe),
+        Some((1080, 1080, Some(1440.5))),
+        "the frame pair is the picture's own and is left as the file holds it: the displayed shape \
+         is worked out from this pair and the ratio rather than stored in place of it"
+    );
+    assert_eq!(
+        parse_pixel_aspect(probe),
+        Some((9, 16)),
+        "and the ratio is the first video stream's, the `N/A`s the streams after it print neither \
+         becoming a ratio nor erasing the one that was there"
+    );
+    assert_eq!(
+        video_player::displayed_shape(1080, 1080, (9, 16)),
+        (1080, 1920),
+        "which together are the portrait shape the film is displayed at"
+    );
+
+    // A file whose pixels are square: the pair is the shape and the ratio changes nothing, so
+    // every ordinary film keeps the box it always had.
+    let square = "index=0\n\
+                  codec_type=video\n\
+                  codec_name=h264\n\
+                  width=1920\n\
+                  height=1080\n\
+                  sample_aspect_ratio=1:1\n\
+                  DISPOSITION:default=1\n\
+                  duration=90.000000\n";
+
+    assert_eq!(
+        parse_video_picture(square),
+        Some((1920, 1080, Some(90.0))),
+        "a square-pixel film is its own frame"
+    );
+    assert_eq!(
+        parse_pixel_aspect(square),
+        Some((1, 1)),
+        "and says so, which is the same answer as saying nothing"
+    );
+    assert_eq!(
+        video_player::displayed_shape(1920, 1080, (1, 1)),
+        (1920, 1080),
+        "so nothing about a normal file's preview changes"
+    );
+
+    // The ratio a probe never printed is no ratio at all, and `probe_video_header` reads that as
+    // the square pixel rather than as a shape of its own.
+    assert_eq!(
+        parse_pixel_aspect("codec_type=video\nwidth=640\nheight=480\n"),
+        None,
+        "a header that never stated a ratio states nothing, which the caller reads as 1:1"
+    );
+    assert_eq!(
+        parse_pixel_aspect("codec_type=video\nsample_aspect_ratio=0:1\n"),
+        None,
+        "and a pixel of no width is not a shape either"
+    );
+}

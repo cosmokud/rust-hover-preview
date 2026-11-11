@@ -1048,6 +1048,12 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
 /// holds is a codec's own arrangement of the colour and this side wants the one the compositor
 /// reads.
 ///
+/// **The pixels are squared before the frame is covered**, because `force_original_aspect_ratio`
+/// weighs a frame in its own space: a film whose pixel is 9:16 wide is already a portrait picture,
+/// but the cover crop would be chosen as if it were square and the middle of the film would be cut
+/// in the wrong place. `scale=iw*sar:ih,setsar=1` makes the frame square-pixel at the shape it is
+/// displayed at, and the cover that follows then takes the middle of that picture.
+///
 /// It is bounded by the caller and it is a *bound* on the wait rather than a budget for it
 /// (`video_probe::wait_bounded`): a grab that outlasts it is a process killed rather than a thread
 /// held, and the answer is the same `None` a file FFmpeg cannot open gives — the bubble keeps the
@@ -1085,7 +1091,7 @@ pub(super) fn grab_a_frame(
         .arg("1")
         .arg("-vf")
         .arg(format!(
-            "scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+            "scale=iw*sar:ih,setsar=1,scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
         ))
         .arg("-f")
         .arg("rawvideo")

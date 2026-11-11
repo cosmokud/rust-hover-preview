@@ -492,6 +492,28 @@ pub(super) fn bubble_players_box(x: i32, y: i32, width: i32) -> (i32, i32) {
     (right_of_the_desktop, y)
 }
 
+/// The filter chain FFmpeg's player is begun with, from the geometry the probe measured: the crop
+/// the picture is cut from where it settled on one, and the pixels squared at the shape the film
+/// is displayed at.
+///
+/// **`setsar=1` on its own does not correct a pixel aspect, it *discards* it** — the renderer is
+/// handed a frame whose ratio has been erased, fits it as a square-pixel picture and draws a file
+/// that stores 1080 x 1080 through a 9:16 pixel as a square rather than as the portrait film it is.
+/// `scale=iw*sar:ih` applies the ratio to the pixels instead (`sar 9/16` -> `sar 1/1`, the frame
+/// widened to `geometry.width/height`) and `setsar=1` then only records what the scale has already
+/// made true. The box is placed at that same displayed shape (see `video_box`), so the player does
+/// one letterbox into a portrait box rather than a squash into a square one. A file that was never
+/// measured gets no filter at all, which is the frame as the file holds it.
+fn the_video_chain(measured: Option<&VideoGeometry>) -> Option<String> {
+    measured.map(|geometry| match geometry.crop {
+        Some(crop) => format!(
+            "crop={}:{}:{}:{},scale=iw*sar:ih,setsar=1",
+            crop.width, crop.height, crop.x, crop.y
+        ),
+        None => "scale=iw*sar:ih,setsar=1".to_string(),
+    })
+}
+
 /// Start ffplay for video preview, at the level `volume` names and with the film's own measured
 /// loudness folded into it where `Normalize` is on for videos (see `normalizing_video`).
 ///
@@ -802,13 +824,15 @@ fn start_video_playback_where(
         _ => None,
     };
 
-    let vf = measured.as_ref().map(|geometry| match geometry.crop {
-        Some(crop) => format!(
-            "crop={}:{}:{}:{},setsar=1",
-            crop.width, crop.height, crop.x, crop.y
-        ),
-        None => "setsar=1".to_string(),
-    });
+    // **The chain squares the pixels at the shape the file is displayed at, and that is the whole
+    // of what was wrong before**: `setsar=1` on its own does not correct a pixel aspect, it
+    // *discards* it — the renderer is handed a frame whose ratio has been erased, fits it as a
+    // square-pixel picture and draws a 1080 x 1920 film squashed into a square. `scale=iw*sar:ih`
+    // applies the ratio to the pixels (`sar 9/16` -> `sar 1/1`, the frame widened to the displayed
+    // shape) and `setsar=1` then only records what the scale has already made true. The box is
+    // placed at `geometry.width/height`, which is the displayed shape, so the player does exactly
+    // one letterbox into a portrait box rather than a squash into a square one.
+    let vf = the_video_chain(measured.as_ref());
 
     // The subtitles are drawn into the same filter chain rather than named beside it, because
     // `-sst` is inert on this build: the subtitle stream is demuxed, no subtitle filter is put
@@ -2318,6 +2342,69 @@ pub(super) unsafe fn player_stands_over_the_pin(pin: HWND) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The chain squares the pixels at the shape the film is displayed at, and never merely
+    /// erases the ratio**: a file whose pixel is not square is drawn squashed by a `setsar=1` alone,
+    /// because the renderer is handed a frame whose pixel aspect has been discarded rather than
+    /// corrected. `scale=iw*sar:ih` is what applies the ratio to the pixels, so it is in every chain
+    /// a measured file gets — and it stands before the `setsar=1` that only records what the scale
+    /// has made true.
+    fn the_measured_geometry() -> VideoGeometry {
+        VideoGeometry {
+            width: 1080,
+            height: 1920,
+            frame_width: 1080,
+            frame_height: 1080,
+            crop: None,
+            duration: None,
+            subtitles: SubtitleStreams::default(),
+            sidecar: None,
+            derived: None,
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
+            subtitle_extraction_failed: false,
+        }
+    }
+
+    #[test]
+    fn the_chain_squares_the_pixels_of_a_measured_film_and_never_drops_the_ratio() {
+        let cropped = VideoGeometry {
+            width: 1080,
+            height: 1920,
+            frame_width: 1080,
+            frame_height: 1080,
+            crop: Some(VideoCrop {
+                x: 40,
+                y: 0,
+                width: 1000,
+                height: 1080,
+            }),
+            ..the_measured_geometry()
+        };
+
+        let chain = the_video_chain(Some(&cropped)).expect("a measured film has a chain");
+        assert!(
+            chain.starts_with("crop=1000:1080:40:0,"),
+            "the crop stays in the frame's own pixels and leads the chain: {chain}"
+        );
+        assert!(
+            chain.contains("scale=iw*sar:ih,setsar=1"),
+            "the ratio is applied to the pixels rather than discarded: {chain}"
+        );
+
+        let whole = the_measured_geometry();
+        assert_eq!(
+            the_video_chain(Some(&whole)).as_deref(),
+            Some("scale=iw*sar:ih,setsar=1"),
+            "a film with nothing to crop is squared and nothing else"
+        );
+
+        assert_eq!(
+            the_video_chain(None),
+            None,
+            "and a file nothing measured is the frame as the file holds it, which is no filter"
+        );
+    }
 
     /// **An answer the trace already wrote is not written again**: the raise road is asked on every
     /// tick, so the same answer for the same window is one line and every transition is one more.
