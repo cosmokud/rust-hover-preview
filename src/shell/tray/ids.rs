@@ -578,6 +578,13 @@ pub(super) const ID_TRAY_TEXT_DONT_PREVIEW_SECRETS: u16 = 1060;
 /// range, which ends at 1737 — so no click on it is read as another submenu's row, and it is inside
 /// no range a submenu's click is read against.
 pub(super) const ID_TRAY_PDF_AUTOFOCUS: u16 = 1738;
+/// The `Preview Settings → PDF → Pin Mode → Full Mode` row: whether a pinned document is handed to
+/// Chromium's own viewer rather than drawn as the single page a hover shows (see `pdf_full_mode`).
+/// On where the app starts.
+///
+/// It is the id after the autofocus row's, and past every other one the tray hands out, for the reason
+/// given there: a click on it is read as this row and as no other submenu's.
+pub(super) const ID_TRAY_PDF_FULL_MODE: u16 = 1739;
 /// The `Preview Types` submenu, one command per kind of preview.
 pub(super) const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 pub(super) const ID_TRAY_TYPE_VIDEOS: u16 = 1063;

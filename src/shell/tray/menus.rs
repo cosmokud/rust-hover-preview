@@ -25,14 +25,15 @@ use super::ids::{
     ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
     ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_IDLE_BASE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG,
-    ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE,
-    ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
-    ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
-    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP,
-    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
-    ID_TRAY_Q_DIR_PREVIEWS, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
-    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
+    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
+    ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE,
+    ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
+    ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
+    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
+    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
+    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -69,9 +70,9 @@ use crate::config::config::{
     DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HOVER_DELAY_MS,
     DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MODEL_SCALE, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PDF_AUTOFOCUS, DEFAULT_PIN_ALWAYS_ON_TOP,
-    DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SEEK,
-    DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
+    DEFAULT_NORMALIZE_VOLUME, DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE,
+    DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
+    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
@@ -1023,11 +1024,11 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Text"),
     );
 
-    // The document kind's own half: what a *pinned* document does, which is one row — whose the
-    // keyboard is once the viewer stands in the pin's band. A document is handed to Chromium's own
-    // viewer when it is pinned and nothing of this app's draws it, so there is no size, no backdrop
-    // and no mode to choose between: the one question a pin of it asks is whether the document is
-    // to be worked in or looked at (see `pdf_autofocus` and `engines::pdf_viewer`).
+    // The document kind's own half: what a *pinned* document does, which is two rows — whether the
+    // pin hands the document to Chromium's own viewer at all, and, where it does, whose the keyboard
+    // is once that viewer stands in the band. A document is the one kind whose pin can be either a
+    // reader or a picture of a page, and the top row is which (see `pdf_full_mode`); everything below
+    // it is about the reader.
     //
     // It hangs under `PDF` rather than under `Ebook`, which is the gate the pages this app reads
     // are listed at: a pinned document is not read by this app at all, and `Ebook` is the name of the
@@ -1036,10 +1037,33 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| c.pdf_autofocus)
         .unwrap_or(DEFAULT_PDF_AUTOFOCUS);
+    let pdf_full_mode = CONFIG
+        .lock()
+        .map(|c| c.pdf_full_mode)
+        .unwrap_or(DEFAULT_PDF_FULL_MODE);
     let pdf_pin_mode = CreatePopupMenu().unwrap();
     append_labeled_item(
         pdf_pin_mode,
         MF_STRING
+            | if pdf_full_mode {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_PDF_FULL_MODE,
+        &default_label("Full Mode", DEFAULT_PDF_FULL_MODE),
+    );
+    append_labeled_item(
+        pdf_pin_mode,
+        MF_STRING
+            // A row about whose the keyboard is is a row about a document nothing shows when the
+            // viewer is switched off, so it goes grey rather than being a setting that answers
+            // nothing (see `pdf_full_mode` and `pdf_autofocus`).
+            | if pdf_full_mode {
+                MF_ENABLED
+            } else {
+                MF_GRAYED
+            }
             | if pdf_autofocus {
                 MF_CHECKED
             } else {

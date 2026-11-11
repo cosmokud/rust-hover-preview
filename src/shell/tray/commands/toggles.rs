@@ -414,6 +414,37 @@ pub(in super::super) fn toggle_pdf_autofocus() {
     refresh_preview();
 }
 
+/// Whether a pinned document is handed to Chromium's own viewer — `Preview Settings → PDF → Pin Mode →
+/// Full Mode`.
+///
+/// **The row is the whole of what a pin does with a document, so it is answered where the pin is.**
+/// On, the next tick asks for a viewer for the file the pin is standing on; off, the viewer the pin is
+/// holding is let go of at once and what stands in the band is the single page this app draws — no
+/// browser, no second window, and nothing of Chromium in the pin's path (see `pdf_full_mode`,
+/// `close_the_pin` and `the_bands_pdf_viewer_is_owed`).
+///
+/// The pin is not laid out again for it: a box, a size and a file are the same ones either way, and
+/// what changed is which window fills the band.
+pub(in super::super) fn toggle_pdf_full_mode() {
+    let full = match CONFIG.lock() {
+        Ok(mut config) => {
+            config.pdf_full_mode = !config.pdf_full_mode;
+            config.save();
+            config.pdf_full_mode
+        }
+        Err(_) => return,
+    };
+
+    if !full {
+        // Let go of the document the pin is holding, whichever file it is on: a viewer left standing
+        // would be a browser in a band that is no longer its, over a raster this app has just gone
+        // back to drawing (see `engines::pdf_viewer::close_the_pin`).
+        crate::engines::pdf_viewer::close_the_pins();
+    }
+
+    refresh_preview();
+}
+
 /// The switch above a sound's levels: whether a file's measured loudness is brought to one level
 /// before it is played, which is read where a player is started the way the level
 /// beside it is — nothing on screen is rebuilt, and a sound already playing is left where it is.
