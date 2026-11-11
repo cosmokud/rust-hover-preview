@@ -364,8 +364,16 @@ pub(super) fn pin_keyboard_wanted_back(claimed: bool, has_focus: bool) -> bool {
 /// this app taking it off the page it just put it in — a document no wheel scrolls and every key
 /// typed into it eaten by the pin's own table. So a document's band answers nothing here.
 pub(super) unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
+    // **Only where the row has put the caret in the document, which is the row this answers.** With
+    // `PDF → Pin Mode → Autofocus on PDF` on, a viewer revealed into the pin's band is the window the
+    // keyboard is for — so asking the pin's own window for it back is this app taking it off the page
+    // it has just put it in. With the row off, nothing put the caret in the document at all, and the
+    // pin claiming it back is the whole of what the row is for: the arrows walk the folder, and a
+    // press on the frame puts the caret back where a press on any other pin's frame puts it (see
+    // `engines::pdf_viewer::pdf_autofocus`).
     let owner = pinned_window();
     if !owner.is_invalid()
+        && crate::engines::pdf_viewer::pdf_autofocus()
         && current_media_type_try()
             .is_some_and(|kind| a_documents_band_is_the_viewers(kind, owner.0 as isize))
     {

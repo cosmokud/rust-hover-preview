@@ -569,6 +569,15 @@ pub(super) const ID_TRAY_RENDER_HTML: u16 = 1058;
 pub(super) const ID_TRAY_TEXT_SHOW_EXTENSIONLESS: u16 = 1059;
 /// The `Text → Don't Preview Secret Files` row: whether secret and sensitive files are blocked from text preview.
 pub(super) const ID_TRAY_TEXT_DONT_PREVIEW_SECRETS: u16 = 1060;
+/// The `Preview Settings → PDF → Pin Mode → Autofocus on PDF` row: whether a pinned document's
+/// viewer takes the caret as it is revealed, so the document is worked in — a notch over it
+/// scrolls it and the arrows are its own — rather than the pin keeping the keyboard for its walk
+/// (see `pdf_autofocus`). On where the app starts.
+///
+/// It is an id past every other one the tray hands out — 1738, one past the `Components → Install`
+/// range, which ends at 1737 — so no click on it is read as another submenu's row, and it is inside
+/// no range a submenu's click is read against.
+pub(super) const ID_TRAY_PDF_AUTOFOCUS: u16 = 1738;
 /// The `Preview Types` submenu, one command per kind of preview.
 pub(super) const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 pub(super) const ID_TRAY_TYPE_VIDEOS: u16 = 1063;

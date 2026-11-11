@@ -11,15 +11,16 @@ use super::defaults::{
     DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH,
     DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
-    DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER,
-    DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_Q_DIR_PREVIEWS,
-    DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML,
-    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE,
-    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS,
-    DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES,
-    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_PDF_AUTOFOCUS, DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS,
+    DEFAULT_PIN_ZOOM_BOUNCE_POWER, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS, DEFAULT_PREVIEW_SCALE_PERCENT,
+    DEFAULT_Q_DIR_PREVIEWS, DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME,
+    DEFAULT_RENDER_HTML, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
+    DEFAULT_SILENT_AUTO_UPDATE, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_DONT_PREVIEW_SECRETS,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
+    DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS, DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE,
+    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME,
+    DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use super::setting_types::{
     AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile,
@@ -676,6 +677,22 @@ pub struct AppConfig {
     pub text_show_extensionless: bool,
     /// Whether to refuse previewing secret and sensitive files.
     pub text_dont_preview_secrets: bool,
+    /// Whether a pinned document's viewer takes the caret as it is revealed — `Preview Settings →
+    /// PDF → Pin Mode → Autofocus on PDF`, and it is about the *pin* rather than about the hover: a
+    /// document is a window of Chromium's standing in the pin's band, and what decides whose the
+    /// keyboard is is whether that window is one the user is meant to work in (see
+    /// `DEFAULT_PDF_AUTOFOCUS`).
+    ///
+    /// **On, the document is worked in**: `engines::pdf_viewer` asks Chromium for the focus where it
+    /// reveals a viewer and where it resumes one, so a notch over the page scrolls it and the arrows
+    /// are its own. **Off, the pin keeps the keyboard**: the viewer never asks, the pin's key table
+    /// is what the arrows reach, and a notch over the page is handed to the browser by the wheel
+    /// seam rather than delivered to a window Windows has not put in front (see
+    /// `pin_ask_keyboard_back`).
+    ///
+    /// It is read where a viewer is revealed rather than written into one, which is the rule a row
+    /// moved under a pin that is up follows: the next reveal or resume is the first reader of it.
+    pub pdf_autofocus: bool,
     /// Extensions previewed as images, already normalized for lookup.
     pub image_extensions: Vec<String>,
     /// The video names the media engine Windows has is asked to play, as `[video] extensions`
@@ -866,6 +883,7 @@ impl Default for AppConfig {
             text_scroll_far_edge_grace_pixels: DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
             text_show_extensionless: DEFAULT_TEXT_SHOW_EXTENSIONLESS,
             text_dont_preview_secrets: DEFAULT_TEXT_DONT_PREVIEW_SECRETS,
+            pdf_autofocus: DEFAULT_PDF_AUTOFOCUS,
             image_extensions: Vec::new(),
             video_extensions: Vec::new(),
             ffmpeg_extensions: Vec::new(),
