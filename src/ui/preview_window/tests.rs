@@ -306,6 +306,34 @@ impl Drop for DoubleClickSettings {
     }
 }
 
+/// `PDF → Pin Mode → Full Mode`, stood where a test asks and put back when the guard is dropped —
+/// the house pattern (see `PausePreviewSettings`).
+///
+/// The row decides whether a pinned document's band is Chromium's or this app's own page, which is the
+/// one question the paint of a `MediaType::Pdf` turns on, so a test about either road has to say which
+/// it is rather than take the machine's setting (see `the_document_holds_the_band`).
+struct PdfFullMode(bool);
+
+impl PdfFullMode {
+    fn stood_at(full: bool) -> Self {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            let was = config.pdf_full_mode;
+            config.pdf_full_mode = full;
+            return Self(was);
+        }
+
+        Self(full)
+    }
+}
+
+impl Drop for PdfFullMode {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.pdf_full_mode = self.0;
+        }
+    }
+}
+
 /// What a picture is drawn at, stood where a test asks and put back when the guard is dropped —
 /// the way the two double-click switches are (`DoubleClickSettings`).
 ///

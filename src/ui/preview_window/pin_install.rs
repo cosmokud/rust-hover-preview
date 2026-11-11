@@ -222,7 +222,11 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
     if file.media.media_type.is_native_video() {
         stop_pinned_player();
     } else if !keeping_the_picture {
-        take_the_pinned_media_down_for_a_swap();
+        // The file the media on screen is of is the pin's own, which is still the outgoing one here:
+        // the two names are what says whether a browser standing in the band is navigated to this file
+        // rather than taken down for it (see `take_down_pinned_media`).
+        let showing = pinned_path().unwrap_or_else(|| file.path.clone());
+        take_the_pinned_media_down_for_a_swap(&showing, &file.path);
     }
 
     if file.media.media_type.is_engine() {
@@ -268,7 +272,8 @@ pub(super) fn swap_pinned_media(answer: PinAnswer) -> PinSwap {
             // nothing to keep (see `refuse_pinned_media`) — and a *bubble* is the one pin that keeps
             // what it has instead, because what it is showing is a frame of that very media (see
             // `take_the_pinned_media_down_for_a_swap`).
-            take_the_pinned_media_down_for_a_swap();
+            let showing = pinned_path().unwrap_or_else(|| file.path.clone());
+            take_the_pinned_media_down_for_a_swap(&showing, &file.path);
             return PinSwap::Refused {
                 path: file.path,
                 walk: file.walk,
@@ -1565,6 +1570,12 @@ pub(super) fn relayout_pinned_media(
         // repaint copies a frame bigger than the box it fills; upgrade to a decode at the settled box
         // if that ever shows as a stutter while an edge is under the hand.
         Some(kind) if box_is_covered(kind, road, held, width, height) => None,
+        // **A pinned page owes no read here, whatever the row says.** `PDF → Pin Mode → Full Mode` on, the
+        // box is Chromium's and the page is laid out by the browser: what this app holds is a kind and a
+        // pixel of no picture at all, so a decode is a whole file read for a frame nothing will paint
+        // (see `paint::the_document_holds_the_band` and `a_documents_media`). Off, it is the page this
+        // app draws and the arm below is the one that reads it.
+        Some(MediaType::Pdf) if crate::engines::pdf_viewer::pdf_full_mode() => None,
         // A frame this app draws for itself: the media is read and decoded again at the box it
         // is now shown in, which is the same call a hover's own load makes — and the same
         // wait one is, on a thread of its own. The decode used to run here, inline, which

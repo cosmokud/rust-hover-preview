@@ -844,18 +844,29 @@ pub(super) struct PinInstallable {
 /// A browser is not touched here: whether the engine a document is drawn in goes or is pointed
 /// at another document is a question about the *new* file's kind, and is asked where that kind
 /// is known.
-pub(super) fn take_down_pinned_media() {
+pub(super) fn take_down_pinned_media(showing: &Path, coming: &Path) {
     // **A pinned PDF's viewer goes with the media it was drawing**, for the reason the film's host
     // and the page's registration go below: the file replacing this one paints the same band, and a
     // browser left standing over it is a document nobody asked for (see `engines::pdf_viewer`).
-    if let Some(path) = pinned_path() {
+    //
+    // **Except where the file replacing it is another page, and which file that is has to be said in
+    // hand.** A walk from one document to the next is the same browser navigated rather than a viewer
+    // taken down and another begun: taking the window down here is what emptied the band for as long as
+    // the next document took to start, and what stood in it until then was a raster of page one (see
+    // `a_walk_between_documents_keeps_the_viewer`). `showing` is the file the media being taken down is
+    // of, and `coming` the file this take-down makes room for — the file on a caller's hand rather than
+    // the pin's, because the pin is not on the new file yet (see `swap_pinned_media`).
+    let keeping_the_viewer =
+        crate::engines::pdf_viewer::a_walk_between_documents_keeps_the_viewer(showing, coming);
+
+    if !keeping_the_viewer {
         // Keyed by the pin as well as the file: the same document pinned twice is two viewers, and
         // this road is about the one the media on screen belongs to (see `engines::pdf_viewer`).
         let owner = pinned_window();
         if owner.is_invalid() {
             crate::engines::pdf_viewer::close_all();
         } else {
-            crate::engines::pdf_viewer::close(&path, owner.0 as isize);
+            crate::engines::pdf_viewer::close(showing, owner.0 as isize);
         }
     }
 
@@ -895,9 +906,13 @@ pub(super) fn take_down_pinned_media() {
 /// decoding, and the player the file being left behind was drawn by is ended by the arm that begins
 /// the replacement (see `kill_stray_video_process` and `stop_pinned_player`, which is the same
 /// take-down with the media left standing).
-pub(super) fn take_the_pinned_media_down_for_a_swap() {
+///
+/// `showing` and `coming` are the two files the step is between, carried in hand because the pin is
+/// still on the first of them: they are what says whether the browser standing in the band is one
+/// the step navigates rather than one it takes down (see `take_down_pinned_media`).
+pub(super) fn take_the_pinned_media_down_for_a_swap(showing: &Path, coming: &Path) {
     if !pin_is_collapsed() {
-        take_down_pinned_media();
+        take_down_pinned_media(showing, coming);
     }
 }
 

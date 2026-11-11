@@ -206,7 +206,8 @@ fn ffplay_to_native_swap_delivers_a_frame() {
                 // The ffplay arm tears the whole standing media down first —
                 // this ends the LIVE native session leg 1 started.
                 eprintln!("repro leg 2: take_down_pinned_media ends the live session");
-                take_down_pinned_media();
+                let (showing, coming) = (PathBuf::from("a.mp4"), PathBuf::from("b.mp4"));
+                take_down_pinned_media(&showing, &coming);
                 eprintln!(
                     "repro leg 2: after take-down is_playing={}",
                     video_player::is_playing(),

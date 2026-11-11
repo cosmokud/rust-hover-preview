@@ -1184,7 +1184,11 @@ fn a_bubble_keeps_the_film_it_is_showing_when_a_swap_takes_the_standing_one_down
     pin.collapsed = true;
     stand_pin(Some(pin));
 
-    take_the_pinned_media_down_for_a_swap();
+    // The two files the step is between, which is what a take-down is now asked with: a windowed pin
+    // keeps its document's browser only where both are pages (see `take_down_pinned_media`).
+    let (showing, coming) = (PathBuf::from("a.png"), PathBuf::from("b.png"));
+
+    take_the_pinned_media_down_for_a_swap(&showing, &coming);
     assert!(
         CURRENT_MEDIA
             .lock()
@@ -1200,7 +1204,7 @@ fn a_bubble_keeps_the_film_it_is_showing_when_a_swap_takes_the_standing_one_down
     up.collapsed = false;
     stand_pin(Some(up));
 
-    take_the_pinned_media_down_for_a_swap();
+    take_the_pinned_media_down_for_a_swap(&showing, &coming);
     assert!(
         CURRENT_MEDIA
             .lock()
@@ -2051,6 +2055,12 @@ fn a_pinned_documents_raster_fills_the_band_the_strips_leave() {
     let caption = pin.caption;
     stand_pin(Some(pin));
 
+    // **The page is drawn here because the reader row is off.** On — where it starts — a pinned
+    // document's band is Chromium's and this raster is never filled in at all (see
+    // `the_document_holds_the_band`); this test is the other road, and it says so rather than taking
+    // whatever the machine's configuration happens to be.
+    let reader = PdfFullMode::stood_at(false);
+
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
         *media = Some(static_image_media(
             Arc::new(ImageFrame::new(page.repeat(120 * 220), 120, 220, 0)),
@@ -2077,6 +2087,8 @@ fn a_pinned_documents_raster_fills_the_band_the_strips_leave() {
             "row {row} is the page's: the raster lands on the media's rows and not the window's"
         );
     }
+
+    drop(reader);
 
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {
