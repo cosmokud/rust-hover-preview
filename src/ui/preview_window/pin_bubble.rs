@@ -1048,11 +1048,14 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
 /// holds is a codec's own arrangement of the colour and this side wants the one the compositor
 /// reads.
 ///
-/// **The pixels are squared before the frame is covered**, because `force_original_aspect_ratio`
-/// weighs a frame in its own space: a film whose pixel is 9:16 wide is already a portrait picture,
-/// but the cover crop would be chosen as if it were square and the middle of the film would be cut
-/// in the wrong place. `scale=iw*sar:ih,setsar=1` makes the frame square-pixel at the shape it is
-/// displayed at, and the cover that follows then takes the middle of that picture.
+/// **The cover is cut in square-pixel space**, because `force_original_aspect_ratio` weighs a frame
+/// in its own space: a film whose pixel is 9:16 wide is already a portrait picture, but the cover
+/// crop would be chosen as if it were square and the middle of the film would be cut in the wrong
+/// place. `reset_sar=true` normalises the ratio only while the scale is proportional — which
+/// `force_original_aspect_ratio=increase` is — so this one scale both covers and squares, and the
+/// crop that follows takes the middle of a square-pixel picture: measured on a 1080 x 1080 frame
+/// through `sar 9:16`, `s:100x178 sar:1/1` then `s:100x100 sar:1/1`, where normalising first cost a
+/// second scale of the same frame.
 ///
 /// It is bounded by the caller and it is a *bound* on the wait rather than a budget for it
 /// (`video_probe::wait_bounded`): a grab that outlasts it is a process killed rather than a thread
@@ -1090,8 +1093,10 @@ pub(super) fn grab_a_frame(
         .arg("-frames:v")
         .arg("1")
         .arg("-vf")
+        // `reset_sar` rule: the cover carries the ratio, so the square is cut in square-pixel
+        // space — a film through a 9:16 pixel is portrait, its middle is not its frame's.
         .arg(format!(
-            "scale=iw*sar:ih,setsar=1,scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+            "scale={width}:{height}:force_original_aspect_ratio=increase:reset_sar=true,crop={width}:{height}"
         ))
         .arg("-f")
         .arg("rawvideo")
