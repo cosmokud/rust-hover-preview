@@ -1910,6 +1910,24 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
         existing.cancel_background_work();
     }
     *current = Some(media);
+    let installed_kind = current.as_ref().map(|media| media.media_type);
+    let installed_size = current
+        .as_ref()
+        .map(|media| (media.current_width(), media.current_height()));
+    drop(current);
+
+    // And the run the index reads is the run of the box the window has *now*: a box change is the
+    // same picture drawn at another size, and a run of the size it was is a run to read again (see
+    // `pin_index`). It answers nothing for a picture whose own run holds every place of the file —
+    // which is the ordinary case a resize leaves (see `keep_animation_place`) — and it is the run
+    // a hand reads for one too long to be held whole, which the merged run alone cannot be.
+    if let (Some(total), Some(kind), Some(size)) = (
+        crate::formats::animation_frames::timeline(&pending.path).map(|run| run.frames()),
+        installed_kind,
+        installed_size,
+    ) {
+        pin_index::start(&pending.path, kind, total, size);
+    }
 
     true
 }

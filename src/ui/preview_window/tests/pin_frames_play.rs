@@ -154,6 +154,9 @@ fn a_share_of_the_track_names_a_frame_of_the_file() {
 /// `settle_the_picture_on`).
 #[test]
 fn a_hand_on_the_track_paints_the_frame_it_named_without_replacing_the_media() {
+    // The media and the runs beside it are one set for the whole process, so the tests that stand
+    // their own media in it take the room to themselves (see `the_room_to_itself`).
+    let _room = the_room_to_itself();
     let folder = std::env::temp_dir().join("pin-scrub-shown-tests");
     std::fs::create_dir_all(&folder).expect("a fixture folder");
     let path = folder.join("run.gif");
@@ -488,4 +491,134 @@ fn a_pinned_pictures_retained_room_is_its_own_budget_and_a_hover_keeps_the_const
     );
 
     stand_pin(previous_pin);
+}
+
+/// **A release seeks after a resize, and it seeks exactly, whether or not the file has finished
+/// streaming into the run.** A box change leaves the whole of the run the pin was playing, with the
+/// frames its own decode answers with taking their places in it (see `keep_animation_place`), so the
+/// place a hand lets go on is a frame the run holds — and a release that left the playhead alone
+/// while the stream was still filling left the picture playing on from wherever the resize had put
+/// it, which is a release that sought nowhere at all.
+#[test]
+fn a_release_after_a_resize_seeks_to_the_frame_the_hand_left() {
+    // The media is one slot for the whole process, so the tests that stand their own in it take the
+    // room to themselves (see `the_room_to_itself`).
+    let _room = the_room_to_itself();
+    let frame = |file_index: usize, side: u32| {
+        let mut frame = ImageFrame::new(vec![0u8; 4], side, side, 100);
+        frame.file_index = file_index;
+        Arc::new(frame)
+    };
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    // The run the box change left: the file's places, the frame the pin was on drawn at the box the
+    // window is now, and a stream still filling the rest of it.
+    let mut media = static_image_media(frame(140, 8), MediaType::AnimatedGif);
+    media.frames = (0..300).map(|index| frame(index, 4)).collect();
+    media.frames[140] = frame(140, 8);
+    media.current_frame = 140;
+    media.all_frames_loaded = Some(Arc::new(AtomicBool::new(false)));
+    media.shared_frames = Some(Arc::new(Mutex::new(StreamedFrames {
+        queue: VecDeque::new(),
+        released: false,
+        decoded: false,
+    })));
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    settle_the_picture_on(300 - 1);
+    let landed = CURRENT_MEDIA.lock().ok().and_then(|media| {
+        media.as_ref().map(|media| {
+            (
+                media.current_frame_of_file(),
+                media.current_width(),
+                media.shown_for_the_hand.is_some(),
+            )
+        })
+    });
+    assert_eq!(
+        landed,
+        Some((Some(300 - 1), 4, false)),
+        "the place the hand let go on is the place the picture carries on from, and nothing is \
+         painted beside the media any longer"
+    );
+
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous;
+    }
+}
+
+/// **And a hand that names a place mid-drag is shown that place as soon as the run holds it**, rather
+/// than only once the whole of the file has streamed into the run: the decode a box change asks for
+/// is answered a frame at a time, and every place the file has is a place the run the resize left
+/// still holds (see `show_the_frame_of`).
+#[test]
+fn a_hand_on_the_track_is_shown_the_place_it_names_while_the_stream_is_still_filling() {
+    // The media is one slot for the whole process, so the tests that stand their own in it take the
+    // room to themselves (see `the_room_to_itself`).
+    let _room = the_room_to_itself();
+    let frame = |file_index: usize, side: u32| {
+        let mut frame = ImageFrame::new(vec![0u8; 4], side, side, 100);
+        frame.file_index = file_index;
+        Arc::new(frame)
+    };
+    let previous = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+
+    let mut media = static_image_media(frame(140, 8), MediaType::AnimatedGif);
+    media.frames = (0..300).map(|index| frame(index, 4)).collect();
+    media.frames[140] = frame(140, 8);
+    media.current_frame = 140;
+    media.all_frames_loaded = Some(Arc::new(AtomicBool::new(false)));
+    media.shared_frames = Some(Arc::new(Mutex::new(StreamedFrames {
+        queue: VecDeque::new(),
+        released: false,
+        decoded: false,
+    })));
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    let path = std::env::temp_dir()
+        .join("pin-scrub-shown-tests")
+        .join("run.gif");
+    std::fs::create_dir_all(path.parent().expect("a folder")).expect("a fixture folder");
+    std::fs::write(&path, b"GIF89a").expect("a fixture file");
+    pin_scrub::forget();
+    pin_index::forget();
+
+    let shown = |target: usize| {
+        let exact = show_the_frame_of(&path, target);
+        let answer = CURRENT_MEDIA.lock().ok().and_then(|media| {
+            media.as_ref().map(|media| {
+                (
+                    media.current_frame_of_file(),
+                    media.current_frame().map(|frame| frame.file_index),
+                    media
+                        .shown_for_the_hand
+                        .as_ref()
+                        .map(|frame| frame.file_index),
+                )
+            })
+        });
+        (exact, answer)
+    };
+
+    assert_eq!(
+        shown(10),
+        (true, Some((Some(10), Some(10), None))),
+        "a place the run holds is the playhead put down on it, without waiting for the rest of the \
+         file"
+    );
+    assert_eq!(
+        shown(200),
+        (true, Some((Some(200), Some(200), None))),
+        "and one from the far end of the file, which the stream has not reached yet"
+    );
+
+    pin_scrub::forget();
+    pin_index::forget();
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous;
+    }
 }
