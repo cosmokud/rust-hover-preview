@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A Q-Dir pane is the one the keyboard is in, and not the first list the frame holds** — a frame holds four panes, and a pane keeps the row it was last left selected after a click moved to another one, so walking a pane with the arrow keys could preview the file of a pane beside it: the row drawn in the shell's grey inactive colour rather than the blue of the listing the keyboard is actually in. The pane is now read from Q-Dir's own thread focus (`GetGUIThreadInfo`, which names the pane's `SysListView32` while the keyboard is in it), so only the pane the keyboard is walking answers — the pane the keys go to — and no other pane of the frame previews anything.
+
 ## [0.5.4] - 2026-11-11
 
 ### Added
