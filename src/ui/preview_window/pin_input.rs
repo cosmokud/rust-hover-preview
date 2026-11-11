@@ -1171,6 +1171,12 @@ pub(super) unsafe fn pinned_press(hwnd: HWND, x: i32, y: i32) -> bool {
 /// `wants_the_keyboard` is the caller's answer to *the pin is not the window the user is in*: asked of
 /// Windows by the window procedure rather than here, and staged by a test that has no desktop.
 ///
+/// **And it stands down where the caret is the document's** (`the_document_holds_the_caret`): the
+/// same rule the tick's own claim follows (`pin_ask_keyboard_back`), because a caption press that
+/// took the keyboard off the page would both break the document and pay for the window work — the
+/// style, the foreground and the focus — between the press and the moves that carry the window.
+/// That one-time cost per reveal is the first drag after a walk trailing the cursor.
+///
 /// **A press inside a document's box is the document's**, and it is answered here rather than passed
 /// into the chrome: nothing is carried, nothing is resized, and the keyboard is not taken back from
 /// Chromium. Our chrome claims input only on its own strips — the caption row and the frame margin
@@ -1189,7 +1195,7 @@ pub(super) unsafe fn press_the_pin(
     let answered =
         unsafe { pinned_volume_press(hwnd, x, y) || pinned_press_on(hwnd, x, y, window) };
 
-    if wants_the_keyboard {
+    if wants_the_keyboard && !the_document_holds_the_caret() {
         unsafe { pin_take_focus(hwnd, window) };
     }
 

@@ -364,19 +364,7 @@ pub(super) fn pin_keyboard_wanted_back(claimed: bool, has_focus: bool) -> bool {
 /// this app taking it off the page it just put it in — a document no wheel scrolls and every key
 /// typed into it eaten by the pin's own table. So a document's band answers nothing here.
 pub(super) unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
-    // **Only where the row has put the caret in the document, which is the row this answers.** With
-    // `PDF → Pin Mode → Autofocus on PDF` on, a viewer revealed into the pin's band is the window the
-    // keyboard is for — so asking the pin's own window for it back is this app taking it off the page
-    // it has just put it in. With the row off, nothing put the caret in the document at all, and the
-    // pin claiming it back is the whole of what the row is for: the arrows walk the folder, and a
-    // press on the frame puts the caret back where a press on any other pin's frame puts it (see
-    // `engines::pdf_viewer::pdf_autofocus`).
-    let owner = pinned_window();
-    if !owner.is_invalid()
-        && crate::engines::pdf_viewer::pdf_autofocus()
-        && current_media_type_try()
-            .is_some_and(|kind| a_documents_band_is_the_viewers(kind, owner.0 as isize))
-    {
+    if the_document_holds_the_caret() {
         return false;
     }
 
@@ -386,6 +374,25 @@ pub(super) unsafe fn pin_ask_keyboard_back(hwnd: HWND) -> bool {
 
     pin_take_focus(hwnd, &Win32PinWindow);
     true
+}
+
+/// Whether the keyboard belongs to a document standing in this pin's band rather than to the pin:
+/// `PDF → Pin Mode → Autofocus on PDF` on, and a viewer of Chromium's actually on the screen for
+/// *this* pin — the reveal that put the caret there (`Host::take_the_caret`).
+///
+/// Asked by both roads that would otherwise claim it back, because a claim on a document's band is
+/// this app taking the caret off the page it just put it in: the tick (`pin_ask_keyboard_back`) and
+/// the press itself — which paid for the same claim twice, once as the caret yanked out of the
+/// document and once as the window work that stands between the press and the hand's first moves.
+///
+/// Off the row, or with no viewer up for this pin, nothing put the caret in the document at all and
+/// the pin claiming it is the whole of what the road is for (see `engines::pdf_viewer::pdf_autofocus`).
+pub(super) fn the_document_holds_the_caret() -> bool {
+    let owner = pinned_window();
+    !owner.is_invalid()
+        && crate::engines::pdf_viewer::pdf_autofocus()
+        && current_media_type_try()
+            .is_some_and(|kind| a_documents_band_is_the_viewers(kind, owner.0 as isize))
 }
 
 /// Which strips of a pinned window's chrome are showing, and what is asking for them.
