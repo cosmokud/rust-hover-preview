@@ -2315,3 +2315,61 @@ fn a_frame_the_stream_answers_after_a_resize_takes_its_place_in_the_run() {
     }
     stand_pin(previous_pin);
 }
+
+/// **A picture that plays is laid out again at its own size, whatever box the window has** — which is
+/// the one thing a box change asks of it that the other kinds are not asked. Its frames are held, so a
+/// box it was dragged out to would have the decode invent every pixel above the file's own: a
+/// four-hundred-pixel animation in a maximized window is some thousands of pixels across and a dozen
+/// megabytes a frame, and a few hundred of those are past the room the pin holds it in. What is past
+/// that room is given back behind the playhead, and a run that has given its frames back is a track a
+/// hand cannot reach every place of — and a run whose wrap has nothing to wrap to stands still. What
+/// is drawn is untouched by it, since the band stretches the frame the pin holds into the box it
+/// stands in (see `relayout_scale` and `compose_media_into_band`).
+#[test]
+fn a_playing_picture_is_laid_out_again_at_its_own_size_not_at_the_box() {
+    for kind in [
+        MediaType::AnimatedGif,
+        MediaType::AnimatedApng,
+        MediaType::AnimatedWebP,
+        MediaType::AnimatedHeif,
+        MediaType::AnimatedJxl,
+    ] {
+        assert_eq!(
+            relayout_scale(Some(kind), PinRelayoutRoad::BoxChange),
+            PreviewScale::Percent(100),
+            "{kind:?} is read at its own size however big the box it is drawn in is, so a long run \
+             of it is held whole rather than given back behind the playhead"
+        );
+        assert_eq!(
+            relayout_scale(Some(kind), PinRelayoutRoad::TakeUp),
+            PreviewScale::Percent(100),
+            "and a pin taken up on one is read at its own size too: a window it was dragged out to \
+             is a picture scaled into it, not a decode of it at that size"
+        );
+    }
+
+    // Every other kind is laid out in the box it has been given, which is what the road asks of them.
+    for kind in [
+        MediaType::StaticImage,
+        MediaType::Pdf,
+        MediaType::Text,
+        MediaType::Dds,
+    ] {
+        assert_eq!(
+            relayout_scale(Some(kind), PinRelayoutRoad::BoxChange),
+            PreviewScale::FitToScreen,
+            "{kind:?} is scaled into the box the window has, by the frame or the page it already holds"
+        );
+    }
+
+    // And the wheel's own road is never a size the file is asked for: the pixels are one for one.
+    assert_eq!(
+        relayout_scale(Some(MediaType::AnimatedGif), PinRelayoutRoad::Zoom),
+        PreviewScale::Percent(100)
+    );
+    assert_eq!(
+        relayout_scale(None, PinRelayoutRoad::BoxChange),
+        PreviewScale::FitToScreen,
+        "and a pin with no media is laid out for the box, since nothing says otherwise"
+    );
+}

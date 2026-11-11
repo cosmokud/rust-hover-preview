@@ -534,6 +534,15 @@ impl MediaData {
                 if !streamed.queue.is_empty() {
                     // A streamed frame is made by the decoder thread and handed over once, so wrapping
                     // it here is the only allocation it ever needs.
+                    //
+                    // **A place the run already holds is that place sharpened rather than a second
+                    // frame pushed beside it.** A box change keeps the whole of the run the pin was
+                    // playing around the frames its own decode answers with (see `merge_the_run`), and
+                    // that decode goes on answering the same file's places in the same order — so each
+                    // frame that arrives takes the place of the one drawn for the box before it.
+                    // Pushed instead, they would hold the file's head and its tail twice, one under the
+                    // other, and the playhead would be moved off every place a hand names by however
+                    // many duplicates arrived behind it (see `show_the_frame_of`).
                     for frame in streamed.queue.drain(..) {
                         let frame = Arc::new(frame);
                         match self
