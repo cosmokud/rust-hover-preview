@@ -159,7 +159,7 @@ fn a_run_with_no_resident_kept_serves_no_hover() {
     mpv_ipc::clear_noted();
     let _ = take_last_spawned_command();
 
-    let served = mpv_resident::serve(&a_film(), 55, false);
+    let served = mpv_resident::serve(&a_film(), 55, false, (100, 100, 1400, 800));
 
     assert!(
         served.is_none(),

@@ -373,7 +373,12 @@ pub(super) fn begin_a_resident_for_a_test(behind_the_host: bool) -> Option<u32> 
 /// resident.** A resident whose pipe had not opened yet, or which never drew a frame, is one the
 /// next hover can be served by: it is stopped and left standing *by* — not serving, its TTL
 /// running — rather than killed for a failure this hover is already paying for.
-pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<Served> {
+pub(super) fn serve(
+    path: &Path,
+    volume: u32,
+    behind_the_host: bool,
+    box_: (i32, i32, i32, i32),
+) -> Option<Served> {
     if !keeping_a_resident() || !the_resident_may_serve(pinned()) {
         return None;
     }
@@ -425,6 +430,27 @@ pub(super) fn serve(path: &Path, volume: u32, behind_the_host: bool) -> Option<S
     // `mpv_ipc::remember_pipe`).
     let started = Instant::now();
     mpv_ipc::remember_pipe(pid, &pipe, audio_off);
+
+    // **The resident's window is the size its one placement will ask for before the file is handed
+    // over**, because the resident stands at a one-pixel window of its own (`PARKED_AT`) and a source
+    // grown from that to a 4K film's own size *after* its first frame is a surface still holding the
+    // one-pixel picture while the crop follows the window that grew — black around a picture a pixel
+    // wide, until the player catches up, which on a 4K film is seconds (see
+    // `pin_film_thumbnail::the_box_a_source_is_born_at`). Sized here, the player configures its output
+    // for the box the placement will name, and that placement moves a window whose size is already
+    // right: one size asked for, by the launch, exactly as a cold player's `--geometry` names it.
+    //
+    // **Only a film drawn through a host**: one drawn over the preview is the preview's box, and the
+    // tick places it there every pass (see `video_playback::ensure_video_window_topmost`). A player
+    // that has not made its window yet is answered nothing rather than waited for — the window arrives
+    // after the pipe does (see `PIPE_UP_WAIT`), and the placement that follows asks for the same box.
+    // A film nothing measured answers the parked box, which is the window left as it stands.
+    let (born_width, born_height) =
+        pin_film_thumbnail::the_box_a_source_is_born_at(path, behind_the_host, box_);
+    if (born_width, born_height) != (PARKED_SIZE, PARKED_SIZE) {
+        unsafe { ffplay_window::size_a_players_window(pid, (born_width, born_height)) };
+    }
+
     let offered = match the_wait_for_the_pipe(begun_now) {
         Some(within) => mpv_ipc::load_file_within(pid, path, within),
         None => mpv_ipc::load_file(pid, path),
