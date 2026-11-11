@@ -913,13 +913,81 @@ pub(super) fn page_is_painted(path: &Path) -> bool {
     HoverFacts::read(path).is_painted_page()
 }
 
-pub(super) fn effective_frame_delay_ms(media_type: &MediaType, source_delay_ms: u32) -> u32 {
-    match media_type {
+/// The pace a picture that plays is played at: the pace the file itself keeps, read out of its
+/// own frame delays, and the pace a hand asked for at the pin's FPS control.
+///
+/// The file's own pace is what the control opens at and what a picture plays at until a hand
+/// moves it — a preview nobody has touched plays the file the way its author paced it.
+#[derive(Clone, Copy, Default)]
+pub(super) struct AnimationPlayback {
+    /// The pace the file itself keeps, in frames a second, as its own delays are read — `0` for a
+    /// file whose timeline was not walked, which is a pace nothing can be measured against.
+    pub(super) detected: f64,
+    /// The pace a hand asked for, and nothing while the file plays at its own.
+    pub(super) wanted: Option<u32>,
+}
+
+impl AnimationPlayback {
+    /// What a picture loaded from `path` plays at: its own pace, and no pace asked for yet.
+    pub(super) fn detected(path: &Path) -> Self {
+        Self {
+            detected: crate::formats::animation_frames::timeline(path)
+                .map(|timeline| timeline.rate())
+                .unwrap_or(0.0),
+            wanted: None,
+        }
+    }
+
+    /// How much longer or shorter each frame of the file is held than the file has it.
+    ///
+    /// A pace of twice the file's own halves every delay and leaves the relationship between
+    /// them where the author put it — a frame authored to wait twice as long as the one before
+    /// it still waits twice as long, where a pace that rewrote every delay to one figure would
+    /// flatten the file's own pacing.
+    pub(super) fn delay_scale(&self) -> f64 {
+        let Some(wanted) = self.wanted else {
+            return 1.0;
+        };
+        if self.detected <= 0.0 {
+            return 1.0;
+        }
+
+        self.detected / f64::from(wanted.max(1))
+    }
+}
+
+/// How long one frame of a picture that plays is held, from the delay the file gives it.
+///
+/// The AnimatedWebP clamp the file's own setting asks for is the floor the last of this module's
+/// hands, and a pace a hand chose at the FPS control is the floor that wins over it: the control
+/// is asked for a frame a second and the setting is asked for at most one, so a hand that asked
+/// for a faster picture than the setting allows is a hand whose answer is what plays.
+pub(super) fn effective_frame_delay_ms(
+    media_type: &MediaType,
+    source_delay_ms: u32,
+    playback: AnimationPlayback,
+) -> u32 {
+    let source_delay_ms = match media_type {
         MediaType::AnimatedWebP => {
             let fps = current_webp_playback_fps();
             let min_delay_ms = (1000 / fps).max(1);
             source_delay_ms.max(min_delay_ms)
         }
         _ => source_delay_ms,
+    };
+    let scale = playback.delay_scale();
+    if scale == 1.0 {
+        return source_delay_ms;
     }
+
+    let scaled = (f64::from(source_delay_ms) * scale).round() as u32;
+    // A pace asked for is a pace whose own frame is the floor under what is drawn: the delay a
+    // file gives a frame, scaled down by the pace, is the shortest a picture can be held and
+    // still be one frame of the pace that was asked for.
+    let floor = match playback.wanted {
+        Some(fps) => 1000 / fps.max(1),
+        None => 0,
+    };
+
+    scaled.max(floor.min(source_delay_ms))
 }

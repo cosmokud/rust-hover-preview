@@ -35,9 +35,9 @@
 //! behind another program is not (see `key_input::pin_owns_foreground`).
 
 use crate::app::seam::{
-    ask_the_pin_to_go_behind, MODELS_BAND, PIN_PLAYLIST_BAND, PIN_PLAYLIST_DELTA,
-    PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_VOLUME_REGION, PIN_ZOOM_DELTA, PIN_ZOOM_REGION,
-    TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION, TEXT_SIZE_REGION,
+    ask_the_pin_to_go_behind, MODELS_BAND, PIN_FPS_DELTA, PIN_FPS_REGION, PIN_PLAYLIST_BAND,
+    PIN_PLAYLIST_DELTA, PIN_TEXT_SIZE_DELTA, PIN_VOLUME_DELTA, PIN_VOLUME_REGION, PIN_ZOOM_DELTA,
+    PIN_ZOOM_REGION, TEXT_SCROLL_DELTA, TEXT_SCROLL_REGION, TEXT_SIZE_REGION,
 };
 use crate::app::seam::{post_a_notch_to_the_model, wake_preview_loop};
 use crate::engines::pdf_viewer::a_documents_window;
@@ -139,6 +139,13 @@ fn note_a_press(point: POINT) {
     // Safety: asks the desktop for the window under a point it was given; dereferences nothing.
     let window = unsafe { WindowFromPoint(point) };
     let ours = press_is_inside_ours(window, point);
+    // **A press that is not ours is the one thing a pin's search field is told about.** This callback
+    // stands on every press on the desktop, and a pin takes no activation: a click on another window is
+    // a caret the hand has let go of, and this counter is where the pin hears of it (see
+    // `seam::note_a_press_elsewhere`).
+    if !ours {
+        crate::app::seam::note_a_press_elsewhere();
+    }
     let always_on_top = our_window_stands_over_everything();
     let the_listing_answers = !ours && the_pick_road_answers(window);
 
@@ -260,6 +267,22 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
             if let Some(block) = PIN_VOLUME_REGION.the_block_over((info.pt.x, info.pt.y)) {
                 if preview_takes_the_wheel(block) {
                     PIN_VOLUME_DELTA
+                        .in_block(block)
+                        .fetch_add(notches, Ordering::AcqRel);
+                    wake_preview_loop();
+                    return LRESULT(1);
+                }
+            }
+        }
+
+        // **A notch over a picture's pace control is the pace's**, and the picture's own zoom is what
+        // it would otherwise be: `PIN_ZOOM_REGION` is published over the whole pin, panel and all,
+        // so the two regions overlap and the order asked here is the whole of the lockout (see
+        // `PIN_FPS_REGION`).
+        if wparam.0 == WM_MOUSEWHEEL as usize && notches != 0 {
+            if let Some(block) = PIN_FPS_REGION.the_block_over((info.pt.x, info.pt.y)) {
+                if preview_takes_the_wheel(block) {
+                    PIN_FPS_DELTA
                         .in_block(block)
                         .fetch_add(notches, Ordering::AcqRel);
                     wake_preview_loop();

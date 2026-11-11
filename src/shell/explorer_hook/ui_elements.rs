@@ -126,10 +126,12 @@ pub(super) fn uia_item_from_focus(resolver: &mut ItemResolver) -> Option<Hovered
         return focused_row(resolver, frame).map(|row| row.item());
     }
 
-    // **The pane's own list says which of its rows the keyboard is on.** No focused element is asked for
-    // in a Q-Dir frame for the same reason as in Everything's: the walk would climb the pane's own
-    // `#32770`/`ATL:` chrome rather than the row (see the note above).
-    if let Some(list) = the_q_dir_list_of(unsafe { GetForegroundWindow() }) {
+    // **The pane the keyboard is in says which of its rows it is on**, and no focused element is asked
+    // for in a Q-Dir frame for the same reason as in Everything's: the walk would climb the pane's own
+    // `#32770`/`ATL:` chrome rather than the row. The pane is the one holding the keyboard rather than
+    // the first list in the frame, because a frame holds four of them and its other panes keep the
+    // selection they were left with (see `q_dir::focused_list`).
+    if let Some(list) = q_dir::focused_list(unsafe { GetForegroundWindow() }) {
         return focused_row_in_list(resolver, list).map(|row| row.item());
     }
 

@@ -994,9 +994,18 @@ pub(super) fn grab_bubble_frame(box_: ScreenRegion) {
 
     std::thread::spawn(move || {
         let pixels = if a_page {
+            // **A pinned page has no frame of this app's to ask a player for**: its picture is page
+            // one read out of the file (see `grab_the_pages_first`), and whatever film was playing
+            // before this pin is not it.
             grab_the_pages_first(side)
         } else {
-            grab_video_frame(&path, at, side)
+            // **The player on screen is asked for the picture before the file is read**, where it is
+            // one that can be asked: an mpv film's frame is already decoded, so a screenshot of it
+            // costs no second decode of the film — and no FFmpeg, which is the half of this that
+            // made an mpv pin need `ffmpeg.exe` to show its own bubble (see
+            // `mpv_ipc::screenshot_to_file`). The read of the file is every other player's answer,
+            // and this one's where the screenshot did not land.
+            screenshot_of_the_film(&path, side).or_else(|| grab_video_frame(&path, at, side))
         };
 
         if let Some(pixels) = pixels {
@@ -1074,6 +1083,111 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
     grab_a_frame(path, at, (side, side), Duration::from_secs(3))
 }
 
+/// The picture the *player* on screen has of its film, cut to the bubble's own square, where that
+/// player is one this app can ask: mpv's `screenshot-to-file`, and nothing for FFmpeg's.
+///
+/// **A film nobody on this side holds a frame of does not need a second decode to be pictured.** mpv
+/// has the decoded frame in front of it, and asking it for a screenshot is one command down the pipe
+/// it already listens on — so a bubble of an mpv film costs the player nothing and costs this app no
+/// `ffmpeg` process at all. The file is only read where nothing can be asked, which is FFmpeg's
+/// player's road (see `grab_a_frame`).
+///
+/// The screenshot is written to a file under this app's temp folder and read back as a PNG, which is
+/// the only form the pipe can hand a picture over in. The scale and the cover crop are this side's
+/// rather than the player's: mpv's screenshot is the film's own frame, and what a bubble shows is the
+/// middle of it cut to a square (see `bubble_thumbnail`, whose rule this reproduces in the same
+/// arithmetic).
+pub(super) fn screenshot_of_the_film(path: &Path, side: u32) -> Option<Vec<u8>> {
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    if pid == 0 || !mpv_ipc::answers_properties(pid) || video_route(path) != VideoRoute::Mpv {
+        return None;
+    }
+
+    let file = screenshot_path(path, pid);
+    let _ = std::fs::remove_file(&file);
+    if !mpv_ipc::screenshot_to_file(pid, &file) {
+        return None;
+    }
+
+    // The player writes the file, and it has not finished writing when the command returns: what is
+    // waited for is the file being complete rather than the line being delivered, which is the same
+    // wait `video_probe::wait_bounded` gives a child (see `SCREENSHOT_WAIT`).
+    let deadline = Instant::now() + SCREENSHOT_WAIT;
+    let bytes = loop {
+        if let Ok(bytes) = std::fs::read(&file) {
+            break bytes;
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(SCREENSHOT_POLL);
+    };
+    let _ = std::fs::remove_file(&file);
+
+    // An empty file is a screenshot that has been created and not written yet, which the read above
+    // cannot tell from one that is whole: PNG's own header is the answer, and a decode of nothing is
+    // a bubble that keeps its still.
+    if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+
+    let picture = decode_png(&bytes)?.to_rgba8();
+    let (width, height) = picture.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    // Scaled to *cover* the circle rather than to fit inside it, and cropped to the middle: the same
+    // two steps `bubble_thumbnail` makes, on a picture the player handed over rather than a frame the
+    // engine delivered.
+    let scale = (side as f32 / width as f32).max(side as f32 / height as f32);
+    let scaled_width = ((width as f32 * scale).round() as u32).max(side);
+    let scaled_height = ((height as f32 * scale).round() as u32).max(side);
+    let scaled = image::imageops::resize(
+        &picture,
+        scaled_width,
+        scaled_height,
+        image::imageops::FilterType::Triangle,
+    );
+    let cropped = image::imageops::crop_imm(
+        &scaled,
+        (scaled_width - side) / 2,
+        (scaled_height - side) / 2,
+        side,
+        side,
+    )
+    .to_image();
+
+    let mut out = Vec::with_capacity(side as usize * side as usize * 4);
+    for pixel in cropped.pixels() {
+        out.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
+    }
+
+    Some(out)
+}
+
+/// How long a player is given to write its screenshot, and how often the file is looked for.
+///
+/// A screenshot of a 4K film is a few megabytes written over a local file, so the wait is a bound
+/// rather than a budget: measured on mpv 0.41.0 the file is whole within 30 ms of the command
+/// landing, and a hundred times that is a player that has stopped answering (see
+/// `screenshot_of_the_film`).
+const SCREENSHOT_WAIT: Duration = Duration::from_secs(3);
+const SCREENSHOT_POLL: Duration = Duration::from_millis(10);
+
+/// Where a player's screenshot is written: a name of this app's own under the temp folder, made
+/// unique by the player it belongs to so that two pins collapsing at once cannot write over each
+/// other's picture.
+fn screenshot_path(path: &Path, pid: u32) -> PathBuf {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&path.to_string_lossy().to_lowercase(), &mut hasher);
+    let stamp = std::hash::Hasher::finish(&hasher);
+
+    crate::engines::document_cache::temp_folder()
+        .join("bubble")
+        .join(format!("shot-{pid}-{stamp:016x}.png"))
+}
+
 /// One frame of a film at a second, scaled to cover `width × height` and cropped to the middle of
 /// that shape, as raw BGRA on stdout.
 ///
@@ -1088,6 +1202,15 @@ pub(super) fn grab_video_frame(path: &Path, at: f64, side: u32) -> Option<Vec<u8
 /// of it. `-pix_fmt bgra` is asked for by name rather than left to the file, because what the file
 /// holds is a codec's own arrangement of the colour and this side wants the one the compositor
 /// reads.
+///
+/// **The cover is cut in square-pixel space**, because `force_original_aspect_ratio` weighs a frame
+/// in its own space: a film whose pixel is 9:16 wide is already a portrait picture, but the cover
+/// crop would be chosen as if it were square and the middle of the film would be cut in the wrong
+/// place. `reset_sar=true` normalises the ratio only while the scale is proportional — which
+/// `force_original_aspect_ratio=increase` is — so this one scale both covers and squares, and the
+/// crop that follows takes the middle of a square-pixel picture: measured on a 1080 x 1080 frame
+/// through `sar 9:16`, `s:100x178 sar:1/1` then `s:100x100 sar:1/1`, where normalising first cost a
+/// second scale of the same frame.
 ///
 /// It is bounded by the caller and it is a *bound* on the wait rather than a budget for it
 /// (`video_probe::wait_bounded`): a grab that outlasts it is a process killed rather than a thread
@@ -1125,8 +1248,10 @@ pub(super) fn grab_a_frame(
         .arg("-frames:v")
         .arg("1")
         .arg("-vf")
+        // `reset_sar` rule: the cover carries the ratio, so the square is cut in square-pixel
+        // space — a film through a 9:16 pixel is portrait, its middle is not its frame's.
         .arg(format!(
-            "scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+            "scale={width}:{height}:force_original_aspect_ratio=increase:reset_sar=true,crop={width}:{height}"
         ))
         .arg("-f")
         .arg("rawvideo")

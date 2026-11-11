@@ -229,19 +229,21 @@ enum PinKeyAnswer {
 /// What the pin does with one message about a key of its own, asked once so that the callback below
 /// is the only place the answer is acted on.
 ///
-/// **A find bar that is up answers `PassedOn` to every message, the key that holds a film included.**
-/// The bar's field is a text field, its characters arrive as `WM_CHAR`, and `TranslateMessage` only
+/// **A text field that is up answers `PassedOn` to every message, the key that holds a film included.**
+/// The fields are text fields, their characters arrive as `WM_CHAR`, and `TranslateMessage` only
 /// makes one from a key-down nothing swallowed: a `Space` or a `T` taken here is a query that can
-/// hold neither (see `PIN_FIND_BAR_UP`). Everything else is the arrangement it always was — a key the
-/// pin answers is counted and swallowed, a chord and a release are swallowed and counted by nothing
-/// (see `pin_key_message_acts` and `pin_key_press_is_a_command`).
+/// hold neither (see `PIN_FIND_BAR_UP` and `PIN_PLAYLIST_SEARCH_UP`). Everything else is the arrangement
+/// it always was — a key the pin answers is counted and swallowed, a chord and a release are swallowed
+/// and counted by nothing (see `pin_key_message_acts` and `pin_key_press_is_a_command`).
+///
+/// `field_up` is either field: the find bar over a pinned page, or the playlist band's search.
 fn the_pin_answers_key(
     command: u8,
     message: u32,
-    find_bar_up: bool,
+    field_up: bool,
     toggle_was_down: bool,
 ) -> PinKeyAnswer {
-    if find_bar_up {
+    if field_up {
         return PinKeyAnswer::PassedOn;
     }
 
@@ -757,16 +759,17 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
             }
         }
 
-        // A find bar that is up is that window's own: a press is the field's there while another
+        // A text field that is up is that window's own: a press is the field's there while another
         // window of the run has none.
         if let Some(caret) = caret {
             // The answer is one value because the gate that matters is the first arm: a key the pin
-            // would have answered is passed on whole while a find bar is up, so the field's
-            // `WM_CHAR` can exist at all (see `the_pin_answers_key`).
+            // would have answered is passed on whole while either field is up, so its `WM_CHAR` can
+            // exist at all (see `the_pin_answers_key`).
             match the_pin_answers_key(
                 command,
                 message,
-                crate::app::seam::the_find_bar_is_up(caret),
+                crate::app::seam::the_find_bar_is_up(caret)
+                    || crate::app::seam::the_playlist_search_is_up(caret),
                 toggle_was_down,
             ) {
                 PinKeyAnswer::PassedOn => {}

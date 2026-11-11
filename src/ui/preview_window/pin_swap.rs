@@ -845,6 +845,12 @@ pub(super) struct PinInstallable {
 /// at another document is a question about the *new* file's kind, and is asked where that kind
 /// is known.
 pub(super) fn take_down_pinned_media(showing: &Path, coming: &Path) {
+    // The frames a drag was served from go with the file they were decoded out of: what is held is
+    // a run of one picture, at one size, and the next take-up holds its own (see `pin_scrub` and
+    // `pin_index`).
+    pin_scrub::forget();
+    pin_index::forget();
+
     // **A pinned PDF's viewer goes with the media it was drawing**, for the reason the film's host
     // and the page's registration go below: the file replacing this one paints the same band, and a
     // browser left standing over it is a document nobody asked for (see `engines::pdf_viewer`).

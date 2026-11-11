@@ -211,10 +211,15 @@ mod session;
 pub use frame_copy::audio_probe;
 pub(crate) use frame_copy::{force_opaque, open_stream, unpack_pair};
 pub use playback::{
-    apply_seek, audio_ended, copy_frame_into, dimensions, duration, failing_before_a_frame,
-    failing_path, is_paused, is_playing, mark_unplayable, play, play_audio, playing_path, plays,
-    position, resize, seek, set_paused, set_volume, stop, Crop, Picture,
+    apply_seek, audio_ended, copy_frame_into, displayed_shape, duration, failing_before_a_frame,
+    failing_path, header, is_paused, is_playing, mark_unplayable, play, play_audio, playing_path,
+    plays, position, resize, seek, set_paused, set_volume, stop, Crop, Picture,
 };
+
+// What a perf run of the frame pipeline measures against, and nothing the app itself asks for: the
+// preview window's geometry probe reads the header directly (see `probe_video_geometry`).
+#[cfg(test)]
+pub use playback::dimensions;
 
 // Reached from the preview window's own tests rather than from the app, so it is only here
 // where they are compiled.

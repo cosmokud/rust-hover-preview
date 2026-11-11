@@ -139,7 +139,9 @@ impl Session {
         };
 
         // What the picture is taken from, which is settled here rather than at every frame:
-        // the crop where the probe settled on one, and the whole frame where it did not.
+        // the crop where the probe settled on one, and the whole frame where it did not. The
+        // rectangle is a share of the raw frame, while the surface above is the displayed shape —
+        // the frame's own pixels corrected by its pixel aspect (see `source_rect`).
         let source = picture.crop.and_then(source_rect);
 
         let failed = Arc::new(AtomicBool::new(false));

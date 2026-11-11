@@ -230,6 +230,7 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
         caption,
         content,
         restore,
+        ..
     }) = pin_box_inputs()
     else {
         return;
@@ -324,6 +325,7 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
         caption,
         content,
         restore,
+        playlist,
     }) = pin_box_inputs()
     else {
         return;
@@ -334,7 +336,16 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
     // either of them can be said to own by a corner (see `centre_pinned_window`).
     let window = pinned_window_box_of(content, dpi, transport_bar, overlay, caption);
     let bounds = work_area_at((window.0 + window.2) / 2, (window.1 + window.3) / 2);
+    // **The band under the card is part of the window the pair puts in the middle**, so the room the
+    // file is fitted into gives up its rows: a card centred in a room measured without them is a
+    // window whose card is in the middle of the screen and whose band hangs under it — half the band
+    // low, where a band of the share it opens at is a band off the bottom of the display (see
+    // `centre_pinned_window`, which centres the window whole).
     let room = pinned_room(bounds, dpi, transport_bar, overlay, caption);
+    let room = ScreenBounds {
+        bottom: (room.bottom - playlist).max(room.top + 1),
+        ..room
+    };
 
     let shape = match frame {
         PinFrame::None => None,
@@ -484,6 +495,9 @@ pub(super) struct PinBoxInputs {
     pub(super) caption: i32,
     pub(super) content: ScreenRegion,
     pub(super) restore: Option<ScreenRegion>,
+    /// The rows the band under the card takes off the room the file is fitted into, and off the
+    /// window a double-click puts in the middle of the display (see `reset_pinned_size`).
+    pub(super) playlist: i32,
 }
 
 pub(super) fn pin_box_inputs() -> Option<PinBoxInputs> {
@@ -499,6 +513,7 @@ pub(super) fn pin_box_inputs() -> Option<PinBoxInputs> {
         caption: pin.caption,
         content: pin.content,
         restore: pin.restore,
+        playlist: pin_playlist::playlist_rows(pin),
     })
 }
 

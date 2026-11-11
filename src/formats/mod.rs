@@ -1,3 +1,4 @@
+pub(crate) mod animation_frames;
 pub(crate) mod archive_formats;
 pub(crate) mod audio_formats;
 pub(crate) mod calibre_formats;

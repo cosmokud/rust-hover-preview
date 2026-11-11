@@ -2060,6 +2060,9 @@ fn every_range_the_tray_hands_out_resolves_and_no_two_share_an_id() {
                 "IMAGE_CACHE_SIZE_CHOICES_MB" => IMAGE_CACHE_SIZE_CHOICES_MB.len() as u16,
                 "DISK_CACHE_SIZE_CHOICES_MB" => DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
                 "DECODE_BUDGET_CHOICES_GB" => ids::DECODE_BUDGET_CHOICES_GB.len() as u16,
+                "ANIMATED_WEBP_BUDGET_CHOICES_MB" => {
+                    ids::ANIMATED_WEBP_BUDGET_CHOICES_MB.len() as u16
+                }
                 "DOCUMENT_SCALE_CHOICES" => DOCUMENT_SCALE_CHOICES.len() as u16,
                 "BITMAP_SCALE_CHOICES" => BITMAP_SCALE_CHOICES.len() as u16,
                 "AUDIO_SCALE_CHOICES" => AUDIO_SCALE_CHOICES.len() as u16,

@@ -2029,7 +2029,6 @@ fn a_document_is_taken_up_at_the_boxes_page_and_a_caption_above_it() {
         *media = previous_media;
     }
 }
-
 /// **The raster is the fallback, and it lands on the band the strips leave rather than on the whole
 /// window.**
 ///
@@ -2089,6 +2088,116 @@ fn a_pinned_documents_raster_fills_the_band_the_strips_leave() {
     }
 
     drop(reader);
+
+    stand_pin(previous_pin);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = previous_media;
+    }
+}
+
+/// **A pinned picture that is transparent where its chrome is still answers both of its strips.**
+///
+/// A layered window is hit-tested by the shape of its pixels, so the rows the caption and the bar are
+/// drawn in are rows Windows hands the press to whatever stands behind the pin unless this window's
+/// own surface claims them — and a `.png` or a `.apng` with alpha in it is a picture whose every pixel
+/// there is *nothing*, which is what a pin drawn from such a frame was until the claim was taken on
+/// the holes themselves. What the pin draws is the picture, so the holes are what stays: a pixel the
+/// picture painted is the picture's and is left alone, and one it left empty is the least coverage a
+/// pixel can have (see `claim_the_holes` and `compose_preview_row`).
+///
+/// The frame a pin holds is the band's own size and lands on the whole of it, which is the road that
+/// composes row for row, and it is drawn over the see-through backdrop (`Background → Image`
+/// transparent) the bug was reported with.
+#[test]
+fn a_picture_transparent_under_its_chrome_still_answers_its_caption_and_its_bar() {
+    let _room = the_room_to_itself();
+    let _stood = BandBackdrops::stood_at(
+        TransparentBackground::Transparent,
+        TransparentBackground::Black,
+    );
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut media| media.take());
+    let previous_pin = take_pin_for_a_test();
+
+    let content = (100, 80, 220, 300);
+    let mut pin = overlay_pin(content, PinChrome::always());
+    pin.dpi = 96;
+    pin.frame = PinFrame::Shaped;
+    pin.overlay = true;
+    pin.zoom = None;
+    pin.transport_bar = true;
+    let caption = pin.caption;
+    stand_pin(Some(pin));
+
+    let (width, height) = the_pins_window_size();
+    let transport = pinned_transport_height(96, true);
+    assert!(
+        caption > 0 && transport > 0,
+        "the pin owes both strips, so both rows are asserted"
+    );
+
+    // A picture blank to the edges in the band's own size: every pixel of it nothing at all.
+    let (band_width, band_height) = (width.max(1) as u32, height.max(1) as u32);
+    let blank = [0u8; 4].repeat(band_width as usize * band_height as usize);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(static_image_media(
+            Arc::new(ImageFrame::new(blank, band_width, band_height, 0)),
+            MediaType::AnimatedApng,
+        ));
+    }
+
+    let hwnd = HWND(0x1000 as *mut _);
+    unsafe { render_pinned_preview_at(hwnd, content.0, content.1) };
+
+    let painted = the_painted_surface(hwnd, width, height);
+    for row in 0..caption as usize {
+        for column in 0..width as usize {
+            assert_eq!(
+                surface_pixel(&painted, (width as u32, height as u32), row, column),
+                &[1, 1, 1, 1],
+                "row {row} column {column} of the caption is the pin's own claim rather than a hole \
+                 the press falls through"
+            );
+        }
+    }
+    for row in (height - transport) as usize..height as usize {
+        for column in 0..width as usize {
+            assert_eq!(
+                surface_pixel(&painted, (width as u32, height as u32), row, column),
+                &[1, 1, 1, 1],
+                "row {row} column {column} of the transport bar is the pin's own claim"
+            );
+        }
+    }
+    assert_eq!(
+        surface_pixel(
+            &painted,
+            (width as u32, height as u32),
+            caption as usize,
+            0
+        ),
+        &[1, 1, 1, 1],
+        "and so is the picture's own band between them: there is no row of a pin the desktop shows \
+         through when the chrome is up"
+    );
+
+    // And a pixel the picture really painted is the picture's, not the claim's: what is claimed is
+    // only ever the hole itself.
+    let half = [255u8, 255, 255, 128].repeat(band_width as usize * band_height as usize);
+    if let Ok(mut media) = CURRENT_MEDIA.lock() {
+        *media = Some(static_image_media(
+            Arc::new(ImageFrame::new(half, band_width, band_height, 0)),
+            MediaType::AnimatedApng,
+        ));
+    }
+    unsafe { render_pinned_preview_at(hwnd, content.0, content.1) };
+    let painted = the_painted_surface(hwnd, width, height);
+    let middle = surface_pixel(&painted, (width as u32, height as u32), caption as usize, 0);
+    assert_eq!(
+        middle,
+        &[128, 128, 128, 128],
+        "a pixel the picture painted is left as the picture's own premultiplied coverage, which is \
+         what the compositor draws it from"
+    );
 
     stand_pin(previous_pin);
     if let Ok(mut media) = CURRENT_MEDIA.lock() {

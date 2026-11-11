@@ -175,6 +175,7 @@ fn a_failed_file_with_nowhere_to_step_to_is_left_standing_as_the_mark() {
         background: [10, 20, 30],
         foreground: [240, 240, 240],
         accent: [0, 0, 0],
+        blue: [97, 175, 239],
         number: [209, 154, 102],
         dark: true,
     };

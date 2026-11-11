@@ -1142,6 +1142,13 @@ pub(super) fn end_pin_beside_the_state() {
         *request = None;
     }
 
+    // And the frames a picture that plays was read into: a run held for a pin that has gone is a
+    // run nothing will be shown from, and one of a long animation is the largest single thing this
+    // app holds. It goes with the pin rather than with the process (see `pin_index` and
+    // `pin_scrub`).
+    pin_scrub::forget();
+    pin_index::forget();
+
     // And the window a pinned mpv film was drawn in — the host, a child of the pin's on the child
     // road and a window of the desktop's that owns the pin's chrome on the default one — with the
     // player it held: it is a window of this app's own, and one left standing for a pin that has gone

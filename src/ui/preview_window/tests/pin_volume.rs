@@ -28,7 +28,13 @@ fn a_volume_popup_is_kept_on_its_control_and_put_away_once_the_pointer_has_left_
     let window = pin.window_box();
     let (width, height) = pin.window_size();
     let strip = pinned_transport_height(pin.dpi, true);
-    let popup = pin_chrome::volume_popup_layout(width, (height - strip).max(0), strip, pin.dpi);
+    let popup = pin_chrome::volume_popup_layout(
+        width,
+        (height - strip).max(0),
+        strip,
+        pin.dpi,
+        pin_chrome::clock_width(pin_duration(&pin.transport), pin.dpi),
+    );
     let on_the_popup = Some((
         window.0 + (popup.panel.left + popup.panel.right) / 2,
         window.1 + (popup.panel.top + popup.panel.bottom) / 2,
@@ -176,6 +182,9 @@ fn a_film_stepped_onto_from_a_sound_is_played_at_the_films_own_level() {
 
     // The pin is up on a sound, which the tray has at 100%.
     stand_pin(Some(PinnedPreview {
+        transport_animated: false,
+        transport_controllable: false,
+        fps: PinFps::default(),
         volume: PinVolume {
             audio: true,
             level: 100,
