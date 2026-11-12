@@ -91,7 +91,19 @@ pub(super) unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
 
         (
             pin.frame,
-            pin.resize_edge(point.0 - origin.0, point.1 - origin.1),
+            // **The box the pointer is judged against is the window's own**, read live beside its
+            // corner rather than the box the pin remembers — the same lesson `begin_pin_drag` is
+            // written on: a window a maximize, a display change or a swap's held box has left a
+            // different size than the pin's record is a window whose whole middle reads as an
+            // edge, so the pointer wears a resize cursor over a picture that has no edge there and
+            // a press that meant to carry the window begins a resize of it instead (see
+            // `pin_resize_edge` and `begin_pin_drag`).
+            pin_resize_edge(
+                (origin.2.max(1), origin.3.max(1)),
+                pin.dpi,
+                point.0 - origin.0,
+                point.1 - origin.1,
+            ),
             pin.dragging.map(|drag| drag.action),
         )
     };
