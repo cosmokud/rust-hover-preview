@@ -184,12 +184,14 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Video** — `100%` down to `0%`, loudest first. A film's soundtrack starts at `0%`, so a hover never makes a sound the pointer did not ask for.
   - **Audio** — The same levels; a sound file starts at `10%`, and a sound at `0%` still shows its card, silently.
 - **Performance**
-  - **Cache** — What a preview may cost between hovers: `Image (RAM)` offers `16 GB` down to `0 MB`, the three disk caches `128 GB` down to `0 MB`, and a size that is a whole gigabyte is named in it (`4 GB`, `128 GB`).
-    - **`Image (RAM)`** = decoded frames kept in memory.
-    - **`Document (Disk)`** = engine-drawn pages kept as temp files.
-    - **`Image (Disk)`** = the pictures ImageMagick developed, kept as temp files.
-    - **`General (Disk)`** = the subtitle tracks a film's embedded ones are copied into, and the track facts a sound was read for, kept as temp files; `0` draws a film without its subtitles and reads every sound again.
-  - **Decode Budget** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
+  - **Disk Cache** — What a preview's own files may cost between hovers: `Document`, `Image`, and `General`, each `128 GB` down to `0 MB`, and a size that is a whole gigabyte is named in it (`4 GB`, `128 GB`).
+    - **`Document`** = engine-drawn pages kept as temp files.
+    - **`Image`** = the pictures ImageMagick developed, kept as temp files.
+    - **`General`** = the subtitle tracks a film's embedded ones are copied into, and the track facts a sound was read for, kept as temp files; `0` draws a film without its subtitles and reads every sound again.
+  - **Memory** — What a preview may cost in RAM between hovers.
+    - **`Image`** = decoded frames kept in memory, `16 GB` down to `0 MB`.
+    - **`Decode Budget`** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
+    - **`Animated WEBP`** — the room a pinned picture's held run of frames is given, `8 GB` down to `64 MB`.
   - **Explorer Poll** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
     - Lower answers a move sooner; higher is lighter on CPU and Explorer.
   - **Hardware Acceleration (MPV Only)** — checked by default: a film mpv plays is decoded on the graphics card through mpv's own `--hwdec=auto`, whose safe list and software fallback are that player's business.

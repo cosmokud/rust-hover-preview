@@ -564,12 +564,12 @@ pub struct AppConfig {
     /// How much of what the engines drew is kept between hovers, in megabytes: the pages the
     /// render tier exported and the pages the engine beside it converted, kept as files under
     /// the temp folder and given up least recently used first. See
-    /// `Performance → Cache → Document` in the tray.
+    /// `Performance → Disk Cache → Document` in the tray.
     pub document_cache_mb: u32,
     /// How much of what an image-developing engine developed is kept between hovers, in
     /// megabytes: the PNG the engine wrote for a file, kept as a page under the temp folder
     /// beside the documents' pages and given up least recently used first. See
-    /// `Performance → Cache → Image (Disk)` in the tray.
+    /// `Performance → Disk Cache → Image` in the tray.
     ///
     /// It is the one cache a developed picture has of its own: the frame it was drawn as is
     /// `image_cache_mb`, and a page of a *document* is `document_cache_mb` whatever it is drawn
@@ -578,7 +578,7 @@ pub struct AppConfig {
     /// How much of what a film's own subtitle tracks were copied into is kept between hovers, in
     /// megabytes: the small subtitle files this app's extraction wrote under the general folder,
     /// with the fonts that came out of the container dumped beside them, given up least recently
-    /// used first. See `Performance → Cache → General (Disk)` in the tray.
+    /// used first. See `Performance → Disk Cache → General` in the tray.
     ///
     /// It is the one cache a hover's subtitles have, and it is what makes a hover a read of a few
     /// dozen kilobytes instead of a stream of the whole film: the filter that draws an embedded
