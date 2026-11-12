@@ -8,6 +8,7 @@ use super::*;
 // only reads what it published. Their storage moved, their readers did not (see
 // `crate::app::seam::PIN_MEDIA_LEFT_DOWN`).
 use crate::app::seam::{PIN_MEDIA_LEFT_DOWN, PIN_MEDIA_LEFT_PRESSES};
+use crate::ui::preview_window::pin_trace::note_pin_trace;
 
 /// Whether the pointer is carrying the pinned window, or pulling it to a new size, right now.
 ///
@@ -293,6 +294,20 @@ pub(super) unsafe fn settle_pinned_press(hwnd: HWND, seen_presses: &mut u64) {
     let pressed_the_preview = is_preview_window(under)
         || (film != 0 && film == under)
         || engine_window_is_at(point.0, point.1);
+
+    // **Which window the press was read on, by handle.** The classes of the pin and of the preview
+    // are not distinguishable in a log that names them by class, and the one question a press that
+    // went nowhere asks is which of the two windows of ours took it (see `pin_drag::begin_pin_drag`,
+    // which writes a band line and nothing else).
+    note_pin_trace!(
+        "pin press read at {},{} under {:?} pin {:?} film {:?} preview {}",
+        point.0,
+        point.1,
+        under,
+        pin_real_window::real_pin_window(),
+        film,
+        is_preview_window(under) as u8,
+    );
 
     if pressed_the_preview {
         put_pin_at_the_front(hwnd);
