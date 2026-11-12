@@ -11,6 +11,12 @@
 //! What is read is the file whole, under the same budget every decoder that reads
 //! bytes rather a reader is held to, and the answer is held under the file's own
 //! version so a bar asked for it on every repaint costs one read per file.
+//!
+//! **Which container it is, asked of twelve bytes and no more.** The whole-file read
+//! is the expensive half of this answer, and only a GIF, an APNG and an animated WebP
+//! can give one: a film, a document or a still asked for its frame run cost the read
+//! the film's own length before the walk could say it had no blocks to walk (see
+//! `begins_a_walked_container`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -173,8 +179,46 @@ fn key_of(path: &Path) -> TimelineKey {
     }
 }
 
+/// How many bytes of a file are read to settle which container it is: a GIF's four, a WebP's
+/// twelve, an APNG's eight, and a handful over for a walk that has to look at all three.
+const CONTAINER_HEAD: usize = 12;
+
+/// Whether a file's first bytes are one of the three containers the walks below read.
+///
+/// **The head is what says a file has a frame run at all, and the whole file is read only where
+/// it does.** Every call of `timeline` for a file that is not one of these — a film, a document,
+/// a still — used to pay the read under the budget before the walk could report that its blocks
+/// were not a walk of anything, which on a cold 1080p episode was the four seconds a pin spent
+/// dead (see the module's note, and `webp_image::read`, which asks the same question the same way).
+fn begins_a_walked_container(path: &Path) -> bool {
+    let mut head = [0u8; CONTAINER_HEAD];
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+
+    let mut filled = 0;
+    while filled < head.len() {
+        match std::io::Read::read(&mut file, &mut head[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            // A file that cannot be read to the end of its own head is not one a walk can
+            // answer: the same nothing a file of no blocks gives, arrived at without the read.
+            Err(_) => return false,
+        }
+    }
+
+    let head = &head[..filled];
+    head.starts_with(b"GIF8")
+        || (head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP")
+        || head.starts_with(&PNG_SIGNATURE)
+}
+
 /// The file's own delays, walked out of its container's block list.
 fn read_timeline(path: &Path) -> Option<FrameTimeline> {
+    if !begins_a_walked_container(path) {
+        return None;
+    }
+
     let bytes = read_within_budget(path)?;
 
     let delays = if bytes.starts_with(b"GIF8") {

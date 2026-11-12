@@ -416,3 +416,32 @@ fn a_volume_change_begins_no_player() {
         *media = previous_media;
     }
 }
+
+/// **A hand the machine says is still down is a hand on the button, whatever the hook published**,
+/// and a hand the machine says is up ends the drag even where the published state is a tick behind.
+///
+/// The two readings are one question asked of two clocks, and either one saying *down* is the
+/// safe answer: a drag ended on a tick-old *up* is a window let go of under a hand that is still
+/// holding it (see `the_hand_is_on_the_button`).
+#[test]
+fn the_button_itself_is_asked_as_well_as_the_one_the_hook_published() {
+    let _room = the_room_to_itself();
+
+    publish_pin_media_press(false, false);
+    super::probes::let_the_button_answer_for_itself();
+    assert!(
+        !the_hand_is_on_the_button(),
+        "nothing published and nothing down on the machine is no hand on the button"
+    );
+    super::probes::the_button_is_down_now(true);
+    assert!(
+        the_hand_is_on_the_button(),
+        "and the machine's own answer is a hand on the button, published or not"
+    );
+
+    // And the other way round: the published state alone is still an answer.
+    super::probes::let_the_button_answer_for_itself();
+    publish_pin_media_press(true, false);
+    assert!(the_hand_is_on_the_button(), "the hook's word is a hand too");
+    publish_pin_media_press(false, false);
+}

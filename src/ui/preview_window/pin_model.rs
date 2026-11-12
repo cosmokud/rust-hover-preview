@@ -953,6 +953,22 @@ pub(super) fn is_played_picture(kind: Option<MediaType>) -> bool {
     )
 }
 
+/// Whether a kind is one whose frames the app walks into an index of its own — a GIF's or an
+/// animated WebP's, and nothing else.
+///
+/// **It is `pin_index`'s own question rather than `is_played_picture`'s**, and the two differ by
+/// one kind: an APNG is composited by the `image` crate from its own frame records and needs no
+/// index at all, so the walk behind the answer is a read of the whole file taken for a number
+/// nothing is going to index. A HEIF or a JXL sequence is held whole by the engine in the first
+/// place, and is not a played picture here for the same reason (see `pin_index`'s own note, which
+/// returns immediately for every kind but these two).
+pub(super) fn is_an_indexed_picture(kind: Option<MediaType>) -> bool {
+    matches!(
+        kind,
+        Some(MediaType::AnimatedGif) | Some(MediaType::AnimatedWebP)
+    )
+}
+
 /// Whether a kind is one whose transport bar carries controls that do something.
 ///
 /// It is the same question as whether the bar is drawn at all, and it is asked as a separate
