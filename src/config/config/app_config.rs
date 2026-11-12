@@ -564,12 +564,12 @@ pub struct AppConfig {
     /// How much of what the engines drew is kept between hovers, in megabytes: the pages the
     /// render tier exported and the pages the engine beside it converted, kept as files under
     /// the temp folder and given up least recently used first. See
-    /// `Performance → Cache → Document` in the tray.
+    /// `Performance → Disk Cache → Document` in the tray.
     pub document_cache_mb: u32,
     /// How much of what an image-developing engine developed is kept between hovers, in
     /// megabytes: the PNG the engine wrote for a file, kept as a page under the temp folder
     /// beside the documents' pages and given up least recently used first. See
-    /// `Performance → Cache → Image (Disk)` in the tray.
+    /// `Performance → Disk Cache → Image` in the tray.
     ///
     /// It is the one cache a developed picture has of its own: the frame it was drawn as is
     /// `image_cache_mb`, and a page of a *document* is `document_cache_mb` whatever it is drawn
@@ -578,7 +578,7 @@ pub struct AppConfig {
     /// How much of what a film's own subtitle tracks were copied into is kept between hovers, in
     /// megabytes: the small subtitle files this app's extraction wrote under the general folder,
     /// with the fonts that came out of the container dumped beside them, given up least recently
-    /// used first. See `Performance → Cache → General (Disk)` in the tray.
+    /// used first. See `Performance → Disk Cache → General` in the tray.
     ///
     /// It is the one cache a hover's subtitles have, and it is what makes a hover a read of a few
     /// dozen kilobytes instead of a stream of the whole film: the filter that draws an embedded
@@ -661,7 +661,7 @@ pub struct AppConfig {
     /// The one setting here that bounds a file rather than a cache: a reader is
     /// handed it before it allocates, so a file larger than the budget is answered
     /// with no preview instead of with memory the app may not get. The tray lists it
-    /// as `Decode Budget → Ceiling`, under the room an animated WebP's run of frames
+    /// as `Memory → Decode Budget`, above the room an animated picture's run of frames
     /// is given (see `animated_webp_budget_mb`).
     pub decode_budget_gb: f32,
     /// What one pinned picture's held run of frames may take, in megabytes.
@@ -669,7 +669,7 @@ pub struct AppConfig {
     /// A picture that plays is read once, in the background, and every frame of it is kept so
     /// that a hand on its track is shown whatever frame it names at once (see `pin_index`). This
     /// is what bounds that run: the frames are held at the pin's own size while they fit, and at
-    /// the largest size that does when they do not. It is `Memory → Animated WEBP` in the
+    /// the largest size that does when they do not. It is `Memory → Animated Image` in the
     /// tray, and it is the one setting under that submenu that is about what is *kept*.
     pub animated_webp_budget_mb: u32,
     /// Whether a video is decoded on the graphics card rather than on a core, which is the

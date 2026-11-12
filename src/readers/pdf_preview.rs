@@ -209,7 +209,7 @@ fn remember_book_page(key: PageDimensionKey, page: Option<BookPage>) {
 /// Nothing is held on this side: the render opens the document and rasters the page, which is
 /// the whole of what a PDF hover costs, and it is paid again on the next hover of the same
 /// file. What was drawn is a screenful of pixels rather than the document, and holding those
-/// costs more than drawing them again (see `Performance → Cache` in the tray).
+/// costs more than drawing them again (see `Performance → Disk Cache` in the tray).
 pub fn render_first_page(
     path: &Path,
     max_width: u32,
