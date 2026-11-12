@@ -806,6 +806,16 @@ pub(super) unsafe extern "system" fn window_proc(
             if text_find::release() {
                 render_layered_preview(hwnd);
             }
+            // **Who took the pointer, while a hand still held it**: a drag that neither moved nor
+            // clicked is a drag nobody's messages were carrying, and the window named here is the one
+            // that took them (see `pin_capture_lost`). `lParam` is the window gaining the capture.
+            if pinned() && pin_is_dragging() {
+                note_pin_trace!(
+                    "the pointer was taken from the pin while a drag was in hand, by {:?} (button down {})",
+                    HWND(lparam.0 as *mut _),
+                    left_button_down() as u8
+                );
+            }
             // Whatever a pinned window was doing with the pointer is over: a capture lost to
             // another window is a drag that is not coming back, and one this app released itself
             // is its own road's to finish (see `pin_capture_lost`).

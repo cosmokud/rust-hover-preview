@@ -874,7 +874,24 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // nothing is left standing to aim a player at.
     if let Some(mut pinned) = pin_state() {
         if let Some(pin) = pinned.pin_mut() {
-            pin.dragging = None;
+            // **A pointer taken from a hand that is still on the button is not the hand letting go
+            // of the window.** A player a step begins makes its window on this same desktop and can
+            // take the capture as it starts — mpv's does, while it is building its first frame — and
+            // a drag dropped on that is a window that cannot be moved for as long as the player is
+            // starting: every press would answer with a drag that is dead before the hand has moved.
+            // So the drag is kept and marked as one the loop carries, which follows the pointer off
+            // the button's own state and ends it when the hand lets go, capture or no capture (see
+            // `settle_pinned_engine_drag` and `carry_pin_drag_with_the_hand`).
+            if pin.dragging.is_some() && left_button_down() {
+                if let Some(drag) = pin.dragging.as_mut() {
+                    drag.delivered = false;
+                }
+            } else {
+                pin.dragging = None;
+            }
+            // A caption button is the other answer: a press it was holding is let go of with the
+            // pointer, because the release that would have clicked it is somebody else's to read
+            // now (see `pinned_release`).
             pin.pressed = None;
             pin.transport.pressed = None;
             pin.transport.seeking = None;
