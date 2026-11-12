@@ -157,6 +157,22 @@ pub(super) fn pin_arc_set(since: Option<Duration>) {
     );
 }
 
+/// Whether the band a pinned window's arc would be drawn over is a film.
+///
+/// A film's band is a picture that moves: a player's window the host draws, or the frames the media
+/// engine hands into this app's own surface. The pin's arc is drawn over that band, so a wait that
+/// outlives the film it left standing — a step's hold for a slow first frame, a load over the file
+/// on screen — turns the arc over a picture that is already playing, which reads as a spinner stuck
+/// on a video rather than as a wait still running. What a film's own next frame says is already
+/// that the window answers, and the hold's box changes hands when the picture does whether or not
+/// an arc was drawn for it, so nothing is owed the picture the arc would have covered.
+pub(super) fn the_band_shows_a_film() -> bool {
+    matches!(
+        current_media_type(),
+        Some(MediaType::Video | MediaType::NativeVideo)
+    )
+}
+
 /// Draw the arc a pinned window is waiting for a file with, in the middle of its media band.
 ///
 /// It goes *over* the band rather than in place of it: the file the pin is showing is the pin
