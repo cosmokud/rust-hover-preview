@@ -1118,14 +1118,21 @@ impl PinSwapHold {
         // where the picture is never ready the box can still change a moment before that road's own
         // give-up: that is the degraded case, and it is the swap with no hold at all rather than a new
         // failure.
-        let alive = self
-            .file
-            .media
-            .video_process
+        // **The player this hold is waiting for is the one it started**, not whichever id is newest:
+        // `VIDEO_PID` is written by every player begun in the run, and a wait measured against it is
+        // asked about somebody else's film the moment a second pick has begun one — which is the wait
+        // that then stands for the whole `VIDEO_START_WAIT_SECS` with the film already playing on the
+        // band (see `the_source_is_standing_try` and `the_player_on_the_band`, which asks the picture
+        // the same way rather than the newest id).
+        let mut player = self.file.media.video_process.as_mut();
+        let alive = player
             .as_mut()
             .is_some_and(|player| matches!(player.try_wait(), Ok(None)));
-        let picture =
-            pin_film_thumbnail::the_source_is_standing_try(VIDEO_PID.load(Ordering::SeqCst));
+        let picture = pin_film_thumbnail::the_source_is_standing_try(if alive {
+            player.as_ref().map_or(0, |player| player.id())
+        } else {
+            0
+        });
 
         let waited = self.started.elapsed();
         player_swap_wait(picture, alive, waited)
