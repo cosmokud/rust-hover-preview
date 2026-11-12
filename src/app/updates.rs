@@ -7,18 +7,25 @@
 //! opens the release page in the user's own browser instead, and `Cancel` is
 //! nothing at all.
 //!
-//! What asks is the app's own start, so that the answer is waiting by the time
-//! anyone looks for it, and the tray menu, because an opening is the one other
-//! moment a user is looking for one: `show_context_menu` asks for a check as the
-//! menu is built, the check runs on a thread of its own, and the row above the
-//! `System` submenu reports what the last one found. `System → Check for Updates`
-//! is the switch the checks answer to — on where the app starts, and nothing is
-//! asked at any moment where it is off (see `check_for_updates`).
-//! `System → Silent Auto-Update`, off where the app starts, is what the start's
-//! check does with its answer where the user has asked for it: the same fetch and
-//! the same silent installer the `Auto` answer runs, with nothing said at all — a
-//! menu's check never installs anything, because a session with windows on screen
-//! is a session an install would end (see `silent_auto_update`).
+//! What asks is three moments: the app's own start, so that the answer is waiting
+//! by the time anyone looks for it; every opening of the tray menu, because an
+//! opening is the other moment a user is looking for one; and the timer the tray
+//! loop keeps (`TIMER_CHECK`), so a run that never opens a menu still checks. All
+//! three answer to one period — `config.ini`'s `update_check_hours`, which the
+//! check itself reads every time it is asked — so asking at three moments is one
+//! check per period however often any of them comes round (see `check_interval`
+//! and `due_for_check`). The check runs on a thread of its own and the row above
+//! the `System` submenu reports what the last one found. `System → Check for
+//! Updates` is the switch the checks answer to — on where the app starts, and
+//! nothing is asked at any moment where it is off.
+//! `System → Silent Auto-Update`, off where the app starts, is what any check does
+//! with its answer where the user has asked for it: the same fetch and the same
+//! silent installer the `Auto` answer runs, with nothing said at all. What decides
+//! whether it happens now is `the_app_is_idle` rather than which moment asked — a
+//! check that found an update over a pin, a preview, an open menu or a dialog is
+//! one whose install is owed rather than done, and `AWAITING_INSTALL` keeps it for
+//! the tray's short tick (`TIMER_DUE`), which takes it the moment the screen is
+//! empty. Nothing of the user's is ever closed by it.
 //! Nothing here is on a hover's path, and a check that never happens costs a
 //! preview nothing.
 //!
@@ -90,21 +97,32 @@ const INSTALLER_FILE: &str = "rust-hover-preview-setup.exe";
 /// statistics apart from a browser's.
 const USER_AGENT: &str = concat!("RustHoverPreview/", env!("CARGO_PKG_VERSION"));
 
-/// How often the check may be answered, however many times it is asked for. Six
-/// hours is often enough for a release, and an opening of the menu is not a
-/// reason to ask GitHub anything: the check is skipped while the last one is
-/// within this, and the six hours are counted however that one ended, so a machine
-/// that is offline does not ask again on the next menu. Nothing about it is
-/// written down — a run has no record of the run before it — so the check a run
-/// makes as it starts is always its first.
-const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
-
 /// Nothing smaller than this is this app's installer — the smallest one ever
 /// published is a few megabytes — so a truncated download is refused rather
 /// than run.
 const MIN_INSTALLER_BYTES: u64 = 256 * 1024;
 
 const READ_CHUNK_BYTES: u32 = 64 * 1024;
+
+/// How long the checks wait between two of them: the `config.ini` value in hours, read every
+/// time the question is asked so a hand edit — or a `save` — reaches the next check rather than
+/// the next run (see `due_for_check` and `shell::tray::ids::TIMER_CHECK`). A file that cannot be read is
+/// the default period rather than no check at all.
+fn check_interval() -> Duration {
+    let hours = crate::CONFIG
+        .lock()
+        .map(|config| config.update_check_hours)
+        .unwrap_or(crate::config::config::DEFAULT_UPDATE_CHECK_HOURS);
+
+    Duration::from_secs(hours.saturating_mul(60 * 60))
+}
+
+/// The same period as the tray's timer wants it, in milliseconds: what the tray asks `SetTimer`
+/// for, capped at what a timer may be given so a file naming a huge number is a check that
+/// happens less often rather than one that never does.
+pub(crate) fn check_interval_ms() -> u32 {
+    u32::try_from(check_interval().as_millis()).unwrap_or(u32::MAX)
+}
 
 /// The version of the newest release, where it is newer than the one running:
 /// what the menu row is built from, and the whole of what a check keeps. Nothing
@@ -113,54 +131,45 @@ const READ_CHUNK_BYTES: u32 = 64 * 1024;
 static OFFER: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
 /// When this run last made a check, which is the whole of what the interval is
-/// counted from. It goes with the run that made it: a run that has just started
-/// has asked nothing yet, and what some earlier run found is no reason for this
-/// one to wait a moment before asking.
+/// counted from — the interval being `check_interval`, the file's own hours. It goes
+/// with the run that made it: a run that has just started has asked nothing yet, and
+/// what some earlier run found is no reason for this one to wait a moment before asking.
 static LAST_CHECK: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether a check is running, so that the menu being opened twice in a row
 /// does not start two of them.
 static CHECKING: AtomicBool = AtomicBool::new(false);
 
-/// When a check is asked for, which is the whole of what tells two of them apart: the one
-/// moment this app puts an update on without asking is its own start, and a check asked for by
-/// a menu opening runs while windows of this app's may be up, each one of which an install nobody
-/// asked for would close.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Moment {
-    /// The check a run makes as it starts, before anything is on screen.
-    Start,
-    /// The check an opening of the tray menu asks for.
-    Menu,
+/// Whether a check found an update the app is owed an install of: one that came back while
+/// the screen was not empty, and one the switch was turned on over (see `the_app_is_idle`).
+/// It is taken by the tray's short tick (`TIMER_DUE`) through `settle_the_owed_install`.
+static AWAITING_INSTALL: AtomicBool = AtomicBool::new(false);
+
+/// Whether the silent installer is running, so that two checks finding the same update do not
+/// fetch it twice: a mega-byte download started twice is two installers, and each one ends the
+/// app the other has just replaced.
+static INSTALLING: AtomicBool = AtomicBool::new(false);
+
+/// Whether the tray's own menu is open, written around `show_context_menu`.
+///
+/// It is the one thing of the user's an install cannot see from where it stands: the row that
+/// asked for the check is the row a download landing mid-click would take away, and a menu is
+/// answered on the tray's own thread while an install ends the app.
+static A_MENU_IS_OPEN: AtomicBool = AtomicBool::new(false);
+
+/// Note that the tray's own menu has just been put up (`open` set) or has just been answered
+/// and is going away (see `A_MENU_IS_OPEN`).
+pub(crate) fn note_a_menu_is_open(open: bool) {
+    A_MENU_IS_OPEN.store(open, Ordering::Release);
 }
 
-/// Whether a check made at `moment` puts on what it finds. The two halves are the whole of the
-/// rule: the start of a run is the one moment this app has no window of its own to close, and
-/// the switch is the user's answer to whether a start may do it (see `silent_auto_update`).
-fn installs_unasked(moment: Moment, silent_auto_update: bool) -> bool {
-    moment == Moment::Start && silent_auto_update
-}
-
-/// Ask for a check, without waiting for one, from an opening of the tray menu.
+/// Ask for a check, without waiting for one, from any of the three moments that ask: the run's
+/// start, an opening of the tray menu, and the tray's own hours timer.
 ///
 /// Nothing is asked where the checks are switched off: the `System → Check for
 /// Updates` row is the switch (see `check_for_updates`), and a run that has been
 /// told not to ask does not start the thread at all.
 pub(crate) fn request_check() {
-    request_check_at(Moment::Menu);
-}
-
-/// Ask for a check, without waiting for one, from this run's own start. It is the one
-/// moment an update found may be put on without asking, and the one moment there are no
-/// windows of this app's to close (see `silent_auto_update`).
-pub(crate) fn request_startup_check() {
-    request_check_at(Moment::Start);
-}
-
-/// The check itself, asked for by one of the two moments above. The interval, the guard
-/// against a second one and the thread are the same whichever moment asked: a check is one
-/// question about one address, and what a moment changes is only what is done with the answer.
-fn request_check_at(moment: Moment) {
     let enabled = crate::CONFIG
         .lock()
         .map(|config| config.check_for_updates)
@@ -173,14 +182,63 @@ fn request_check_at(moment: Moment) {
         return;
     }
 
-    std::thread::spawn(move || {
-        check(moment);
+    std::thread::spawn(|| {
+        check();
         CHECKING.store(false, Ordering::SeqCst);
     });
 }
 
+/// Everything a silent install would close, read as one answer: whether the app is idle enough
+/// that putting on what a check found costs the user nothing.
+///
+/// The eight readings are the whole of what an install takes away: a pin (`the_pin_is_up`), a
+/// window detached from this run (`is_detached`), a preview or a spinner the hover is holding
+/// (`HOLD_REGION_JOURNEY`/`HOLD_REGION_PREVIEW`), a page a browser engine of this app's is
+/// drawing (`ENGINE_SHOWING`), a dialog the app is drawing (`is_confirming`), the tray's own
+/// menu (`A_MENU_IS_OPEN`) and a pin's menu (`the_menu_window`). The last two are menus rather
+/// than windows because a menu is the one thing answered on a thread an install ends, and the
+/// row under the pointer is the one it would take away mid-click.
+pub(crate) fn the_app_is_idle() -> bool {
+    idle_with(
+        crate::app::seam::the_pin_is_up(),
+        crate::app::detach::is_detached(),
+        crate::app::seam::HOLD_REGION_JOURNEY.get().is_some(),
+        crate::app::seam::HOLD_REGION_PREVIEW.get().is_some(),
+        crate::app::seam::ENGINE_SHOWING.load(Ordering::Acquire),
+        crate::app::dialogs::is_confirming(),
+        A_MENU_IS_OPEN.load(Ordering::Acquire),
+        // A pin's menu is a window of the viewer's, published through the seam: the handle is
+        // there only while the panel is up, and zero is a window never made or not drawn.
+        crate::app::seam::the_menu_window() != 0,
+    )
+}
+
+/// The eight readings as a rule, so the gate can be answered by a table rather than by a desktop
+/// (see `the_app_is_idle`).
+#[allow(clippy::too_many_arguments)] // One reading per thing the gate looks at, and a struct of them would be a type for one call.
+fn idle_with(
+    pin_up: bool,
+    detached: bool,
+    hold_journey: bool,
+    hold_preview: bool,
+    engine_page: bool,
+    dialog: bool,
+    tray_menu: bool,
+    pin_menu: bool,
+) -> bool {
+    !(pin_up
+        || detached
+        || hold_journey
+        || hold_preview
+        || engine_page
+        || dialog
+        || tray_menu
+        || pin_menu)
+}
+
 /// The version of the update on offer, where one is: what the menu row is built
-/// from, and `None` where there is nothing to say.
+/// from, and `None` where there is nothing to say. An install does not take it off the
+/// offer: the row stays for a hand click whatever the quiet one is doing (see `OFFER`).
 pub(crate) fn available() -> Option<String> {
     OFFER.lock().ok().and_then(|offer| offer.clone())
 }
@@ -194,6 +252,9 @@ pub(crate) fn available() -> Option<String> {
 /// answered where there is nothing on offer and where nothing could be fetched;
 /// the two are one answer to the caller, and only the last is one the user is told
 /// about.
+///
+/// It is the one install the user asked for by clicking, so it waits for nothing —
+/// the click is the answer to what a silent install has to ask `the_app_is_idle`.
 pub(crate) fn install() -> bool {
     let Some(version) = available() else {
         return false;
@@ -207,34 +268,89 @@ pub(crate) fn install() -> bool {
     installed
 }
 
-/// Put an update the app found as it started on without asking anybody: the same fetch and the
+/// Put an update a check found on without asking anybody: the same fetch and the
 /// same installer the `Auto` answer runs, and nothing said at all where any of it fails — a
 /// machine that is offline, a release carrying no installer, a program the machine will not
 /// start. What was found stays on offer, so the row above the `System` submenu is still there to
 /// be clicked by hand.
 ///
-/// It runs on the thread that asked for it — the check's own, or the one the click that turned
-/// the switch on spawned — so nothing waits on the download, and the app ends itself through the
-/// tray window rather than from here (see `note_update_installed`).
+/// It runs on a thread of its own — the one `start_the_install` spawned — so nothing waits on the
+/// download, and the app ends itself through the tray window rather than from here (see
+/// `note_update_installed`). It is only reached where `the_app_is_idle` said so, which is what
+/// makes it safe to end the run: nothing of the user's is on screen to be closed.
 fn install_silently(version: &str) {
     if run_installer(version) {
         crate::shell::tray::note_update_installed();
     }
 }
 
+/// Start putting on an update a check found, on a thread of its own, unless one is already being
+/// put on: the same update found twice is one download, and the second installer would end the
+/// app the first has just replaced (see `INSTALLING`). What was owed is dropped before the
+/// thread starts, since the install is now happening rather than waiting to.
+fn start_the_install(version: &str) {
+    if INSTALLING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    AWAITING_INSTALL.store(false, Ordering::Release);
+
+    let version = version.to_owned();
+    std::thread::spawn(move || {
+        install_silently(&version);
+        INSTALLING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Take an install the checks are owed, where the screen has emptied enough for one: what the
+/// tray's short tick (`TIMER_DUE`) calls every second, so a check that found an update over a pin
+/// installs it the moment the pin is gone.
+///
+/// The early answer is one atomic read, because the tick runs a thousand times for every install
+/// there is. What is dropped rather than kept is the switch turned off since the check: the row
+/// that asked for it has been answered with no. `true` is answered where an install was started.
+pub(crate) fn settle_the_owed_install() -> bool {
+    if !AWAITING_INSTALL.load(Ordering::Acquire) {
+        return false;
+    }
+
+    let asked = crate::CONFIG
+        .lock()
+        .is_ok_and(|config| config.silent_auto_update);
+    if !asked {
+        AWAITING_INSTALL.store(false, Ordering::Release);
+        return false;
+    }
+
+    let Some(version) = available() else {
+        return false;
+    };
+
+    if !the_app_is_idle() {
+        return false;
+    }
+
+    start_the_install(&version);
+    true
+}
+
 /// Put the update already on offer on without asking, from the click that turns the switch on:
 /// the update a check has already found is one the switch was turned on for, and waiting for the
 /// next check to install it would be a switch that does nothing until a restart.
 ///
-/// It is a thread of its own because the download is megabytes and the thread that answered the
-/// click is the one every menu of this app is built on: a menu that stalled for a download would
-/// be a tray icon that stopped answering.
+/// A switch turned on over a pin is an install that waits for the pin: nothing here is installed
+/// while `the_app_is_idle` says the screen is not empty, and what the click asks for is kept as
+/// owed for the tray's short tick to take (see `AWAITING_INSTALL`).
 pub(crate) fn install_silently_in_background() {
-    std::thread::spawn(|| {
-        if let Some(version) = available() {
-            install_silently(&version);
-        }
-    });
+    let Some(version) = available() else {
+        return;
+    };
+
+    if the_app_is_idle() {
+        start_the_install(&version);
+    } else {
+        AWAITING_INSTALL.store(true, Ordering::Release);
+    }
 }
 
 /// Fetch one release's installer and start it, answering whether it was started. `/S` is the
@@ -369,27 +485,31 @@ fn download_failed(version: &str) {
 /// One check, whole: the version the release is published under, where that is
 /// newer than the one running, and the time the check is noted as having
 /// happened.
-fn check(moment: Moment) {
+fn check() {
     if !due_for_check() {
         return;
     }
 
     // What a check comes back with is a version and nothing else: the installer
     // for it is the click's business, so a row nobody has clicked costs the
-    // network nothing at all. The one exception is the start of a run with
-    // `silent_auto_update` on, where the check installs what it found — and that
-    // is the start alone: a check the menu asked for runs while windows of this
-    // app's may be up, and an install ends every one of them.
+    // network nothing at all. The exception is `silent_auto_update`, where any
+    // check installs what it found — but only while `the_app_is_idle` says nothing
+    // of the user's is on screen, so a check that found one over a pin leaves the
+    // install owed for the tray's short tick to take (see `AWAITING_INSTALL`).
     if let Some(version) = newer_release() {
         if let Ok(mut offer) = OFFER.lock() {
             *offer = Some(version.clone());
         }
 
-        let silently = crate::CONFIG
+        if crate::CONFIG
             .lock()
-            .is_ok_and(|config| installs_unasked(moment, config.silent_auto_update));
-        if silently {
-            install_silently(&version);
+            .is_ok_and(|config| config.silent_auto_update)
+        {
+            if the_app_is_idle() {
+                start_the_install(&version);
+            } else {
+                AWAITING_INSTALL.store(true, Ordering::Release);
+            }
         }
     }
 
@@ -487,14 +607,16 @@ fn installer_dir() -> PathBuf {
     std::env::temp_dir().join("rust-hover-preview")
 }
 
-/// Whether the last check is far enough behind to ask again. A run with no
+/// Whether the last check is far enough behind to ask again, where far enough is
+/// `check_interval` — the file's `update_check_hours` — counted however that one ended, so a
+/// machine that is offline does not ask again on the next opening of the menu. A run with no
 /// record of one — which is every run, until it makes its first — is due.
 fn due_for_check() -> bool {
     LAST_CHECK
         .lock()
         .ok()
         .and_then(|last| *last)
-        .is_none_or(|last| last.elapsed() >= CHECK_INTERVAL)
+        .is_none_or(|last| last.elapsed() >= check_interval())
 }
 
 /// A version as the three numbers it is made of, which is what the tags this
@@ -768,15 +890,65 @@ mod tests {
         assert!(!newer("0.2.13"));
     }
 
-    /// Only one of the two moments an update can be found at puts it on without asking, and
-    /// only where the switch is on: a check the menu asked for runs while windows of this app's
-    /// may be on screen, and an install ends every one of them.
+    /// A silent install closes everything the app has on screen, so the gate is every one of the
+    /// eight things an install would take away: any one of them on its own is enough to hold it, and
+    /// they do not add up to anything but a no.
     #[test]
-    fn only_a_start_at_the_switch_on_installs_what_it_finds() {
-        assert!(installs_unasked(Moment::Start, true));
-        assert!(!installs_unasked(Moment::Start, false));
-        assert!(!installs_unasked(Moment::Menu, true));
-        assert!(!installs_unasked(Moment::Menu, false));
+    fn the_gate_holds_for_every_one_of_the_eight_things_on_screen() {
+        let things = [
+            "pin",
+            "detached",
+            "journey",
+            "preview",
+            "engine",
+            "dialog",
+            "tray menu",
+            "pin menu",
+        ];
+
+        assert!(idle_with(
+            false, false, false, false, false, false, false, false
+        ));
+
+        for (idx, thing) in things.iter().enumerate() {
+            let mut readings = [false; 8];
+            readings[idx] = true;
+            assert!(
+                !idle_with(
+                    readings[0],
+                    readings[1],
+                    readings[2],
+                    readings[3],
+                    readings[4],
+                    readings[5],
+                    readings[6],
+                    readings[7]
+                ),
+                "{thing} on its own must hold the install"
+            );
+        }
+
+        assert!(!idle_with(true, true, true, true, true, true, true, true));
+        assert!(!idle_with(
+            false, false, false, true, false, true, false, false
+        ));
+    }
+
+    /// The period a check waits is the hours the file names, one for every check whatever moment
+    /// asked: a hand-edited `update_check_hours` reaches the next check rather than the next run.
+    #[test]
+    fn the_period_a_check_waits_is_the_interval_the_file_names() {
+        // `crate::CONFIG` is one global the whole run shares, so what is held here is the period a
+        // configuration that says nothing gets: the clock the tray's timer is armed with.
+        assert_eq!(
+            crate::CONFIG
+                .lock()
+                .map(|config| config.update_check_hours)
+                .unwrap_or(crate::config::config::DEFAULT_UPDATE_CHECK_HOURS),
+            crate::config::config::DEFAULT_UPDATE_CHECK_HOURS
+        );
+        assert_eq!(check_interval(), Duration::from_secs(6 * 60 * 60));
+        assert_eq!(check_interval_ms(), 6 * 60 * 60 * 1000);
     }
 
     /// A build made from a pre-release tag is older than the release its own
