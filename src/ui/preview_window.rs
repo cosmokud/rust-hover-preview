@@ -282,11 +282,16 @@ use windows::Win32::System::Threading::{
     PROCESS_TERMINATE,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetCapture, GetDoubleClickTime, GetFocus, GetKeyState, ReleaseCapture,
-    SetCapture, SetFocus, VK_A, VK_BACK, VK_C, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE,
-    VK_F, VK_F3, VK_HOME, VK_LBUTTON, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT,
-    VK_SPACE, VK_UP, VK_V, VK_X, VK_Y, VK_Z,
+    GetAsyncKeyState, GetCapture, GetDoubleClickTime, GetFocus, ReleaseCapture, SetCapture,
+    SetFocus, VK_A, VK_BACK, VK_C, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F, VK_F3,
+    VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_UP, VK_V,
+    VK_X, VK_Y, VK_Z,
 };
+// **The button asked of this thread's own message state, and only where there is a machine to ask.**
+// A test run stands its answer in (see `tests::probes::the_button_is_pressed_now`), so the call
+// itself is compiled out rather than made and ignored.
+#[cfg(not(test))]
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LBUTTON};
 use windows::Win32::UI::Shell::{
     AssocQueryStringW, DragAcceptFiles, DragFinish, DragQueryFileW, ShellExecuteExW, ASSOCF_NONE,
     ASSOCSTR, ASSOCSTR_FRIENDLYAPPNAME, HDROP, SEE_MASK_ASYNCOK, SEE_MASK_HMONITOR,

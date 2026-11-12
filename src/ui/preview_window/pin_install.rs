@@ -796,12 +796,15 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     // shown whatever frame it names at once (see `pin_index`). A box change asks for it again on
     // its own road, which is the one that knows the box the picture has been laid out at.
     //
-    // **Only a picture that plays is asked for its run, and it is asked before anything else
-    // that reads the file.** The walk behind that answer reads the whole file up to the decode
-    // budget before it knows what the file is (`animation_frames::timeline`), so asking it of a
-    // film is a film read end to end on the thread that draws: measured on a cold 1080p episode,
-    // 4.3 seconds of a dead pin, on every install, for a question a film can never answer.
-    if is_played_picture(Some(media.media_type)) {
+    // **Only a picture the index has frames for is asked for its run, and it is asked before
+    // anything else that reads the file.** The walk behind that answer reads the whole file up to
+    // the decode budget before it knows what the file is (`animation_frames::timeline`), so asking
+    // it of a film is a film read end to end on the thread that draws: measured on a cold 1080p
+    // episode, 4.3 seconds of a dead pin, on every install, for a question a film can never answer.
+    // And it is the two kinds an index is built for rather than every played picture, since an APNG
+    // needs no index and the walk would be a read taken for a number nothing uses (see
+    // `is_an_indexed_picture`).
+    if is_an_indexed_picture(Some(media.media_type)) {
         if let Some(total) =
             crate::formats::animation_frames::timeline(&path).map(|run| run.frames())
         {
@@ -2019,11 +2022,11 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     // which is the ordinary case a resize leaves (see `keep_animation_place`) — and it is the run
     // a hand reads for one too long to be held whole, which the merged run alone cannot be.
     //
-    // **A kind that is not a picture that plays is asked nothing, for the reason the install gives
-    // where the same walk is asked of a file being put on the window**: the answer costs a read of
-    // the whole file, and a window being resized over a film is the last place to pay it.
+    // **A kind that is not one an index is built for is asked nothing, for the reason the install
+    // gives where the same walk is asked of a file being put on the window**: the answer costs a read
+    // of the whole file, and a window being resized over a film is the last place to pay it.
     if let (Some(total), Some(kind), Some(size)) = (
-        is_played_picture(installed_kind)
+        is_an_indexed_picture(installed_kind)
             .then(|| {
                 crate::formats::animation_frames::timeline(&pending.path).map(|run| run.frames())
             })

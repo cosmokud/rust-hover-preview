@@ -391,8 +391,17 @@ pub(super) fn left_button_down() -> bool {
 /// procedure and from its tick, which is a thread that pumps messages every tick. Its high bit is
 /// the button being down, exactly as `GetAsyncKeyState`'s is; only the low one differs, and only
 /// the low one is spent.
+///
+/// A test has no hand on the desktop, so it stands the answer in rather than asking a machine it
+/// is not driving: what a test means by *the button is down* is written by the test (see
+/// `probes::the_button_is_down_now`), and one that says nothing means the published state alone.
 pub(super) fn the_left_button_is_down_now() -> bool {
-    (unsafe { GetKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000) != 0
+    #[cfg(test)]
+    let down = super::tests::probes::the_button_is_pressed_now(left_button_down());
+    #[cfg(not(test))]
+    let down = unsafe { GetKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000 != 0;
+
+    down
 }
 
 /// Whether the window a gesture was begun in is the one holding the pointer.

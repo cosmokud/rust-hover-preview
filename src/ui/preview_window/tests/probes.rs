@@ -202,6 +202,31 @@ pub(in crate::ui::preview_window) fn the_pointer_is_held() -> isize {
     POINTER_HELD_BY.load(Ordering::SeqCst)
 }
 
+/// Whether the left button is down right now, as a stand-in for the machine's own answer.
+///
+/// `GetKeyState` reports the button the desktop's hand is on, and a test has no hand: left
+/// unanswered, it would be whatever the person at the keyboard happens to be doing, which is a
+/// suite whose answer depends on whether its owner is clicking something. So the stand-in answers
+/// the *published* state unless a test says otherwise — that is what a test that says nothing is
+/// standing up — and a test of the two readings disagreeing writes its own answer here (see
+/// `pin_drag::the_left_button_is_down_now`).
+static BUTTON_DOWN_NOW: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
+
+pub(super) fn the_button_is_down_now(down: bool) {
+    BUTTON_DOWN_NOW.store(down as i8, Ordering::SeqCst);
+}
+
+pub(super) fn let_the_button_answer_for_itself() {
+    BUTTON_DOWN_NOW.store(-1, Ordering::SeqCst);
+}
+
+pub(in crate::ui::preview_window) fn the_button_is_pressed_now(published: bool) -> bool {
+    match BUTTON_DOWN_NOW.load(Ordering::SeqCst) {
+        -1 => published,
+        down => down != 0,
+    }
+}
+
 pub(super) fn step_the_pin_drag_by(dx: i32, dy: i32) {
     let at = cursor_screen_point().expect("the pointer is somewhere on the desktop");
     let mut anchored = false;
