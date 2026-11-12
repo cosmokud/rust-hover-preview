@@ -3718,6 +3718,16 @@ pub fn run_preview_window() {
                                     measure_waiting(&path) || video_probe_due(&hover) || asked;
 
                                 if outstanding {
+                                    // **The pin keeps the file it is showing while this wait is out**, and
+                                    // the file it is showing is the one a hand on the window is holding: a
+                                    // box that arrives late re-boxes the pin, so a run that cannot move the
+                                    // window for the first seconds of a cold file is read against this
+                                    // line and the probe's own (see `pin_awaiting_box`).
+                                    note_pin_trace!(
+                                        "the pin awaits the box of {} (probe {})",
+                                        pin_trace::path_name(&path),
+                                        video_probe_due(&hover) as u8
+                                    );
                                     pin_awaiting_box = Some(path.clone());
                                     // The file the pin is waiting for a box of is the file it has
                                     // been asked for, so a second press on it is nobody's new pick

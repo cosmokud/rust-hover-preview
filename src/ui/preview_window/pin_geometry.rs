@@ -1151,6 +1151,28 @@ pub(super) unsafe fn apply_pin_drag(hwnd: HWND) {
         // resize takes that order where it grows; a step that shrinks puts the film down first (see
         // above).
         place_pinned_siblings();
+
+        // **What the window really took, read back where the trace is on.** A box asked for and not
+        // taken is a hand whose every step is undone by something else — a window put back where the
+        // pin remembers it, by a box a load is still waiting for — and the two numbers are the whole
+        // of that answer (see `pin_awaiting_box` and `place_pinned_siblings`).
+        if pin_trace::wanted() {
+            if let Some(stands) = window_origin(hwnd) {
+                if stands != (window.0, window.1, width, height) {
+                    note_pin_trace!(
+                        "the pin's box did not take: asked {}x{}+{}+{} stands {}x{}+{}+{}",
+                        width,
+                        height,
+                        window.0,
+                        window.1,
+                        stands.2,
+                        stands.3,
+                        stands.0,
+                        stands.1
+                    );
+                }
+            }
+        }
     }
 }
 
