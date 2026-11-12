@@ -1697,6 +1697,17 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // than the visibility alone (see `the_pin_window_is_down`): a pin minimized away is one to put in
     // front of wherever the Shell left it, not one already standing where the user left it.
     let on_the_screen = !the_pin_window_is_down(hwnd);
+    // **A window the Shell minimized is not moved by the call below, and it is the show's own answer to
+    // put right afterwards.** `IsIconic` is the state a minimize — the taskbar's button, `Win`+`D` —
+    // leaves the pin's own window in, and both `MoveWindow` and `SetWindowPos` are refused while it
+    // stands (measured: the rectangle is the minimized one after each, and the window keeps the box it
+    // went down in). What the show below restores the window *at* is the box it went down in, so a pin
+    // brought back up on a file picked while it was away came up where the file before it stood while
+    // the document standing in its band was placed at the file that had just arrived — a page and a
+    // band a few hundred pixels apart, and the page the one of the two that was right. So whether the
+    // window is really away is read here, and the show's answer is given the box the pin asks for below
+    // (see the placement that follows it, which is this read's own).
+    let iconic = unsafe { IsIconic(hwnd) }.as_bool();
     if !on_the_screen {
         let _ = MoveWindow(hwnd, window.0, window.1, width, height, false);
     }
@@ -1849,6 +1860,28 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         unsafe { IsWindowVisible(hwnd).as_bool() } as u8,
         window,
     );
+
+    // **And a window the Shell had minimized is put where the pin says now that the show has brought it
+    // back**, which is the one road a move reaches it on: the restore above lands it at the box it went
+    // down in, and the take-up asking for another box is a window and a document that part company (see
+    // the read of `iconic` above). The box is written with `SetWindowPos` rather than by a second show,
+    // so the window is on the screen while it is placed.
+    //
+    // **A pin restored into the maximized form is left to the form.** A window put down while it was
+    // maximized comes back maximized, and its box is the display's rather than any take-up's: what the
+    // take-up asks for is its own ordinary box, and nothing here is a toggle of the form (see
+    // `toggle_pin_maximized`, which is the one road that decides one).
+    if iconic && !unsafe { IsZoomed(hwnd) }.as_bool() {
+        let _ = SetWindowPos(
+            hwnd,
+            HWND::default(),
+            window.0,
+            window.1,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
 
     // **Where the window really landed**, read back rather than taken from the box that was asked
     // for: the placement above is a request, and what the pin stands at is what Windows reports —
