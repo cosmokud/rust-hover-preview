@@ -1742,6 +1742,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         );
     }
 
+    let _ = AppendMenuW(
+        performance_menu,
+        MF_STRING | MF_POPUP,
+        disk_cache_menu.0 as usize,
+        w!("Disk Cache"),
+    );
+
     // Add the "Memory" submenu, which is everything here that is spent in RAM rather than on
     // disk: the frames a decoded image is shown as, which are held between hovers; the ceiling
     // one hover may decode or read *for*; and the room a pinned picture's held run of frames is
