@@ -26,10 +26,24 @@ pub(super) const WM_TRAYICON: u32 = WM_USER + 1;
 /// finished: the worker has already re-probed and recorded what it installed, and what is left for
 /// this thread is the slot that said one install was in flight (see `winget::settle`).
 pub(super) const WM_TRAY_INSTALL_FINISHED: u32 = WM_USER + 2;
-/// What the tray window is told when an update the app found as it started has been put on
-/// without asking: the installer is already running, and all that is left for this thread is to
-/// end the app it has to replace (see `updates::install_silently_in_background`).
+/// What the tray window is told when an update the app found has been put on without asking:
+/// the installer is already running, and all that is left for this thread is to end the app it has
+/// to replace (see `updates::start_the_install`).
 pub(super) const WM_TRAY_UPDATE_INSTALLED: u32 = WM_USER + 3;
+/// What the tray window is told when a timer of its own has come round: the hours timer asks for a
+/// check, the short one gives an install the checks are owed to a moment to happen (see
+/// `updates::settle_the_owed_install`).
+// `SetTimer` with no `TIMERPROC` posts `WM_TIMER` itself, so nothing posts this: it is the name a
+// tick of the tray's is a message by, kept beside the two ids that were given to `SetTimer`.
+#[allow(dead_code)]
+pub(super) const WM_TRAY_TICK: u32 = WM_USER + 4;
+/// The two timers the tray window keeps, as the ids `SetTimer` was given: the check the
+/// `update_check_hours` period turns over, and the short tick a waiting install is taken on.
+pub(super) const TIMER_CHECK: usize = 1;
+pub(super) const TIMER_DUE: usize = 2;
+/// The short tick's period, in milliseconds: long enough that the tray thread sleeps, short enough
+/// that an install the app is owed lands within a second of the screen emptying.
+pub(super) const DUE_TICK_MS: u32 = 1000;
 pub(super) const ID_TRAY_EXIT: u16 = 1001;
 pub(super) const ID_TRAY_STARTUP: u16 = 1002;
 pub(super) const ID_TRAY_ENABLE: u16 = 1003;
@@ -366,15 +380,15 @@ pub(super) const PIN_END_OF_FILE_CHOICES: [PinEndOfFile; 3] = [
 pub(super) const ID_TRAY_RESET_SETTINGS: u16 = 1520;
 pub(super) const ID_TRAY_RESET_LISTS: u16 = 1521;
 /// The `System → Check for Updates` row: whether the app asks GitHub for a newer
-/// release on its own, at startup and when the menu is opened (see
-/// `check_for_updates`). On where the app starts.
+/// release on its own, at startup, on every opening of the menu and once per
+/// `update_check_hours` (see `check_for_updates`). On where the app starts.
 ///
 /// It is a switch of a question rather than a level of a list, so it takes an
 /// id of its own — the one the reset rows beside it leave free, where a row of
 /// the same submenu belongs and no range the app hands out reaches.
 pub(super) const ID_TRAY_CHECK_UPDATES: u16 = 1522;
-/// The `System → Silent Auto-Update` row, under the switch above it: whether an update the
-/// check finds as the app starts is put on without asking (see `silent_auto_update`). Off where
+/// The `System → Silent Auto-Update` row, under the switch above it: whether an update a check
+/// finds is put on without asking, wherever the app is idle (see `silent_auto_update`). Off where
 /// the app starts, and greyed where the checks are off, since it is a question about a check
 /// that is not being made.
 ///

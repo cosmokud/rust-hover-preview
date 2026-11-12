@@ -103,6 +103,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let menu = CreatePopupMenu().unwrap();
+    // The row that asked for the update check is the one a silent install landing mid-click would
+    // take away, so a menu is open from here to the moment `TrackPopupMenu` returns — before
+    // `DestroyMenu`, since the install it holds back ends this app and a menu whose window is gone
+    // is no menu at all (see `updates::note_a_menu_is_open`).
+    updates::note_a_menu_is_open(true);
     // Lock released before the publish: the message a publish sends locks `CONFIG` again on
     // the preview loop. A level this process wrote itself is not an edit, and is not reported
     // as one (see `reload_from_disk_keeping_our_own_levels`).
@@ -122,10 +127,11 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     }
 
     // The menu is also where the check for a newer release is asked for, after the one
-    // the app made as it started: opening the menu is the one moment a user is looking
-    // for one, and a check asked for here keeps what is offered current however long this
-    // run has been up. It costs nothing here — the check runs on a thread of its own and
-    // is answered at most once every six hours — and the row above the `System` submenu
+    // the app made as it started and beside the tray's own hours timer: opening the menu is
+    // the one other moment a user is looking for one, and a check asked for here keeps what
+    // is offered current however long this run has been up. It costs nothing here — the check
+    // runs on a thread of its own, and all three moments share one period, the file's own
+    // `update_check_hours` (see `check_interval`) — and the row above the `System` submenu
     // reports what the last one found, so an update published since that check is offered
     // on the opening after this one. Nothing is asked where the setting is off: the
     // `System → Check for Updates` row is the switch (see `check_for_updates`).
@@ -2100,10 +2106,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let system_menu = CreatePopupMenu().unwrap();
 
     // Whether the app asks GitHub for a newer release on its own: the switch the
-    // passive check above answers to, on where the app starts. What a check finds is
-    // said on the row above where there is something to put on the menu, and nowhere
-    // at all where there is not — a check that found nothing is a menu that stays as
-    // it was.
+    // passive checks above answer to — the start's, every opening's, and the tray
+    // timer's — on where the app starts. What a check finds is said on the row above
+    // where there is something to put on the menu, and nowhere at all where there is
+    // not — a check that found nothing is a menu that stays as it was.
     let (check_for_updates, silent_auto_update) = CONFIG
         .lock()
         .map(|config| (config.check_for_updates, config.silent_auto_update))
@@ -2120,9 +2126,11 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Check for Updates"),
     );
 
-    // And whether an update one of those checks finds as the app starts is put on without
-    // asking. It is greyed while the checks are off rather than hidden: it is a question about
-    // a check that is not being made, and a switch that is there and does nothing says why.
+    // And whether an update any check finds is put on without asking — but only where
+    // `updates::the_app_is_idle` holds, so nothing of the user's is closed by it; what a check finds
+    // over a pin or an open menu is owed until the screen is empty. It is greyed while the checks are
+    // off rather than hidden: it is a question about a check that is not being made, and a switch
+    // that is there and does nothing says why.
     let silent_flags = MF_STRING
         | if silent_auto_update {
             MF_CHECKED
@@ -2249,6 +2257,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         None,
     )
     .ok();
+    updates::note_a_menu_is_open(false);
     let _ = DestroyMenu(menu);
 }
 
