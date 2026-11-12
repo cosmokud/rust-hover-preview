@@ -616,7 +616,34 @@ pub(super) fn probe_runs_ffmpeg(
 /// called from a thread whose waiting does not matter: the load worker, and the probe a
 /// hover is waiting on (see `video_probe_due` in the preview loop). What it answers is
 /// held — the failure included — so the next hover of the file is a lookup.
+/// **A file read from cold is the one wait a pin's first seconds are made of**, and the trace says
+/// whether what was slow was this or the window: a probe that was already answered is the arithmetic
+/// below, and a cold one is two external processes for FFmpeg's arm or a header read for mpv's — the
+/// answer a box, a swap and a caption's arrival are all held for (see `pin_trace`).
 pub(super) fn probe_video_geometry(path: &PathBuf) -> ProbedGeometry {
+    let cold = cached_video_geometry(path).is_none();
+    let asked_at = std::time::Instant::now();
+
+    if cold {
+        super::pin_trace::note_pin_trace!("probe cold {} asked", super::pin_trace::path_name(path));
+    }
+
+    let answer = probe_the_geometry(path);
+
+    if cold {
+        super::pin_trace::note_pin_trace!(
+            "probe {} answered after {}ms",
+            super::pin_trace::path_name(path),
+            asked_at.elapsed().as_millis()
+        );
+    }
+
+    answer
+}
+
+/// The probe itself: the cache first, and the passes where the file has not been measured (see
+/// `probe_video_geometry`, which is the only caller and the one that writes the wait down).
+fn probe_the_geometry(path: &PathBuf) -> ProbedGeometry {
     let key = VideoGeometryKey {
         path: path.clone(),
         version: file_version(path),
