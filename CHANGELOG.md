@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A pinned document put away into the taskbar comes back at its own band, not at the file's before it** — a pin the Shell minimized is a pin the app cannot move: both `MoveWindow` and `SetWindowPos` are refused while `IsIconic` stands, and the show that brings the window back lands it at the box it went down in. A file picked in the listing while the pin was away is a take-up at *that* file's box, so the WebView2 viewer — a window of its own, and one whose placement is a call rather than a restore — moved to the new band while the pin's chrome came back at the old one, and the document stood a few hundred pixels out of the window it belongs to. The window is now placed where the pin says once the show has brought it back, and the maximized form a restore comes into is left to the form.
+
 ## [0.5.5] - 2026-11-11
 
 ### Added

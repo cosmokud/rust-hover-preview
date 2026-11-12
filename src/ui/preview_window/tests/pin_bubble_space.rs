@@ -2913,6 +2913,96 @@ fn the_shells_show_desktop_minimizes_a_pin_that_is_a_window_of_its_own() {
     stand_pin(previous_pin);
 }
 
+/// **A pin the Shell minimized comes back up at the box the file it is now showing was taken up in.**
+///
+/// The minimize is the one state a move cannot reach: `MoveWindow` and `SetWindowPos` are both refused
+/// while `IsIconic` stands, and the show that brings the window back restores it at
+/// `WINDOWPLACEMENT`'s normal position — the box it went down in. A file picked in the listing while
+/// the pin was away is a take-up at the box *that* file's kind asks for, so the window came back at
+/// the box of the file before it while the document standing in its band was placed at the new one:
+/// the WebView2 viewer is a window of its own and it moved, and the chrome around it did not. So the
+/// take-up writes the box into the placement as well (see `give_the_window_the_box_it_will_come_back_at`).
+#[test]
+fn a_pin_the_shell_minimized_comes_back_at_the_box_of_the_file_it_is_showing() {
+    let _room = the_room_to_itself();
+
+    let previous_own = pin_is_its_own_window();
+    let previous_pin = take_pin_for_a_test();
+    let previous_window = pin_real_window::real_pin_window();
+
+    // The pin as the file it was showing left it, and the box the file arriving in it asks for — which
+    // is not the box it went down in, because another file of another shape is another take-up.
+    //
+    // **The box asked for is a real one, and that is the subject rather than an accident.** Windows keeps
+    // no normal position that is off every display — a placement naming one is snapped into the work area
+    // (measured), which is a second reason the box a take-up asks for has to be written rather than left
+    // to the show. The window is away until the show under test and destroyed at the end of it.
+    let stood = (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240);
+    let arriving = (100, 100, 460, 400);
+    stand_pin(Some(overlay_pin(stood, PinChrome::always())));
+    pin_stands_in_its_own_window(true);
+    let pin_hwnd = unsafe {
+        pin_real_window::stand_real_pin_window_for_a_test(None);
+        pin_real_window::real_pin_window_at(stood)
+    }
+    .expect("the pin's own window");
+
+    // The pin the user puts away as a window — the Shell's own minimize of it.
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
+        let _ = SendMessageW(
+            pin_hwnd,
+            WM_SYSCOMMAND,
+            WPARAM(SC_MINIMIZE as usize),
+            LPARAM(0),
+        );
+    }
+    assert!(
+        unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the window is away, which is the state a move cannot reach"
+    );
+
+    // The file that arrives while it is away: a take-up at its own box, and the show that put the new
+    // file on the window.
+    let arriving_pin = overlay_pin(arriving, PinChrome::always());
+    let content = arriving_pin.content;
+    let window = arriving_pin.window_box();
+    unsafe {
+        stand_pin(Some(arriving_pin));
+        show_pinned_window(pin_hwnd);
+    }
+
+    let (left, top, right, bottom) = unsafe {
+        let mut rect = RECT::default();
+        let _ = GetWindowRect(pin_hwnd, &mut rect);
+        (rect.left, rect.top, rect.right, rect.bottom)
+    };
+
+    assert!(
+        !unsafe { IsIconic(pin_hwnd) }.as_bool(),
+        "the new file puts the window back on the screen"
+    );
+    assert_eq!(
+        (left, top, right, bottom),
+        (window.0, window.1, window.2, window.3),
+        "and the window it comes back as is the one the arriving file's box asked for, so the band\n         \
+         the document stands in is the band a press on the chrome is answered against"
+    );
+    assert_eq!(
+        content,
+        (left, top, right, bottom),
+        "the pin's media is the window's own box for a kind whose chrome is drawn over it"
+    );
+
+    // Safety: the window is this test's own, and every global written here is put back.
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+}
+
 /// The flip is a process's own for the rest of its life, and the test process outlives more windows than
 /// one: the flag is turned back off when this goes out of scope, including when a body panics.
 struct AWindowOfItsOwnNoLonger;
