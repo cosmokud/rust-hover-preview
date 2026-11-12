@@ -28,7 +28,7 @@
 //! written to its own standard output rather than to a path. What is read there is decoded
 //! into the frame the hover that asked is drawn from, and written down as a page for the
 //! hovers after it — the cache `document_cache` keeps for every engine, in a folder and
-//! against a budget of this tier's own (`Cache → Image (Disk)`, `image_disk_cache_mb`),
+//! against a budget of this tier's own (`Disk Cache → Image`, `image_disk_cache_mb`),
 //! because the one thing that makes the next hover cheap is the picture this one already
 //! developed. Two things are therefore kept, and they are worth different things: the frame,
 //! in the image cache every picture is kept in, bounded by `image_cache_mb`, which answers a

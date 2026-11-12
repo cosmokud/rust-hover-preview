@@ -640,7 +640,7 @@ pub(super) const ID_TRAY_IMAGE_CACHE_BASE: u16 = 1300;
 /// pages are files under the temp folder rather than memory, which is what makes it one of the
 /// two caches a size is measured in bytes of something on disk.
 pub(super) const ID_TRAY_DOCUMENT_CACHE_BASE: u16 = 1320;
-/// The `Cache → Image (Disk)` sizes: how much of what the image converter developed is kept
+/// The `Disk Cache → Image` sizes: how much of what the image converter developed is kept
 /// between hovers. The other cache whose size is bytes on disk — pictures of its own, in a
 /// folder beside the documents' pages rather than a share of them (see `document_cache`).
 pub(super) const ID_TRAY_IMAGE_DISK_CACHE_BASE: u16 = 1340;
@@ -665,14 +665,14 @@ pub(super) const ID_TRAY_GENERAL_DISK_CACHE_BASE: u16 = 1425;
 /// room an animated WebP's run of frames is given takes the stretch right after it (see
 /// `ID_TRAY_ANIMATED_WEBP_BUDGET_BASE`).
 pub(super) const ID_TRAY_DECODE_BUDGET_BASE: u16 = 1380;
-/// The sizes `Cache → Image (RAM)` offers, in megabytes, largest first — `16 GB` at
+/// The sizes `Memory → Image` offers, in megabytes, largest first — `16 GB` at
 /// the top and a cache that holds nothing at the bottom — and the whole range the
 /// setting allows, so a size a hand-edited `config.ini` asks for that is not one of
 /// these is shown with nothing checked rather than rounded to one of them.
 pub(super) const IMAGE_CACHE_SIZE_CHOICES_MB: [u32; 12] =
     [16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 0];
-/// The sizes the three disk caches offer — `Document (Disk)`, `Image (Disk)` and
-/// `General (Disk)` — in megabytes, largest first: the same range the memory cache is
+/// The sizes the three disk caches offer — `Performance → Disk Cache → Document`, `Image`
+/// and `General` — in megabytes, largest first: the same range the memory cache is
 /// offered in, and then on up to `128 GB`, past what a volume would hold long before
 /// the sizes above it are a disk's business. A size a hand-edited `config.ini` asks
 /// for that is not one of these is shown with nothing checked rather than rounded to
@@ -686,7 +686,7 @@ pub(super) const DISK_CACHE_SIZE_CHOICES_MB: [u32; 15] = [
 /// picture still fits in. A value a hand-edited `config.ini` asks for that is not one of
 /// these is shown with nothing marked rather than rounded to one of them.
 pub(super) const DECODE_BUDGET_CHOICES_GB: [f32; 6] = [16.0, 8.0, 4.0, 2.0, 1.0, 0.5];
-/// The room `Performance → Memory → Animated WEBP` offers a pinned picture's held run of
+/// The room `Performance → Memory → Animated Image` offers a pinned picture's held run of
 /// frames, in megabytes, largest first, and the id each size carries.
 ///
 /// It is the one ceiling under that submenu that is about what is *kept* rather than about what one
