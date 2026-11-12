@@ -183,6 +183,25 @@ pub(super) fn send_pointer_to(x: i32, y: i32) {
 /// really is, the callers' own `apply_pin_drag` measures the step from there, and the hand's
 /// pointer stays where the user's hand left it — which is what a plain `cargo test` owes the
 /// desktop (see `a_border_stroke` in the edges' own tests).
+/// The window the pointer is held by, as a stand-in for the machine's own capture.
+///
+/// A test window is a stand-in and not a window, so `GetCapture` answers about a desktop the
+/// test is not standing on. This is the same question the pin's gesture asks of it, written by
+/// the test instead (see `pin_drag::the_window_holds_the_pointer`).
+static POINTER_HELD_BY: AtomicIsize = AtomicIsize::new(0);
+
+pub(super) fn the_pointer_is_held_by(hwnd: HWND) {
+    POINTER_HELD_BY.store(hwnd.0 as isize, Ordering::SeqCst);
+}
+
+pub(super) fn let_the_pointer_go() {
+    POINTER_HELD_BY.store(0, Ordering::SeqCst);
+}
+
+pub(in crate::ui::preview_window) fn the_pointer_is_held() -> isize {
+    POINTER_HELD_BY.load(Ordering::SeqCst)
+}
+
 pub(super) fn step_the_pin_drag_by(dx: i32, dy: i32) {
     let at = cursor_screen_point().expect("the pointer is somewhere on the desktop");
     let mut anchored = false;

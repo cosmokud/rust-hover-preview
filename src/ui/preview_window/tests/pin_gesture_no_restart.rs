@@ -252,6 +252,74 @@ fn a_button_down_handed_again_does_not_anchor_the_drag_over() {
     stand_pin(previous_pin);
 }
 
+/// **The pointer a window holds is a hand that has not let go, whatever the published state
+/// says.** A cold film's player is begun on this machine while the Explorer hook's tick is the one
+/// behind, so the button's published state can still read *up* under a hand that is holding the
+/// window — and a press read as a new gesture anchors the drag where the pointer is now, so the
+/// window follows the hand by nothing at all. The capture the press took is the reading that holds.
+#[test]
+fn a_press_under_a_held_pointer_does_not_anchor_the_drag_over_on_a_stale_button() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let content = (100, 80, 420, 320);
+    stand_pin(Some(a_playing_film_pin(
+        "a-stale-button-under-a-held-pointer.mkv",
+        content,
+    )));
+    let window = a_window_at(content);
+    let pin_window = HWND(0x1000 as *mut _);
+
+    // The press takes the pointer for the drag it begins.
+    publish_pin_media_press(true, false);
+    super::probes::the_pointer_is_held_by(pin_window);
+    begin_pin_drag(pin_window, &window, PinDragAction::Move, true);
+    assert!(pin_is_dragging(), "the press begins the drag");
+
+    super::probes::step_the_pin_drag_by(90, 50);
+    unsafe { apply_pin_drag(pin_window) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.window_box())),
+        Some((
+            content.0 + 90,
+            content.1 + 50,
+            content.2 + 90,
+            content.3 + 50
+        )),
+        "the window is the hand's for the travel it has made from the press"
+    );
+
+    // The hook's tick has not caught up with the hand: its published state still says the button
+    // is up, while the window holds the pointer the press took.
+    publish_pin_media_press(false, false);
+    assert!(!left_button_down(), "the published state is a tick behind");
+
+    begin_pin_drag(pin_window, &window, PinDragAction::Move, true);
+    assert!(pin_is_dragging(), "the gesture is still the one in hand");
+
+    // Nothing moves the pointer for the press, and the window still owes the hand the travel it
+    // has already made — a press that anchored the drag over would owe it none of it.
+    unsafe { apply_pin_drag(pin_window) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.window_box())),
+        Some((
+            content.0 + 90,
+            content.1 + 50,
+            content.2 + 90,
+            content.3 + 50
+        )),
+        "and the window still follows the hand from the press that began the drag"
+    );
+
+    assert!(
+        finish_pin_drag(pin_window, &window),
+        "the release is the drag's own end"
+    );
+    super::probes::let_the_pointer_go();
+    publish_pin_media_press(false, false);
+    stand_pin(previous_pin);
+}
+
 /// **A pointer taken from a hand that is still on the button does not end the gesture.** A player a
 /// step begins makes its own window on this desktop and can take the capture as it starts, and a drag
 /// dropped there is a pin that cannot be moved or resized while the film is loading — the press still

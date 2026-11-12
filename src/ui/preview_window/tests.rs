@@ -1033,7 +1033,7 @@ mod pin_volume;
 mod pin_window_kind;
 mod pin_zoom;
 mod placement;
-mod probes;
+pub(super) mod probes;
 mod resident;
 mod text_find_bar;
 mod text_page_presses;
