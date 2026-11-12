@@ -1457,8 +1457,21 @@ pub(super) unsafe fn pinned_press_on(hwnd: HWND, x: i32, y: i32, window: &dyn Pi
     let framed = caption.frame != PinFrame::None;
 
     if framed {
-        let edge =
-            pin_state().and_then(|pinned| pinned.pin().and_then(|pin| pin.resize_edge(x, y)));
+        // **The edge is found on the window that is really there**, whose client box is read live
+        // where one can be read — the same lesson `begin_pin_drag` is written on, and the one the
+        // pointer's own shape is read by: a window a maximize, a display change or a swap's held box
+        // has left a different size than the pin remembers is a window whose whole middle is an edge
+        // of the remembered box, so a press meant to carry the window resized it instead. The
+        // remembered box is the answer where no client box can be read, which is what a test's pin
+        // is (see `pinned_press_on` and `pin_resize_edge`).
+        let edge = pin_state().and_then(|pinned| {
+            let pin = pinned.pin()?;
+            let live = unsafe { pin_film_thumbnail::client_size(hwnd) };
+            match live {
+                Some(size) => pin_resize_edge(size, pin.dpi, x, y),
+                None => pin.resize_edge(x, y),
+            }
+        });
         if let Some(edge) = edge {
             begin_pin_drag(hwnd, window, PinDragAction::Resize(edge), true);
             return true;

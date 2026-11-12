@@ -417,6 +417,13 @@ pub fn run_preview_window() {
                 note_pin_alive();
             }
 
+            // **Where a tick's own time went, for a pin that answered nothing.** A window whose
+            // presses queue and then arrive in a burst is a thread that was not pumping messages,
+            // and a line per segment of the tick is the only way to say which segment it was: the
+            // whole of what a tick does with a pin is four calls, and one of them is the install a
+            // cold file's swap lands on (see `pin_install` and the take-up below).
+            let tick_at = Instant::now();
+
             // What the pin asks for this tick, if anything: the key, one of the caption's
             // buttons, or the media behind it having come apart. It is held for the drain
             // below, which is where a hover's own messages are turned into a preview.
@@ -3718,6 +3725,16 @@ pub fn run_preview_window() {
                                     measure_waiting(&path) || video_probe_due(&hover) || asked;
 
                                 if outstanding {
+                                    // **The pin keeps the file it is showing while this wait is out**, and
+                                    // the file it is showing is the one a hand on the window is holding: a
+                                    // box that arrives late re-boxes the pin, so a run that cannot move the
+                                    // window for the first seconds of a cold file is read against this
+                                    // line and the probe's own (see `pin_awaiting_box`).
+                                    note_pin_trace!(
+                                        "the pin awaits the box of {} (probe {})",
+                                        pin_trace::path_name(&path),
+                                        video_probe_due(&hover) as u8
+                                    );
                                     pin_awaiting_box = Some(path.clone());
                                     // The file the pin is waiting for a box of is the file it has
                                     // been asked for, so a second press on it is nobody's new pick
@@ -3857,6 +3874,7 @@ pub fn run_preview_window() {
             }
 
             let swap = settle_pin_swap(&mut pin_swap_hold, &mut pin_load);
+            let swap_at = Instant::now();
 
             if let Some(swap) = swap {
                 // The loop's own record of what the pin is showing, borrowed for whichever of
@@ -4089,6 +4107,18 @@ pub fn run_preview_window() {
                         );
                     }
                 }
+            }
+
+            // **The segments of a tick that a pin waits on, written down where the trace is on.**
+            // A tick whose presses arrive in a burst after a silence is a thread that was inside
+            // one of these, and the numbers are the whole of which (see `tick_at`).
+            if pin_trace::wanted() && tick_at.elapsed().as_millis() >= 100 {
+                note_pin_trace!(
+                    "tick slow: {}ms to the swap's settle, {}ms to the front's work (pin {})",
+                    swap_at.duration_since(tick_at).as_millis(),
+                    swap_at.elapsed().as_millis(),
+                    pinned() as u8
+                );
             }
 
             // The pin's request, if it made one, is the newest thing that happened and speaks
@@ -4522,8 +4552,23 @@ pub fn run_preview_window() {
                         // `take_up_pinned_window`). Whether a pin is already up tells the second
                         // road from the first: a swap installs through here with the pin standing,
                         // and a take-up from a hover arrives with none (see `settle_pin_handover`).
+                        if pin_trace::wanted() && tick_at.elapsed().as_millis() >= 100 {
+                            note_pin_trace!(
+                                "tick slow: {}ms to the take-up of {}",
+                                tick_at.elapsed().as_millis(),
+                                pin_trace::path_name(&path)
+                            );
+                        }
+                        let take_up_at = Instant::now();
                         let pin = take_up_pinned_window(&path, rect);
                         let content = pin.content;
+                        if pin_trace::wanted() && tick_at.elapsed().as_millis() >= 100 {
+                            note_pin_trace!(
+                                "tick slow: the box took {}ms to build, {}ms from the tick's own start",
+                                take_up_at.elapsed().as_millis(),
+                                tick_at.elapsed().as_millis()
+                            );
+                        }
 
                         // The kind on screen, read back rather than carried out of the take-up:
                         // it is the two kinds below whose media has to be laid out again now
