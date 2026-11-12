@@ -40,9 +40,9 @@ use super::ids::{
     AFK_TIMER_CHOICES_SECS, ANIMATED_WEBP_BUDGET_CHOICES_MB, AUDIO_SCALE_CHOICES,
     AUDIO_SEEK_CHOICES, AVOID_CHOICES, BACKGROUND_CHOICES, BITMAP_SCALE_CHOICES, CODEC_COMMANDS,
     DDS_BACKGROUND_CHOICES, DECODE_BUDGET_CHOICES_GB, DISK_CACHE_SIZE_CHOICES_MB,
-    DOCUMENT_SCALE_CHOICES, ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES, ID_TRAY_AFK_TIMER_BASE,
-    ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_ANIMATED_WEBP_BUDGET_BASE, ID_TRAY_AUDIO_LOOP,
-    ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_SHUFFLE,
+    DOCUMENT_SCALE_CHOICES, DUE_TICK_MS, ENGINE_IDLE_CHOICES, HTML_BACKGROUND_CHOICES,
+    ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_ANIMATED_WEBP_BUDGET_BASE,
+    ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_SHUFFLE,
     ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE, ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED,
     ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE, ID_TRAY_DDS_BACKGROUND_BASE,
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
@@ -81,9 +81,9 @@ use super::ids::{
     ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
     IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MPV_COMMANDS, PIN_END_OF_FILE_CHOICES,
-    TASKBAR_CREATED, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND,
-    VIDEO_ENGINE_CHOICES, WM_TRAYICON, WM_TRAY_INSTALL_FINISHED, WM_TRAY_UPDATE_INSTALLED,
-    ZOOM_BACKGROUND_CHOICES,
+    TASKBAR_CREATED, TICK_CHOICES_MS, TIMER_CHECK, TIMER_DUE, TIMING_DELAY_CHOICES_MS, TRAY_CLASS,
+    TRAY_HWND, VIDEO_ENGINE_CHOICES, WM_TRAYICON, WM_TRAY_INSTALL_FINISHED,
+    WM_TRAY_UPDATE_INSTALLED, ZOOM_BACKGROUND_CHOICES,
 };
 use super::menus::show_context_menu;
 use super::submenus::{install_engine, open_codec_page};
@@ -105,10 +105,11 @@ use windows::Win32::UI::Shell::{
     Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, RegisterWindowMessageW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, MSG,
-    PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, WM_COMMAND, WM_DESTROY, WM_LBUTTONUP,
-    WM_POWERBROADCAST, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, KillTimer, PostMessageW,
+    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SetTimer, TranslateMessage,
+    CS_HREDRAW, CS_VREDRAW, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, WM_COMMAND,
+    WM_DESTROY, WM_LBUTTONUP, WM_POWERBROADCAST, WM_RBUTTONUP, WM_TIMER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 /// The one function every message the tray window gets arrives in. It is `extern "system"`,
@@ -171,12 +172,33 @@ unsafe extern "system" fn tray_window_proc(
                 winget::settle();
                 LRESULT(0)
             }
-            // An update the app found as it started has been put on without asking: the
-            // installer is running and this app has to be gone before it can replace it, so
-            // what is left is the same ending `Exit` and the `Auto` answer are.
+            // An update a check found has been put on without asking: the installer is running and
+            // this app has to be gone before it can replace it, so what is left is the same ending
+            // `Exit` and the `Auto` answer are. It is not a start-only thing: any check installs what
+            // it finds while `updates::the_app_is_idle` holds, and the one that found it over a pin
+            // is owed until the tray's short tick takes it.
             WM_TRAY_UPDATE_INSTALLED => {
                 RUNNING.store(false, Ordering::SeqCst);
                 PostQuitMessage(0);
+                LRESULT(0)
+            }
+            // A timer of the tray's own has come round. The hours one asks for a check, which runs
+            // on a thread of its own as every check does; the short one takes an install the checks
+            // are owed, which is the only road it has once the user has finished what they were
+            // doing. The check timer is re-armed from the file each time it fires, so a
+            // `update_check_hours` written since the last one is honoured on the spot — a `SetTimer`
+            // with the same id replaces the period rather than adding a second timer.
+            WM_TIMER => {
+                match wparam.0 {
+                    TIMER_CHECK => {
+                        let _ = SetTimer(hwnd, TIMER_CHECK, updates::check_interval_ms(), None);
+                        updates::request_check();
+                    }
+                    TIMER_DUE => {
+                        updates::settle_the_owed_install();
+                    }
+                    _ => {}
+                }
                 LRESULT(0)
             }
             WM_COMMAND => {
@@ -215,9 +237,10 @@ unsafe extern "system" fn tray_window_proc(
                         toggle_check_for_updates();
                     }
                     // The `System → Silent Auto-Update` switch, under the one above it: whether
-                    // an update the check finds as the app starts is put on without asking.
-                    // Turning it on while one is already on offer puts that one on, on a thread
-                    // of its own — the download is megabytes and this is the menu's own thread.
+                    // an update any check finds is put on without asking, wherever the app is idle.
+                    // Turning it on while one is already on offer puts that one on, on a thread of
+                    // its own — the download is megabytes and this is the menu's own thread — or
+                    // keeps it owed where a pin or a menu is on screen (see `the_app_is_idle`).
                     ID_TRAY_SILENT_AUTO_UPDATE => {
                         toggle_silent_auto_update();
                     }
@@ -721,6 +744,8 @@ unsafe extern "system" fn tray_window_proc(
                 LRESULT(0)
             }
             WM_DESTROY => {
+                let _ = KillTimer(hwnd, TIMER_CHECK);
+                let _ = KillTimer(hwnd, TIMER_DUE);
                 remove_tray_icon(hwnd);
                 PostQuitMessage(0);
                 LRESULT(0)
@@ -891,6 +916,19 @@ pub fn run_tray(trace: &mut StartupTrace) {
         // The icon is in the tray, which is the last thing the start is between the launch and
         // anything the user can see: what the retries above cost shows in this step's own time.
         trace.step("tray icon");
+
+        // Two timers, because the tray's own thread is the only one that can be on time twice over.
+        // The hours timer is what makes a run check without a menu ever being opened — the checks
+        // used to be the start's and the menu's alone — and the short tick is the only road an
+        // install the checks are owed has once the user has finished what they were doing. `SetTimer`
+        // with no `TIMERPROC` posts `WM_TIMER` to this window, so the loop wakes as it does for any
+        // other message and nothing polls.
+        let _ = SetTimer(hwnd, TIMER_DUE, DUE_TICK_MS, None);
+        let _ = SetTimer(hwnd, TIMER_CHECK, updates::check_interval_ms(), None);
+
+        // And what the start's own check may have found over something already on screen is taken
+        // here rather than a second later: the install is owed the moment the check lands.
+        updates::settle_the_owed_install();
 
         // Message loop.
         //

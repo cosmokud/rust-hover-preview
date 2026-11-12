@@ -55,9 +55,10 @@ pub(crate) fn toggle_preview_enabled() {
 
 /// Whether the app asks GitHub for a newer release on its own: the `System → Check
 /// for Updates` row, on where the app starts. Turning it on asks at once rather than
-/// at the next opening of the menu, so the row above the submenu reports what the
-/// check found without waiting for one; turning it off asks nothing further, and the
-/// row is gone while there is nothing already on offer to say.
+/// at the next opening of the menu or the next turn of the tray's timer, so the row
+/// above the submenu reports what the check found without waiting for one; turning it
+/// off asks nothing further, and the row is gone while there is nothing already on
+/// offer to say.
 pub(in super::super) fn toggle_check_for_updates() {
     let enabled = if let Ok(mut config) = CONFIG.lock() {
         config.check_for_updates = !config.check_for_updates;
@@ -72,12 +73,13 @@ pub(in super::super) fn toggle_check_for_updates() {
     }
 }
 
-/// Whether an update the check finds as the app starts is put on without asking: the
-/// `System → Silent Auto-Update` row under the switch above it, off where the app starts.
-/// Turning it on while one is already on offer puts that one on at once, on a thread of its
-/// own, so the switch is not one that waits for the next restart to do anything; turning it
-/// off leaves an install already in flight alone, as a switch reading a file cannot take back a
-/// program that has been started.
+/// Whether an update a check finds is put on without asking: the `System → Silent Auto-Update`
+/// row under the switch above it, off where the app starts. Turning it on while one is already on
+/// offer puts that one on at once, so the switch is not one that waits for a later check to do
+/// anything — and it waits for the screen to empty where a pin or a menu is on it, since nothing
+/// of the user's may be closed by an install nobody asked for (see `updates::the_app_is_idle`).
+/// Turning it off leaves an install already in flight alone, as a switch reading a file cannot
+/// take back a program that has been started, and drops one it was owed.
 pub(in super::super) fn toggle_silent_auto_update() {
     let enabled = if let Ok(mut config) = CONFIG.lock() {
         config.silent_auto_update = !config.silent_auto_update;

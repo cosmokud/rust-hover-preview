@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`update_check_hours` — one period for both update switches** — how often the update checks may ask GitHub, in hours (`config.ini`, 6 by default, so `24` is a day), and the tray's own timer that makes the checks happen with it: a run now checks every period whether or not the menu is ever opened, re-arming the timer from the file each time it fires, so a hand edit is honoured on the spot.
+- **A silent install lands when the app is idle, not only at startup** — an install a check found over a pin, a preview or an open menu is owed rather than dropped, and the tray's short tick takes it the moment the screen is empty.
+
+### Changed
+
+- **`System → Silent Auto-Update` installs from any check while the app is idle** — instead of only from the check a run makes as it starts.
+
 ### Fixed
 
 - **A pinned document put away into the taskbar comes back at its own band, not at the file's before it** — a pin the Shell minimized is a pin the app cannot move: both `MoveWindow` and `SetWindowPos` are refused while `IsIconic` stands, and the show that brings the window back lands it at the box it went down in. A file picked in the listing while the pin was away is a take-up at *that* file's box, so the WebView2 viewer — a window of its own, and one whose placement is a call rather than a restore — moved to the new band while the pin's chrome came back at the old one, and the document stood a few hundred pixels out of the window it belongs to. The window is now placed where the pin says once the show has brought it back, and the maximized form a restore comes into is left to the form.
