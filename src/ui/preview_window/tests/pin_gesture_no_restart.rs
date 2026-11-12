@@ -252,6 +252,60 @@ fn a_button_down_handed_again_does_not_anchor_the_drag_over() {
     stand_pin(previous_pin);
 }
 
+/// **A pointer taken from a hand that is still on the button does not end the gesture.** A player a
+/// step begins makes its own window on this desktop and can take the capture as it starts, and a drag
+/// dropped there is a pin that cannot be moved or resized while the film is loading — the press still
+/// answers with a drag, and the drag is dead before the hand has moved.
+#[test]
+fn a_capture_taken_mid_drag_leaves_the_gesture_in_the_loops_hands() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let content = (100, 80, 420, 320);
+    stand_pin(Some(a_playing_film_pin(
+        "a-capture-taken-mid-drag.mkv",
+        content,
+    )));
+    let window = a_window_at(content);
+
+    publish_pin_media_press(true, false);
+    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
+    assert!(pin_is_dragging(), "the press begins the drag it always did");
+
+    // The window of a player the pin's own step began takes the pointer, with the hand still down.
+    pin_capture_lost(&window);
+
+    assert!(
+        pin_is_dragging(),
+        "a pointer taken is not the hand letting go of the window"
+    );
+    assert!(
+        pin_drag_is_carried(),
+        "and the loop carries it off the button's own state from here"
+    );
+
+    super::probes::step_the_pin_drag_by(70, 30);
+    unsafe { settle_pinned_engine_drag(HWND(0x1000 as *mut _)) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.window_box())),
+        Some((
+            content.0 + 70,
+            content.1 + 30,
+            content.2 + 70,
+            content.3 + 30
+        )),
+        "so the window still follows the hand, capture or no capture"
+    );
+
+    // The hand lets go: the button's own state is what ends it, since its release is somebody's
+    // message other than this window's.
+    publish_pin_media_press(false, false);
+    unsafe { settle_pinned_engine_drag(HWND(0x1000 as *mut _)) };
+    assert!(!pin_is_dragging(), "and the release is the gesture's end");
+
+    stand_pin(previous_pin);
+}
+
 /// **A level let go of on an FFmpeg film begins no player**: the level is its mixer session's (see
 /// `audio_session::ask_the_mixer`), so the same pid stands and no reason line is written.
 #[test]
