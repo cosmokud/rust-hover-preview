@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.6] - 2026-11-13
 
 ### Added
 
@@ -17,6 +17,10 @@
 
 ### Fixed
 
+- **Instant cold-pin responsiveness on videos and documents** — `animation_frames::begins_a_walked_container` probes 12 bytes for container signatures (`GIF8`, `RIFF`..`WEBP`, or PNG) before attempting whole-file animation timeline reads, and `is_an_indexed_picture` gates the frame run walk during pin installation. This prevents reading multi-gigabyte video or document files whole under the decode budget and removes multi-second UI freezes when pinning cold files.
+- **Pinned video swap transition stability** — video swap holds track the active player instance on the band (`on_the_band`) rather than relying on global `VIDEO_PID` (which could be overwritten by rapid subsequent picks), preventing held transitions from timing out and waiting the full `VIDEO_START_WAIT_SECS`.
+- **Loading arc spinner suppressed over active film bands** — stepping onto a slow file while keeping the current film playing suppresses the circular arc spinner over the active video frame, preventing the appearance of a stuck spinner on playing video.
+- **Pin window edge hit testing and drag gesture retention** — pointer edge hit testing reads the live client rectangle rather than stale cached bounds (preventing spurious resizes after window maximizes or display changes). In-flight mouse drag captures anchor to the initial press and maintain tracking across child HWND pointer takeovers.
 - **`Performance → Disk Cache` is back in the tray** — the reorganisation that split the old `Cache` block into `Disk Cache` and `Memory` built the three disk-cache size menus but never attached them to `Performance`, so `Document`, `Image` and `General` (the page, the developed picture and the general temp-file budgets) had no row to reach them: they could only be set by hand-editing `config.ini`. The submenu sits above `Memory` again, as `Performance → Disk Cache → Document | Image | General`, `128 GB` down to `0 MB`, with `0` keeping nothing between hovers.
 - **`Pin Mode → Update Preview → On Hover` off is honoured in Everything and Q-Dir** — with the hover off the pin follows a listing's *selection*, but those two listings answer the file under the hand instead: their rows are read out of another process's `SysListView32`, where the row is asked for by point rather than by the list's own selected row, so a pointer merely crossing the results swapped the pin as surely as `On Hover` on did. Both now answer the listing's focused row (its first selected row where nothing holds the focus), so a hover moves the pin there only where the setting asks for one, and a click or a key still does.
 - **A pinned document put away into the taskbar comes back at its own band, not at the file's before it** — a pin the Shell minimized is a pin the app cannot move: both `MoveWindow` and `SetWindowPos` are refused while `IsIconic` stands, and the show that brings the window back lands it at the box it went down in. A file picked in the listing while the pin was away is a take-up at *that* file's box, so the WebView2 viewer — a window of its own, and one whose placement is a call rather than a restore — moved to the new band while the pin's chrome came back at the old one, and the document stood a few hundred pixels out of the window it belongs to. The window is now placed where the pin says once the show has brought it back, and the maximized form a restore comes into is left to the form.
