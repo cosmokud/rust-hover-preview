@@ -19,9 +19,9 @@ use super::defaults::{
     DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE, DEFAULT_SPINNER_DELAY_MS,
     DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS,
-    DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES,
-    DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_UPDATE_CHECK_HOURS, DEFAULT_VIDEO_ENGINE,
+    DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT,
+    DEFAULT_VIDEO_SUBTITLES, DEFAULT_VIDEO_VOLUME, DEFAULT_WEBP_PLAYBACK_FPS,
 };
 use super::setting_types::{
     AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile,
@@ -45,14 +45,19 @@ use super::setting_types::{
 pub struct AppConfig {
     pub is_first_run: bool,
     pub run_at_startup: bool,
-    /// Whether the app asks GitHub for a newer release on its own, at startup and when the
-    /// menu is opened — on where the app starts, and the `System → Check for Updates` row
-    /// is the switch (see `DEFAULT_CHECK_FOR_UPDATES`).
+    /// Whether the app asks GitHub for a newer release on its own, at startup, on every opening
+    /// of the menu and once per `update_check_hours` — on where the app starts, and the
+    /// `System → Check for Updates` row is the switch (see `DEFAULT_CHECK_FOR_UPDATES`).
     pub check_for_updates: bool,
-    /// Whether an update the app finds as it starts is put on without asking — off where the
-    /// app starts, and the `System → Silent Auto-Update` row is the switch (see
-    /// `DEFAULT_SILENT_AUTO_UPDATE`).
+    /// Whether an update a check finds is put on without asking — off where the app starts, and
+    /// the `System → Silent Auto-Update` row is the switch. It installs only while the app is idle,
+    /// and what a check finds over a pin or an open menu is owed until it is (see
+    /// `DEFAULT_SILENT_AUTO_UPDATE` and `updates::the_app_is_idle`).
     pub silent_auto_update: bool,
+    /// How often the update checks may ask GitHub, in hours — one period for both switches; the
+    /// `System → Check for Updates` row and its `Silent Auto-Update` are what they answer. See
+    /// DEFAULT_UPDATE_CHECK_HOURS.
+    pub update_check_hours: u64,
     pub hover_delay_ms: u64,
     pub preview_enabled: bool,
     /// Whether a preview is made where a **browse dialog** is showing — the Common Item Dialog
@@ -801,6 +806,7 @@ impl Default for AppConfig {
             run_at_startup: true,
             check_for_updates: DEFAULT_CHECK_FOR_UPDATES,
             silent_auto_update: DEFAULT_SILENT_AUTO_UPDATE,
+            update_check_hours: DEFAULT_UPDATE_CHECK_HOURS,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
             preview_enabled: true,
             browse_dialog_preview_enabled: DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED,

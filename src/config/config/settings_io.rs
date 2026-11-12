@@ -93,6 +93,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "q_dir_previews",
             "check_for_updates",
             "silent_auto_update",
+            "update_check_hours",
             "pin_always_on_top",
             "pin_double_click_center",
             "pin_double_click_reset_size",

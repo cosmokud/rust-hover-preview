@@ -16,7 +16,8 @@ use super::defaults::{
     sanitize_image_disk_cache_mb, sanitize_pin_zoom_bounce_ms, sanitize_pin_zoom_bounce_power,
     sanitize_pin_zoom_bounce_speed_ms, sanitize_program_path, sanitize_spinner_delay_ms,
     sanitize_text_font_scale_percent, sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms,
-    sanitize_ttc_face, sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
+    sanitize_ttc_face, sanitize_update_check_hours, sanitize_volume, sanitize_webp_playback_fps,
+    CONFIG_SECTION,
 };
 use super::migrate;
 use super::setting_types::{
@@ -67,6 +68,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "silent_auto_update",
             Some(self.silent_auto_update.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "update_check_hours",
+            Some(self.update_check_hours.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -664,11 +670,17 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "check_for_updates") {
             self.check_for_updates = value;
         }
-        // Whether an update found as the app starts is put on without asking. A file written
-        // before the setting existed has no key for it, so a fresh installation checks and
-        // installs, and one that says nothing about it is left where it starts.
+        // Whether an update a check finds is put on without asking, where the app is idle. A file
+        // written before the setting existed has no key for it, so a fresh installation checks
+        // and installs, and one that says nothing about it is left where it starts.
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "silent_auto_update") {
             self.silent_auto_update = value;
+        }
+        // How often the checks may ask, in hours: a period, so a file naming no period at all — or
+        // one that cannot be read as a number — leaves the default, and a number outside the range
+        // is the edge of it rather than a longer one (see `sanitize_update_check_hours`).
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "update_check_hours") {
+            self.update_check_hours = sanitize_update_check_hours(value);
         }
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "hover_delay_ms") {
             self.hover_delay_ms = value;

@@ -806,9 +806,9 @@ fn the_q_dir_switch_is_on_until_the_file_says_otherwise() {
     assert!(read_file(&mut ini).q_dir_previews);
 }
 
-/// Whether an update found as the app starts is put on without asking is the user's to switch
-/// on: a fresh configuration checks for one and installs nothing, which is what a row above the
-/// `System` submenu is for.
+/// Whether an update a check finds is put on without asking is the user's to switch on: a fresh
+/// configuration checks for one and installs nothing, which is what a row above the `System`
+/// submenu is for.
 #[test]
 fn silent_auto_update_is_off_until_the_file_says_otherwise() {
     let config = AppConfig::default();
@@ -835,4 +835,50 @@ fn silent_auto_update_is_off_until_the_file_says_otherwise() {
         Some("true".to_string()),
     );
     assert!(!read_file(&mut ini).silent_auto_update);
+}
+
+/// The period the checks wait is a number of hours the file names, one setting for both update
+/// switches: `0` is read as the shortest period rather than as a check on every opening, and a
+/// number past the ceiling is the ceiling.
+#[test]
+fn the_check_interval_is_hours_the_file_names() {
+    let config = AppConfig::default();
+    assert_eq!(config.update_check_hours, DEFAULT_UPDATE_CHECK_HOURS);
+    assert_eq!(DEFAULT_UPDATE_CHECK_HOURS, 6);
+    assert_eq!(MIN_UPDATE_CHECK_HOURS, 1);
+    assert_eq!(MAX_UPDATE_CHECK_HOURS, 168);
+
+    let mut ini = written_file();
+    ini.set(CONFIG_SECTION, "update_check_hours", Some("24".to_string()));
+    assert_eq!(read_file(&mut ini).update_check_hours, 24);
+
+    for (written, read) in [
+        ("0", MIN_UPDATE_CHECK_HOURS),
+        ("9999", MAX_UPDATE_CHECK_HOURS),
+    ] {
+        let mut ini = written_file();
+        ini.set(
+            CONFIG_SECTION,
+            "update_check_hours",
+            Some(written.to_string()),
+        );
+        assert_eq!(
+            read_file(&mut ini).update_check_hours,
+            read,
+            "a period out of range is the edge of it, not a longer one: {written}"
+        );
+    }
+
+    // A file written before the setting existed says nothing about it, and saying nothing is the
+    // period left where it starts.
+    let mut ini = Ini::new();
+    ini.set(
+        CONFIG_SECTION,
+        "check_for_updates",
+        Some("true".to_string()),
+    );
+    assert_eq!(
+        read_file(&mut ini).update_check_hours,
+        DEFAULT_UPDATE_CHECK_HOURS
+    );
 }
