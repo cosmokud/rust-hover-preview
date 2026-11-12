@@ -196,6 +196,62 @@ fn a_drag_and_a_resize_keep_the_same_player_throughout() {
     }
 }
 
+/// **A button-down handed to the window again, with the hand never letting go of it, is the same
+/// gesture rather than a second one.** It was seen arriving every 25 ms of a drag of a pinned film,
+/// and each one anchored the drag over at the pointer's new place, so the window followed the hand
+/// only by the sliver between the last one and the release — a pin that could not be dragged.
+#[test]
+fn a_button_down_handed_again_does_not_anchor_the_drag_over() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let content = (100, 80, 420, 320);
+    let before = content;
+    stand_pin(Some(a_playing_film_pin(
+        "a-repeated-button-down.mkv",
+        content,
+    )));
+    let window = a_window_at(before);
+
+    // The hand is on the button, and the press begins the drag from where it landed.
+    publish_pin_media_press(true, false);
+    assert!(left_button_down(), "the hand is on the button");
+    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
+    assert!(pin_is_dragging(), "the press begins the drag");
+
+    super::probes::step_the_pin_drag_by(60, 40);
+    unsafe { apply_pin_drag(HWND(0x1000 as *mut _)) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.window_box())),
+        Some((before.0 + 60, before.1 + 40, before.2 + 60, before.3 + 40)),
+        "the window is the hand's for the travel from the press"
+    );
+
+    // The same button-down arrives again, with the pointer already carried out to 120, 80.
+    super::probes::step_the_pin_drag_by(120, 80);
+    begin_pin_drag(HWND(0x1000 as *mut _), &window, PinDragAction::Move, true);
+    assert!(
+        pin_is_dragging(),
+        "and the gesture is still the one in hand"
+    );
+
+    // Nothing moves the pointer for the echo, and the window still owes the hand the travel it has
+    // already made from the press — an echo that anchored the drag over would owe it none of it.
+    unsafe { apply_pin_drag(HWND(0x1000 as *mut _)) };
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.window_box())),
+        Some((before.0 + 120, before.1 + 80, before.2 + 120, before.3 + 80)),
+        "and the window follows the hand from the press that began the drag, not from the echo"
+    );
+
+    assert!(
+        finish_pin_drag(HWND(0x1000 as *mut _), &window),
+        "the release is the drag's own end"
+    );
+    publish_pin_media_press(false, false);
+    stand_pin(previous_pin);
+}
+
 /// **A level let go of on an FFmpeg film begins no player**: the level is its mixer session's (see
 /// `audio_session::ask_the_mixer`), so the same pid stands and no reason line is written.
 #[test]

@@ -455,6 +455,29 @@ pub(super) fn begin_pin_drag(
     delivered: bool,
 ) {
     let hwnd = hwnd.0 as isize;
+
+    // **A press that arrives while a gesture is already in hand is that gesture's own echo, and it
+    // must not anchor a second one.** A window can be handed the button-down again for a hand that
+    // has not let go of it — it was seen on a pinned film handed down every 25 ms while the pointer
+    // crossed the band — and every echo re-anchored the drag at the pointer's new place and at the
+    // window's new box, so `apply_pin_drag` was asked for no travel at all: the window followed the
+    // hand only by the sliver between the last echo and the release, which is a window that cannot
+    // be dragged. The anchor of a drag is the gesture's, taken at the press that began it, and a
+    // hand that has really pressed again has a release between the two that `finish_pin_drag` has
+    // already taken the drag away with.
+    //
+    // The button's own state is asked as well, so that a drag whose release never arrived is not a
+    // drag nothing can begin over: a hand that is not holding the button begins the gesture it
+    // pressed for, over the record of one that is not coming back (see `left_button_down`).
+    if left_button_down()
+        && pin_state()
+            .and_then(|pinned| pinned.pin().map(|pin| pin.dragging.is_some()))
+            .unwrap_or(false)
+    {
+        note_pin_trace!("pin press carried on: a drag is already in hand");
+        return;
+    }
+
     let Some(from) = window.pointer() else {
         return;
     };
