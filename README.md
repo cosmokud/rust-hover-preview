@@ -68,7 +68,7 @@ A secret or credential file is never previewed while **Don't Preview Secret File
 
 | Engine                                                                                                      | `config.ini` | Default extensions                                                          |
 | ----------------------------------------------------------------------------------------------------------- | ------------ | --------------------------------------------------------------------------- |
-| The Windows PDF engine for the PDF's three spellings; this app's own readers for the three comic containers | `[ebook]`    | cbc, cbr, cbz, epdf, pdf, pdfa                                              |
+| The Windows PDF engine for hover previews, WebView2 for interactive pinned documents; this app's own readers for comic containers | `[ebook]`    | cbc, cbr, cbz, epdf, pdf, pdfa                                              |
 | [Calibre](#optional-enable-ebooks-calibre), which converts the book to a PDF first                          | `[calibre]`  | azw, azw3, azw4, djvu, epub, fb2, htmlz, lit, lrf, mobi, pml, prc, snb, tcr |
 
 
@@ -334,7 +334,7 @@ The release binary is written to `target/release/rust-hover-preview.exe`. A rele
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, and runs HTML pages where Render HTML is switched on, camera raw and the pictures beside it are developed by ImageMagick, and video is played by mpv where installed, and otherwise by Windows' own media engine for small films and FFmpeg's player for large ones. A middle click or `Space` pins the preview into a captioned window of its own — always on top unless you turn that off, in which case it wears a taskbar button of its own.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system overview. In short: Windows accessibility APIs and Shell COM identify the hovered or focused Explorer item, and GDI paints the preview into a topmost layered window. Text and code are highlighted with TextMate-style themes, Markdown is rendered, archive contents are listed from the archives' own tables of contents — or from the listing an installed PeaZip produces for the formats no reader here has — Office documents are drawn from a page Office renders in the background, WebView2 draws SVG documents and font specimens, hosts the interactive pinned PDF viewer, and runs HTML pages where Render HTML is switched on, camera raw and the pictures beside it are developed by ImageMagick, and video is played by mpv where installed, and otherwise by Windows' own media engine for small films and FFmpeg's player for large ones. A middle click or `Space` pins the preview into a captioned window of its own — always on top unless you turn that off, in which case it wears a taskbar button of its own.
 
 ## TODO
 

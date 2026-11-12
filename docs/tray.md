@@ -125,6 +125,10 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
   - **Image** — **Pin Mode**, and the whole of it: **Shuffle**, whether a *pinned* picture's walk takes the next file at random, and **Zoom Background**, the backdrop the band a zoom leaves behind the picture is filled with.
     - A picture has no level, no end of file and nowhere in it to start, and a hover has no next file, so the shuffle is the one thing a picture answers.
     - **Pin Mode → Zoom Background** — **Black** (default), **White** or **Checkerboard**: the backdrops that fill the band a hand carries a zoomed picture off its window leaves behind it. The see-through one is not offered, since the band is the window's rather than the file's. Written as `zoom_background`. A picture with a transparent pixel in it keeps what **Background → Image** asks for instead — see-through included — so one meant to show the desktop through it keeps doing so at any size, zoom or not.
+  - **PDF** — Settings for PDF previews.
+    - **Pin Mode** — What a *pinned* PDF does.
+      - **Full Mode** — On by default: a pinned PDF opens in WebView2's full Chromium PDF viewer, allowing continuous scrolling, page search, zooming, and text selection inside the pin's frame. Off, a pinned PDF is rendered as the single page this app draws itself, with no browser and no second window.
+      - **Autofocus on PDF** — On by default (greyed out when **Full Mode** is off): puts keyboard focus into the PDF viewer on reveal and resume so arrow keys, `Ctrl`+`F`, and page navigation go straight to the document. Off, keeps the keyboard in the pin so arrow keys walk the folder listing while wheel scrolling still scrolls the document.
 - **Timing**
   - **Prioritize Keyboard** — On by default.
     - The file under a pointer that has not been moved does not preview of its own while the keyboard is driving Explorer, so pressing a key onto a file with no preview of its own behaves like pressing one onto a file that has a preview.
