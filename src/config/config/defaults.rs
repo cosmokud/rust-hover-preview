@@ -162,20 +162,42 @@ pub const MAX_TTC_FACE: u32 = 10;
 pub const DEFAULT_RENDER_HTML: bool = false;
 /// Whether the app asks GitHub for a newer release on its own.
 ///
-/// It is on where the app starts: the check is a read of a four-kilobyte file at most once
-/// every six hours, on a thread of its own, and the row above the `System` submenu is how
-/// a newer release is offered. Off, nothing is asked at any moment — neither at startup
-/// nor when the menu is opened — and the row never appears (see `request_check`).
+/// It is on where the app starts: the check is a read of a four-kilobyte file, on a thread of
+/// its own, and the row above the `System` submenu is how a newer release is offered. Three
+/// moments ask for one, and the `update_check_hours` period is what keeps them from asking more
+/// often than that: the run's start, every opening of the tray menu, and the timer the tray loop
+/// keeps, so a run checks of its own accord however long no menu is opened (see `request_check`,
+/// `due_for_check` and `TIMER_CHECK`). Off, nothing is asked at any moment, and the row never
+/// appears.
 pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
-/// Whether an update the app finds as it starts is put on without asking.
+/// Whether an update a check finds is put on without asking.
 ///
 /// It is off where the app starts: a check asks GitHub one question, and putting on what the
-/// answer names is a larger thing to do unasked than leaving the check on agreed to. On, the
-/// one check a run makes as it starts installs what it finds — the same fetch and the same
-/// silent installer the `Auto` answer runs — and nothing happens at any other moment, because
-/// a menu opened mid-session can have windows on screen this app would have to close (see
-/// `silent_auto_update`).
+/// answer names is a larger thing to do unasked than leaving the check on agreed to. On, any
+/// check installs what it finds — the same fetch and the same silent installer the `Auto`
+/// answer runs — but only while the app is idle, so nothing of the user's is ever closed by it:
+/// a check that found an update over a pin or an open menu is owed rather than spent, and the
+/// tray's short tick takes it the moment the screen is empty (see `the_app_is_idle` and
+/// `AWAITING_INSTALL`).
 pub const DEFAULT_SILENT_AUTO_UPDATE: bool = false;
+/// How often the update checks may ask GitHub, in hours — the one period both `System` rows
+/// share, since a silent install is an answer to a check and never a schedule of its own.
+///
+/// Six hours is often enough for a release, and a menu opening is no reason to ask GitHub
+/// anything sooner. Nothing about it is written down that outlives the run — a run has no record
+/// of the run before it — so its start is always its first check (see `check_interval`).
+pub const DEFAULT_UPDATE_CHECK_HOURS: u64 = 6;
+/// The shortest period the setting can name, in hours.
+pub const MIN_UPDATE_CHECK_HOURS: u64 = 1;
+/// The longest period the setting can name: a week, which is as long as a check that never
+/// happens is still a check the user asked for.
+pub const MAX_UPDATE_CHECK_HOURS: u64 = 168;
+/// The period a file names, read as a period rather than as a switch: `0` is the shortest
+/// period rather than "ask on every opening", which is a thing no setting has to say — every
+/// opening of the tray menu asks anyway (see `request_check`).
+pub fn sanitize_update_check_hours(value: u64) -> u64 {
+    value.clamp(MIN_UPDATE_CHECK_HOURS, MAX_UPDATE_CHECK_HOURS)
+}
 /// Whether a preview is made where a **browse dialog** is showing — the Common Item Dialog every
 /// program draws for itself: Chrome's or Notepad's `Ctrl`+`O`, a `Save As`, a folder pick.
 ///
