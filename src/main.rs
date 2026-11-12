@@ -250,10 +250,12 @@ fn main() {
     // it may put in the menu should be there the first time the menu is opened
     // rather than only after an opening of its own asked for a check. It runs on a
     // thread of its own, so nothing here waits on GitHub — and nothing is asked
-    // at all where the checks are switched off (see `check_for_updates`). This is
-    // also the one moment an update may be installed without asking, where
-    // `silent_auto_update` is on: a start has nothing on screen to close.
-    app::updates::request_startup_check();
+    // at all where the checks are switched off (see `check_for_updates`). What the
+    // tray loop's own timer and every menu opening ask for are the rest of the run's
+    // checks, one period apart; what a check does with its answer is no longer a
+    // start-only thing either — a silent install happens wherever the app is idle, and
+    // the one that found an update over a pin waits for it (see `the_app_is_idle`).
+    app::updates::request_check();
     trace.step("update check");
 
     // Run the system tray (this blocks until exit), noting the two steps between the launch
