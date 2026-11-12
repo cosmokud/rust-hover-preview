@@ -1838,8 +1838,19 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     }
 
     // What is held in memory between hovers and what one file may be answered for drawn into: the
-    // cache first, where a hand reaches for a size, and the two ceilings under it.
+    // ceiling one hover may decode or read *for* first, then a rule, then the two rooms a run of
+    // frames is *kept* in — the frames a decoded picture is shown as, held between hovers, and the
+    // run a pinned picture's track reads (see `pin_index`). The ceiling is above the two because
+    // it decides whether a file is answered at all, which is the question a hand with a machine
+    // that struggles reaches for first.
     let memory_menu = CreatePopupMenu().unwrap();
+    let _ = AppendMenuW(
+        memory_menu,
+        MF_STRING | MF_POPUP,
+        budget_menu.0 as usize,
+        w!("Decode Budget"),
+    );
+    let _ = AppendMenuW(memory_menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(
         memory_menu,
         MF_STRING | MF_POPUP,
@@ -1849,14 +1860,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let _ = AppendMenuW(
         memory_menu,
         MF_STRING | MF_POPUP,
-        budget_menu.0 as usize,
-        w!("Decode Budget"),
-    );
-    let _ = AppendMenuW(
-        memory_menu,
-        MF_STRING | MF_POPUP,
         animated_webp_menu.0 as usize,
-        w!("Animated WEBP"),
+        w!("Animated Image"),
     );
 
     let _ = AppendMenuW(

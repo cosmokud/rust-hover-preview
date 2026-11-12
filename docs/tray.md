@@ -189,9 +189,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **`Image`** = the pictures ImageMagick developed, kept as temp files.
     - **`General`** = the subtitle tracks a film's embedded ones are copied into, and the track facts a sound was read for, kept as temp files; `0` draws a film without its subtitles and reads every sound again.
   - **Memory** — What a preview may cost in RAM between hovers.
-    - **`Image`** = decoded frames kept in memory, `16 GB` down to `0 MB`.
     - **`Decode Budget`** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
-    - **`Animated WEBP`** — the room a pinned picture's held run of frames is given, `8 GB` down to `64 MB`.
+    - **`Image`** — decoded frames kept in memory, `16 GB` down to `0 MB`.
+    - **`Animated Image`** — the room a pinned picture's held run of frames is given — an animated GIF as much as a WebP — `8 GB` down to `64 MB`.
   - **Explorer Poll** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
     - Lower answers a move sooner; higher is lighter on CPU and Explorer.
   - **Hardware Acceleration (MPV Only)** — checked by default: a film mpv plays is decoded on the graphics card through mpv's own `--hwdec=auto`, whose safe list and software fallback are that player's business.

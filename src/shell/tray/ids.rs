@@ -686,7 +686,7 @@ pub(super) const DISK_CACHE_SIZE_CHOICES_MB: [u32; 15] = [
 /// picture still fits in. A value a hand-edited `config.ini` asks for that is not one of
 /// these is shown with nothing marked rather than rounded to one of them.
 pub(super) const DECODE_BUDGET_CHOICES_GB: [f32; 6] = [16.0, 8.0, 4.0, 2.0, 1.0, 0.5];
-/// The room `Performance → Memory → Animated WEBP` offers a pinned picture's held run of
+/// The room `Performance → Memory → Animated Image` offers a pinned picture's held run of
 /// frames, in megabytes, largest first, and the id each size carries.
 ///
 /// It is the one ceiling under that submenu that is about what is *kept* rather than about what one

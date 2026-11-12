@@ -447,7 +447,7 @@ fn a_run_whose_stream_was_cancelled_holds_its_last_frame_and_never_returns_to_it
 }
 
 /// **A pinned picture's held run is its own budget, and a hover keeps the constant**: the room a
-/// release gives frames back in is the tray's `Performance → Memory → Animated WEBP` for a picture
+/// release gives frames back in is the tray's `Performance → Memory → Animated Image` for a picture
 /// that has been pinned — which is what lets the player hold a run whole and serve a drag from it —
 /// and the module's constant for a hover, which is never dragged (see `MediaData::retained_room`).
 #[test]
