@@ -12,6 +12,8 @@
 ### Changed
 
 - **`System → Silent Auto-Update` installs from any check while the app is idle** — instead of only from the check a run makes as it starts.
+- **`Performance → Memory` lists `Decode Budget` first, a rule under it, then `Image` and `Animated Image`** — the ceiling one file may be answered for sits above the two budgets about what is *kept*: whether a preview happens at all is the question a hand reaches for first.
+- **`Animated WEBP` is now `Animated Image`** — the room a pinned picture's held run of frames is given is a GIF's as much as a WebP's (see `pin_index`, which walks both), so the row no longer names one of the two formats it bounds. The setting behind it keeps its name, `animated_webp_budget_mb`.
 
 ### Fixed
 
