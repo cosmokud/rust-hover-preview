@@ -571,7 +571,14 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // The arc of a window that is waiting for a file, over the band and under the chrome: a
     // caption drawn over it is a caption a hand can still read, which is the whole of what the
     // wait is not allowed to cost the window (see `paint_pin_spinner`).
-    paint_pin_spinner(out, width.max(1) as u32, band_top, band_height as i32);
+    //
+    // **Except over a film**, whose band is a picture that plays: a step that lands on a slow file
+    // keeps the film it was showing and plays it on, and the arc turning over a picture that is
+    // plainly moving reads as a spinner stuck on a video rather than as a wait (see
+    // `the_band_shows_a_film`).
+    if !the_band_shows_a_film() {
+        paint_pin_spinner(out, width.max(1) as u32, band_top, band_height as i32);
+    }
 
     // The caret a pinned page is holding, drawn over the frame rather than into it: it goes away
     // again every half of a blink, and a frame drawn again for each phase would restyle a screenful

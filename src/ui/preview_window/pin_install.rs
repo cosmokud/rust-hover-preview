@@ -677,6 +677,7 @@ pub(super) fn pin_install<'a>(
 /// carries only the file and the box, and everything else about the file being on screen is
 /// state the take-up reads rather than state it is handed.
 pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable) {
+    let install_at = Instant::now();
     let PinInstallable {
         path,
         update,
@@ -794,16 +795,23 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     // read once in the background, at the size this pin draws it, so that a hand on its track is
     // shown whatever frame it names at once (see `pin_index`). A box change asks for it again on
     // its own road, which is the one that knows the box the picture has been laid out at.
-    if let (Some(total), Some(kind)) = (
-        crate::formats::animation_frames::timeline(&path).map(|run| run.frames()),
-        Some(media.media_type),
-    ) {
-        pin_index::start(
-            &path,
-            kind,
-            total,
-            (media.current_width(), media.current_height()),
-        );
+    //
+    // **Only a picture that plays is asked for its run, and it is asked before anything else
+    // that reads the file.** The walk behind that answer reads the whole file up to the decode
+    // budget before it knows what the file is (`animation_frames::timeline`), so asking it of a
+    // film is a film read end to end on the thread that draws: measured on a cold 1080p episode,
+    // 4.3 seconds of a dead pin, on every install, for a question a film can never answer.
+    if is_played_picture(Some(media.media_type)) {
+        if let Some(total) =
+            crate::formats::animation_frames::timeline(&path).map(|run| run.frames())
+        {
+            pin_index::start(
+                &path,
+                media.media_type,
+                total,
+                (media.current_width(), media.current_height()),
+            );
+        }
     }
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(media);
@@ -827,6 +835,14 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
         // `pin_what_is_on_screen` and `the_pin_takes_the_file_up`).
         arriving: false,
     });
+
+    // **A swap's install is on the tick that draws, so its own cost is a hand's wait.** The
+    // take-up is asked for a tick or more after this, and a cold file is the one whose install does
+    // work a warm one's did not: a line here is which half of the wait the wait was (see `tick_at`
+    // in the loop and `pin_swap_awaits`).
+    if install_at.elapsed().as_millis() >= 100 {
+        note_pin_trace!("install took {}ms", install_at.elapsed().as_millis());
+    }
 }
 
 /// The answer a swap of a pinned window's file gives where there is nothing to show for it: the
@@ -2002,8 +2018,16 @@ pub(super) fn take_pin_relayout(relayout: &mut Option<PinRelayout>) -> bool {
     // `pin_index`). It answers nothing for a picture whose own run holds every place of the file —
     // which is the ordinary case a resize leaves (see `keep_animation_place`) — and it is the run
     // a hand reads for one too long to be held whole, which the merged run alone cannot be.
+    //
+    // **A kind that is not a picture that plays is asked nothing, for the reason the install gives
+    // where the same walk is asked of a file being put on the window**: the answer costs a read of
+    // the whole file, and a window being resized over a film is the last place to pay it.
     if let (Some(total), Some(kind), Some(size)) = (
-        crate::formats::animation_frames::timeline(&pending.path).map(|run| run.frames()),
+        is_played_picture(installed_kind)
+            .then(|| {
+                crate::formats::animation_frames::timeline(&pending.path).map(|run| run.frames())
+            })
+            .flatten(),
         installed_kind,
         installed_size,
     ) {

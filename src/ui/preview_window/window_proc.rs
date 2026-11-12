@@ -658,7 +658,36 @@ pub(super) unsafe extern "system" fn window_proc(
             // begins is the pointer taken for this window. That has to happen before any of the
             // window-manager work the keyboard costs, or the first press of a hand that is already
             // moving has nothing to carry it (see `press_the_pin`).
-            if pinned() && press_the_pin(hwnd, x, y, &Win32PinWindow, !pin_is_focused()) {
+            // **What the press was answered with, written down.** Every road a press can take on a
+            // pin is silent — a caption button, a panel, the transport bar and a drag all look the
+            // same from outside the window — and a press that carries nothing is the one fault no
+            // other line in this trace can name: the band a drag asks for on its way in is the only
+            // thing `begin_pin_drag` writes, so a press with no band line after it is a press some
+            // arm above the media took. The point, the chrome it was read against, the answer and
+            // what the pin is holding afterwards are the whole of that answer.
+            let (answered, dragging, chrome) = {
+                let answered = pinned()
+                    && unsafe { press_the_pin(hwnd, x, y, &Win32PinWindow, !pin_is_focused()) };
+                let (dragging, chrome) = pin_state()
+                    .and_then(|pinned| {
+                        pinned.pin().map(|pin| {
+                            (pin.dragging.is_some(), (pin.chrome.caption, pin.chrome.bar))
+                        })
+                    })
+                    .unwrap_or((false, (false, false)));
+                (answered, dragging, chrome)
+            };
+            note_pin_trace!(
+                "pin press {},{} pinned {} answered {} dragging {} chrome {}/{}",
+                x,
+                y,
+                pinned() as u8,
+                answered as u8,
+                dragging as u8,
+                chrome.0 as u8,
+                chrome.1 as u8,
+            );
+            if answered {
                 return LRESULT(0);
             }
 
@@ -776,6 +805,16 @@ pub(super) unsafe extern "system" fn window_proc(
             // held under a hand that is no longer on it (see `text_find::release`).
             if text_find::release() {
                 render_layered_preview(hwnd);
+            }
+            // **Who took the pointer, while a hand still held it**: a drag that neither moved nor
+            // clicked is a drag nobody's messages were carrying, and the window named here is the one
+            // that took them (see `pin_capture_lost`). `lParam` is the window gaining the capture.
+            if pinned() && pin_is_dragging() {
+                note_pin_trace!(
+                    "the pointer was taken from the pin while a drag was in hand, by {:?} (button down {})",
+                    HWND(lparam.0 as *mut _),
+                    left_button_down() as u8
+                );
             }
             // Whatever a pinned window was doing with the pointer is over: a capture lost to
             // another window is a drag that is not coming back, and one this app released itself

@@ -2559,12 +2559,88 @@ pub(super) fn the_hosted_frame_is_up(pid: u32) -> bool {
     if !the_hosted_player_is_drawing(pid) {
         return false;
     }
-    if !the_players_output_is_configured(pid) {
+    // **A player with no pipe to answer through is its own window's drawing**, and that window is
+    // the whole of its picture: FFmpeg's player reports nothing at all (see `answers_properties`).
+    if !mpv_ipc::answers_properties(pid) {
+        PRESENTED_PID.store(pid, Ordering::SeqCst);
+        return true;
+    }
+
+    // **And a player that answers is asked at most four times a second**, and never on the strength
+    // of a tick or a pointer move alone: the ask is a pipe round trip bounded at the read wait, and
+    // this question is asked of every tick and of every move of a hand on the window — a player busy
+    // with its first frames is one that makes every one of those answers wait, and a window
+    // answering a hand at the pace of the player is a window that cannot be dragged while the film
+    // is loading (see `the_players_picture`).
+    if !the_players_picture(pid).is_some_and(|picture| picture.configured) {
         return false;
     }
     PRESENTED_PID.store(pid, Ordering::SeqCst);
     true
 }
+
+/// How often the player is asked about its picture, and how long its answer stands for.
+///
+/// It is not a timer anything is waited on: what the answer decides is a strip's arrival and the
+/// handover's own swap, both of which are bounded by the player's start and neither of which is
+/// changed by an answer a quarter of a second old. What it buys is the window's own pace — the two
+/// questions are a pipe round trip each, and a player decoding its first frames answers neither for
+/// the ten milliseconds the read is given.
+const THE_PLAYER_IS_ASKED_EVERY: Duration = Duration::from_millis(250);
+
+/// How long an answer stands for, which is `THE_PLAYER_IS_ASKED_EVERY` and nothing at all in a test:
+/// a run of the suite stands a different answer between two questions of the same player, and an
+/// answer kept from the turn before would be the case it is standing up not being asked at all (see
+/// `the_players_picture`).
+fn the_players_answer_stands_for() -> Duration {
+    if cfg!(test) {
+        Duration::ZERO
+    } else {
+        THE_PLAYER_IS_ASKED_EVERY
+    }
+}
+
+/// The player's own answer about its picture, as of the moment it was asked: whether its video
+/// output is configured for a frame, and the second it says it stands at.
+#[derive(Clone, Copy)]
+struct ThePlayersPicture {
+    pid: u32,
+    asked: Instant,
+    configured: bool,
+    second: Option<f64>,
+}
+
+/// The answer the player gave about its picture, asked again only where the last one is older than
+/// `THE_PLAYER_IS_ASKED_EVERY`.
+///
+/// **Nothing here waits for a player that is not there**: a player with no pipe to answer through is
+/// the window's own drawing (see `answers_properties`), and one whose answer has not landed inside
+/// the read wait is a picture this app has not been told about — which is the same answer as a
+/// player still building its first frame, so nothing is decided differently for it.
+fn the_players_picture(pid: u32) -> Option<ThePlayersPicture> {
+    let now = Instant::now();
+    if let Ok(held) = THE_PLAYERS_PICTURE.lock() {
+        if let Some(held) = *held {
+            if held.pid == pid && now.duration_since(held.asked) < the_players_answer_stands_for() {
+                return Some(held);
+            }
+        }
+    }
+
+    let asked = ThePlayersPicture {
+        pid,
+        asked: now,
+        configured: mpv_ipc::get_property(pid, "vo-configured").as_deref() == Some("true"),
+        second: mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse().ok()),
+    };
+    if let Ok(mut held) = THE_PLAYERS_PICTURE.lock() {
+        *held = Some(asked);
+    }
+    Some(asked)
+}
+
+/// The last answer a player gave about its picture (see `the_players_picture`).
+static THE_PLAYERS_PICTURE: Lazy<Mutex<Option<ThePlayersPicture>>> = Lazy::new(|| Mutex::new(None));
 
 /// Whether this player's own video output is configured for a frame, where the player answers over a
 /// pipe: **the half of the presented predicate that does not need to know which second it is on**.
@@ -2594,9 +2670,10 @@ pub(super) fn the_players_output_is_configured(pid: u32) -> bool {
 /// not proved anything, so the wait goes on — bounded by the player-start timeout, never by a timer
 /// of its own (see `VIDEO_START_WAIT_SECS`).
 pub(super) fn the_hosted_frame_is_presented(pid: u32, at: f64) -> bool {
-    let Some(seconds) =
-        mpv_ipc::get_property(pid, "time-pos").and_then(|answer| answer.parse::<f64>().ok())
-    else {
+    let Some(picture) = the_players_picture(pid) else {
+        return false;
+    };
+    let Some(seconds) = picture.second else {
         return false;
     };
 

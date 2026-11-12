@@ -8,6 +8,7 @@ use super::*;
 // only reads what it published. Their storage moved, their readers did not (see
 // `crate::app::seam::PIN_MEDIA_LEFT_DOWN`).
 use crate::app::seam::{PIN_MEDIA_LEFT_DOWN, PIN_MEDIA_LEFT_PRESSES};
+use crate::ui::preview_window::pin_trace::note_pin_trace;
 
 /// Whether the pointer is carrying the pinned window, or pulling it to a new size, right now.
 ///
@@ -91,7 +92,19 @@ pub(super) unsafe fn pinned_set_cursor(hwnd: HWND) -> bool {
 
         (
             pin.frame,
-            pin.resize_edge(point.0 - origin.0, point.1 - origin.1),
+            // **The box the pointer is judged against is the window's own**, read live beside its
+            // corner rather than the box the pin remembers — the same lesson `begin_pin_drag` is
+            // written on: a window a maximize, a display change or a swap's held box has left a
+            // different size than the pin's record is a window whose whole middle reads as an
+            // edge, so the pointer wears a resize cursor over a picture that has no edge there and
+            // a press that meant to carry the window begins a resize of it instead (see
+            // `pin_resize_edge` and `begin_pin_drag`).
+            pin_resize_edge(
+                (origin.2.max(1), origin.3.max(1)),
+                pin.dpi,
+                point.0 - origin.0,
+                point.1 - origin.1,
+            ),
             pin.dragging.map(|drag| drag.action),
         )
     };
@@ -282,6 +295,20 @@ pub(super) unsafe fn settle_pinned_press(hwnd: HWND, seen_presses: &mut u64) {
         || (film != 0 && film == under)
         || engine_window_is_at(point.0, point.1);
 
+    // **Which window the press was read on, by handle.** The classes of the pin and of the preview
+    // are not distinguishable in a log that names them by class, and the one question a press that
+    // went nowhere asks is which of the two windows of ours took it (see `pin_drag::begin_pin_drag`,
+    // which writes a band line and nothing else).
+    note_pin_trace!(
+        "pin press read at {},{} under {:?} pin {:?} film {:?} preview {}",
+        point.0,
+        point.1,
+        under,
+        pin_real_window::real_pin_window(),
+        film,
+        is_preview_window(under) as u8,
+    );
+
     if pressed_the_preview {
         put_pin_at_the_front(hwnd);
     }
@@ -346,6 +373,53 @@ pub(super) fn the_engines_window(
 /// buttons once per tick and publishes the left button's state; this is that state.
 pub(super) fn left_button_down() -> bool {
     PIN_MEDIA_LEFT_DOWN.load(Ordering::Acquire)
+}
+
+/// Whether the left button is down *now*, asked without taking anything off the Explorer hook.
+///
+/// **The published state is a tick old, and a gesture cannot wait a tick for it.** A hand that is
+/// holding a window down is answered by messages that arrive between the hook's ticks — and while
+/// a player a step began is building its first frame, the hook's own tick is the one behind: it is
+/// the cold file's work the machine is busy with. A press read against a state that still says the
+/// button is up is a press that begins a second gesture over the first, and `begin_pin_drag`
+/// anchors it where the hand is now, so the window follows the hand by nothing at all (see the
+/// guard there, and `pin_capture_lost`).
+///
+/// `GetAsyncKeyState` is not the question to ask for the reason `left_button_down` gives above:
+/// its press bit is spent by any reader. `GetKeyState` is the same button's state as the calling
+/// thread's own last message left it — it spends nothing, and it is asked from this window's
+/// procedure and from its tick, which is a thread that pumps messages every tick. Its high bit is
+/// the button being down, exactly as `GetAsyncKeyState`'s is; only the low one differs, and only
+/// the low one is spent.
+pub(super) fn the_left_button_is_down_now() -> bool {
+    (unsafe { GetKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000) != 0
+}
+
+/// Whether the window a gesture was begun in is the one holding the pointer.
+///
+/// It is the witness a stale button reading cannot give: the pointer is taken at the press that
+/// begins a drag and given back by the release that ends it, so a window that holds it is a
+/// window whose hand has not let go (see `begin_pin_drag` and `finish_pin_drag`). A test's window
+/// is not a window the machine can capture, so what it stands in with is written by the test (see
+/// `probes::the_pointer_is_held_by`).
+fn the_window_holds_the_pointer(hwnd: HWND) -> bool {
+    #[cfg(test)]
+    let held = super::tests::probes::the_pointer_is_held();
+    #[cfg(not(test))]
+    let held = unsafe { GetCapture() }.0 as isize;
+
+    hwnd.0 as isize != 0 && held == hwnd.0 as isize
+}
+
+/// Whether the hand is still on the left button, as either reading has it.
+///
+/// The two are one question asked of two clocks, and a gesture that ends on one of them ending
+/// early is a drag the user is still holding that the window has let go of. Down is answered by
+/// either: a reading a tick behind is still a hand that has not let go, and the one that is live
+/// covers the tick the published state has not reached. Up takes both, which is the safe end — a
+/// drag ends a tick late rather than under a hand.
+pub(super) fn the_hand_is_on_the_button() -> bool {
+    the_left_button_is_down_now() || left_button_down()
 }
 
 /// Publish the left mouse button's state for the pin's own press handling, from the one place
@@ -428,6 +502,38 @@ pub(super) fn begin_pin_drag(
     delivered: bool,
 ) {
     let hwnd = hwnd.0 as isize;
+
+    // **A press that arrives while a gesture is already in hand is that gesture's own echo, and it
+    // must not anchor a second one.** A window can be handed the button-down again for a hand that
+    // has not let go of it — it was seen on a pinned film handed down every 25 ms while the pointer
+    // crossed the band — and every echo re-anchored the drag at the pointer's new place and at the
+    // window's new box, so `apply_pin_drag` was asked for no travel at all: the window followed the
+    // hand only by the sliver between the last echo and the release, which is a window that cannot
+    // be dragged. The anchor of a drag is the gesture's, taken at the press that began it, and a
+    // hand that has really pressed again has a release between the two that `finish_pin_drag` has
+    // already taken the drag away with.
+    //
+    // The button's own state is asked as well, so that a drag whose release never arrived is not a
+    // drag nothing can begin over: a hand that is not holding the button begins the gesture it
+    // pressed for, over the record of one that is not coming back (see `left_button_down`).
+    //
+    // **And the pointer is the other witness, because the published state is a tick behind.** A
+    // window that still holds the capture it took for the drag is a window the hand has not let go
+    // of: the capture is given back in `finish_pin_drag`, which is the very road that takes the
+    // drag away. So a window holding the pointer *and* a drag is one whose press cannot be a new
+    // gesture, whatever the hook has published yet — and while a cold film's player is building
+    // its first frame, the hook's tick is the one that lags, so this is the reading that holds
+    // (see `the_left_button_is_down_now`).
+    let a_drag_is_in_hand = pin_state()
+        .and_then(|pinned| pinned.pin().map(|pin| pin.dragging.is_some()))
+        .unwrap_or(false);
+    if a_drag_is_in_hand
+        && (the_hand_is_on_the_button() || the_window_holds_the_pointer(HWND(hwnd as *mut _)))
+    {
+        note_pin_trace!("pin press carried on: a drag is already in hand");
+        return;
+    }
+
     let Some(from) = window.pointer() else {
         return;
     };
@@ -560,7 +666,7 @@ pub(super) unsafe fn settle_pinned_engine_drag(hwnd: HWND) {
         return;
     }
 
-    if left_button_down() {
+    if the_hand_is_on_the_button() {
         apply_pin_drag(hwnd);
         return;
     }
@@ -824,7 +930,28 @@ pub(super) fn pin_capture_lost(window: &dyn PinWindow) {
     // nothing is left standing to aim a player at.
     if let Some(mut pinned) = pin_state() {
         if let Some(pin) = pinned.pin_mut() {
-            pin.dragging = None;
+            // **A pointer taken from a hand that is still on the button is not the hand letting go
+            // of the window.** A player a step begins makes its window on this same desktop and can
+            // take the capture as it starts — mpv's does, while it is building its first frame — and
+            // a drag dropped on that is a window that cannot be moved for as long as the player is
+            // starting: every press would answer with a drag that is dead before the hand has moved.
+            // So the drag is kept and marked as one the loop carries, which follows the pointer off
+            // the button's own state and ends it when the hand lets go, capture or no capture (see
+            // `settle_pinned_engine_drag` and `carry_pin_drag_with_the_hand`).
+            // The hand is asked of both readings, and the live one is what keeps a drag the
+            // capture was taken from while the hook's tick was behind: a stolen capture while the
+            // button is still down is a player a step began making its own window, not the hand
+            // letting go (see `the_hand_is_on_the_button`).
+            if pin.dragging.is_some() && the_hand_is_on_the_button() {
+                if let Some(drag) = pin.dragging.as_mut() {
+                    drag.delivered = false;
+                }
+            } else {
+                pin.dragging = None;
+            }
+            // A caption button is the other answer: a press it was holding is let go of with the
+            // pointer, because the release that would have clicked it is somebody else's to read
+            // now (see `pinned_release`).
             pin.pressed = None;
             pin.transport.pressed = None;
             pin.transport.seeking = None;
