@@ -32,6 +32,7 @@ run_at_startup=true
 silent_auto_update=false
 theme=light
 toggle_key=f7
+update_check_hours=6
 
 ; Minimize
 pin_minimize_to=bubble
@@ -56,6 +57,10 @@ render_html=false
 text_dont_preview_secrets=true
 text_font_scale=125
 text_show_extensionless=false
+
+; PDF Preview
+pdf_autofocus=true
+pdf_full_mode=true
 
 ; Timing
 hover_delay_ms=0
@@ -219,6 +224,12 @@ spinner_delay_ms=250
 - `pdf_autofocus`: `true` (default) puts the caret in a pinned document's viewer as it is revealed and as it is resumed, so a notch over the page scrolls it and `Ctrl`, `Ctrl+F` and the arrows are the document's own. `false` keeps the keyboard in the pin: its key table answers the arrows so a folder walks with them, and a notch over the page is handed to the browser by this app rather than delivered to a window Windows has not put in front.
   - Read at each reveal and resume, so a row moved under a pin that is up is answered by the next one.
   - The tray's **PDF → Pin Mode → Autofocus on PDF** writes it, and the row is greyed out while `pdf_full_mode` is off — there is no viewer to put a caret in.
+
+### Updates
+
+- `check_for_updates`: `true` (default) checks GitHub for newer releases at startup, on every opening of the tray menu, and once per `update_check_hours` hours.
+- `update_check_hours`: how often update checks may ask GitHub, in hours (`1` to `168`, default `6`, so `24` is a day). Re-arms the timer from `config.ini` each time it fires, so a hand edit is honoured on the spot.
+- `silent_auto_update`: `false` (default). When `true`, automatically downloads and silently installs updates found by checks, but only while the app is idle (nothing pinned, no preview or spinner on screen, and no menu or dialog open).
 
 ### Trigger and position
 
