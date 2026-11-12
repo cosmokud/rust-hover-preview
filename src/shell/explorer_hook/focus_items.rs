@@ -29,19 +29,26 @@ pub(super) fn selected_file_in_view(
 ) -> Option<PathBuf> {
     let window = item_window_of(pointer.window)?;
 
-    // **Everything's own list answers the point, before any automation is asked for it** — no walk is
-    // made in that window at all (see `everything`) — and the row under the point is the item a click
-    // there landed on, which is what a list answers as its selection.
+    // **Everything's own list answers before any automation is asked for it** — no walk is made in
+    // that window at all (see `everything`) — and what it answers is its own selection, the row the
+    // keyboard is on, exactly as a folder view answers through the selection pattern below.
+    //
+    // **The row under the point is not that answer.** A list this listing is read out of is a plain
+    // `SysListView32`, and a row's `LVM_HITTEST` answer says what the hand is over rather than what
+    // was picked: read there, a hand merely crossing the results answered every poll with a new file,
+    // so `Pin Mode → Update Preview → On Hover` off followed the pointer in Everything as surely as
+    // on (see `PinUpdateWatch::follow_selection`).
     if window.is(Listing::Everything) {
-        return row_at(resolver, window.frame, pointer.point)
+        return everything::focused_row(resolver, window.frame)
             .and_then(|row| item_file_path(resolver, &window, &row.item()));
     }
 
     // **A Q-Dir pane answers the same way, and from the pane the point is in**: the frame holds four
-    // panes, so the list is the one above the point's own window (see `q_dir`).
+    // panes, so the list is the one above the point's own window (see `q_dir`) — and its selection
+    // rather than the row under the hand, for the reason Everything's is read that way.
     if window.is(Listing::QDir) {
         let list = the_q_dir_list_under(pointer.point)?;
-        return row_at_in_list(resolver, list, pointer.point)
+        return focused_row_in_list(resolver, list)
             .and_then(|row| item_file_path(resolver, &window, &row.item()));
     }
 
