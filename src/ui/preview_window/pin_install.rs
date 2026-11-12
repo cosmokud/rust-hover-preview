@@ -677,6 +677,7 @@ pub(super) fn pin_install<'a>(
 /// carries only the file and the box, and everything else about the file being on screen is
 /// state the take-up reads rather than state it is handed.
 pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable) {
+    let install_at = Instant::now();
     let PinInstallable {
         path,
         update,
@@ -827,6 +828,14 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
         // `pin_what_is_on_screen` and `the_pin_takes_the_file_up`).
         arriving: false,
     });
+
+    // **A swap's install is on the tick that draws, so its own cost is a hand's wait.** The
+    // take-up is asked for a tick or more after this, and a cold file is the one whose install does
+    // work a warm one's did not: a line here is which half of the wait the wait was (see `tick_at`
+    // in the loop and `pin_swap_awaits`).
+    if install_at.elapsed().as_millis() >= 100 {
+        note_pin_trace!("install took {}ms", install_at.elapsed().as_millis());
+    }
 }
 
 /// The answer a swap of a pinned window's file gives where there is nothing to show for it: the
