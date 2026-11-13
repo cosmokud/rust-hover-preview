@@ -88,6 +88,13 @@ fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 /// Write a window's taskbar bit **and no show**: the road every *arrival* takes, because the show the
 /// pair is about to be given is the one the Shell reads the bit with (see
 /// `pin_film_host::promote_the_hover_film_host` and `pin_lifecycle::show_pinned_window`).
+///
+/// **A bit written this way is read at the window's next show, and that is the price of the road.** A
+/// promotion takes a host that is already on the screen, so its own show here would be a hide and a
+/// re-show — a hole where the film is, which is the flash this road exists to avoid. What the Shell
+/// therefore answers with is the button the pair wore before the take-up: it gains the setting's one at
+/// the next show the host is given, which is the first collapse and restore of the pair or the next
+/// film's own appearance (see `set_the_pin_film_host_visible`, whose show writes the bit again).
 pub(super) unsafe fn write_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
     if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
         unsafe { ask_the_window_to_re_read_its_style(hwnd) };
