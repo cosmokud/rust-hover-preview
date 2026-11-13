@@ -3974,6 +3974,64 @@ fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
     unsafe { put_away_a_window_of_the_suite(source) };
 }
 
+/// **A take-up whose listing is one of the pair's own windows is over its listing, by its own
+/// answer**, rather than chased for the whole of a press's grace.
+///
+/// The fault this is a regression test for: `the_listing_a_take_up_was_pressed_in` answers the pin
+/// itself when the foreground is empty or this app's own (pressing middle click a moment after the
+/// hover appeared is exactly that), and a middle press dispatched late is a middle press that
+/// follows it — so the chase asked the pair to stand over the pin's own window and the host's, and
+/// the walk up from the chrome never reaches them. Every tick of the answer raised the pair again:
+/// 201 chases and 132 band flips in 1.5 s of one trace, each flip a band given back under a picture
+/// that had not been repainted (`see keep_pin_at_the_front`).
+#[test]
+fn a_listing_of_the_pairs_own_windows_is_one_the_pair_stands_over() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
+
+    assert!(
+        unsafe { the_pair_stands_over(film.pin_hwnd, film.pin_hwnd) },
+        "the pin's own window is the pin's own front, not a window it stands behind"
+    );
+    assert!(
+        unsafe { the_pair_stands_over(film.pin_hwnd, host) },
+        "and the host that carries the picture is the pair's own window too, standing over the \
+         chrome it owns"
+    );
+
+    // And a window that is none of the pair's is answered off the desktop's own order.
+    let in_front = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        )
+    };
+    // Safety: both windows are this test's own, and the placement only reads and writes their
+    // z-order. The host is put behind it, and the chrome it owns goes with it.
+    let _ = unsafe {
+        SetWindowPos(
+            host,
+            in_front,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    };
+    let _ = unsafe { DwmFlush() };
+    assert!(
+        !unsafe { the_pair_stands_over(film.pin_hwnd, in_front) },
+        "a window over the pair is a listing the pair does not stand over"
+    );
+
+    unsafe { put_away_a_window_of_the_suite(source) };
+    unsafe { put_away_a_window_of_the_suite(in_front) };
+}
+
 /// **The film a step leaves behind is held where it stands**: mpv is told to pause the player the
 /// pin is keeping, so the picture under the incoming file's wait is the frame the user stepped away
 /// from rather than the frames that follow it (see `swap_pinned_media`).
