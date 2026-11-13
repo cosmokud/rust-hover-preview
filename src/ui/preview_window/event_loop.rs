@@ -1147,6 +1147,12 @@ pub fn run_preview_window() {
                     render_layered_preview(hwnd);
                 }
 
+                // **A taken frame holds the pin's band until the host has the picture, and the pass
+                // that lets it go owes the paint that says so** (see `pin_film_host::BandStill`).
+                if pinned() {
+                    pin_film_host::settle_the_band_still();
+                }
+
                 // **A picture that has changed hands in the pin's host is the band painted again**,
                 // and this is the only road that paints it: a film a player draws advances no frame
                 // of this app's, so nothing else on a pinned film's tick would ever ask for this

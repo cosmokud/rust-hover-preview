@@ -2532,6 +2532,20 @@ const THE_DC_STILL_PNG: &str = "rhp-pin-dc-still.png";
 /// band with a speck in it.
 const THE_DC_STILL_MIN_LIT_SHARE: u32 = 2;
 
+/// **A frame of the player's own picture, as it is on the screen right now**: what a take-up holds
+/// the pin's band with while the host catches up with the film (see `pin_film_host::BandStill`).
+///
+/// It is the same capture a relaunch's cover takes, and for the same reason: the source window wears
+/// `WS_EX_LAYERED` at alpha 1 so nothing of it reaches the screen, so the screen has no frame of it
+/// and the player's own device context is the one surface that does (see
+/// `stand_the_outgoing_picture_from_its_dc`).
+///
+/// Nothing is ended, frozen or read back here: the frame is a copy out of a context that is already
+/// drawing, so the film goes on playing in the window it is drawn in.
+pub(super) fn a_frame_of_the_players_picture(pid: u32) -> Option<((u32, u32), Vec<u8>)> {
+    capture_the_sources_dc(pid)
+}
+
 /// The frame in the source's own window as the BGRA pixels and the size a still is painted from, or
 /// nothing where the window holds no picture (see `stand_the_outgoing_picture_from_its_dc`).
 fn capture_the_sources_dc(pid: u32) -> Option<((u32, u32), Vec<u8>)> {

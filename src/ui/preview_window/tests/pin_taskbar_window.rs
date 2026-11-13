@@ -3287,19 +3287,24 @@ fn a_promoted_pair_owes_no_button_with_always_on_top() {
     drop(hover);
 }
 
-/// **A pair promoted out of a hover asks for its button through the one road the Shell reads it on.**
+/// **A pair promoted out of a hover asks for its button through the one road the Shell reads it on,
+/// and that road is the show the pair is given as it arrives — never a hide of its own.**
 ///
 /// The fault this is a regression test for: the promotion is the moment a host that was a *hover's* —
 /// a topmost, tool, non-activating window with no button and no business being listed - becomes the
 /// window the Shell lists for the pin. `WS_EX_APPWINDOW` was added to it with the rest of the pin's
 /// bits, on a window that was already on the screen, and a style write behind a visible window's back
 /// is not re-read for a button: what the Shell draws a button from is the window being shown (see
-/// `pin_real_window::set_the_pin_window_appwindow`). The pair therefore wore the button it happened to
-/// be shown with, which is the intermittency the user reported.
+/// `pin_real_window::set_the_pin_window_appwindow`).
 ///
-/// The bit here is the setting's and the show is the road's: with `Always On Top` off the host wears
-/// the button and the show that asks for it is paid for on that host, and the chrome is not listed
-/// beside it.
+/// **And the show that reads it is the take-up's**, which is paid on both windows of the pair anyway:
+/// the host's own hide-and-show is a hole where the film is, and every frame the compositor made inside
+/// it was the listing rather than the film — the flash the user reported as the pin appearing before it
+/// was ready. So the bit is written, the window asked to re-read its style, and no show is bought with
+/// it (see `pin_real_window::write_the_pin_window_appwindow`).
+///
+/// The bit here is the setting's: with `Always On Top` off the host wears the button, and the chrome is
+/// not listed beside it.
 #[test]
 fn a_promoted_pair_asks_for_its_button_on_the_show_that_reads_it() {
     let _room = the_room_to_itself();
@@ -3334,9 +3339,9 @@ fn a_promoted_pair_asks_for_its_button_on_the_show_that_reads_it() {
         "and the chrome it owns is not listed beside it"
     );
     assert!(
-        pin_real_window::the_appwindow_shows().contains(&(hover.host.0 as isize)),
-        "and the bit was written through the road that puts the host down and up again for it, \
-         because a promotion restyles a window that is already on the screen: {:?}",
+        pin_real_window::the_appwindow_shows().is_empty(),
+        "and no hide was bought for it: the show the pair is given as it arrives is the one the Shell \
+         reads the bit with, and a hide there is a hole where the film is: {:?}",
         pin_real_window::the_appwindow_shows()
     );
 

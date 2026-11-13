@@ -1003,6 +1003,200 @@ pub(super) fn put_the_cover_away() {
     }
 }
 
+/// **The frame a take-up took of the film the pin's band stood over**, kept by this app until the
+/// host has the film: the pixels the band is painted from while the picture's window catches up.
+///
+/// The band of a film is a hole over the host, and a hole is the desktop or the listing behind it
+/// until something of the film stands there. A take-up that adopts a hover's film paints its band at
+/// a moment when there is no host at all (see `show_pinned_window`), and what it wrote then was this
+/// app's black: a band that is neither the picture nor a hole, on a window the user is already
+/// looking at, and the black is the same reason the desktop was seen through the band a frame later —
+/// the host a promotion makes is at the next box with its client dropped (see
+/// `SWP_NOCOPYBITS` in `place_the_pin_film_host`), and a window whose client has painted nothing is
+/// composed as what stands behind it.
+///
+/// So the frame the hover's player had on the screen is taken at the press, one `BitBlt` off the
+/// player's own device context (see `pin_film_thumbnail::a_frame_of_the_players_picture`), and the
+/// band is painted from it until the host is drawing the film itself. **The handover from that still
+/// to the live picture is the same film's frame**, so it is a flip nothing can see (see
+/// `the_band_owes_a_repaint`).
+struct BandStill {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    /// The player the frame was taken of, so a band is never painted from a film that has gone.
+    pid: u32,
+    since: Instant,
+    /// When the pin carrying this frame was put on the screen, or nothing while it is still down.
+    /// **A still is only worth giving up once the compositor has had a frame of the host it is
+    /// standing in for**: the promotion re-points the registration at the pin's box, and the Shell
+    /// composes that over the host's next frame rather than the same one.
+    shown_since: Option<Instant>,
+}
+
+/// The still a take-up holds the pin's band with (see `BandStill`).
+static BAND_STILL: Mutex<Option<BandStill>> = Mutex::new(None);
+
+/// **How long a taken frame is worth holding a band for**: a host that has not taken the picture over
+/// in this long is one the band's black is the truth about again, and a still kept past it would be
+/// a frozen frame where a film is playing.
+const A_BAND_STILL_IS_KEPT_FOR: Duration = Duration::from_millis(1000);
+
+/// **How long the pair is given to be composed before the still is handed back to the host**: two
+/// frames of a 60 Hz display, which is the shortest wait that says the compositor has made a frame of
+/// the re-pointed registration rather than the one it was already showing (see `BandStill`).
+const A_BAND_STILL_SETTLES: Duration = Duration::from_millis(33);
+
+/// Keep `pixels` as the frame the pin's band is painted from until its host draws the film (see
+/// `BandStill`).
+pub(super) fn keep_the_band_still(
+    pid: u32,
+    (width, height): (u32, u32),
+    mut pixels: Vec<u8>,
+) -> bool {
+    let expected = width as usize * height as usize * 4;
+    if width == 0 || height == 0 || pixels.len() < expected {
+        return false;
+    }
+    // **Every pixel of it is opaque**, because the band it goes into is opaque: what was bit-blitted
+    // out of a player's device context is the picture's colour and no alpha at all — GDI writes none —
+    // so a frame taken as it stands would be a band Windows hands every press through, and one drawn
+    // over whatever the compositor has under it. The colours are kept, and the alpha is this app's
+    // statement that the band is the film's.
+    for pixel in pixels[..expected].as_chunks_mut::<4>().0.iter_mut() {
+        pixel[3] = 255;
+    }
+    let Ok(mut held) = BAND_STILL.lock() else {
+        return false;
+    };
+    *held = Some(BandStill {
+        pixels,
+        width,
+        height,
+        pid,
+        since: Instant::now(),
+        shown_since: None,
+    });
+    true
+}
+
+/// The frame the pin's band is painted from, where the host has not taken the picture yet: the frame
+/// itself handed to the paint that draws it, so a band of a film's size is not copied once a frame
+/// (see `BandStill`).
+pub(super) fn with_the_pins_band_still<R>(paint: impl FnOnce(&[u8], u32, u32) -> R) -> Option<R> {
+    let held = BAND_STILL.lock().ok()?;
+    let still = held.as_ref()?;
+    Some(paint(&still.pixels, still.width, still.height))
+}
+
+/// Note that the pin carrying the taken frame is on the screen: the clock that lets the host's own
+/// picture be given the band (see `BandStill`).
+pub(super) fn the_band_still_is_on_the_screen() {
+    if let Ok(mut held) = BAND_STILL.lock() {
+        if let Some(still) = held.as_mut() {
+            still.shown_since = Some(Instant::now());
+        }
+    }
+}
+
+/// Whether the host is drawing the film the still was taken of, with the still standing — the answer
+/// that lets the band be a hole over the picture again (see `BandStill`).
+pub(super) fn the_host_has_drawn_the_band_still() -> bool {
+    let Ok(held) = BAND_STILL.lock() else {
+        return false;
+    };
+    let Some(still) = held.as_ref() else {
+        return false;
+    };
+    let Some(host) = film_host() else {
+        return false;
+    };
+    // **A host that is not on the screen has no picture for a band to be a hole over**, and one that
+    // is on it with nothing in it is the band's black rather than the still's frame (see
+    // `the_band_is_a_standing_host`).
+    if !unsafe { IsWindowVisible(host) }.as_bool() {
+        return false;
+    }
+    // **And the pair has been on the screen for a frame of the compositor's**, because the promotion
+    // re-pointed the registration at the pin's box and the Shell draws that over the host's own next
+    // picture: giving the still up the instant the registration answers is a band handed back to a
+    // rectangle nothing has been composed into yet.
+    if !still
+        .shown_since
+        .is_some_and(|shown| shown.elapsed() >= A_BAND_STILL_SETTLES)
+    {
+        return false;
+    }
+    if the_cover_stands() {
+        return true;
+    }
+    // The same film's picture: a host drawing another player's is no frame of this one (see
+    // `the_standing_source_process`).
+    if still.pid != 0 {
+        return pin_film_thumbnail::the_picture_is_composed_in(host, still.pid)
+            || the_hosted_player_is_drawing(still.pid);
+    }
+    the_host_is_drawing()
+}
+
+/// Whether the still has been held longer than a frame of a film is worth being frozen for (see
+/// `A_BAND_STILL_IS_KEPT_FOR`).
+pub(super) fn the_band_still_is_overdue() -> bool {
+    let Ok(held) = BAND_STILL.lock() else {
+        return false;
+    };
+    held.as_ref()
+        .is_some_and(|still| still.since.elapsed() >= A_BAND_STILL_IS_KEPT_FOR)
+}
+
+/// Give the band's still up: the host has the picture (or nothing is coming), so the band over it is
+/// a hole again and owes the one paint that says so (see `the_band_owes_a_repaint`).
+pub(super) fn the_band_still_gives_way() {
+    let Ok(mut held) = BAND_STILL.lock() else {
+        return;
+    };
+    if held.take().is_some() {
+        drop(held);
+        note_pin_trace!("band still given up for the host's picture");
+        the_band_owes_a_repaint();
+    }
+}
+
+/// Give the band's still up where one is standing, without asking for a paint: the roads that are
+/// already painting the band owe nothing (see `take_the_film_off_the_band`).
+fn forget_the_band_still() {
+    if let Ok(mut held) = BAND_STILL.lock() {
+        *held = None;
+    }
+}
+
+/// Whether a taken frame is still what the pin's band is painted from (see `BandStill`).
+pub(super) fn a_band_still_stands() -> bool {
+    BAND_STILL.lock().is_ok_and(|held| held.is_some())
+}
+
+/// **One tick's answer about the taken frame**: the host has the picture, or the frame has stood longer
+/// than a film is worth being frozen for, and the band is given up to the host with the one paint that
+/// says so.
+///
+/// It is the tick's rather than the paint's because what it asks has to be asked once a turn and not
+/// once a frame: the paint is the thing the answer changes (see `the_band_owes_a_repaint`), so asking
+/// it from the paint would be the paint asking whether it should be painting.
+pub(super) fn settle_the_band_still() {
+    if !a_band_still_stands() {
+        return;
+    }
+    if the_host_has_drawn_the_band_still() {
+        the_band_still_gives_way();
+    } else if the_band_still_is_overdue() {
+        // **A frame that never gave way is the black it was standing in for**: a host that is not on
+        // the screen, or one whose player never put a picture in it, is a band whose own answer is
+        // the truth again (see `the_band_is_a_standing_host`).
+        note_pin_trace!("band still overdue: the host never took the picture");
+        the_band_still_gives_way();
+    }
+}
+
 /// **Put the black under the picture before the window is on the screen.**
 ///
 /// The Shell composes a window that has painted nothing as what stands behind it, and a host's first
@@ -1409,8 +1603,12 @@ pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
 ///
 /// `the_host_is_up` is the visibility the host is to have — the show that is about to be made, or the
 /// hide that has just been taken — because a bit written *before* the show it belongs to is the bit the
-/// Shell reads with it, which is what keeps a visible window from being put down and up again for a
-/// button it could have been given for free (see `pin_real_window::set_the_pin_window_appwindow`).
+/// Shell reads with it (see `pin_real_window::write_the_pin_window_appwindow`).
+///
+/// **Every caller is a show or a hide**, so nothing here pays a hide of its own: the show the caller is
+/// making is the one the Shell reads the bit with. A show paid here is a window put down and up again,
+/// and what is on the screen between those two is the listing the pin was taken up over rather than
+/// the film — the artifact a promotion used to be (see `promote_the_hover_film_host`).
 pub(super) unsafe fn the_button_follows_the_screen(the_host_is_up: bool) {
     let Some(pin) = pin_real_window::real_pin_window() else {
         return;
@@ -1418,13 +1616,13 @@ pub(super) unsafe fn the_button_follows_the_screen(the_host_is_up: bool) {
     let app_window = !pin_lifecycle::pin_always_on_top();
     match film_host() {
         Some(host) => {
-            unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
+            unsafe { pin_real_window::write_the_pin_window_appwindow(host, app_window) };
             unsafe {
-                pin_real_window::set_the_pin_window_appwindow(pin, app_window && !the_host_is_up)
+                pin_real_window::write_the_pin_window_appwindow(pin, app_window && !the_host_is_up)
             };
         }
         // A pair with no host is the chrome's own window, and it wears the button the setting names.
-        None => unsafe { pin_real_window::set_the_pin_window_appwindow(pin, app_window) },
+        None => unsafe { pin_real_window::write_the_pin_window_appwindow(pin, app_window) },
     }
 }
 
@@ -1441,7 +1639,17 @@ pub(super) unsafe fn the_button_follows_the_screen(the_host_is_up: bool) {
 /// gain or lose the button.
 pub(super) unsafe fn the_button_follows_the_setting() {
     let host_is_up = film_host().is_some_and(|host| unsafe { IsWindowVisible(host) }.as_bool());
-    unsafe { the_button_follows_the_screen(host_is_up) };
+    let Some(pin) = pin_real_window::real_pin_window() else {
+        return;
+    };
+    let app_window = !pin_lifecycle::pin_always_on_top();
+    // **The one road that pays the show**, because the user is looking at a window whose list bit has
+    // just changed and only a show makes the Shell read it (see
+    // `pin_real_window::set_the_pin_window_appwindow`).
+    unsafe { pin_real_window::set_the_pin_window_appwindow(pin, app_window && !host_is_up) };
+    if let Some(host) = film_host() {
+        unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
+    }
 }
 
 /// Whether the pin's host holds an FFmpeg player whose window has not been found yet: the take-up
@@ -1522,9 +1730,14 @@ unsafe fn own_the_pin_window(owned: bool) {
     // taskbar. The two calls are one pass on the same thread, so the show the Shell reads for it is
     // the show the next pin makes.
     let app_window = !pin_lifecycle::pin_always_on_top();
-    unsafe { pin_real_window::set_the_pin_window_appwindow(pin, !owned && app_window) };
+    // **An arrival writes the pair's bits and pays no show for them**, because the pair is about to be
+    // shown and that show is the one the Shell reads the bit with (see
+    // `pin_real_window::write_the_pin_window_appwindow`). A hide here was the flash: the host is the
+    // window the user is looking at, and every frame the compositor made between its two shows had
+    // nothing of the film behind the pin's band.
+    unsafe { pin_real_window::write_the_pin_window_appwindow(pin, !owned && app_window) };
     if let Some(host) = film_host() {
-        unsafe { pin_real_window::set_the_pin_window_appwindow(host, app_window) };
+        unsafe { pin_real_window::write_the_pin_window_appwindow(host, app_window) };
     }
 
     // **The chrome is put in the band the setting names, worn or not.** A window given an owner or
@@ -2131,8 +2344,10 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
 pub(super) unsafe fn take_the_film_off_the_band() {
     pin_film_thumbnail::forget_the_thumbnail_because("the film is leaving the pin");
     // A cover standing in the host is that film's, and the host is about to show another one (see
-    // `put_the_cover_away`).
+    // `put_the_cover_away`). And a still taken of that film is no frame of the next one (see
+    // `BandStill`).
     put_the_cover_away();
+    forget_the_band_still();
     unsafe { set_the_pin_film_host_visible(false) };
     // **And the band is nobody's claim any more**, which is the half of this that has to be written:
     // a host with its registration gone and its cover away has nothing to show, and a band still
@@ -2253,8 +2468,9 @@ pub(super) unsafe fn take_down_the_pin_film_host() {
     // The band has no host of its own any more (see `the_band_is_a_standing_host`).
     release_the_band();
     // The cover went with the picture: there is no host left for it to be re-cropped into (see
-    // `put_the_cover_away`).
+    // `put_the_cover_away`). And the band's still was that pin's frame (see `BandStill`).
     put_the_cover_away();
+    forget_the_band_still();
     // And the still taken for the host's own button goes with it: a picture of a window that is gone is
     // no pin's hover (see `keep_the_pins_picture_for_the_taskbar`).
     pin_taskbar_mirror::forget_the_pin_picture();
