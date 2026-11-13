@@ -1803,7 +1803,21 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // tick later. Made the pin's here, where the window it is owned by is still down, the picture is
     // already the band's before the first composed frame (see
     // `pin_film_host::promote_the_hover_film_host`).
+    //
+    // **And the band is held by the frame the film had on the screen a moment ago.** The paint above
+    // was the paint of a pin with no host: it left the band this app's black (or a hole with the
+    // listing behind it), and the promotion puts the host at the pin's box with its client dropped, so
+    // the frames the compositor makes of that host before the registration lands are whatever stands
+    // behind it rather than the film — the artifact read as the pin being shown before it was ready.
+    // A frame taken of the player's own device context is the film the user was already watching,
+    // so the band shows it and the live picture takes it over invisibly (see
+    // `pin_film_host::BandStill` and `pin_film_thumbnail::a_frame_of_the_players_picture`).
     let a_hover_host_was_taken_up = if let Some(host) = the_hover_host {
+        let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
+        if let Some((size, pixels)) = pin_film_thumbnail::a_frame_of_the_players_picture(pid) {
+            pin_film_host::keep_the_band_still(pid, size, pixels);
+            render_pinned_preview_at(hwnd, window.0, window.1);
+        }
         adopt_the_hovered_film_in_the_host(host);
         true
     } else {
@@ -1920,6 +1934,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    // **The taken frame's clock starts at the pin's own show**, because the moment the pair is on the
+    // screen is the moment the compositor can be asked to make a frame of it: the still is handed back
+    // to the host's picture only after that (see `pin_film_host::BandStill`).
+    pin_film_host::the_band_still_is_on_the_screen();
     note_pin_trace!(
         "show hwnd {:?} handover {} visible {} rect {:?}",
         hwnd,
