@@ -2065,8 +2065,11 @@ fn the_strips_belong_to_the_pins_window_not_its_film_host() {
 }
 
 /// The pin's bitmap carries no chrome any more: the caption's and the transport's rows are the
-/// pin's own alpha-1 claim on the point, and the chrome lives in the strips (see
-/// `pin_chrome_strips`).
+/// pin's own claim on the point, and the chrome lives in the strips (see `pin_chrome_strips`).
+///
+/// **The claim of a film's band with no host at it is this app's black and not the least pixel**:
+/// there is nothing of the film's behind the band to be seen through, so the rows are painted
+/// opaque (see `pin_film_host::the_band_has_no_host`).
 #[test]
 fn the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows() {
     let _room = the_room_to_itself();
@@ -2105,7 +2108,7 @@ fn the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows() {
         for column in 0..width as usize {
             assert_eq!(
                 pixel(row, column),
-                &[1, 1, 1, 1],
+                &[0, 0, 0, 255],
                 "row {row} column {column}: the caption's rows are the pin's claim, not its chrome"
             );
         }
@@ -2114,7 +2117,7 @@ fn the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows() {
         for column in 0..width as usize {
             assert_eq!(
                 pixel(row, column),
-                &[1, 1, 1, 1],
+                &[0, 0, 0, 255],
                 "row {row} column {column}: the transport's rows are the pin's claim, not its bar"
             );
         }

@@ -1150,6 +1150,21 @@ pub(super) fn the_band_is_a_standing_host() -> bool {
         })
 }
 
+/// Whether the pin's band has **no host standing at it at all** — the state a take-up that adopts a
+/// hover's film leaves, because it makes no host of its own and the promotion that makes the hover's
+/// window the pin's lands after the pin has been painted (`show_pinned_window`) and, on the tick's
+/// road, after it has been shown.
+///
+/// **The band there is a hole with nothing of this app's behind it, which is the desktop** — for as
+/// long as a cold player takes to be promoted, on the very films this road exists for. A pin's paint
+/// therefore writes this app's black over it rather than the least pixel, and the promotion owes the
+/// band its repaint back (see `paint`'s host arm and `promote_the_hover_film_host`).
+///
+/// Read without a lock, because the paint it is asked from holds the media's own.
+pub(super) fn the_band_has_no_host() -> bool {
+    pinned() && film_host().is_none()
+}
+
 /// Note that the pin's band is standing over this host again — taken up at the band, shown with a
 /// picture in it, or handed a picture by the registration (see `HOST_HOLDS_THE_BAND`).
 fn claim_the_band_for_the_host() {
@@ -1838,9 +1853,13 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     PIN_FILM_HOST_PLAYER.store(pid, Ordering::SeqCst);
     PRESENTED_PID.store(pid, Ordering::SeqCst);
     VIDEO_HWND.store(0, Ordering::SeqCst);
+    the_band_owes_a_repaint();
     // The promoted window is the pin's band from here, picture and all (see
     // `the_band_is_a_standing_host`).
     claim_the_band_for_the_host();
+    // **And the band is owed its paint back**, because the paint before this promotion — the one
+    // `show_pinned_window` makes of a pin that has no host yet — wrote this app's black over a band
+    // that is a picture's from here (see `the_band_is_a_standing_host`).
     unsafe { pin_taskbar::set_pin_taskbar_title(host) };
 
     // **The two style words the Shell reads the pair's button for come on with the pin's bits**, on
