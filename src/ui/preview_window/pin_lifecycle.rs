@@ -1783,6 +1783,16 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         return;
     }
 
+    // **A hover's host is the pin's host before the pin is shown, not after it.** The band is a
+    // hole over the Shell's picture, and while the host is still the hover's the pin's window is a
+    // hole over whatever the compositor has under it — the desktop — until the promotion lands a
+    // tick later. Made the pin's here, where the window it is owned by is still down, the picture is
+    // already the band's before the first composed frame (see
+    // `pin_film_host::promote_the_hover_film_host`).
+    if let Some(host) = the_hover_host {
+        adopt_the_hovered_film_in_the_host(host);
+    }
+
     // **A window this show made has its surface composed before it is shown.** The paint above is a
     // compositor round trip, and a show that reaches the compositor first is one frame of an empty
     // window — the desktop through a pin whose first frame is the one thing it cannot borrow (see
@@ -1937,12 +1947,8 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // band is the setting's to say (see `pin_holds_the_front`, `showing_takes_the_band_to_appear` and
     // `band_place`); the keyboard a pin answers is the press's to give it (see `pin_take_focus`).
 
-    // The pin is painted and on the screen over the hover's still-top-level host, and only now is
-    // that host made the pin's: the promotion is the visible handover, and the picture never sits
-    // behind a pin that has not appeared yet.
-    if let Some(host) = the_hover_host {
-        adopt_the_hovered_film_in_the_host(host);
-    }
+    // The pin is painted and on the screen over the host it was given above: the promotion is the
+    // visible handover, and the picture never sits behind a pin that has not appeared yet.
 
     // **And now the hover goes**, painted, shown and settled: from here the pin is what stands in the
     // box, and the window that stood in for it while it was only a hover comes down with nothing left
