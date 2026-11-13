@@ -1137,9 +1137,17 @@ static HOST_HOLDS_THE_BAND: AtomicBool = AtomicBool::new(false);
 /// `the_band_is_a_standing_host`).
 pub(super) fn the_band_is_a_standing_host() -> bool {
     HOST_HOLDS_THE_BAND.load(Ordering::SeqCst)
-        && film_host().is_some()
-        && !the_cover_stands()
-        && !the_host_is_drawing()
+        && film_host().is_some_and(|host| {
+            // **A host that is not on the screen carries no picture for the band to be a hole
+            // for.** The Shell composes nothing of a hidden window, so a registration standing in
+            // one is not a picture on the desktop: the pin's band over it is the desktop behind it.
+            // That is the whole of the first frame of a pin whose player is still starting — the
+            // pin is shown by `show_pinned_window` and its host only once the film is drawing (see
+            // `video_playback::ensure_video_window_topmost`), so the band between the two is a hole
+            // onto the desktop unless it is this app's black.
+            !unsafe { IsWindowVisible(host) }.as_bool()
+                || (!the_cover_stands() && !the_host_is_drawing())
+        })
 }
 
 /// Note that the pin's band is standing over this host again — taken up at the band, shown with a
