@@ -429,8 +429,8 @@ impl PinUpdateWatch {
             // point is read for every press rather than only for the presses the row answered: a click
             // the shell had not named yet is still the file the press picked, and answering it with "no
             // pick" put the pin behind the listing it picked in and cleared the front it was owed (see
-            // `where_the_band_goes_back`). A gap between the rows still reads as no file either way, and
-            // so does a folder.
+            // `where_the_band_goes_back`). A gap between the rows still reads as no file where the press
+            // picked nothing, and so does a folder.
             let under_the_point = get_file_under_cursor(resolver, &pointer);
             let row = match uia_item_from_point(resolver, pointer.point, false) {
                 Some(_) => Some(under_the_point),
@@ -443,7 +443,18 @@ impl PinUpdateWatch {
                     }
                     pick
                 }
-                Some(Some(_)) | None => {
+                Some(Some(_)) => {
+                    pin_press_was_not_a_pick(press_frame(&pointer));
+                    false
+                }
+                // **A press the pick rule accepts is never answered as a no-pick**, however little the
+                // shell names under it: a no-pick lowers the pin and clears the front it is owed, and
+                // the held click below then names the file the press did pick with no band and no grace
+                // left to raise it back over a listing that activates a moment later (see the retry
+                // below, which takes the front for the click it answers). A press that named nothing at
+                // all is the gap between the rows or the path bar, and that one is still answered.
+                None if pick => false,
+                None => {
                     pin_press_was_not_a_pick(press_frame(&pointer));
                     false
                 }
@@ -571,6 +582,15 @@ impl PinUpdateWatch {
                             // the raise the press made is given back.
                             if path.is_dir() {
                                 pin_press_was_not_a_pick(press_frame(&pointer));
+                            }
+                            // **A held click that names a file is a pick, and a pick puts the pin back
+                            // in front of the listing for it.** Its press was read before the shell
+                            // could name the file and so raised nothing, and the offer below raises on
+                            // its own only where a front is owed: without this the file lands on a pin
+                            // the listing was never told to move behind, and a listing that activates
+                            // a moment later stays over it for good (see `press_pinned_preview`).
+                            else if !path.is_dir() && is_media_file(&path) {
+                                press_pinned_preview(press_frame(&pointer));
                             }
                             let offered = self.offer(&path, &showing);
                             self.answer_click(&path, &showing, clicked, now, pointer.point);
