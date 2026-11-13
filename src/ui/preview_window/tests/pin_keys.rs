@@ -1439,3 +1439,33 @@ fn a_caret_key_the_hook_answers_is_counted_and_wakes_the_loop() {
 
     crate::app::seam::publish_pin_key_owner(0, 0);
 }
+
+/// **A press with nothing on screen to take up names the file under the hand**, and the file that comes of
+/// it is taken rather than read: a name left standing is the next press pinning the file the last one was
+/// over, and a press nothing answered for is a pin the user asked for that never came (see
+/// `take_the_cold_pins_file` and `crate::app::seam::take_the_pointer_file`).
+#[test]
+fn a_press_with_nothing_on_screen_takes_the_file_under_the_hand_once() {
+    let _room = the_room_to_itself();
+
+    // Nothing published: the press names nothing, whatever the row is.
+    crate::app::seam::publish_the_pointer_file(None);
+    assert_eq!(
+        take_the_cold_pins_file(),
+        None,
+        "a press with no file under it is still nothing at all"
+    );
+
+    let path = PathBuf::from("a-file-under-the-hand.png");
+    crate::app::seam::publish_the_pointer_file(Some(&path));
+    assert_eq!(
+        take_the_cold_pins_file().as_deref(),
+        Some(path.as_path()),
+        "the hook's own answer is the file the pin comes up on"
+    );
+    assert_eq!(
+        take_the_cold_pins_file(),
+        None,
+        "and once: the same press is not two pins"
+    );
+}

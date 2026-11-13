@@ -699,6 +699,15 @@ pub fn run_preview_window() {
                     pin_what_is_on_screen(&current_show, pending_load.as_ref())
                 {
                     pin_request = Some(request);
+                } else if let Some(path) = take_the_cold_pins_file() {
+                    // **A press with nothing on screen names the file under the hand**, and the hook is what
+                    // wrote that name down: the pointer is resolved by the side that watches the listing, and
+                    // what a pin is built from is this side's (see `PreviewMessage::PinCold`). The file is
+                    // taken at the press rather than from the message, so that the box is measured on the
+                    // tick the press is answered on and the name cannot go stale between the two.
+                    if !crate::app::seam::the_pin_is_up() || pinned() {
+                        pin_request = Some(PreviewMessage::PinCold { path });
+                    }
                 }
             }
 
@@ -4789,6 +4798,22 @@ pub fn run_preview_window() {
                                 band_until: pressed + PIN_RAISE_GRACE,
                                 listing,
                             });
+                        }
+                    }
+                    // The pin key's other answer: a press with no preview on screen — nothing hovered, and
+                    // `preview_enabled` off is a run that never hovers anything — is the user naming the file
+                    // under the hand, and the pin comes up cold on it rather than doing nothing at all (see
+                    // `take_up_a_cold_pin`).
+                    //
+                    // **Nothing is gated on `Pin Mode → Update Preview`**: that row is about a pin that
+                    // follows the listing's picks, and this press is the user naming a file.
+                    PreviewMessage::PinCold { path } => {
+                        let at = cursor_screen_point().unwrap_or_default();
+                        if let Some(update) = take_up_a_cold_pin(hwnd, &path, at) {
+                            // The file is loaded on a thread of its own, as a swap's is: the window is
+                            // already up and the arc turns in it until the frame lands (see `PinLoad`).
+                            pin_load = Some(PinLoad::start(&path, update, None));
+                            pin_awaiting_box = None;
                         }
                     }
                     // The pinned window was given another box — maximized, restored, resized,
