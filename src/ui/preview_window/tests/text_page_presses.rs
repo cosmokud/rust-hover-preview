@@ -131,15 +131,28 @@ impl PageOfAFile {
 
     /// The step the loop was asked for, taken off the planner's slot so the next ask is its own.
     fn walked_step(&self) -> Option<i32> {
+        self.take_the_job().and_then(|job| match job {
+            PinJob::Walk { step, .. } => Some(step),
+            _ => None,
+        })
+    }
+
+    /// The end the loop asked the walk for, where the press was a jump: `false` for the beginning of
+    /// the playlist and `true` for its end, taken off the planner's slot so the next ask is its own.
+    fn walked_jump(&self) -> Option<bool> {
+        self.take_the_job().and_then(|job| match job {
+            PinJob::Walk { to_the_end, .. } => to_the_end,
+            _ => None,
+        })
+    }
+
+    /// The job the loop left for the planner, taken off its slot.
+    fn take_the_job(&self) -> Option<PinJob> {
         PIN_JOBS
             .0
             .lock()
             .ok()
             .and_then(|mut pending| pending.take())
-            .and_then(|job| match job {
-                PinJob::Walk { step, .. } => Some(step),
-                _ => None,
-            })
     }
 
     /// The line the frame starts at.
@@ -499,6 +512,10 @@ fn a_scrollbar_point() -> (i32, i32) {
 /// arrows, the two page keys and the two ends are the folder's until the page has the reader's
 /// focus, and none of them queues a move of a caret the page is not drawing (see
 /// `text_caret::page_has_focus` and `pin_command_request`).
+///
+/// **The two ends are the walk's too, and they ask it for its own ends rather than for a step**: a step
+/// back from the head of a list that wraps is the file *before* it, so a `Home` answered that way
+/// would arrive at the end of the playlist it means the beginning of (see `jump_pinned_file`).
 #[test]
 fn an_unfocused_page_walks_the_folder_with_every_walk_key() {
     let _room = the_room_to_itself();
@@ -515,11 +532,9 @@ fn an_unfocused_page_walks_the_folder_with_every_walk_key() {
         (PinCommand::Next, 1),
         (PinCommand::CaretDown, 1),
         (PinCommand::PageOn, 1),
-        (PinCommand::PageBottom, 1),
         (PinCommand::Previous, -1),
         (PinCommand::CaretUp, -1),
         (PinCommand::PageBack, -1),
-        (PinCommand::PageTop, -1),
     ] {
         ask_pin(command);
         assert!(
@@ -530,6 +545,26 @@ fn an_unfocused_page_walks_the_folder_with_every_walk_key() {
             page.walked_step(),
             Some(step),
             "{command:?} asked the folder for that file"
+        );
+        assert_eq!(
+            page.queued(),
+            0,
+            "{command:?} queued no move of a page that has no focus"
+        );
+    }
+
+    // And the two ends: a jump of the walk rather than a step along it, the beginning of the list
+    // for `Home` and its end for `End`.
+    for (command, to_the_end) in [(PinCommand::PageTop, false), (PinCommand::PageBottom, true)] {
+        ask_pin(command);
+        assert!(
+            page.answer_left_presses().is_some(),
+            "{command:?} over a page nobody has pressed into is the folder's"
+        );
+        assert_eq!(
+            page.walked_jump(),
+            Some(to_the_end),
+            "{command:?} asked the folder for the end of its playlist"
         );
         assert_eq!(
             page.queued(),

@@ -372,11 +372,21 @@ pub(crate) enum PinCommand {
     CaretUp,
     /// The same, a line down, and the next file where there is no page.
     CaretDown,
-    /// The beginning of the page in the window, for a window that holds one, and nothing at all for
-    /// one that does not: a picture has no beginning to go back to.
+    /// The beginning of the page in the window, for a window that holds one, and the beginning of
+    /// the pin's playlist for one that does not: what `Home` asks for (see `pin_command_request`).
+    ///
+    /// **The two are one command rather than two.** A caret is the page's, and a folder is the pin's:
+    /// which of the two a `Home` is is the page's focus rather than the key's, and a window holding no
+    /// page at all falls through to the walk the way it always does (see `text_caret::page_has_focus`).
+    ///
+    /// **The playlist's beginning is a jump and not a step.** A walk wraps, so the file *before* the
+    /// first one is the last one and a `Home` answered as a step back would arrive at the end of the
+    /// list it means the beginning of (see `jump_pinned_file`).
     PageTop,
-    /// The last screenful of it, the same way.
+    /// The last screenful of it, the same way — and the end of the pin's playlist where the page has
+    /// not taken the key.
     PageBottom,
+
     /// Take a pinned page to the next place its own selection appears, and select it: what a
     /// reader does with a word they are looking for again (see `find_next`).
     ///

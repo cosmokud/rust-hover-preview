@@ -796,26 +796,25 @@ pub(super) unsafe fn pin_command_request(
                 }
             }
             // And the two ends: the line's where the page has the reader's focus, the document's under
-            // `Ctrl` — and the walk of one file where the pin holds a page nobody has pressed into, which
-            // is what every other walk key of an unfocused pin does (see `text_caret::page_has_focus`).
+            // `Ctrl` — and the playlist's two ends where the pin holds no page that has taken the key,
+            // which is what every other walk key of a pin the caret is not in does (see
+            // `text_caret::page_has_focus`).
             //
-            // **A pin holding no page at all still swallows them**, and that is the one thing this arm has
-            // to keep apart: a picture has no beginning for `Home` to go back to, so the question is
-            // `holds_a_page` — a page that is held but unfocused — and never "the caret did not take it",
-            // which is equally true of both.
+            // **The ends of the playlist are a jump, and never a step back from the first file.** A
+            // walk wraps, so a step of `-1` from the head lands on the last file: the press that means
+            // "the beginning of this list" would arrive at the end of it. So the two ends go to
+            // `jump_pinned_file`, which puts the walk on the first entry of its playlist or the last
+            // rather than on the file beside the one it is standing on, and onto the folder's own list
+            // where this press is the first of the pin's walk and there is no order to read yet (see
+            // `PinStep::jump`).
             command @ (PinCommand::PageTop | PinCommand::PageBottom) => {
-                if text_caret::holds_a_page() {
-                    step_pinned_file(
-                        if matches!(command, PinCommand::PageTop) {
-                            -1
-                        } else {
-                            1
-                        },
-                        wait,
-                        anchor,
-                    )
-                } else {
+                let to_the_end = matches!(command, PinCommand::PageBottom);
+                if text_caret::page_has_focus() {
+                    step_pinned_file(if to_the_end { 1 } else { -1 }, wait, anchor)
+                } else if pin_playlist::jump_the_pick(to_the_end) {
                     None
+                } else {
+                    jump_pinned_file(to_the_end, wait, anchor)
                 }
             }
             // A find is the page's own as well: it looks for what the page has selected in the document
