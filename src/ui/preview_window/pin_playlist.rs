@@ -879,6 +879,25 @@ fn step_the_notches(notches: i32) -> bool {
 /// are on the same row. It answers whether the band took the key, which is what keeps the arrows off
 /// the walk of the pinned file wherever it did (see `pin_geometry::pin_command_request`).
 pub(super) fn step_the_pick(direction: i32) -> bool {
+    step_the_pick_between(direction, false)
+}
+
+/// The band's two ends: the first row of the band in sight and its last, which is what `Home` and `End`
+/// ask a band that is up for — the same list a `Return` in it plays (see `pin_command_request`).
+///
+/// Nothing where the band is down, which is what keeps a `Home` over a pinned picture and a `End` over
+/// a pinned film the walk's own.
+pub(super) fn jump_the_pick(to_the_end: bool) -> bool {
+    step_the_pick_between(if to_the_end { 1 } else { -1 }, true)
+}
+
+/// The one road both the arrows and the two ends take: a row of the band picked, and the band scrolled
+/// to keep it in sight.
+///
+/// `to_the_end` is what the two differ by rather than a direction, because the first row and the last
+/// are reached from anywhere rather than stepped to from where the hand stands (see
+/// `pin_chrome::playlist_step_pick`).
+fn step_the_pick_between(direction: i32, to_the_end: bool) -> bool {
     let Some((_, height, width, scale)) = the_band_of_the_pin() else {
         return false;
     };
@@ -900,6 +919,7 @@ pub(super) fn step_the_pick(direction: i32) -> bool {
         playlist.shown.len(),
         layout.visible.max(0) as usize,
         direction,
+        to_the_end,
     ) else {
         return true;
     };
