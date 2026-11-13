@@ -1768,6 +1768,20 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
                     render_pinned_preview_at(hwnd, window.0, window.1);
                     return;
                 }
+
+                // **A film whose player has not drawn yet is not shown over the desktop.** The
+                // band is a hole and the host this take-up has just made has no picture in it, so a
+                // pin shown here is the desktop through a pinned window until the player's window
+                // is adopted — the case a press made the moment a hover's film appeared. The hover
+                // is still the placeholder; the handover shows the pin when the host draws, and a
+                // player that never draws goes down the road a dead film does (see
+                // `pin_film_host::settle_pin_handover` and `the_pin_is_owed_its_first_picture`).
+                if created_now && pin_film_host::the_pin_is_owed_its_first_picture() {
+                    with_pin(|pin| pin.chrome = PinChrome::hidden());
+                    pin_film_host::arm_pin_handover();
+                    render_pinned_preview_at(hwnd, window.0, window.1);
+                    return;
+                }
             }
         } else {
             pin_film_host::take_down_the_pin_film_host();

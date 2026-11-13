@@ -1610,6 +1610,28 @@ pub(super) fn the_host_is_drawing() -> bool {
     drawing
 }
 
+/// Whether a pin taken up on a film has its host made and no picture in it yet: the pass between the
+/// take-up and the first draw of the player it begun, where the band is a hole over the desktop.
+///
+/// **The handover waits on this answer while the hover is the placeholder** (see
+/// `show_pinned_window`), and the pin is not shown over an empty host until the picture is there.
+/// A pin standing over a picture of an earlier take-up is not owed one: the host draws, and the
+/// band has that frame rather than the desktop.
+pub(super) fn the_pin_is_owed_its_first_picture() -> bool {
+    pin_is_its_own_window()
+        && current_media_type() == Some(MediaType::Video)
+        && film_host().is_some()
+        && !the_host_is_drawing()
+        && !the_players_window_is_up(VIDEO_PID.load(Ordering::SeqCst))
+}
+
+/// Whether the hover's own window is on the screen, which is the placeholder a pin waiting on its
+/// first picture stands behind (see `settle_pin_handover`).
+fn the_hover_window_is_up() -> bool {
+    let preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    preview != 0 && unsafe { IsWindowVisible(HWND(preview as *mut _)) }.as_bool()
+}
+
 /// Whether **this** player is up as the pin's picture: the source the Shell draws into the host is the
 /// window this player made, adopted and still live (see `pin_film_thumbnail::the_source_is_up`).
 ///
@@ -2723,10 +2745,17 @@ pub(super) unsafe fn settle_pin_handover() -> PinHandover {
     // froze is let go of here rather than a start's bound later.
     let pid = VIDEO_PID.load(Ordering::SeqCst);
     let overtaken = the_pins_own_window_is_on_the_screen();
-    if overtaken
-        || (the_hosted_player_is_drawing(pid)
-            && frozen.is_some_and(|frozen| the_hosted_frame_is_presented(pid, frozen.seconds)))
-    {
+    // **A wait with no frozen hover under it is the pass before a player's first frame**, where
+    // there is no second to prove and the host having a picture at all is the handover (see
+    // `the_pin_is_owed_its_first_picture`). Where the hover has gone from the screen before that,
+    // the pin is put up rather than left waiting behind nothing.
+    let the_waited_picture_is_up = match frozen {
+        Some(frozen) => {
+            the_hosted_player_is_drawing(pid) && the_hosted_frame_is_presented(pid, frozen.seconds)
+        }
+        None => the_host_is_drawing() || !the_hover_window_is_up(),
+    };
+    if overtaken || the_waited_picture_is_up {
         note_pin_trace!(
             "handover handed over after {}ms{}",
             since.elapsed().as_millis(),
