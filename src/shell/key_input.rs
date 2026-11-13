@@ -861,12 +861,12 @@ mod tests {
         assert_eq!(
             pin_key_command(0x24),
             Some(9),
-            "VK_HOME is the beginning of the page in the window"
+            "VK_HOME is the beginning of the pin's playlist, and of a page's line where the page\n             has the caret"
         );
         assert_eq!(
             pin_key_command(0x23),
             Some(10),
-            "and VK_END is the last screenful of it"
+            "and VK_END is the end of it"
         );
         assert_eq!(
             pin_key_command(0x72),

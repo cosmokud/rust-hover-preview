@@ -87,6 +87,10 @@ pub(super) fn pinned_key_command(vk: i32) -> Option<PinCommand> {
         return Some(PinCommand::PageOn);
     }
 
+    // The two ends of the pin's own list, and of a page's line where the page has the reader's focus
+    // and of its document under `Ctrl` — which of the two a key is is the file in the window's answer
+    // and the caret's, asked where both are known (see `pin_command_request` and
+    // `text_caret::page_has_focus`).
     if vk == VK_HOME.0 as i32 {
         return Some(PinCommand::PageTop);
     }
