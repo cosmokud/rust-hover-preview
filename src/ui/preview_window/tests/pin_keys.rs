@@ -1469,3 +1469,170 @@ fn a_press_with_nothing_on_screen_takes_the_file_under_the_hand_once() {
         "and once: the same press is not two pins"
     );
 }
+
+/// A cold pin's file is read for what it owes *before* the window is built, and what a press on it comes to
+/// is exactly one of three answers — the load, the wait for a box, or nothing at all (see
+/// `a_cold_pins_file_is_owed`). The three are the decisions a pin is taken up on, so they are what this asks:
+/// an engine still owing the file its page is the wait, a folder and a file no kind previews are nothing, and
+/// a file whose box is in hand is the load.
+///
+/// The engine's own half is asked of the machine it runs on — a document's page exists only once a reader has
+/// been asked for it — so that half of the bottom of this is answered twice: as a wait where this machine has
+/// a tier to ask, and as nothing at all where it has not (see `page_is_on_the_way`).
+#[test]
+fn a_cold_pin_is_the_load_the_wait_or_nothing_by_what_the_file_owes() {
+    let _room = the_room_to_itself();
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-cold-pin");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    // A folder: no kind claims a directory, so there is no box to stand a window in.
+    let mut waiting = None;
+    assert_eq!(
+        a_cold_pins_file_is_owed(&folder, 1, (1920, 1080), None, &mut waiting),
+        ColdPinOwed::Nothing,
+        "a folder is a press on something nothing can show: no window and no cross"
+    );
+    assert_eq!(waiting, None, "and nothing is waited on for it");
+
+    // A name no list claims and whose bytes are nothing in particular: the same answer (see
+    // `media_dimensions_of_kind` answering nothing for it).
+    let unknown = folder.join("a-file-no-kind-previews.zzz");
+    std::fs::write(&unknown, b"nothing any reader of this app's knows").expect("a written file");
+    assert_eq!(
+        a_cold_pins_file_is_owed(&unknown, 1, (1920, 1080), None, &mut waiting),
+        ColdPinOwed::Nothing,
+        "and a file no kind previews is the same press"
+    );
+
+    // A page a read is still answering for is a wait whatever the file is: there is no box to lay the file
+    // out at yet, and the file is picked up where the read answers (see `measure_waiting` and
+    // `MeasuredProbed`).
+    let page = folder.join("a-page.txt");
+    std::fs::write(&page, b"a page of text").expect("a written file");
+    assert!(begin_measure(&page), "a read of the file is started");
+    assert_eq!(
+        a_cold_pins_file_is_owed(&page, 5, (1920, 1080), Some((600, 800)), &mut waiting),
+        ColdPinOwed::TheBox,
+        "a file whose box a read still owes is the wait"
+    );
+    assert_eq!(
+        waiting.as_deref(),
+        Some(page.as_path()),
+        "and the file being waited on is written down, so the answer can find it again"
+    );
+    end_measure(&page);
+
+    // A document is the engine's own half of that question: its page does not exist until a reader is asked
+    // for it, so the wait is the engine's answer (see `page_is_on_the_way`). The tier is the machine's, and
+    // a machine with none has nothing coming — which is the no-window-no-cross above.
+    let document = folder.join("a-document.docx");
+    std::fs::write(&document, b"PK\x03\x04").expect("a written file");
+    let expected = if page_is_on_the_way(&document) {
+        ColdPinOwed::TheBox
+    } else {
+        ColdPinOwed::Nothing
+    };
+    assert_eq!(
+        a_cold_pins_file_is_owed(&document, 7, (1920, 1080), Some((600, 800)), &mut waiting),
+        expected,
+        "a document is the wait for the page an engine owes it, and nothing where this machine has no tier"
+    );
+
+    // A film nothing has probed: the box is the probe's to answer, so the pin stands on a stand-in and the
+    // probe is started here — a cold press is the only road that has no hover to have started one (see
+    // `video_probe_due`).
+    let film = folder.join("a-film-nothing-probed.mp4");
+    std::fs::write(&film, b"a file no probe has seen").expect("a written file");
+    assert!(
+        cached_video_geometry(&film).is_none(),
+        "nothing has probed this film"
+    );
+    assert_eq!(
+        a_cold_pins_file_is_owed(&film, 3, (1920, 1080), Some((640, 360)), &mut waiting),
+        ColdPinOwed::TheBox,
+        "an unprobed film is the wait for the shape its probe answers with"
+    );
+
+    // The probe's answer in hand, and the file is the load: `swap_pinned_media` is what starts the player
+    // for it, so a cold pin of a film is a pin of a film (see `pinned_player_is_coming`).
+    video_geometry_cache().insert(
+        VideoGeometryKey {
+            path: film.clone(),
+            version: file_version(&film),
+        },
+        ProbedGeometry::Measured(VideoGeometry {
+            width: 640,
+            height: 360,
+            frame_width: 640,
+            frame_height: 360,
+            crop: None,
+            duration: None,
+            subtitles: SubtitleStreams::default(),
+            sidecar: None,
+            derived: None,
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
+            subtitle_extraction_failed: false,
+        }),
+    );
+    assert_eq!(
+        a_cold_pins_file_is_owed(&film, 3, (1920, 1080), Some((640, 360)), &mut waiting),
+        ColdPinOwed::TheFile,
+        "a measured film is loaded, and the player comes with the swap"
+    );
+    assert_eq!(waiting, None, "and nothing is waited on for it");
+
+    // And the player is the swap's: a film the route hands to a player of its own is a film
+    // `start_video_playback` begins there, ffplay stood in here so the answer is the road's rather than this
+    // machine's (see `pinned_player_is_coming`).
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, false)));
+    assert!(
+        pinned_player_is_coming(MediaType::Video, &film),
+        "a cold pin of a film the route hands to FFmpeg's player begins one, as a swap does"
+    );
+    stand_video_engine_in(None);
+    stand_ffplay_in(None);
+    stand_mpv_in(None);
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// **A press of the pin key is one window, however many times it is pressed.** With a pin up — standing, or
+/// put away as its bubble — the press is about the window that is there, and a cold take-up of the file under
+/// the hand would be a second window built over the first, a tick after it was built (see
+/// `a_cold_press_raises_a_window`). It is the one window there is, so the answer is about the pin and not
+/// about the file: nothing of the press reaches the take-up at all.
+#[test]
+fn a_cold_press_raises_no_second_window_over_one_that_is_up() {
+    let _room = the_room_to_itself();
+
+    // The pin is process-wide, so what the tests beside this one left standing is put down first.
+    stand_pin(None);
+    assert!(
+        a_cold_press_raises_a_window(),
+        "with nothing pinned, a press is the pin arriving on the file under the hand"
+    );
+
+    let mut pin = PinnedPreview::for_test();
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    assert!(
+        !a_cold_press_raises_a_window(),
+        "a pin put away as its bubble is still the window the press is about"
+    );
+
+    stand_pin(Some(PinnedPreview::for_test()));
+    assert!(
+        !a_cold_press_raises_a_window(),
+        "and a pin standing is owed the answer every press over it gets, not a second window"
+    );
+
+    stand_pin(None);
+    assert!(
+        a_cold_press_raises_a_window(),
+        "and the take-up is the next press's once the window has gone"
+    );
+}

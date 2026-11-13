@@ -2229,6 +2229,15 @@ pub(super) fn take_the_cold_pins_file() -> Option<PathBuf> {
     Some(path)
 }
 
+/// Whether a press of the pin key over a file is one that raises a window at all: it is, where no pin stands.
+///
+/// A pin that is up — standing, or put away as its bubble — is the window the press is about, and what a
+/// second press over it is owed is the answer every press over a standing pin gets rather than a second
+/// window built over the first (see `take_up_a_cold_pin` and the key's own arm in `event_loop`).
+pub(super) fn a_cold_press_raises_a_window() -> bool {
+    !pinned()
+}
+
 /// **A file the pin key names with nothing on screen to take up is the pin arriving on it**, and the box it
 /// arrives at is measured here because there is no hover to have measured one.
 ///
@@ -2239,17 +2248,23 @@ pub(super) fn take_the_cold_pins_file() -> Option<PathBuf> {
 ///
 /// Answers nothing where the file has no box to be pinned at — a folder, a file no kind previews, a file the
 /// engine of its kind has turned down — which is a press on something nothing can show: no window, no cross.
+/// The box is what is decided first, because it is the measurement a preview is laid out in and nothing
+/// downstream of it has one to offer (see `a_cold_pins_file_is_owed`).
 pub(super) unsafe fn take_up_a_cold_pin(
     hwnd: HWND,
     path: &Path,
     at: (i32, i32),
-) -> Option<PinUpdate> {
+    generation: u64,
+    room: (u32, u32),
+    waiting: &mut Option<PathBuf>,
+) -> Option<()> {
     let hover = HoverFacts::read(path);
     let bounds = work_area_at(at.0, at.1);
     let dpi = dpi_at(at.0, at.1);
     let preview_scale = hover_preview_scale_of(&hover, hover.scales);
 
-    let layout = media_dimensions_of(&hover, path, bounds, dpi).and_then(|orig_dims| {
+    let measured = media_dimensions_of(&hover, path, bounds, dpi);
+    let layout = measured.and_then(|orig_dims| {
         compute_mouse_layout(
             at.0,
             at.1,
@@ -2262,7 +2277,8 @@ pub(super) unsafe fn take_up_a_cold_pin(
                 preview_scale,
                 // A page that is on its way has no size to place yet, so the pin stands where a hover
                 // waiting on it would have stood — at the hand that asked (see `waiting_placement`).
-                at_the_pointer_corner: page_is_on_the_way(path),
+                // A film nothing has probed is the same wait for the same reason (see `video_probe_due`).
+                at_the_pointer_corner: page_is_on_the_way(path) || video_probe_due(&hover),
             },
             bounds,
             dpi,
@@ -2293,6 +2309,22 @@ pub(super) unsafe fn take_up_a_cold_pin(
         at.0,
         at.1
     );
+
+    // **What the file is owed is decided before there is a window to stand it in.** A file an engine, a
+    // read or a probe still owes its box gets the window it will be laid out in once that lands; a file
+    // nothing here draws — no kind for it, or a kind whose engine this machine has not got — is a press
+    // on something nothing can show, and nothing is built for it (see `a_cold_pins_file_is_owed`).
+    let owed = a_cold_pins_file_is_owed(path, generation, room, measured, waiting);
+
+    note_pin_trace!(
+        "cold pin: {} is owed {:?}",
+        pin_trace::path_name(path),
+        owed
+    );
+
+    if owed == ColdPinOwed::Nothing {
+        return None;
+    }
 
     // **A window of the engine's is the media's own, and a hover hands that kind over with the slot empty.**
     // A pin taken up cold has no hover to have done it, and a pin with no media behind it is one the liveness
@@ -2335,20 +2367,178 @@ pub(super) unsafe fn take_up_a_cold_pin(
     place_pinned_siblings();
     publish_pointer_hold(pinned_window());
 
-    // **The file is loaded for the box this take-up gave it**, and the plan is built here rather than asked
-    // of `pin_update_plan`: that one answers `None` for the file the pin is already showing, which after the
-    // take-up above is always this file — a plan there would leave the window on its stand-in for good.
-    //
-    // The box is the media's own, which is what the take-up has just written into the pin — a sound's card is
-    // measured again at the take-up and a window is clamped to its display — and the level is the kind's own
-    // half of the tray's, as a swap's is (see `pinned_level`).
-    let update = PinUpdate {
-        content: pinned_content().unwrap_or(content),
-        dpi,
-        volume: pinned_level(drawn_as_audio(path)),
-    };
     note_the_pin_file_in_flight(Some(path));
     note_the_pick(PickRoad::Update, path);
 
-    Some(update)
+    Some(())
+}
+
+/// What a cold pin's file is owed, decided before its window is built and asked again wherever an answer
+/// lands.
+///
+/// **It is a decision about the file rather than about the pin**, which is the whole of why it can be asked
+/// before there is a window: the box a cold pin stands at is the layout's, measured beside the hand (see
+/// `take_up_a_cold_pin`), so what is left is what the file owes — an engine's page, picture or listing
+/// (`page_is_on_the_way`, asked here through the same `request_engine_render` a hover uses), a video nothing
+/// has probed (`video_probe_due`), and a box whose read the layout has just started (`measure_waiting`).
+///
+/// `measured` is the box the layout came out at, and nothing at all is the one answer no reader of this
+/// app's can improve on: a file nothing here measures is a file nothing here draws.
+///
+/// `waiting` is the file the pin is standing on and has nothing of yet. It is written where something really
+/// is coming and left alone where nothing is — and a page the ask answers nothing for is the one case no
+/// reader of this app's can improve on: the tier is not installed or the kind's row is switched off, so
+/// nothing else here draws the file and the press is the no-window-no-cross a folder gets (see the hover's
+/// own `requested.is_none` arm).
+pub(super) fn a_cold_pins_file_is_owed(
+    path: &Path,
+    generation: u64,
+    room: (u32, u32),
+    measured: Option<(u32, u32)>,
+    waiting: &mut Option<PathBuf>,
+) -> ColdPinOwed {
+    // **No box is no window**, whatever the file is: the layout is what measures a preview to stand a
+    // window in, and a file it measured nothing of — a name no list claims, a kind switched off, a reader
+    // with no box for the file — is the press on something nothing can show (see `take_up_a_cold_pin`).
+    if measured.is_none() {
+        *waiting = None;
+        return ColdPinOwed::Nothing;
+    }
+
+    let hover = HoverFacts::read(path);
+    let unprobed = video_probe_due(&hover);
+    let paging = page_is_on_the_way(path);
+    let reading = measure_waiting(path);
+
+    // **Asked once per file while the wait is out**: a re-plan after every answer would ask the same engine
+    // for the same page again, which is a second launch for work already running. A fresh press — `waiting`
+    // naming no file — is the ask.
+    let mut asked = false;
+    if waiting.as_deref() != Some(path) {
+        if unprobed {
+            spawn_video_probe(path.to_path_buf(), generation);
+        }
+        if paging {
+            // Which reader owes the file its page is the router's answer, and the ask is the same call a
+            // hover makes at the moment its preview is raised (see `request_engine_render`).
+            asked = request_engine_render(path, generation, room).is_some();
+        }
+        note_pin_trace!(
+            "cold pin: {} owes a box (asked {}, unprobed {}, reading {})",
+            pin_trace::path_name(path),
+            asked as u8,
+            unprobed as u8,
+            reading as u8
+        );
+    }
+
+    // **What a page already being written for is a wait, whichever reader is writing it.** `asked` is the
+    // ask this call made; where the wait is already out, the ask is the one that found it out — a file in
+    // `waiting` is one an engine has been asked for (see `take_up_a_cold_pin`).
+    let owing_a_page = paging && (asked || waiting.as_deref() == Some(path));
+
+    let owed = if unprobed || reading || owing_a_page {
+        ColdPinOwed::TheBox
+    } else if paging {
+        // A page nothing here writes: a tier this machine has not got, or a kind whose row is switched off.
+        // No reader of this app's drew the file either, so nothing is coming and no window belongs over it —
+        // which is the answer the hover comes down on too (see `page_is_on_the_way`).
+        ColdPinOwed::Nothing
+    } else {
+        ColdPinOwed::TheFile
+    };
+
+    note_pin_trace!(
+        "cold pin: {} is owed {:?}",
+        pin_trace::path_name(path),
+        owed
+    );
+
+    match owed {
+        ColdPinOwed::TheFile => *waiting = None,
+        _ => *waiting = Some(path.to_path_buf()),
+    }
+
+    owed
+}
+
+/// What a cold pin's file is owed, in the three answers the window is built around: a file to load, a box
+/// to wait for, or nothing here can show.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ColdPinOwed {
+    /// Everything the file was owed for its box is in hand: it is loaded for the box the take-up gave it,
+    /// and every video and sound gets its player from the swap that follows (see `swap_pinned_media`).
+    TheFile,
+    /// An engine, a read or a probe still owes the file its box: the window stands on a stand-in until the
+    /// answer lands.
+    TheBox,
+    /// Nothing here draws the file and nothing is coming for it: no window at all (see `take_up_a_cold_pin`).
+    Nothing,
+}
+
+/// The plan a file whose box is in hand is loaded with, and nothing where there is no plan to be made.
+///
+/// The plan is the cold one — the plan a pick of that same file is given, with the refusal of the file on
+/// screen left out (see `plan_the_pin_file`). It is asked only once a file is owed its box, because a plan for
+/// a file still waiting is the wait itself (see `pin_swap_awaits`).
+pub(super) fn a_cold_pins_plan(path: &Path) -> Option<PinUpdate> {
+    match pin_cold_update_plan(&path.to_path_buf()) {
+        Some(PinPlan::Show(update)) => Some(update),
+        _ => None,
+    }
+}
+
+/// The answer an engine gave for the file a cold pin was waiting on, taken the way a pick's answer is taken
+/// (see `take_pin_engine_answer`).
+///
+/// `false` is an answer that was not this file's, and the caller goes on to treat it as a hover's. Otherwise
+/// the file is looked at again by the same question the take-up asked — the plan is the cold one, a pick of
+/// that same file with the refusal of the file on screen left out (see `a_cold_pins_plan`) — which picks it up
+/// where the engine's page, picture or listing is in hand, and leaves it waiting where a second reader still
+/// owes its box. An answer with nothing behind it — an engine that has turned the file down — is a window
+/// standing over a stand-in for a page that is not coming, so the pin comes down rather than turning an arc
+/// over a question already answered (see `Reason::MediaGone`).
+pub(super) fn take_a_cold_pins_answer(
+    path: &Path,
+    ok: bool,
+    generation: u64,
+    waiting: &mut Option<PathBuf>,
+    load: &mut Option<PinLoad>,
+    request: &mut Option<PreviewMessage>,
+) -> bool {
+    let mut picked = None;
+    if !take_pin_engine_answer(path, ok, waiting, &mut picked) {
+        return false;
+    }
+
+    if !ok {
+        // The engine turned the file down, and the pin was taken up on a stand-in for a page that is not
+        // coming: the window goes rather than turning an arc over an answered question (see
+        // `Reason::MediaGone` and `take_up_a_cold_pin`).
+        *waiting = None;
+        *request = Some(end_pin_state(Reason::MediaGone));
+        return true;
+    }
+
+    // The window is already standing on the file, so its own box is the measurement: what an engine, a read
+    // or a probe still owes is what this asks about (see `a_cold_pins_file_is_owed`).
+    let room = pin_engine_room().unwrap_or_else(|| office_formats::default_page_size(path));
+    let boxed = pinned_content().map(|box_| {
+        (
+            (box_.2 - box_.0).max(1) as u32,
+            (box_.3 - box_.1).max(1) as u32,
+        )
+    });
+    let owed = a_cold_pins_file_is_owed(path, generation, room, boxed, waiting);
+
+    if owed == ColdPinOwed::TheFile {
+        *load = a_cold_pins_plan(path).map(|update| PinLoad::start(path, update, None));
+    }
+
+    if owed == ColdPinOwed::Nothing {
+        *waiting = None;
+        *request = Some(end_pin_state(Reason::MediaGone));
+    }
+
+    true
 }
