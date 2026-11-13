@@ -157,6 +157,7 @@ pub fn run_explorer_hook() {
                 c.trigger_key_enabled,
                 c.trigger_key_affect_pin_mode,
                 c.tick_ms,
+                c.pin_enabled,
             );
             // Resolved once per config change instead of once per tick: what the tick
             // compares is the spelling, and a spelling that has not changed is a key that
@@ -185,6 +186,7 @@ pub fn run_explorer_hook() {
                 true,
                 DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
                 DEFAULT_TICK_MS,
+                true,
             ),
             crate::shell::key_binding::parse_or_default(
                 "",
@@ -426,6 +428,7 @@ pub fn run_explorer_hook() {
                 config.trigger_key_enabled,
                 config.trigger_key_affect_pin_mode,
                 config.tick_ms,
+                config.pin_enabled,
             );
             // The trigger key is resolved when it is *spelled* differently, not every
             // tick: what the tick does with it is read a key's state, and lower-casing a
@@ -450,6 +453,7 @@ pub fn run_explorer_hook() {
         let trigger_key_enabled = config_snapshot.6;
         let trigger_key_affect_pin_mode = config_snapshot.7;
         let tick_ms = config_snapshot.8;
+        let pin_enabled = config_snapshot.9;
 
         // One question, two settings: the key either stops previews while it is
         // held, or is the only thing that lets them happen. Either way, what is left
@@ -474,7 +478,16 @@ pub fn run_explorer_hook() {
         let previews_allowed =
             !trigger_key_enabled || trigger_key_mode.allows_previews(trigger_key_down);
 
-        if !previews_allowed || !preview_enabled {
+        let previews_held_back = previews_are_held_back(previews_allowed, preview_enabled);
+        // **The trigger key's half of "previews are off" is the pin's too, but only where the row for it asks.**
+        // `Affect Pin Mode` on is the user saying that holding the key takes the pin down with the previews it
+        // stops, and that answer is unchanged (see `trigger_key_affect_pin_mode`). It is not asked at all while
+        // previews are switched off outright: the pin is then a window the user put there, and the key holding
+        // hovers back has nothing to do with it (see `a_pin_may_stand`).
+        let the_key_takes_the_pin_down = preview_enabled && !previews_allowed;
+        let pin_may_stand = a_pin_may_stand(pin_enabled) && !the_key_takes_the_pin_down;
+
+        if previews_held_back {
             if last_file.is_some() || keyboard_file.is_some() {
                 hide_preview();
                 suppressed.clear();
@@ -482,11 +495,12 @@ pub fn run_explorer_hook() {
                 stationary_search_miss_started_at = None;
                 hover_start = None;
             }
-            // A pinned preview is a window the user put there, and the two settings above are
-            // what says whether previews may be raised at all — which is the question their
-            // leaving it standing would answer wrongly. So it comes down with them, by the path
-            // its own close button takes (see `request_pin_end`).
-            if crate::app::seam::the_pin_is_up() {
+            // **A pin is not a hover, so a setting about hovers is not the pin's end.** `Pin Mode →
+            // Enable` is what says whether a pin may stand, with the trigger key's own row beside it: a pin
+            // the user put up comes down on its own close button, on `Pin Mode → Enable` off, on the key the
+            // row asks for, or on its media going away. `Enable Preview` says that nothing may be *raised*
+            // here, which is why the pin stays (see `request_pin_end`).
+            if !pin_may_stand && crate::app::seam::the_pin_is_up() {
                 request_pin_end();
             }
             keyboard_file = None;
@@ -503,10 +517,22 @@ pub fn run_explorer_hook() {
             hover_resolver_hints = HoverResolverHints::default();
             folder_change_time = None;
             suspended_initial_focus = None;
-            // A held key has to be noticed the moment it is released, so the poll
-            // stays quick while the trigger is what is holding previews back, and
-            // slows down only when previews are turned off outright.
-            crate::app::seam::wait_for_the_tray(if previews_allowed {
+            // **A run with no hovers still has a file under a hand, and still has a pin key.** What the
+            // viewer is owed is that file and nothing else — it builds the pin from it, measuring the box
+            // itself — so the pointer is read here and resolved, and the answer is published rather than
+            // kept: a name left standing is a press with nothing under it pinning the file the last press
+            // was over (see `take_the_pointer_file`). The rest of the tick is a hover's, and there is none.
+            let under_the_pointer = pin_may_stand
+                .then(read_pointer)
+                .flatten()
+                .and_then(|pointer| get_file_under_cursor(&mut resolver, &pointer));
+            crate::app::seam::publish_the_pointer_file(under_the_pointer.as_deref());
+            // A held key has to be noticed the moment it is released, so the poll stays quick while the
+            // trigger is what is holding previews back, and slows down only when previews are turned off
+            // outright. **A run with a pin key is never one of those**: the pointer is resolved every tick
+            // above, so the name a press is answered with is at most one tick old, and a long sleep would be
+            // a press answered half a second late with whatever was under the hand when it began.
+            crate::app::seam::wait_for_the_tray(if previews_allowed && !pin_may_stand {
                 LONG_SLEEP_MS
             } else {
                 tick_ms
@@ -1837,6 +1863,24 @@ pub(crate) fn answer_what_the_preview_side_asked() {
             }
         }
     }
+}
+
+/// Whether this tick raises no previews at all: the trigger key holding them back, or the tray's `Enable
+/// Preview` row off. The two are one question here because what is left to do about them is one thing — no
+/// hover, and whether a pin survives it is `a_pin_may_stand`'s answer.
+pub(super) fn previews_are_held_back(previews_allowed: bool, preview_enabled: bool) -> bool {
+    !previews_allowed || !preview_enabled
+}
+
+/// Whether a pin may stand, and whether the file under the pointer is resolved for the press that names
+/// it: **`Pin Mode → Enable` is the whole of the setting it speaks for** (see `the_key_takes_the_pin_down`
+/// for the trigger key's own half of it, which is asked beside this one).
+///
+/// Neither `Enable Preview` nor a key the row for pin mode does not reach takes a standing pin down — that
+/// window is the user's — and a run that raises no previews is still one with a pin key (see
+/// `request_pin_end` and `publish_the_pointer_file`).
+pub(super) fn a_pin_may_stand(pin_enabled: bool) -> bool {
+    pin_enabled
 }
 
 /// Write down who is in front when the gate decides that no listing can be reached: the window, its

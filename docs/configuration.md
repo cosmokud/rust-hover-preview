@@ -239,6 +239,7 @@ spinner_delay_ms=250
   - Holding it down is one toggle, not one per keyboard repeat. The tray's **Enable Preview** row names the configured key.
 - `trigger_key_affect_pin_mode`: whether the trigger key reaches a pinned preview. Default `false` — the key is not read while a preview is pinned, up or collapsed into its bubble, since a pin is a window you put there rather than a hover for the key to hold back. `true` lets holding the key bring the pin down with the previews it stops. It speaks for `disable`; the `enable` mode is left as it is.
 - `pin_key` / `pin_enabled`: the key that pins the preview on screen (`mouse3,space` by default — the same spellings the trigger key takes: `alt`, `f8`, `a`, `space`, …), and whether it is watched. See **Pin Mode** above for what a pin does.
+  - `pin_enabled` is the row that says whether a pin may stand, and it is independent of `preview_enabled`: with previews off the key names the file under the pointer and pins it directly, with no hover ever raised, and a pin that is already standing is left alone by `Enable Preview`. Only `pin_enabled` off, the pin's own close button, or its media going away end one.
   - A binding may name alternatives and chords: `,` separates alternatives (either one matches) and `+` joins keys that must all be held. The last key of a chord is the one whose press counts.
     - `pin_key=space,page_down` — either key pins.
     - `pin_key=ctrl+space` — Space pins while Ctrl is held; `ctrl+alt+space` needs both.

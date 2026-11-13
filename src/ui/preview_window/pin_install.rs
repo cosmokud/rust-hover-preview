@@ -2189,3 +2189,166 @@ fn merge_the_run(media: &mut MediaData, old: &[Arc<ImageFrame>]) {
     frames.sort_by_key(|frame| frame.file_index);
     media.frames = frames;
 }
+
+/// The tick a cold pin was last taken up, and so the press it was answered for.
+static THE_COLD_PIN_WAS_ANSWERED: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
+
+/// How long one press is answered for.
+///
+/// A press count the loop drains is a hook's, and a hook may write it twice for one hand — a key and the
+/// button bound beside it, or one edge read on two ticks — which would be two take-ups of one file: the
+/// window the first put up ended and another built in its place. It is shorter than any wait the loop has
+/// between two ticks, so a second press a hand really made is always a second press.
+///
+/// shortcut: a tick slower than this that read the same press bit twice would raise a second window; the
+/// waits it is compared against are `STATIC_PIN_WAIT_MS` and `PIN_TRANSPORT_REPAINT_MS`.
+const A_COLD_PIN_PRESS_IS_ANSWERED_FOR: Duration = Duration::from_millis(20);
+
+/// The file a cold pin press named, taken from what the Explorer hook published: `None` where the press
+/// named nothing, or where this same press has already been answered.
+///
+/// It is taken rather than read, which is the whole of what makes the answer the press's (see
+/// `crate::app::seam::take_the_pointer_file`).
+pub(super) fn take_the_cold_pins_file() -> Option<PathBuf> {
+    let path = crate::app::seam::take_the_pointer_file()?;
+
+    let mut answered = THE_COLD_PIN_WAS_ANSWERED
+        .lock()
+        .unwrap_or_else(|held| held.into_inner());
+    let now = Instant::now();
+    if answered.is_some_and(|at| now.duration_since(at) < A_COLD_PIN_PRESS_IS_ANSWERED_FOR) {
+        note_pin_trace!(
+            "cold pin: {} is already answered by this press",
+            pin_trace::path_name(&path)
+        );
+        return None;
+    }
+    *answered = Some(now);
+    drop(answered);
+
+    Some(path)
+}
+
+/// **A file the pin key names with nothing on screen to take up is the pin arriving on it**, and the box it
+/// arrives at is measured here because there is no hover to have measured one.
+///
+/// `Preview Enabled` off is a run where no preview is ever raised, and `Pin Mode` is a setting of its own:
+/// the pin key pressed in one names the file under the hand, and what the user asked for is a window of it.
+/// The hover cannot be that window — it is the one thing the setting turned off — so nothing of it is sized,
+/// placed or painted: what comes out of the layout below is a box, and the box is the pin's.
+///
+/// Answers nothing where the file has no box to be pinned at — a folder, a file no kind previews, a file the
+/// engine of its kind has turned down — which is a press on something nothing can show: no window, no cross.
+pub(super) unsafe fn take_up_a_cold_pin(
+    hwnd: HWND,
+    path: &Path,
+    at: (i32, i32),
+) -> Option<PinUpdate> {
+    let hover = HoverFacts::read(path);
+    let bounds = work_area_at(at.0, at.1);
+    let dpi = dpi_at(at.0, at.1);
+    let preview_scale = hover_preview_scale_of(&hover, hover.scales);
+
+    let layout = media_dimensions_of(&hover, path, bounds, dpi).and_then(|orig_dims| {
+        compute_mouse_layout(
+            at.0,
+            at.1,
+            HoverPlacement {
+                orig_dims,
+                // No item was measured for this press: nothing asked the view what the row's text covers,
+                // so the box stands beside the hand rather than clear of a name.
+                avoid: None,
+                follow_cursor: hover.follow_cursor,
+                preview_scale,
+                // A page that is on its way has no size to place yet, so the pin stands where a hover
+                // waiting on it would have stood — at the hand that asked (see `waiting_placement`).
+                at_the_pointer_corner: page_is_on_the_way(path),
+            },
+            bounds,
+            dpi,
+        )
+    });
+
+    let Some(layout) = layout else {
+        note_pin_trace!(
+            "cold pin: {} has no box to be pinned at",
+            pin_trace::path_name(path)
+        );
+        return None;
+    };
+
+    // The media's box: the layout's own place, and the size the file is drawn at inside it (see
+    // `PreviewLayout`). It is the same box `PreviewMessage::Pin` carries, which is what a take-up builds
+    // the window around.
+    let content = (
+        layout.pos_x,
+        layout.pos_y,
+        layout.pos_x + layout.preview_w as i32,
+        layout.pos_y + layout.preview_h as i32,
+    );
+    note_pin_trace!(
+        "cold pin: {} at {} beside {},{}",
+        pin_trace::path_name(path),
+        pin_trace::a_box(content),
+        at.0,
+        at.1
+    );
+
+    // **A window of the engine's is the media's own, and a hover hands that kind over with the slot empty.**
+    // A pin taken up cold has no hover to have done it, and a pin with no media behind it is one the liveness
+    // read takes straight back down (see `pin_media_is_alive` and `pinned_engine_media`).
+    //
+    // Every other kind fills the band itself, and the load begun below fills it a tick or more later: a frame
+    // of this app's own stands in the band until then, which is also what turns the arc in it (see
+    // `create_loading_media`).
+    if let Some(engine) = pinned_engine_media(path) {
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(engine);
+        }
+    } else if current_media_type().is_none() {
+        let (width, height) = (
+            (content.2 - content.0).max(1) as u32,
+            (content.3 - content.1).max(1) as u32,
+        );
+        if let Ok(mut current) = CURRENT_MEDIA.lock() {
+            *current = Some(create_loading_media(width, height));
+        }
+    }
+
+    let pin = take_up_pinned_window(path, content);
+    let kind = current_media_type();
+    pin_stands_in_its_own_window(pin_should_stand_in_its_own_window(kind, path));
+    install(pin);
+    ask_the_bands_playlist();
+    arm_pin_to_the_front();
+    pin_taskbar::refresh_pin_taskbar_title();
+
+    // A pin comes up under a pointer that may be anywhere, and it holds no keyboard until the hand presses
+    // it — the rule every take-up keeps (see `pin_set_focusable`).
+    if !pin_is_its_own_window() {
+        pin_set_focusable(hwnd, true);
+    }
+
+    // The engine's own window is placed in the pin's band, which is the road that draws it (see
+    // `place_pinned_siblings`).
+    show_pinned_window(hwnd);
+    place_pinned_siblings();
+    publish_pointer_hold(pinned_window());
+
+    // **The file is loaded for the box this take-up gave it**, and the plan is built here rather than asked
+    // of `pin_update_plan`: that one answers `None` for the file the pin is already showing, which after the
+    // take-up above is always this file — a plan there would leave the window on its stand-in for good.
+    //
+    // The box is the media's own, which is what the take-up has just written into the pin — a sound's card is
+    // measured again at the take-up and a window is clamped to its display — and the level is the kind's own
+    // half of the tray's, as a swap's is (see `pinned_level`).
+    let update = PinUpdate {
+        content: pinned_content().unwrap_or(content),
+        dpi,
+        volume: pinned_level(drawn_as_audio(path)),
+    };
+    note_the_pin_file_in_flight(Some(path));
+    note_the_pick(PickRoad::Update, path);
+
+    Some(update)
+}

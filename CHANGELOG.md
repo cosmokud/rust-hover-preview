@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A pin can be taken up with previews turned off** — `Enable Preview` off used to mean no hover, and a pin key pressed in that run therefore nothing at all. `Pin Mode → Enable` is a setting of its own, so the pin key now names the file under the pointer and the pin comes up cold on it: the box is measured from the file rather than from a hover that never existed, and the file is loaded into the window on the tick after. A press on a folder, a gap between rows, or a file nothing previews still does nothing. Written `pin_enabled`, `preview_enabled` in `config.ini`.
+
+### Fixed
+
+- **`Enable Preview` no longer takes a standing pin down** — the two rows are different settings, and the row about hovers was ending a window the user had put there: only `Pin Mode → Enable` off, the pin's own close button, or its media going away ends it now. The trigger key still takes a pin down where `Affect Pin Mode` asks for it.
+
 ## [0.5.6] - 2026-11-13
 
 ### Added
