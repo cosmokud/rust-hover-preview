@@ -975,7 +975,8 @@ fn a_pinned_film_the_engine_failed_at_is_stepped_over_rather_than_closed() {
     let walk: Option<PinStep> = Some(PinStep {
         at: PathBuf::from("C:\\folder\\next.mp4"),
         from: PathBuf::from("C:\\folder\\broken.mp4"),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![
             PathBuf::from("C:\\folder\\broken.mp4"),
             PathBuf::from("C:\\folder\\next.mp4"),

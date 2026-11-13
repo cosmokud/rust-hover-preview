@@ -65,7 +65,8 @@ fn a_walk_steps_through_the_playlist_and_round_again() {
     let mut walk = PinStep {
         at: list[0].clone(),
         from: list[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         // The playlist is what the planner read off the preview thread, handed in rather
         // than looked up again on every step (see `PinStep`).
         order: list.clone(),
@@ -93,7 +94,7 @@ fn a_walk_steps_through_the_playlist_and_round_again() {
     );
 
     // And back along it: the previous file of the order, wrapped at the start.
-    walk.step = -1;
+    walk.direction = -1;
     assert_eq!(
         walk.step(),
         Some(list[2].clone()),
@@ -111,7 +112,8 @@ fn stepping_over_a_file_the_pin_cannot_show_carries_the_walk_on() {
     let walk = PinStep {
         at: folder.join("a.png"),
         from: folder.join("a.png"),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![folder.join("a.png"), folder.join("b.png")],
         missed: 0,
         shuffle: false,
@@ -354,6 +356,7 @@ fn a_shuffled_playlist_starts_on_the_pinned_file_and_holds_every_sound() {
         anchor: None,
         config: Box::new(config),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(mut walk)) = answer else {
         panic!("a walk is always answered");
@@ -404,7 +407,8 @@ fn a_playlist_of_only_the_pinned_file_has_nowhere_to_shuffle() {
     let mut walk = PinStep {
         at: only.clone(),
         from: only.clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![only.clone()],
         missed: 0,
         shuffle: true,
@@ -421,6 +425,58 @@ fn a_playlist_of_only_the_pinned_file_has_nowhere_to_shuffle() {
     assert!(
         walk.step().is_none(),
         "and a playlist of nothing at all is the same answer"
+    );
+}
+
+/// `Home` and `End` are the playlist's two ends rather than two steps: the walk is put on the first
+/// file of the order or on the last, whatever file it stands on — where a step would wrap and a back
+/// step from the head would arrive at the end the key beside it is for.
+#[test]
+fn a_jump_puts_the_walk_on_the_first_file_or_the_last() {
+    let folder = sounded_folder("jump-ends");
+    let list = vec![
+        folder.join("a.mp3"),
+        folder.join("b.mp3"),
+        folder.join("c.mp3"),
+    ];
+
+    let mut walk = PinStep {
+        at: list[1].clone(),
+        from: list[1].clone(),
+        direction: 1,
+        to_the_end: Some(true),
+        order: list.clone(),
+        missed: 0,
+        shuffle: false,
+        progress: 1,
+        anchor: None,
+    };
+
+    assert_eq!(
+        walk.jump(true),
+        Some(list[2].clone()),
+        "the end of the playlist is its last file, whether or not the walk wraps"
+    );
+    assert_eq!(
+        walk.jump(false),
+        Some(list[0].clone()),
+        "and its beginning is the first one, which a back step from the head would not reach"
+    );
+    assert_eq!(
+        walk.jump(false),
+        None,
+        "a press on the file the walk already stands on moves nothing"
+    );
+    assert_eq!(
+        walk.jump(true),
+        Some(list[2].clone()),
+        "and the same the other way, from the head of the order"
+    );
+
+    walk.order = Vec::new();
+    assert!(
+        walk.jump(false).is_none(),
+        "a playlist of nothing has no beginning to be put on"
     );
 }
 
@@ -446,6 +502,7 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(walk)) = answer else {
         panic!("a walk is always answered");
@@ -477,6 +534,7 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(walk)) = answer else {
         panic!("a walk is always answered");
@@ -494,6 +552,41 @@ fn a_walk_that_shuffles_carries_the_sounds_of_the_folder() {
         ],
         "a walk that steps to the file beside it walks the folder's own order"
     );
+}
+
+/// A `Home` or an `End` is the walk's two ends rather than its two neighbours: the first press of a
+/// pin that holds no playlist yet is a walk asked for its order *and* put on the folder's first file
+/// or its last, which is what the planner's own answer is (see `PinStep::jump`).
+#[test]
+fn a_planner_answer_puts_the_walk_on_the_end_the_press_asked_for() {
+    let _every_file = WalkEveryFile::set();
+    let folder = walkable_folder("jump-ended");
+
+    for (to_the_end, expected) in [(false, "a.png"), (true, "c.png")] {
+        let answer = answer_pin_job(&PinJob::Walk {
+            at: folder.join("b.png"),
+            step: 0,
+            to_the_end: Some(to_the_end),
+            anchor: None,
+            config: Box::new(CONFIG.lock().expect("the configuration").clone()),
+            session: None,
+        });
+        let Some(PinPlanned::Walk(walk)) = answer else {
+            panic!("a walk is always answered");
+        };
+
+        assert_eq!(
+            walk.at,
+            folder.join(expected),
+            "the walk is put on the folder's {} file",
+            if to_the_end { "last" } else { "first" }
+        );
+        assert_eq!(
+            walk.direction,
+            if to_the_end { 1 } else { -1 },
+            "and it steps on the way the press was pointing"
+        );
+    }
 }
 
 /// The same walk anchored on a picture carries the folder's pictures and nothing else: the
@@ -515,6 +608,7 @@ fn a_walk_that_shuffles_carries_the_pictures_of_the_folder() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(walk)) = answer else {
         panic!("a walk is always answered");
@@ -546,6 +640,7 @@ fn a_walk_that_shuffles_carries_the_pictures_of_the_folder() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(walk)) = answer else {
         panic!("a walk is always answered");
@@ -751,7 +846,8 @@ fn a_walk_the_planner_answers_carries_the_list_it_walked() {
     let mut walk = PinStep {
         at: list[0].clone(),
         from: list[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: list.clone(),
         missed: 0,
         shuffle: false,
@@ -823,6 +919,7 @@ fn a_walk_with_nowhere_to_go_is_answered_rather_than_left_outstanding() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(walk)) = answered else {
         panic!("a walk is always answered, so the pin's arc can be taken down");
@@ -847,6 +944,7 @@ fn a_walk_with_nowhere_to_go_is_answered_rather_than_left_outstanding() {
         anchor: None,
         config: Box::new(config),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(walk)) = gone else {
         panic!("a folder that cannot be read is answered like a folder with nothing in it");
@@ -1013,7 +1111,8 @@ fn a_shuffled_walk_hears_every_sound_once_before_repeating() {
     let mut walk = PinStep {
         at: at.clone(),
         from: at.clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![at.clone(), folder.join("a.mp3"), folder.join("c.mp3")],
         missed: 0,
         shuffle: true,
@@ -1071,6 +1170,7 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(sound_walk)) = from_sound else {
         panic!("a walk is always answered");
@@ -1090,6 +1190,7 @@ fn a_walk_is_anchored_on_the_first_file_pinned() {
         anchor: None,
         config: Box::new(config),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(other_walk)) = from_other else {
         panic!("a walk is always answered");
@@ -1138,6 +1239,7 @@ fn a_press_after_a_sound_keeps_the_first_files_anchor() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(first_walk)) = first else {
         panic!("a walk is always answered");
@@ -1156,6 +1258,7 @@ fn a_press_after_a_sound_keeps_the_first_files_anchor() {
         anchor: first_walk.anchor,
         config: Box::new(config),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(second_walk)) = second else {
         panic!("a walk is always answered");
@@ -1209,6 +1312,7 @@ fn a_shuffle_hears_every_sound_once_across_presses() {
             anchor: None,
             config: Box::new(config.clone()),
             session: held.clone().map(Box::new),
+            to_the_end: None,
         });
         let Some(PinPlanned::Walk(walk)) = answer else {
             panic!("a walk is always answered");
@@ -1247,6 +1351,7 @@ fn a_shuffle_hears_every_sound_once_across_presses() {
         anchor: None,
         config: Box::new(config),
         session: held.map(Box::new),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(again)) = spent else {
         panic!("a walk is always answered");
@@ -1292,6 +1397,7 @@ fn a_step_back_is_the_file_it_came_from_and_forward_returns_to_it() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(first_walk)) = first else {
         panic!("a walk is always answered");
@@ -1317,6 +1423,7 @@ fn a_step_back_is_the_file_it_came_from_and_forward_returns_to_it() {
         anchor: first_walk.anchor,
         config: Box::new(config.clone()),
         session: Some(Box::new(first_walk.clone())),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(back_walk)) = back else {
         panic!("a walk is always answered");
@@ -1338,6 +1445,7 @@ fn a_step_back_is_the_file_it_came_from_and_forward_returns_to_it() {
         anchor: back_walk.anchor,
         config: Box::new(config),
         session: Some(Box::new(back_walk.clone())),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(forward_walk)) = forward else {
         panic!("a walk is always answered");
@@ -1363,7 +1471,8 @@ fn a_file_that_could_not_be_shown_is_stepped_over_onto_the_next_file() {
     let mut walk = PinStep {
         at: sounds[1].clone(),
         from: sounds[1].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.clone(),
         missed: 0,
         shuffle: false,
@@ -1422,7 +1531,8 @@ fn a_press_asks_with_the_walk_the_pin_is_standing_on() {
     let held = PinStep {
         at: folder.join("a.mp3"),
         from: folder.join("a.mp3"),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![folder.join("a.mp3"), folder.join("b.mp3")],
         missed: 0,
         shuffle: true,
@@ -1496,7 +1606,8 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.clone(),
         missed: 0,
         shuffle: true,
@@ -1509,7 +1620,8 @@ fn a_playlist_an_answer_made_goes_onto_the_pin_without_moving_it() {
     pin_walk_synced_its_playlist(&PinStep {
         at: sounds[1].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![sounds[0].clone(), sounds[1].clone(), sounds[2].clone()],
         missed: 0,
         shuffle: true,
@@ -1645,6 +1757,7 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
         anchor,
         config,
         session: None,
+        to_the_end: None,
     };
     let Some(PinPlanned::Walk(first_walk)) = answer_pin_job(&job) else {
         panic!("a walk is always answered");
@@ -1680,6 +1793,7 @@ fn a_key_press_walks_the_first_files_anchor_like_a_button_does() {
         step: 1,
         config,
         session: None,
+        to_the_end: None,
     };
     let Some(PinPlanned::Walk(second_walk)) = answer_pin_job(&job) else {
         panic!("a walk is always answered");
@@ -1721,6 +1835,7 @@ fn a_press_after_a_sound_keeps_a_sound_anchor_sounds_only() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(first_walk)) = first else {
         panic!("a walk is always answered");
@@ -1740,6 +1855,7 @@ fn a_press_after_a_sound_keeps_a_sound_anchor_sounds_only() {
         anchor: first_walk.anchor,
         config: Box::new(config),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(second_walk)) = second else {
         panic!("a walk is always answered");
@@ -1770,7 +1886,8 @@ fn a_pick_retried_after_its_box_lands_carries_the_parked_walk() {
         Some(PinStep {
             at: order[1].clone(),
             from: order[0].clone(),
-            step: 1,
+            direction: 1,
+            to_the_end: None,
             order: order.clone(),
             missed: 0,
             shuffle: true,
@@ -1864,7 +1981,8 @@ fn installing_a_pick_in_the_walks_folder_keeps_the_playlist() {
         Some(PinStep {
             at: order[1].clone(),
             from: order[0].clone(),
-            step: 1,
+            direction: 1,
+            to_the_end: None,
             order: order.clone(),
             missed: 0,
             shuffle: true,
@@ -2062,7 +2180,8 @@ fn a_pin_taken_up_again_on_its_own_file_keeps_the_walk() {
     let walk = || PinStep {
         at: order[1].clone(),
         from: order[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: order.clone(),
         missed: 0,
         shuffle: true,
@@ -2126,6 +2245,7 @@ fn throwing_the_shuffle_off_walks_the_folders_own_order() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(shuffled)) = first else {
         panic!("a walk is always answered");
@@ -2141,6 +2261,7 @@ fn throwing_the_shuffle_off_walks_the_folders_own_order() {
         anchor: shuffled.anchor,
         config: Box::new(config.clone()),
         session: Some(Box::new(shuffled.clone())),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(linear)) = second else {
         panic!("a walk is always answered");
@@ -2163,6 +2284,7 @@ fn throwing_the_shuffle_off_walks_the_folders_own_order() {
         anchor: linear.anchor,
         config: Box::new(config),
         session: Some(Box::new(linear.clone())),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(reshuffled)) = third else {
         panic!("a walk is always answered");
@@ -2202,6 +2324,7 @@ fn a_shuffled_playlist_takes_new_files_on_the_end_and_drops_deleted_ones() {
         anchor: None,
         config: Box::new(config.clone()),
         session: None,
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(spawned)) = first else {
         panic!("a walk is always answered");
@@ -2225,6 +2348,7 @@ fn a_shuffled_playlist_takes_new_files_on_the_end_and_drops_deleted_ones() {
         anchor: spawned.anchor,
         config: Box::new(config.clone()),
         session: Some(Box::new(spawned.clone())),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(reconciled)) = second else {
         panic!("a walk is always answered");
@@ -2250,6 +2374,7 @@ fn a_shuffled_playlist_takes_new_files_on_the_end_and_drops_deleted_ones() {
         anchor: reconciled.anchor,
         config: Box::new(config),
         session: Some(Box::new(reconciled)),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(linear)) = third else {
         panic!("a walk is always answered");
@@ -2319,6 +2444,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
             anchor: Some(anchor),
             config: Box::new(config.clone()),
             session: None,
+            to_the_end: None,
         });
         let Some(PinPlanned::Walk(first)) = answer else {
             panic!("a walk is always answered");
@@ -2349,6 +2475,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
             anchor: first.anchor,
             config: Box::new(config.clone()),
             session: Some(Box::new(first.clone())),
+            to_the_end: None,
         });
         let Some(PinPlanned::Walk(back)) = answer else {
             panic!("a walk is always answered");
@@ -2368,7 +2495,8 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
     let session = PinStep {
         at: stepped_to.clone(),
         from: showing.clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![showing.clone(), stepped_to.clone(), folder.join("b.mp3")],
         missed: 0,
         shuffle: true,
@@ -2381,6 +2509,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
         anchor: session.anchor,
         config: Box::new(config.clone()),
         session: Some(Box::new(session)),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(back)) = answer else {
         panic!("a walk is always answered");
@@ -2406,7 +2535,8 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
     let session = PinStep {
         at: showing.clone(),
         from: showing.clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![elsewhere.clone(), folder.join("c.mp3")],
         missed: 0,
         shuffle: true,
@@ -2419,6 +2549,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
         anchor: session.anchor,
         config: Box::new(config.clone()),
         session: Some(Box::new(session)),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(first)) = answer else {
         panic!("a walk is always answered");
@@ -2439,6 +2570,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
         anchor: first.anchor,
         config: Box::new(config.clone()),
         session: Some(Box::new(first)),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(back)) = answer else {
         panic!("a walk is always answered");
@@ -2453,7 +2585,8 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
     let session = PinStep {
         at: stepped_to.clone(),
         from: showing.clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![stepped_to.clone(), folder.join("b.mp3"), showing.clone()],
         missed: 0,
         shuffle: true,
@@ -2466,6 +2599,7 @@ fn a_shuffled_playlist_is_built_around_the_file_the_pin_is_showing() {
         anchor: session.anchor,
         config: Box::new(config),
         session: Some(Box::new(session)),
+        to_the_end: None,
     });
     let Some(PinPlanned::Walk(held)) = answer else {
         panic!("a walk is always answered");
@@ -2513,6 +2647,7 @@ fn a_shuffled_walk_comes_back_to_the_pinned_file_however_far_it_went_either_way(
                 anchor: held.as_ref().and_then(|walk| walk.anchor),
                 config: Box::new(config.clone()),
                 session: held.clone().map(Box::new),
+                to_the_end: None,
             });
             let Some(PinPlanned::Walk(walk)) = answer else {
                 panic!("a walk is always answered");
@@ -2573,6 +2708,7 @@ fn a_previous_pressed_first_walks_the_same_playlist_as_a_next() {
             anchor: None,
             config: Box::new(config.clone()),
             session: None,
+            to_the_end: None,
         });
         let Some(PinPlanned::Walk(first)) = answer else {
             panic!("a walk is always answered");
@@ -2609,6 +2745,7 @@ fn a_previous_pressed_first_walks_the_same_playlist_as_a_next() {
             anchor: first.anchor,
             config: Box::new(config.clone()),
             session: Some(Box::new(first.clone())),
+            to_the_end: None,
         });
         let Some(PinPlanned::Walk(back)) = answer else {
             panic!("a walk is always answered");

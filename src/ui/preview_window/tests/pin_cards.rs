@@ -1622,7 +1622,8 @@ fn a_name_the_band_lets_go_of_parks_before_it_stops() {
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -1716,7 +1717,8 @@ fn a_return_plays_the_row_a_sounds_band_has_picked() {
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -1862,6 +1864,7 @@ fn a_band_turned_over_asks_the_walk_behind_it_again() {
         anchor: Some(crate::formats::routing::NavCategory::Audio),
         config: Box::new(CONFIG.lock().expect("the configuration").clone()),
         session: None,
+        to_the_end: None,
     }) {
         Some(PinPlanned::Walk(walk)) => walk,
         _ => panic!("a walk is always answered"),
@@ -1899,7 +1902,8 @@ fn a_band_turned_over_asks_the_walk_behind_it_again() {
         .take()
         .expect("the walk the band asked for");
     assert!(
-        matches!(&job, PinJob::Walk { step, .. } if *step == 0),
+        matches!(&job, PinJob::Walk { step, ..
+} if *step == 0),
         "and it asks for the walk's order rather than for a step along it"
     );
     let Some(PinPlanned::Walk(audio_only)) = answer_pin_job(&job) else {
@@ -2069,6 +2073,7 @@ fn a_band_opened_over_a_pin_that_holds_no_walk_is_the_playlist_the_first_press_s
         anchor: Some(crate::formats::routing::NavCategory::Audio),
         config: Box::new(CONFIG.lock().expect("the configuration").clone()),
         session: Some(Box::new(held)),
+        to_the_end: None,
     }) {
         Some(PinPlanned::Walk(walk)) => walk,
         _ => panic!("a walk is always answered"),
@@ -2135,7 +2140,8 @@ fn a_pin_that_comes_up_under_a_band_asks_the_walk_for_its_playlist() {
     stand_pin_walk(Some(PinStep {
         at: sound.clone(),
         from: sound.clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: vec![sound.clone(), folder.join("b.mp3")],
         missed: 0,
         shuffle: false,
@@ -3932,7 +3938,8 @@ fn a_query_in_the_bands_field_hides_the_rows_it_does_not_name() {
     stand_pin_walk(Some(PinStep {
         at: sounds[1].clone(),
         from: sounds[1].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -4084,7 +4091,8 @@ fn a_press_beside_the_field_blurs_it_and_leaves_the_query_it_typed() {
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -4190,7 +4198,8 @@ fn a_press_carried_across_the_field_selects_the_range_it_crosses() {
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -4283,7 +4292,8 @@ fn a_double_press_in_the_field_takes_its_word_and_the_second_one_the_whole_query
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -4370,7 +4380,8 @@ fn a_press_on_the_fields_clear_button_empties_it_and_leaves_the_field_in_sight()
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -4443,7 +4454,8 @@ fn a_walk_of_twelve_sounds(mut pin: PinnedPreview) -> Vec<PathBuf> {
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.clone(),
         missed: 0,
         shuffle: false,
@@ -4533,7 +4545,8 @@ fn the_bands_field_slides_in_with_the_pointer_and_parks_when_it_goes() {
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -4641,7 +4654,8 @@ fn a_caret_holds_the_field_open_and_a_press_is_what_lets_it_go() {
     stand_pin_walk(Some(PinStep {
         at: sounds[0].clone(),
         from: sounds[0].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.to_vec(),
         missed: 0,
         shuffle: false,
@@ -5004,7 +5018,8 @@ fn a_pick_leaves_the_band_scrolled_where_the_hand_left_it() {
     stand_pin_walk(Some(PinStep {
         at: sounds[picked].clone(),
         from: sounds[picked].clone(),
-        step: 1,
+        direction: 1,
+        to_the_end: None,
         order: sounds.clone(),
         missed: 0,
         shuffle: false,

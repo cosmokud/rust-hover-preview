@@ -128,8 +128,13 @@ pub(crate) struct PinStep {
     /// pin has been given another file is an answer to a press about a file the pin is no
     /// longer showing, and this is what says so (see `PreviewMessage::PinAnswered`).
     pub(super) from: PathBuf,
-    /// Which way the walk goes: `1` along the playlist, `-1` against it.
-    pub(super) step: i32,
+    /// Which way the walk goes: `1` along the playlist, `-1` against it, and `0` where the pin was put
+    /// on the file itself rather than stepped onto it — the press that asks for the beginning of a
+    /// playlist or for the end of it (see `jump_pinned_file`).
+    pub(super) direction: i32,
+    /// Which end of the playlist a press of `0` asked for: `false` for its first file, `true` for its
+    /// last, and nothing for a walk that steps.
+    pub(super) to_the_end: Option<bool>,
     /// The playlist the walk steps through: the folder's own order where the pin walks
     /// linearly, or the file the pin was standing on first and the anchor's own kind of the
     /// folder shuffled after it where the pin shuffles. Spawned when the pin is triggered and
@@ -180,7 +185,34 @@ impl PinStep {
     /// draw, which is what makes **Previous** take you back exactly where you were and a
     /// **Next** after it land on the file it was interrupted on.
     pub(super) fn step(&mut self) -> Option<PathBuf> {
-        self.advance(self.step)
+        self.advance(self.direction)
+    }
+
+    /// Put the walk on the first file of its playlist, or on the last, and say which it is.
+    ///
+    /// **A jump and not a step, which is the whole of why it is here.** A step is taken from where the
+    /// walk stands and wraps at either end — so a step back from the first file is the last one, and a
+    /// press that means "the beginning of this list" would arrive at the end of it (see `advance`). The
+    /// beginning is the playlist's own first entry and the end is its last, whatever file the pin is
+    /// standing on, and nothing at all where the pin already stands on it: a reload of the file on
+    /// screen is a window that flickers for a key that moved nothing (see `jump_pinned_file`).
+    pub(super) fn jump(&mut self, to_the_end: bool) -> Option<PathBuf> {
+        let next = if to_the_end {
+            self.order.last().cloned()?
+        } else {
+            self.order.first().cloned()?
+        };
+
+        if pin_navigation::same_file(&next, &self.at) {
+            return None;
+        }
+
+        self.at = next;
+        // A jump is neither a step forward nor a step back for the permutation's own count: the
+        // head of a shuffle is where a fresh one begins and its last file is what a spent one ends
+        // at, so the count is written to match where the walk now stands (see `progress`).
+        self.progress = if to_the_end { self.order.len() } else { 0 };
+        Some(self.at.clone())
     }
 
     /// The same step forward over a file that could not be shown (see `pin_step_off`):
@@ -304,7 +336,29 @@ pub(super) fn step_pinned_file(
     None
 }
 
-/// The anchor a fresh press asks with: the category of the first file pinned, read off the
+/// The file the beginning or the end of the pin's playlist holds, and the walk that press joins, or
+/// nothing where there is no playlist to jump into.
+///
+/// It is the press beside `step_pinned_file` and the same round trip: a folder the pin holds no order
+/// for yet is a folder that has to be read, so the question goes to the planner and the arc turns while
+/// it is answered. What differs is the step it is asked with — `0` is the walk standing on the file it
+/// was asked from rather than stepping off it, which is where the order a jump reads is worked out
+/// (see `answer_pin_job` and `PinStep::jump`).
+pub(super) fn jump_pinned_file(
+    to_the_end: bool,
+    wait: &mut Option<PinWait>,
+    anchor: Option<NavCategory>,
+) -> Option<PinStep> {
+    let at = pinned_path()?;
+
+    if !ask_pin_walk_jump(at, to_the_end, anchor) {
+        return None;
+    }
+
+    *wait = Some(PinWait::new());
+
+    None
+}
 /// walk the pin is standing on — or nothing where the pin holds no walk, which is a first
 /// press or a press after a listing pick cleared it, and anchors on the file the pin is
 /// standing on.
@@ -342,6 +396,10 @@ pub(super) enum PinJob {
         /// which case the planner anchors on `at` itself. Carried rather than recomputed
         /// so a press standing on a sound keeps the first file's walk (see `list_for`).
         anchor: Option<NavCategory>,
+        /// Which end of the playlist the walk is to be put on, where it is a jump rather than a step: a
+        /// `Home` or an `End` the page's caret has not taken (see `jump_pinned_file`). Nothing for a
+        /// step, which is every other press of the pin.
+        to_the_end: Option<bool>,
         config: Box<AppConfig>,
         /// The walk this press is a step of — the pin's own playlist — so that the read the
         /// planner does behind it continues one walk rather than starting another. Nothing
@@ -402,11 +460,11 @@ pub(super) fn take_pin_walk() -> Option<PinStep> {
 /// (see `PinUp::walk`).
 ///
 /// **And where the pin holds no walk at all it is taken whole**, which is a pin nothing has
-/// stepped yet: `step: 0` is the walk asked for its order rather than for a step — the question
-/// the band behind a sound's card asks (see `ask_the_walk_again`) — and there is no walk to hand
-/// that order to, so the answer is the playlist, and the press after it is a step of that one
-/// rather than a fresh draw. A step's answer is *not* taken that way: it lands on a file the pin
-/// has not been shown yet, and the install that shows it is what puts its walk on the pin.
+/// stepped yet: `step: 0` with no end named is the walk asked for its order rather than for a
+/// step — the question the band behind a sound's card asks (see `ask_the_walk_again`) — and a
+/// jump's answer is not one of those: a `Home` or an `End` asked for the order of a playlist the
+/// pin holds none of yet lands on a file the pin has never been shown, which the install that
+/// shows it is what puts its walk on the pin (see `PinStep::jump`).
 pub(super) fn pin_walk_synced_its_playlist(walk: &PinStep) {
     let Some(mut state) = pin_state() else {
         return;
@@ -421,7 +479,7 @@ pub(super) fn pin_walk_synced_its_playlist(walk: &PinStep) {
             held.shuffle = walk.shuffle;
             held.anchor = walk.anchor;
         }
-        None if walk.step == 0 => *held = Some(walk.clone()),
+        None if walk.direction == 0 && walk.to_the_end.is_none() => *held = Some(walk.clone()),
         None => {}
     }
 }
@@ -497,6 +555,44 @@ pub(super) fn install_walk(
 /// the pin is standing on, and the order that walk holds is what makes the next file a
 /// continuation of the same playlist rather than a fresh draw (see `answer_pin_job`).
 pub(super) fn ask_pin_walk(at: PathBuf, step: i32, anchor: Option<NavCategory>) -> bool {
+    ask_the_planner(PinWalkAsk {
+        at,
+        step,
+        anchor,
+        to_the_end: None,
+    })
+}
+
+/// Ask the planner for the pin's walk put on the beginning or the end of its playlist: the question a
+/// `Home` or an `End` that the page's caret has not taken is (see `jump_pinned_file`).
+///
+/// It is the walk with no step asked for, and the end written down beside it, because a jump is off
+/// the walk rather than along it: the file it lands on is the playlist's own first or last, which is
+/// work the planner does on the order it just read (see `PinStep::jump`).
+pub(super) fn ask_pin_walk_jump(
+    at: PathBuf,
+    to_the_end: bool,
+    anchor: Option<NavCategory>,
+) -> bool {
+    ask_the_planner(PinWalkAsk {
+        at,
+        step: 0,
+        anchor,
+        to_the_end: Some(to_the_end),
+    })
+}
+
+/// A walk question as it is asked: the file it is asked from, the step along the playlist, the category
+/// it is anchored on, and the end where it is a jump rather than a step.
+struct PinWalkAsk {
+    at: PathBuf,
+    step: i32,
+    anchor: Option<NavCategory>,
+    to_the_end: Option<bool>,
+}
+
+/// Leave a walk question for the planner, answering whether it was left.
+fn ask_the_planner(ask: PinWalkAsk) -> bool {
     let Some(config) = CONFIG.lock().ok().map(|config| config.clone()) else {
         return false;
     };
@@ -504,9 +600,10 @@ pub(super) fn ask_pin_walk(at: PathBuf, step: i32, anchor: Option<NavCategory>) 
     let session = session_walk().map(Box::new);
 
     queue_pin_job(PinJob::Walk {
-        at,
-        step,
-        anchor,
+        at: ask.at,
+        step: ask.step,
+        to_the_end: ask.to_the_end,
+        anchor: ask.anchor,
         config: Box::new(config),
         session,
     })
@@ -661,6 +758,7 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
         PinJob::Walk {
             at,
             step,
+            to_the_end,
             anchor,
             config,
             session,
@@ -791,9 +889,22 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
                 // The walk is asked from the file the pin is standing on, and steps from it
                 // along the playlist.
                 from: at.clone(),
-                step: *step,
-                order,
+                // A jump's direction is the end it was asked for, so that the walk the pin is left
+                // holding steps the way the press was pointing: `End` walks forward after it and
+                // `Home` back.
+                direction: match to_the_end {
+                    Some(to_the_end) => {
+                        if *to_the_end {
+                            1
+                        } else {
+                            -1
+                        }
+                    }
+                    None => *step,
+                },
+                to_the_end: *to_the_end,
                 missed: 0,
+                order,
                 shuffle,
                 // Carried like the playlist itself: how far forward the walk has got says
                 // whether this press is the permutation spent or the order walked round (see
@@ -813,6 +924,11 @@ pub(super) fn answer_pin_job(job: &PinJob) -> Option<PinPlanned> {
             // showing is the file it keeps (see `ask_the_walk_again`).
             if *step != 0 {
                 walk.step();
+            } else if let Some(to_the_end) = to_the_end {
+                // No step asked for and an end named: the walk is put on the playlist's first file or
+                // its last, which is what a `Home` or an `End` asks for. One that lands nothing — the
+                // pin is already there — is left standing, and the loop holds nothing to show.
+                walk.jump(*to_the_end);
             }
 
             Some(PinPlanned::Walk(walk))
