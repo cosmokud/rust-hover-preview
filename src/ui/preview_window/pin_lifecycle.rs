@@ -1803,16 +1803,28 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // tick later. Made the pin's here, where the window it is owned by is still down, the picture is
     // already the band's before the first composed frame (see
     // `pin_film_host::promote_the_hover_film_host`).
-    if let Some(host) = the_hover_host {
+    //
+    // **And the band is painted again the moment the promotion lands**, because the paint above was
+    // the paint of a pin with no host: it wrote this app's black over the band, and nothing between
+    // here and the show rewrites it. What that cost was the pin appearing over its own black for as
+    // long as a tick took to spend the promotion's debt — 204 ms in one run of the trace — which reads
+    // as the pin being shown before it was ready (see `pin_film_host::the_band_owes_a_repaint`, which
+    // the tick still spends).
+    let a_hover_host_was_taken_up = if let Some(host) = the_hover_host {
         adopt_the_hovered_film_in_the_host(host);
-    }
+        render_pinned_preview_at(hwnd, window.0, window.1);
+        true
+    } else {
+        false
+    };
 
     // **A window this show made has its surface composed before it is shown.** The paint above is a
     // compositor round trip, and a show that reaches the compositor first is one frame of an empty
     // window — the desktop through a pin whose first frame is the one thing it cannot borrow (see
-    // `pin_film_host`). Asked only of a window made here: a show of a window already on the screen
-    // is a resize step's road as well, and a flush there would be a frame of the hand's lag.
-    if created_now {
+    // `pin_film_host`). Asked of a window made here and of the repaint a promotion's band is owed:
+    // a show of a window already on the screen is a resize step's road, and a flush there would be a
+    // frame of the hand's lag.
+    if created_now || a_hover_host_was_taken_up {
         let _ = unsafe { DwmFlush() };
     }
 
