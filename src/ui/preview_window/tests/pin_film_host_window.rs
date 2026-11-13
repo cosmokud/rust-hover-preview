@@ -763,6 +763,53 @@ fn an_ffplay_hover_taken_up_is_moved_into_the_pin_not_begun() {
     );
 }
 
+/// **A take-up on a hover's film holds the pin's band with the frame the film had on the screen**,
+/// so the band is neither this app's black nor a hole onto whatever stands behind the pair (see
+/// `pin_film_host::BandStill`).
+///
+/// The fault this is a regression test for: the pin's band was painted while the take-up had no host
+/// at all, which left it opaque black, and the promotion then put the host at the pin's box with its
+/// client dropped — so every frame the compositor made before the registration landed was read as the
+/// pin appearing before it was ready. What the band carries instead is the film the user was already
+/// watching.
+#[test]
+fn a_take_up_holds_the_pins_band_with_the_frame_the_film_was_showing() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+
+    // A frame of this app's own making, in the place a hover's player's would have been: one flat
+    // colour, so what the band carries is readable out of the pixels the paint wrote.
+    let a_frame = [70u8, 70, 70, 0].repeat(16 * 16);
+    assert!(
+        pin_film_host::keep_the_band_still(pid, (16, 16), a_frame),
+        "the take-up keeps the frame it was handed"
+    );
+    let (band, top, rows) = the_band_one_paint_left(&film);
+    assert!(rows > 0, "the pin has a band to assert");
+    let carried = band
+        .iter()
+        .filter(|pixel| pixel[3] == 255 && (pixel[0] as i32 - 70).abs() <= 2)
+        .count();
+    assert!(
+        carried > band.len() * 9 / 10,
+        "rows {top}..{} of the pin's bitmap are the taken frame, {} of {} pixels of it",
+        top + rows,
+        carried,
+        band.len()
+    );
+    assert!(
+        !band
+            .iter()
+            .any(|pixel| *pixel == [0, 0, 0, 255] || *pixel == [1, 1, 1, 1]),
+        "and neither the empty host's black nor a hole onto the listing behind the pair"
+    );
+
+    pin_film_host::the_band_still_gives_way();
+}
+
 /// **A take-up on a hover's mpv film takes the hover's own host up as the pin's host**: the same
 /// window, the same player, the same child, and no second decode.
 ///
