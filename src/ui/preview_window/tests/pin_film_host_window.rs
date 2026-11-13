@@ -7772,8 +7772,10 @@ fn a_source_with_no_lit_frame_paints_no_cover_and_leaves_the_old_picture_playing
     );
     assert_eq!(
         pin_film_host::host_erases(),
-        erases,
-        "nothing erases the host on the fallback either"
+        erases + 1,
+        "the fallback paints nothing of its own: the one erase is the host's first show, which \
+         writes the black under the picture before the window is on the screen (see \
+         `pin_film_host::erase_the_host_before_the_show`)"
     );
 
     unsafe { put_away_a_window_of_the_suite(source) };

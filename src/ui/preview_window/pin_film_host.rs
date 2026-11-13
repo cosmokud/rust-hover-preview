@@ -55,8 +55,8 @@ use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::PAINTSTRUCT;
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, FillRect, GetStockObject, SetBrushOrgEx, SetStretchBltMode, StretchBlt,
-    BLACK_BRUSH, HALFTONE, HBRUSH, NULL_BRUSH, SRCCOPY,
+    BeginPaint, EndPaint, FillRect, GetDC, GetStockObject, ReleaseDC, SetBrushOrgEx,
+    SetStretchBltMode, StretchBlt, BLACK_BRUSH, HALFTONE, HBRUSH, NULL_BRUSH, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
@@ -1003,6 +1003,28 @@ pub(super) fn put_the_cover_away() {
     }
 }
 
+/// **Put the black under the picture before the window is on the screen.**
+///
+/// The Shell composes a window that has painted nothing as what stands behind it, and a host's first
+/// composition is the one moment the erase has not run yet: the pin's band is a hole over this
+/// window, so a fresh host's first frame is the desktop showing inside the pin — the first pin of a
+/// run, and the first frame of every player a relaunch begins. The erase is therefore written into
+/// the client here, with the window still hidden, rather than waited for as `WM_ERASEBKGND`.
+///
+/// Asked of the client's own context rather than of a paint, because a hidden window's invalidation
+/// is composed with the next paint after the show — one frame too late for the band it is behind
+/// (see `paint_the_host_behind_the_film`).
+unsafe fn erase_the_host_before_the_show(host: HWND) {
+    let dc = unsafe { GetDC(host) };
+    if dc.is_invalid() {
+        return;
+    }
+    unsafe { paint_the_host_behind_the_film(host, dc) };
+    unsafe {
+        let _ = ReleaseDC(host, dc);
+    };
+}
+
 /// Draw the cover into `dc`, **cover-cropped to the host's client as it is now**: the same centred
 /// crop the registration wears, so a resize or an invalidation in the middle of a gap re-crops the
 /// picture instead of showing the host's black (see `pin_film_thumbnail::the_pictures_crop`).
@@ -1620,9 +1642,15 @@ pub(super) fn the_host_is_drawing() -> bool {
 pub(super) fn the_pin_is_owed_its_first_picture() -> bool {
     pin_is_its_own_window()
         && current_media_type() == Some(MediaType::Video)
-        && film_host().is_some()
-        && !the_host_is_drawing()
-        && !the_players_window_is_up(VIDEO_PID.load(Ordering::SeqCst))
+        // **The hover must be the placeholder**, because with it gone there is nothing to stand in
+        // for the pin until its film arrives (see `settle_pin_handover`).
+        && the_hover_window_is_up()
+        // **The host standing on the screen is the question, not a picture in it**: a fresh host is
+        // made hidden and shown only once a source is adopted, and the pin's band is a hole over
+        // this window — so a pin shown before it is a pin with the desktop in its band whatever the
+        // registration already says (see `the_host_is_drawing`).
+        && film_host().is_some_and(|host| !unsafe { IsWindowVisible(host) }.as_bool())
+        && !the_cover_stands()
 }
 
 /// Whether the hover's own window is on the screen, which is the placeholder a pin waiting on its
@@ -1750,6 +1778,9 @@ pub(super) unsafe fn take_up_the_pin_film_host(adopted: Option<HWND>) {
         // other** — the one the swap's hide left off the band, put back on it with the band write the
         // show is owed (see `the_host_has_appeared`).
         let was_up = unsafe { IsWindowVisible(host) }.as_bool();
+        if !was_up {
+            unsafe { erase_the_host_before_the_show(host) };
+        }
         // And the pair's button goes with the appearance, written before the show it belongs to (see
         // `the_button_follows_the_screen`).
         unsafe { the_button_follows_the_screen(true) };
@@ -2021,6 +2052,12 @@ pub(super) unsafe fn set_the_pin_film_host_visible(visible: bool) {
             );
         }
         if visible {
+            // **The black is written before the first show and not after it**, so that the frame the
+            // Shell composes of a host that has never painted is the film's black rather than the
+            // desktop through the pin's band (see `erase_the_host_before_the_show`).
+            if !was_up {
+                unsafe { erase_the_host_before_the_show(host) };
+            }
             // **The button is the appearing host's from the show that makes it the pair's listed
             // window**, written before the show so that the Shell reads it with it (see
             // `the_button_follows_the_screen`).
