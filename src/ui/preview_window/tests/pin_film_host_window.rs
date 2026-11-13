@@ -3983,7 +3983,7 @@ fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
 /// follows it — so the chase asked the pair to stand over the pin's own window and the host's, and
 /// the walk up from the chrome never reaches them. Every tick of the answer raised the pair again:
 /// 201 chases and 132 band flips in 1.5 s of one trace, each flip a band given back under a picture
-/// that had not been repainted (`see keep_pin_at_the_front`).
+/// that had not been repainted (see `keep_pin_at_the_front`).
 #[test]
 fn a_listing_of_the_pairs_own_windows_is_one_the_pair_stands_over() {
     let _room = the_room_to_itself();
