@@ -4,6 +4,8 @@
 use super::pin_trace::{self, note_pin_trace};
 use super::*;
 
+use windows::Win32::Graphics::Dwm::DwmFlush;
+
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
 /// from sleep. What a pin *is* — a window and the media under it — belongs to the
@@ -1759,6 +1761,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
                 if begin_the_adopted_film_in_the_host() {
                     with_pin(|pin| pin.chrome = PinChrome::hidden());
                     pin_film_host::arm_pin_handover();
+                    // **The pin is painted here but shown by the handover**: a first paint that
+                    // failed on a window made by this take-up is the one case with no frame to
+                    // show under the wait, and the handover's own show paints again (see
+                    // `pin_film_host::settle_pin_handover`).
                     render_pinned_preview_at(hwnd, window.0, window.1);
                     return;
                 }
@@ -1768,7 +1774,34 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
 
-    render_pinned_preview_at(hwnd, window.0, window.1);
+    // **A window this show made and could not paint is not shown**: there is no earlier frame of
+    // its own to stand in for the surface, so the pin stays down and the tick's own restore asks
+    // again rather than standing an empty frame where the hover was (see `the_pin_owes_a_show`).
+    // A window already on the screen is shown whatever the paint answered: its last frame is the
+    // one the hand sees, and hiding it would be the blink the whole road is for.
+    if !render_pinned_preview_at(hwnd, window.0, window.1) && created_now {
+        return;
+    }
+
+    // **A window this show made has its surface composed before it is shown.** The paint above is a
+    // compositor round trip, and a show that reaches the compositor first is one frame of an empty
+    // window — the desktop through a pin whose first frame is the one thing it cannot borrow (see
+    // `pin_film_host`). Asked only of a window made here: a show of a window already on the screen
+    // is a resize step's road as well, and a flush there would be a frame of the hand's lag.
+    if created_now {
+        let _ = unsafe { DwmFlush() };
+    }
+
+    // **A page is a window of its own, and the window the show is about to close over it is not
+    // the one that carries it.** Placed here, where the pin's window exists and is still down, so
+    // the first composed frame already has the page or its thumbnail in the band rather than the
+    // pin's least pixel over the desktop. The call at the end of this function re-points and
+    // raises, which is what a page that runs needs after the pin is over it (see
+    // `place_pinned_siblings` and `pin_page_thumbnail`).
+    if engine_page_in_the_band().is_some() || the_bands_pdf_viewer_is_owed() {
+        place_pinned_siblings();
+    }
+
     // Where the pin is owed: the topmost band for a pin that is Always On Top or one that owes the
     // front while it follows the listing (see `pin_holds_the_front`), and the ordinary one for one
     // that owes neither. The second is no raise — `HWND_NOTOPMOST` asks for the place a window

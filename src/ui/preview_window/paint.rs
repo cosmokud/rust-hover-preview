@@ -287,7 +287,7 @@ pub(super) fn chrome_rows_are_hit_testable(overlay: bool) -> bool {
 /// band is the fourth, and the one painted *whole*: Chromium's viewer stands in the middle of
 /// it and the margin the viewer is inset by is the pin's own frame (see
 /// `the_document_holds_the_band` and `PIN_DOCUMENT_MARGIN_PIXELS`).
-pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
+pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) -> bool {
     // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock, taken only where a resize step is being
     // measured (see `pin_resize_probe`).
     let started = pin_resize_probe::a_step_started();
@@ -298,7 +298,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // a point that moves it arrives as a message on this same thread.
     the_pan_was_drawn();
     let Some(paint) = pinned_paint() else {
-        return;
+        return false;
     };
 
     let (width, height) = (paint.width, paint.height);
@@ -310,7 +310,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         ));
     let rows = height + slack;
     let Some(bits) = ensure_layered_surface(hwnd.0 as isize, width as u32, rows as u32) else {
-        return;
+        return false;
     };
     let stride = width as usize * 4;
     let whole = std::slice::from_raw_parts_mut(bits, stride * rows as usize);
@@ -899,8 +899,11 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
 
-    if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
-        let _ = UpdateLayeredWindow(
+    // **Whether the surface reached the window**, which is what a caller that is about to show it
+    // needs: a window shown without one is the desktop through an empty frame (see
+    // `show_pinned_window` and `the_pin_paint_is_owed`).
+    let painted = match layered_surface_dc(hwnd.0 as isize) {
+        Some(mem_dc) => UpdateLayeredWindow(
             hwnd,
             None,
             Some(&dst_point),
@@ -910,8 +913,10 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
             COLORREF(0),
             Some(&blend),
             ULW_ALPHA,
-        );
-    }
+        )
+        .is_ok(),
+        None => false,
+    };
 
     // And the strips the chrome stands in, which carry what this paint just painted into their own
     // surfaces — the bitmap carries none of it (see `pin_chrome_strips`): asked here because the
@@ -919,6 +924,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     pin_chrome_strips::sync_the_chrome_strips();
     PIN_PAINTS.fetch_add(1, Ordering::Relaxed);
     pin_resize_probe::note_the_paint(started);
+    painted
 
     // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish
     // per painted frame is what made the 500 ms throttle suppress nothing.

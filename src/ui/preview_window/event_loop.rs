@@ -3993,6 +3993,15 @@ pub fn run_preview_window() {
                 place_pinned_siblings();
             }
 
+            // **A page the pin frames is drawn by a registration that is not the pin's own window,
+            // and a registration the Shell refused on the take-up is one nothing else asks for** —
+            // a pin that is not moved makes no second placement (see
+            // `pin_page_thumbnail::the_band_is_owed_a_page`). The band stays the pin's least pixel
+            // until a placement retries, which is the desktop through it.
+            if pin_page_thumbnail::the_band_is_owed_a_page() {
+                place_pinned_siblings();
+            }
+
             // A pin that has just answered a pick keeps answering for the front of its band for a
             // moment after it: the click is this loop's before it is the listing's, and the window the
             // listing is in is activated after it — which is that window being put over the pin again
