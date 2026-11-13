@@ -2061,12 +2061,24 @@ pub(super) fn the_band_is_nobodys(debt: Option<PinFrontOwed>, now: Instant) -> b
 /// should be. Asked of the chrome alone, that state answers "the pin is over the listing" and nothing
 /// ever answers for the half that is not (see `pin_film_host::place_the_pin_in_the_band` and
 /// `keep_pin_at_the_front`).
+///
+/// **A listing that is one of the pair's own windows is nowhere to be over**, and the answer is yes
+/// for it: a take-up whose foreground was empty or this app's own names the pin as the listing it
+/// was pressed in (see `the_listing_a_take_up_was_pressed_in`), and the host stands *over* the
+/// chrome, so the walk below reads that pair as one that never came over its listing. What that
+/// cost was a chase every tick for the length of the answer, each one taking the topmost band and
+/// giving it back — 132 of them in 1.5 s of one take-up's trace, and the desktop through the band
+/// while each was in flight.
 pub(super) unsafe fn the_pair_stands_over(hwnd: HWND, window: HWND) -> bool {
+    let band_holder = pin_film_host::the_pin_window_that_holds_the_band(hwnd);
+    if window == hwnd || window == band_holder {
+        return true;
+    }
+
     if !unsafe { pin_stands_over(hwnd, window) } {
         return false;
     }
 
-    let band_holder = pin_film_host::the_pin_window_that_holds_the_band(hwnd);
     band_holder == hwnd || unsafe { pin_stands_over(band_holder, window) }
 }
 
