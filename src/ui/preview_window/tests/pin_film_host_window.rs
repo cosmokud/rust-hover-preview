@@ -3545,6 +3545,10 @@ unsafe fn a_pin_showing_a_registered_film(film: &StandingFilm) -> (HWND, HWND) {
     );
     let source = unsafe { a_players_own_window() };
     unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+    // **The picture is one the desktop is showing**: a host that is down composes nothing, and the
+    // pin's band over it is this app's black whatever registration stands in it (see
+    // `pin_film_host::the_band_is_a_standing_host`).
+    let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
     assert!(
         pin_film_host::the_host_is_drawing(),
         "the film is the host's picture before the step"
@@ -8272,6 +8276,10 @@ fn a_cover_standing_leaves_the_pins_band_to_the_host() {
         pin_film_host::put_the_cover_in(host, vec![60u8; 8 * 8 * 4], 8, 8),
         "the host takes the still it was decoded for"
     );
+    // **A cover is a picture the desktop is showing, so the host stands on the screen with it**: a
+    // host that is down composes nothing, and this app's black is what the band over it carries (see
+    // `pin_film_host::the_band_is_a_standing_host`).
+    let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
 
     let (band, top, rows) = the_band_one_paint_left(&film);
     assert!(rows > 0, "the pin has a band to assert");
@@ -8376,6 +8384,9 @@ fn an_mpv_film_takes_the_bands_answers_as_they_were() {
         pin_film_host::put_the_cover_in(host, vec![60u8; 8 * 8 * 4], 8, 8),
         "the host takes a cover of this app's"
     );
+    // The cover is a picture on the screen only with the host that carries it up (see
+    // `pin_film_host::the_band_is_a_standing_host`).
+    let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
     let (band, ..) = the_band_one_paint_left(&film);
     assert!(
         band.iter().all(|pixel| *pixel == [1, 1, 1, 1]),
