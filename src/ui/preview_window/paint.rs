@@ -547,15 +547,26 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) -> boo
                     // registration that is gone, and a band still claiming that pixel would be the
                     // black rectangle that stands where the film was for the whole rest of the run
                     // (see `pin_film_host::take_the_film_off_the_band`).
-                    if pin_film_host::the_band_is_a_standing_host() {
-                        if let Some(host) = pin_film_host::film_host() {
-                            note_pin_trace!(
+                    // **And where there is no host at all**, which a take-up that adopts a hover's
+                    // film leaves for as long as its promotion is away: the band is a hole with
+                    // nothing of this app's behind it there, so the pin's own black is the only
+                    // truth (see `pin_film_host::the_band_has_no_host`).
+                    let a_film_stands_in_the_band = pin_film_host::the_band_is_a_standing_host()
+                        || (film_band_is_hit_testable(media.media_type)
+                            && pin_film_host::the_band_has_no_host());
+                    if a_film_stands_in_the_band {
+                        match pin_film_host::film_host() {
+                            Some(host) => note_pin_trace!(
                                 "pin band filled black: host {:?} drawing 0 cover 0",
                                 host,
-                            );
+                            ),
+                            None => note_pin_trace!("pin band filled black: no host"),
                         }
                         fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
                     } else {
+                        if pin_film_host::film_host().is_none() {
+                            note_pin_trace!("pin band left a hole: no host");
+                        }
                         fill_band_hit_testable(
                             out,
                             band_width,
