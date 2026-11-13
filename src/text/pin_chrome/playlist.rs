@@ -403,6 +403,10 @@ pub(crate) fn playlist_row_at(
 /// The first press with nothing picked starts on the row the pin is showing where its walk has one
 /// and on the band's first row in sight where it has none. Either end holds rather than wrapping,
 /// and the scroll is a whole row because a band never draws half of one.
+///
+/// `to_the_end` is the band's first row and its last rather than the row beside the hand: `Home` and
+/// `End` are asked for by the ends themselves, and a hand at the head of a list that was stepped back
+/// from would otherwise stay where it stands (see `pin_playlist::jump_the_pick`).
 pub(crate) fn playlist_step_pick(
     picked: Option<usize>,
     showing: Option<usize>,
@@ -410,10 +414,19 @@ pub(crate) fn playlist_step_pick(
     rows: usize,
     visible: usize,
     direction: i32,
+    to_the_end: bool,
 ) -> Option<(usize, usize)> {
     let last = rows.checked_sub(1)?;
     let from = picked.or(showing).unwrap_or(scroll).min(last);
-    let picked = (from as i32 + direction).clamp(0, last as i32) as usize;
+    let picked = if to_the_end {
+        if direction >= 0 {
+            last
+        } else {
+            0
+        }
+    } else {
+        (from as i32 + direction).clamp(0, last as i32) as usize
+    };
     let scroll = scroll
         .min(picked)
         .max((picked + 1).saturating_sub(visible.max(1)));

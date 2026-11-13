@@ -4458,6 +4458,57 @@ fn a_walk_of_twelve_sounds(mut pin: PinnedPreview) -> Vec<PathBuf> {
     sounds
 }
 
+/// `Home` and `End` over a band that is up are the band's own ends: the first row of the list becomes
+/// the pick and then the last one does, which is the rule the arrows keep — the band takes the key and
+/// the file on screen is not moved by it (see `pin_playlist::jump_the_pick`).
+#[test]
+fn the_ends_of_a_band_that_is_up_are_its_first_row_and_its_last() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let sounds = a_walk_of_twelve_sounds(pin);
+    let last = sounds.len() - 1;
+
+    assert!(
+        pin_playlist::jump_the_pick(true),
+        "the band takes an `End` over it"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
+        Some(Some(last)),
+        "and the row it picked is the last of the walk"
+    );
+
+    assert!(
+        pin_playlist::jump_the_pick(false),
+        "and a `Home` just the same"
+    );
+    assert_eq!(
+        pin_playlist::the_band_in_hand().map(|(_, picked, _)| picked),
+        Some(Some(0)),
+        "which puts the pick on the first row of the walk"
+    );
+
+    // A key that moved the pick named no file: nothing was sent for it, and the pin is still showing
+    // the sound the band was opened over.
+    assert_eq!(
+        pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.path.clone())),
+        Some(sounds[0].clone()),
+        "the file on screen is the one the band was opened on"
+    );
+
+    // The band is put away again, for the tests that follow this one — the pin the walk stands on is
+    // still the pin the band was opened over.
+    if let Some(pin) = take_pin_for_a_test() {
+        pin_playlist::toggle(&pin);
+    }
+    if let Some(previous) = previous_pin {
+        stand_pin(Some(previous));
+    }
+}
+
 /// **The field is the pointer's**: it comes into sight when a hand reaches into the band and it parks
 /// when the hand leaves — and it parks by travelling rather than by jumping, which is the one thing a
 /// slide is for.

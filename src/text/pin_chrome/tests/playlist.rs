@@ -533,29 +533,74 @@ fn a_press_on_the_bar_takes_hold_of_the_thumb_it_found() {
 #[test]
 fn the_arrows_step_a_row_and_hold_at_either_end() {
     // Nothing picked and nothing playing: the first press starts where the band is looking.
-    assert_eq!(playlist_step_pick(None, None, 0, 40, 5, -1), Some((0, 0)));
-    assert_eq!(playlist_step_pick(None, None, 0, 40, 5, 1), Some((1, 0)));
+    assert_eq!(
+        playlist_step_pick(None, None, 0, 40, 5, -1, false),
+        Some((0, 0))
+    );
+    assert_eq!(
+        playlist_step_pick(None, None, 0, 40, 5, 1, false),
+        Some((1, 0))
+    );
 
     // A first press on a pin that is playing starts on the sound's own row and carries the band to
     // it: the row it steps from is one the band has scrolled to rather than one it can see.
-    assert_eq!(playlist_step_pick(None, Some(7), 0, 40, 5, 1), Some((8, 4)));
     assert_eq!(
-        playlist_step_pick(None, Some(7), 0, 40, 5, -1),
+        playlist_step_pick(None, Some(7), 0, 40, 5, 1, false),
+        Some((8, 4))
+    );
+    assert_eq!(
+        playlist_step_pick(None, Some(7), 0, 40, 5, -1, false),
         Some((6, 2))
     );
 
     // Either end holds rather than wraps.
     assert_eq!(
-        playlist_step_pick(Some(0), None, 0, 40, 5, -1),
+        playlist_step_pick(Some(0), None, 0, 40, 5, -1, false),
         Some((0, 0))
     );
     assert_eq!(
-        playlist_step_pick(Some(39), Some(39), 35, 40, 5, 1),
+        playlist_step_pick(Some(39), Some(39), 35, 40, 5, 1, false),
         Some((39, 35))
     );
 
     // And a band of no rows has no row to step to.
-    assert_eq!(playlist_step_pick(None, None, 0, 0, 5, 1), None);
+    assert_eq!(playlist_step_pick(None, None, 0, 0, 5, 1, false), None);
+}
+
+/// `Home` and `End` are the band's two ends rather than the two rows beside the hand: the first row
+/// and the last is what they ask for, from wherever the pick stands (see `pin_playlist::jump_the_pick`).
+#[test]
+fn the_ends_of_the_band_are_its_first_row_and_its_last() {
+    let (rows, visible) = (40usize, 5usize);
+
+    assert_eq!(
+        playlist_step_pick(None, None, 0, rows, visible, -1, true),
+        Some((0, 0))
+    );
+    assert_eq!(
+        playlist_step_pick(None, None, 0, rows, visible, 1, true),
+        Some((rows - 1, rows - visible)),
+        "the last row of the list, scrolled to the band's last screenful"
+    );
+    assert_eq!(
+        playlist_step_pick(Some(4), Some(4), 0, rows, visible, -1, true),
+        Some((0, 0)),
+        "a row in sight is the list's beginning just the same"
+    );
+    assert_eq!(
+        playlist_step_pick(Some(35), None, 35, rows, visible, 1, true),
+        Some((rows - 1, rows - visible))
+    );
+    assert_eq!(
+        playlist_step_pick(None, Some(7), 0, rows, visible, 1, true),
+        Some((rows - 1, rows - visible)),
+        "and the row the sound on screen is on does not hold the end short"
+    );
+    assert_eq!(
+        playlist_step_pick(None, None, 0, 0, 5, 1, true),
+        None,
+        "a band of no rows has no end to go to"
+    );
 }
 
 /// A highlight stepped out of the rows in sight is carried back into them by the scroll, which is
@@ -567,24 +612,32 @@ fn a_stepped_row_is_scrolled_back_into_sight() {
 
     // Down out of the last row in sight, and up out of the first: the band follows it one row.
     assert_eq!(
-        playlist_step_pick(Some(4), None, 0, rows, visible, 1),
+        playlist_step_pick(Some(4), None, 0, rows, visible, 1, false),
         Some((5, 1))
     );
     assert_eq!(
-        playlist_step_pick(Some(1), None, 1, rows, visible, -1),
+        playlist_step_pick(Some(1), None, 1, rows, visible, -1, false),
         Some((0, 0))
     );
 
     // The last row of the list is the last row the band can scroll to, and the first is its first.
     let last = rows - 1;
     assert_eq!(
-        playlist_step_pick(Some(last - 1), None, last - visible, rows, visible, 1),
+        playlist_step_pick(
+            Some(last - 1),
+            None,
+            last - visible,
+            rows,
+            visible,
+            1,
+            false
+        ),
         Some((last, last + 1 - visible))
     );
 
     // A step inside the rows in sight moves nothing of the scroll.
     assert_eq!(
-        playlist_step_pick(Some(5), None, 2, rows, visible, 1),
+        playlist_step_pick(Some(5), None, 2, rows, visible, 1, false),
         Some((6, 2))
     );
 
@@ -592,7 +645,7 @@ fn a_stepped_row_is_scrolled_back_into_sight() {
     for picked in 0..rows {
         for direction in [-1, 1] {
             let (to, scroll) =
-                playlist_step_pick(Some(picked), None, picked, rows, visible, direction)
+                playlist_step_pick(Some(picked), None, picked, rows, visible, direction, false)
                     .expect("a band of forty rows");
             assert!(
                 scroll <= to && to < scroll + visible,
