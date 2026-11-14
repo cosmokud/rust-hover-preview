@@ -71,11 +71,15 @@ pub(super) fn is_valid_file_path(s: &str) -> bool {
 ///
 /// **Everything answers first, and the automation client is not asked at all where the point is in its
 /// window.** Reading that list through UI Automation is reported to hang Everything and to leave it
-/// holding gigabytes, so the class of the frame the point is in decides the road — a `WindowFromPoint`
-/// and two class compares, taken before the client in hand is even looked at — and the row comes back
+/// holding gigabytes, so the class of the frame the point is in decides the road — a hit test and two
+/// class compares, taken before the client in hand is even looked at — and the row comes back
 /// from the list's own messages instead (see `everything`). It is here rather than in each caller
 /// because this is where every item walk starts: the pointer road, the click road's row and the
 /// region a preview is kept off all arrive through this one function.
+///
+/// **The point's own reading is the window and not the desktop's hit test**: a tooltip standing over
+/// the row it describes is taken off the answer, so the row under a pointer resting on its text is
+/// still read out of Everything's list (see `window_classes::the_window_under_the_point`).
 ///
 /// `measure_content` asks the walk for the item's own text as well, which a preview
 /// is placed from. A plain probe passes `false`: it answers which file the pointer is
@@ -86,7 +90,9 @@ pub(super) fn uia_item_from_point(
     point: POINT,
     measure_content: bool,
 ) -> Option<HoveredItem> {
-    if let Some(frame) = the_everything_frame_of(unsafe { WindowFromPoint(point) }) {
+    if let Some(frame) = the_everything_frame_of(
+        crate::shell::window_classes::the_window_under_the_point(point),
+    ) {
         return row_at(resolver, frame, point).map(|row| row.item());
     }
 
