@@ -412,6 +412,12 @@ pub(crate) fn a_press_puts_us_behind(
 /// nobody's pick — and the switch is what makes the pick the pin's business. A pin that follows nothing
 /// is a pin a press in the listing *is* the answer for, and it goes behind as it always has.
 ///
+/// **And a popup over a row answers as the row does**, which is the whole of what a tooltip asked for:
+/// Everything puts one up over the text of a result row with no delay at all, the desktop's hit test
+/// names it for a press that landed on the row beneath it, and a pin put behind the popup's program for
+/// that press is the listing flashing over it for one click (see `popup_class_matches` and
+/// `lower_pinned_preview`).
+///
 /// Asked of the class of the frame the press landed in rather than of the process behind it, and with no
 /// lock and no allocation, because this is a low-level callback and every press on the machine waits for
 /// it (see `window_classes::explorer_class_matches`). A Common Item Dialog is a listing a pick can be made
@@ -419,8 +425,27 @@ pub(crate) fn a_press_puts_us_behind(
 /// program's Open dialog, and the press that chooses it is the press that hands it over (see
 /// `explorer_hook::file_dialog`).
 pub(crate) fn the_pick_road_answers(window: HWND) -> bool {
-    crate::app::seam::the_pin_follows_the_listing()
-        && crate::app::seam::a_listing_is_previewed(window)
+    if !crate::app::seam::the_pin_follows_the_listing() {
+        return false;
+    }
+
+    // **A popup standing over a listing is not a place the pin goes behind, whatever it belongs to.**
+    // A `tooltips_class32` popup and a `#32768` menu are drawn *over* the rows of the listing whose
+    // item they describe, take no press of their own, and are named by `WindowFromPoint` for a press
+    // that lands on the row beneath them — the tooltip Everything puts up over the text of a result
+    // row within milliseconds of the hand arriving, which is exactly the point an empty part of the
+    // same row does not have one on. Read as a place, that popup is the press answered twice: the pin
+    // is lowered behind the program that owns it and raised again by the pick the same press made (see
+    // `a_press_puts_us_behind` and `lower_pinned_preview`, which refuses a popup as a place of its
+    // own for the same reason).
+    //
+    // It is asked before the class of the frame because a popup is its own root: the frame of a
+    // tooltip is the tooltip, so every listing question below answers no for it.
+    if crate::shell::window_classes::popup_class_matches(window) {
+        return true;
+    }
+
+    crate::app::seam::a_listing_is_previewed(window)
 }
 
 /// Whether the point a press landed on is inside any window of ours: the broad answer, and the one the

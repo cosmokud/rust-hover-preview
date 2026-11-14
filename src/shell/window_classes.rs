@@ -91,10 +91,36 @@ pub(crate) fn the_window_under_the_point(point: POINT) -> HWND {
         return named;
     };
 
-    // **And the window below it is answered as the hit test would have: the leaf, not the frame.**
+    // **The window below it is answered as the hit test would have: the leaf, not the frame.**
     // A listing's rows are children of its frame, and the frame answers no item the rows draw — the
     // window an item is resolved in is the one it is drawn in (see `ItemWindow`).
     unsafe { the_leaf_at(below, point) }
+}
+
+/// Whether a window is one the desktop draws **over** a listing rather than part of it: a tooltip,
+/// or a menu's own `#32768`.
+///
+/// **These are asked about before any frame is**, because both are their own roots: a popup's frame
+/// is the popup, so every question about a listing answers no for it, and a press read as that
+/// program's is a press the pin is lowered behind (see `window_state::the_pick_road_answers` and
+/// `a_press_puts_us_behind`). Everything puts a `tooltips_class32` up over the text of a result row
+/// with no delay at all, which is why the same press flashed the pin for one click on a row's text
+/// and never on the empty part of that row.
+///
+/// Allocation-free and one class read, because a `WH_MOUSE_LL` callback reaches this through
+/// `window_state::the_pick_road_answers`.
+pub(crate) fn popup_class_matches(hwnd: HWND) -> bool {
+    if hwnd.is_invalid() {
+        return false;
+    }
+
+    unsafe {
+        let mut class_name = [0u16; 256];
+        let len = GetClassNameW(hwnd, &mut class_name);
+        len > 0
+            && (utf16_contains_ascii_ignore_case(&class_name[..len as usize], b"tooltips_class32")
+                || utf16_contains_ascii_ignore_case(&class_name[..len as usize], b"#32768"))
+    }
 }
 
 /// The window a point is really over, inside a window the desktop has already named: the deepest
