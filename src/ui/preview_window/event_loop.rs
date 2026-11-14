@@ -257,6 +257,16 @@ pub fn run_preview_window() {
         // the answer lands, which is a tick of its own, so this outlives the tick the way the
         // replay flags above it do (see `PinPlan::Awaiting`).
         let mut pin_awaiting_box: Option<PathBuf> = None;
+        // The file a cold pin was taken up on that its own take-up could not draw at once: an engine owes
+        // it a page, a picture or a listing, or a read or a probe owes it a box. Nothing is loaded for it
+        // until that answer lands, and the engine is asked once per press — a second ask would be a second
+        // launch for a page the first one is already writing (see `a_cold_pins_file_is_owed`).
+        let mut pin_cold_wait: Option<PathBuf> = None;
+        // The page this loop last raised the pin's window on, for a pin of an engine kind: the window is put
+        // up where the page is drawn rather than at the take-up, and what answers for it is a page the engine
+        // has published (see `the_pins_page_is_on_the_screen` and `show_pinned_window`, which refuses the
+        // show until it has).
+        let mut pin_page_shown: Option<PathBuf> = None;
         // The return a put-away pin is owed once a file it can be shown is on the window: a pick
         // names a file nothing has read yet, and a window put up on the pick shows the file before it
         // for as long as the read and the decode take — the flash the user sees between the two
@@ -699,6 +709,15 @@ pub fn run_preview_window() {
                     pin_what_is_on_screen(&current_show, pending_load.as_ref())
                 {
                     pin_request = Some(request);
+                } else if let Some(path) = take_the_cold_pins_file() {
+                    // **A press with nothing on screen names the file under the hand**, and the hook is what
+                    // wrote that name down: the pointer is resolved by the side that watches the listing, and
+                    // what a pin is built from is this side's (see `PreviewMessage::PinCold`). The file is
+                    // taken at the press rather than from the message, so that the box is measured on the
+                    // tick the press is answered on and the name cannot go stale between the two.
+                    if !crate::app::seam::the_pin_is_up() || pinned() {
+                        pin_request = Some(PreviewMessage::PinCold { path });
+                    }
                 }
             }
 
@@ -3047,6 +3066,15 @@ pub fn run_preview_window() {
                         // message: a page that lands in the same tick as a new
                         // hover is not the answer to it.
                         if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
+                            && !take_a_cold_pins_answer(
+                                hwnd,
+                                &path,
+                                ok,
+                                current_generation,
+                                &mut pin_cold_wait,
+                                &mut pin_load,
+                                &mut pin_request,
+                            )
                             && latest_preview_msg.is_none()
                             && page_ready.is_none()
                         {
@@ -3064,6 +3092,18 @@ pub fn run_preview_window() {
                             if pinned() {
                                 pin_pick = Some(path.clone());
                             }
+                        } else if pin_cold_wait.as_deref() == Some(path.as_path()) {
+                            // The cold pin's file has the box the probe owed it: the pin is taken up at it here, and
+                            // the wait is over (see `take_a_cold_pins_answer`).
+                            take_a_cold_pins_answer(
+                                hwnd,
+                                &path,
+                                true,
+                                current_generation,
+                                &mut pin_cold_wait,
+                                &mut pin_load,
+                                &mut pin_request,
+                            );
                         } else if latest_preview_msg.is_none() && video_probed.is_none() {
                             // Held apart the way a render's answer is: it is not a hover to
                             // act on but an answer about the one that is waiting. An answer
@@ -3170,6 +3210,19 @@ pub fn run_preview_window() {
                             if size.is_some() && pinned() {
                                 pin_pick = Some(path.clone());
                             }
+                        } else if pin_cold_wait.as_deref() == Some(path.as_path()) {
+                            // The measure a cold pin's file was owed has answered: a box is what the file is
+                            // loaded for, and no box at all is a file nothing here will lay out (see
+                            // `take_a_cold_pins_answer`).
+                            take_a_cold_pins_answer(
+                                hwnd,
+                                &path,
+                                size.is_some(),
+                                current_generation,
+                                &mut pin_cold_wait,
+                                &mut pin_load,
+                                &mut pin_request,
+                            );
                         } else if latest_preview_msg.is_none() && measure_probed.is_none() {
                             // And a measured box, held apart with the box itself: what is waiting
                             // on it is a hover, and the box is what that hover is laid out with
@@ -3191,6 +3244,15 @@ pub fn run_preview_window() {
                         // placed with, not another hover — and an engine that will not draw
                         // the file is the same wait answered, with nothing in it.
                         if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
+                            && !take_a_cold_pins_answer(
+                                hwnd,
+                                &path,
+                                ok,
+                                current_generation,
+                                &mut pin_cold_wait,
+                                &mut pin_load,
+                                &mut pin_request,
+                            )
                             && latest_preview_msg.is_none()
                             && page_ready.is_none()
                         {
@@ -3207,6 +3269,15 @@ pub fn run_preview_window() {
                         // a page from, and an archive the engine will not list is that wait
                         // answered with nothing.
                         if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
+                            && !take_a_cold_pins_answer(
+                                hwnd,
+                                &path,
+                                ok,
+                                current_generation,
+                                &mut pin_cold_wait,
+                                &mut pin_load,
+                                &mut pin_request,
+                            )
                             && latest_preview_msg.is_none()
                             && page_ready.is_none()
                         {
@@ -3312,6 +3383,23 @@ pub fn run_preview_window() {
                 // standing until its answer arrives.
                 if let Some(drawn) = engine_page_answer(&path) {
                     take_pin_engine_answer(&path, drawn, &mut pin_awaiting_box, &mut pin_pick);
+                }
+            }
+
+            // A cold pin waiting on one of the two engines that answer by writing a page into the app's own
+            // folder is watched for here for the same reason, and taken up by the pin's own plan rather than a
+            // pick (see `take_a_cold_pins_answer`).
+            if let Some(path) = pin_cold_wait.clone() {
+                if let Some(drawn) = engine_page_answer(&path) {
+                    take_a_cold_pins_answer(
+                        hwnd,
+                        &path,
+                        drawn,
+                        current_generation,
+                        &mut pin_cold_wait,
+                        &mut pin_load,
+                        &mut pin_request,
+                    );
                 }
             }
 
@@ -3570,6 +3658,12 @@ pub fn run_preview_window() {
             // would take the landing of a hover's wait for its own (see `pin_awaiting_box`).
             if !pinned() {
                 pin_awaiting_box = None;
+                // A cold pin's wait is the window's too: the engine is writing a page for a pin that is
+                // not there, and the file it was owed is nobody's to load.
+                pin_cold_wait = None;
+                // And the page it was raised on belongs to the window that has gone: the next pin's own page
+                // is what the road below is owed.
+                pin_page_shown = None;
                 // A file a pin that is over was loading is not waited for: the window it was
                 // being shown in has gone, and the answer landing for it would be installed
                 // into a pin that is not there (see `PinLoad`).
@@ -3629,6 +3723,10 @@ pub fn run_preview_window() {
                 }
 
                 pin_awaiting_box = None;
+                // And a cold pin's wait goes with the pick: the file it was standing on is not the one the
+                // user has picked, and a page landing for it would be a plan made for a window shown
+                // something else (see `pin_cold_wait`).
+                pin_cold_wait = None;
                 // Whatever was loading is a load for a file nobody is asking for any more, and
                 // the answer it lands with is dropped with it: what the pin shows next is
                 // planned here, for this file, and taking up an answer for another one would
@@ -3954,6 +4052,28 @@ pub fn run_preview_window() {
                         }
                     }
                 }
+            }
+
+            // **A pin the window was held back from is owed it the moment its page is drawn.** The
+            // take-up, a swap and a walk all raise the window on a file that is in hand, and a page a
+            // browser draws is not: what stands in the band is the Shell's picture of the page's window,
+            // and a source that has presented nothing is pictured with its window's icon — so
+            // `show_pinned_window` refuses the show until the engine has named the file, and this is the
+            // other half of that refusal (see `the_pins_page_is_on_the_screen`).
+            //
+            // Nothing else asks for the band: the window and the Shell's registration of its picture are
+            // both owed here, and the loop's own record is what keeps one page from being raised twice.
+            match webview_preview::showing_path() {
+                Some(shown) if pinned_path().as_deref() == Some(shown.as_path()) => {
+                    if pin_page_shown.as_deref() != Some(shown.as_path()) {
+                        pin_page_shown = Some(shown);
+                        show_pinned_window(pinned_window());
+                        place_pinned_siblings();
+                    }
+                }
+                // A page that is not the pin's file is nobody's show, and the pin's next page is one to
+                // raise on all the same (see `a_walk_between_documents_keeps_the_viewer`).
+                _ => pin_page_shown = None,
             }
 
             // The pin's window is this app's own to keep on the screen, where Windows is not already
@@ -4804,6 +4924,41 @@ pub fn run_preview_window() {
                                 band_until: pressed + PIN_RAISE_GRACE,
                                 listing,
                             });
+                        }
+                    }
+                    // The pin key's other answer: a press with no preview on screen — nothing hovered, and
+                    // `preview_enabled` off is a run that never hovers anything — is the user naming the file
+                    // under the hand, and the pin comes up cold on it rather than doing nothing at all (see
+                    // `take_up_a_cold_pin`).
+                    //
+                    // **Nothing is gated on `Pin Mode → Update Preview`**: that row is about a pin that
+                    // follows the listing's picks, and this press is the user naming a file.
+                    PreviewMessage::PinCold { path } => {
+                        let at = cursor_screen_point().unwrap_or_default();
+                        // **A press while a cold pin is up is a press over a standing pin**, not a second
+                        // window: the pin is already standing on the file the press named — a press that
+                        // raised one raises nothing more, and a press whose wait is still out raised nothing
+                        // at all, so the file it named is the one the answer lands for (see `pin_cold_wait`).
+                        if !a_cold_press_raises_a_window() {
+                            continue;
+                        }
+
+                        let room = work_area_at(at.0, at.1).room();
+                        if take_up_a_cold_pin(
+                            hwnd,
+                            &path,
+                            at,
+                            current_generation,
+                            room,
+                            &mut pin_cold_wait,
+                        )
+                        .is_some()
+                        {
+                            // The file is loaded on a thread of its own, as a swap's is: the window is
+                            // already up and the arc turns in it until the frame lands (see `PinLoad`).
+                            if let Some(update) = a_cold_pins_plan(&path) {
+                                pin_load = Some(PinLoad::start(&path, update, None));
+                            }
                         }
                     }
                     // The pinned window was given another box — maximized, restored, resized,

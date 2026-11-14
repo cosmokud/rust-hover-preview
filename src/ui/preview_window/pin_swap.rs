@@ -10,6 +10,7 @@ use super::*;
 /// It is read off the pin in one look and carried by value, because what follows the plan — a
 /// file read, a decode, a player started — is work the pin's own lock must not be held across:
 /// that lock is what the window procedure takes to answer a drag, a button, or a tick's repaint.
+#[derive(Debug)]
 pub(super) struct PinUpdate {
     pub(super) content: ScreenRegion,
     pub(super) dpi: u32,
@@ -110,6 +111,23 @@ pub(super) fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
 /// is every pin taken up on a file drawn to its own box that has not been shown a shape since (see
 /// `PinnedPreview::bound` and `pin_swap_room`).
 pub(super) fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
+    plan_the_pin_file(path, true)
+}
+
+/// The plan for the file a pin was taken up *cold* on: `pin_update_plan` with the one answer it refuses a
+/// file on left out.
+///
+/// That answer is "this is the file the pin is already showing", and it is right for a pick: a second ask
+/// for the file on screen is a decode done twice for one press. A cold pin is the other way round — it stands
+/// on its file *before* there is anything of it in its band, with a stand-in waiting for the real thing — so
+/// what it asks for is a plan to make rather than a pick to refuse (see `a_cold_pins_file_is_owed`).
+pub(super) fn pin_cold_update_plan(path: &PathBuf) -> Option<PinPlan> {
+    plan_the_pin_file(path, false)
+}
+
+/// The plan for showing the pinned window a file, with the refusal of the file it is already showing left to
+/// the caller: see `pin_update_plan` and `pin_cold_update_plan`.
+fn plan_the_pin_file(path: &PathBuf, refuses_the_file_on_screen: bool) -> Option<PinPlan> {
     let (space, showing) = {
         let pinned = pin_state()?;
         let pin = pinned.pin()?;
@@ -126,7 +144,7 @@ pub(super) fn pin_update_plan(path: &PathBuf) -> Option<PinPlan> {
         pin_keeps_its_box(path)
     );
 
-    if showing == *path {
+    if refuses_the_file_on_screen && showing == *path {
         return None;
     }
 

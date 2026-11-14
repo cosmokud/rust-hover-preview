@@ -1439,3 +1439,444 @@ fn a_caret_key_the_hook_answers_is_counted_and_wakes_the_loop() {
 
     crate::app::seam::publish_pin_key_owner(0, 0);
 }
+
+/// **A press with nothing on screen to take up names the file under the hand**, and the file that comes of
+/// it is taken rather than read: a name left standing is the next press pinning the file the last one was
+/// over, and a press nothing answered for is a pin the user asked for that never came (see
+/// `take_the_cold_pins_file` and `crate::app::seam::take_the_pointer_file`).
+#[test]
+fn a_press_with_nothing_on_screen_takes_the_file_under_the_hand_once() {
+    let _room = the_room_to_itself();
+
+    // Nothing published: the press names nothing, whatever the row is.
+    crate::app::seam::publish_the_pointer_file(None);
+    assert_eq!(
+        take_the_cold_pins_file(),
+        None,
+        "a press with no file under it is still nothing at all"
+    );
+
+    let path = PathBuf::from("a-file-under-the-hand.png");
+    crate::app::seam::publish_the_pointer_file(Some(&path));
+    assert_eq!(
+        take_the_cold_pins_file().as_deref(),
+        Some(path.as_path()),
+        "the hook's own answer is the file the pin comes up on"
+    );
+    assert_eq!(
+        take_the_cold_pins_file(),
+        None,
+        "and once: the same press is not two pins"
+    );
+}
+
+/// A cold pin's file is read for what it owes *before* the window is built, and what a press on it comes to
+/// is exactly one of three answers — the load, the wait for a box, or nothing at all (see
+/// `a_cold_pins_file_is_owed`). The three are the decisions a pin is taken up on, so they are what this asks:
+/// an engine still owing the file its page is the wait, a folder and a file no kind previews are nothing, and
+/// a file whose box is in hand is the load.
+///
+/// The engine's own half is asked of the machine it runs on — a document's page exists only once a reader has
+/// been asked for it — so that half of the bottom of this is answered twice: as a wait where this machine has
+/// a tier to ask, and as nothing at all where it has not (see `page_is_on_the_way`).
+#[test]
+fn a_cold_pin_is_the_load_the_wait_or_nothing_by_what_the_file_owes() {
+    let _room = the_room_to_itself();
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-cold-pin");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+
+    // A folder: no kind claims a directory, so there is no box to stand a window in.
+    let mut waiting = None;
+    assert_eq!(
+        a_cold_pins_file_is_owed(&folder, 1, (1920, 1080), None, &mut waiting),
+        ColdPinOwed::Nothing,
+        "a folder is a press on something nothing can show: no window and no cross"
+    );
+    assert_eq!(waiting, None, "and nothing is waited on for it");
+
+    // A name no list claims and whose bytes are nothing in particular: the same answer (see
+    // `media_dimensions_of_kind` answering nothing for it).
+    let unknown = folder.join("a-file-no-kind-previews.zzz");
+    std::fs::write(&unknown, b"nothing any reader of this app's knows").expect("a written file");
+    assert_eq!(
+        a_cold_pins_file_is_owed(&unknown, 1, (1920, 1080), None, &mut waiting),
+        ColdPinOwed::Nothing,
+        "and a file no kind previews is the same press"
+    );
+
+    // A page a read is still answering for is a wait whatever the file is: there is no box to lay the file
+    // out at yet, and the file is picked up where the read answers (see `measure_waiting` and
+    // `MeasuredProbed`).
+    let page = folder.join("a-page.txt");
+    std::fs::write(&page, b"a page of text").expect("a written file");
+    assert!(begin_measure(&page), "a read of the file is started");
+    assert_eq!(
+        a_cold_pins_file_is_owed(&page, 5, (1920, 1080), Some((600, 800)), &mut waiting),
+        ColdPinOwed::TheBox,
+        "a file whose box a read still owes is the wait"
+    );
+    assert_eq!(
+        waiting.as_deref(),
+        Some(page.as_path()),
+        "and the file being waited on is written down, so the answer can find it again"
+    );
+    end_measure(&page);
+
+    // A document is the engine's own half of that question: its page does not exist until a reader is asked
+    // for it, so the wait is the engine's answer (see `page_is_on_the_way`). The tier is the machine's, and
+    // a machine with none has nothing coming — which is the no-window-no-cross above.
+    let document = folder.join("a-document.docx");
+    std::fs::write(&document, b"PK\x03\x04").expect("a written file");
+    let expected = if page_is_on_the_way(&document) {
+        ColdPinOwed::TheBox
+    } else {
+        ColdPinOwed::Nothing
+    };
+    assert_eq!(
+        a_cold_pins_file_is_owed(&document, 7, (1920, 1080), Some((600, 800)), &mut waiting),
+        expected,
+        "a document is the wait for the page an engine owes it, and nothing where this machine has no tier"
+    );
+
+    // A film nothing has probed: the box is the probe's to answer, so the pin stands on a stand-in and the
+    // probe is started here — a cold press is the only road that has no hover to have started one (see
+    // `video_probe_due`).
+    let film = folder.join("a-film-nothing-probed.mp4");
+    std::fs::write(&film, b"a file no probe has seen").expect("a written file");
+    assert!(
+        cached_video_geometry(&film).is_none(),
+        "nothing has probed this film"
+    );
+    assert_eq!(
+        a_cold_pins_file_is_owed(&film, 3, (1920, 1080), Some((640, 360)), &mut waiting),
+        ColdPinOwed::TheBox,
+        "an unprobed film is the wait for the shape its probe answers with"
+    );
+
+    // The probe's answer in hand, and the file is the load: `swap_pinned_media` is what starts the player
+    // for it, so a cold pin of a film is a pin of a film (see `pinned_player_is_coming`).
+    video_geometry_cache().insert(
+        VideoGeometryKey {
+            path: film.clone(),
+            version: file_version(&film),
+        },
+        ProbedGeometry::Measured(VideoGeometry {
+            width: 640,
+            height: 360,
+            frame_width: 640,
+            frame_height: 360,
+            crop: None,
+            duration: None,
+            subtitles: SubtitleStreams::default(),
+            sidecar: None,
+            derived: None,
+            subtitle_codecs: Vec::new(),
+            attachment_codecs: Vec::new(),
+            subtitle_extraction_failed: false,
+        }),
+    );
+    assert_eq!(
+        a_cold_pins_file_is_owed(&film, 3, (1920, 1080), Some((640, 360)), &mut waiting),
+        ColdPinOwed::TheFile,
+        "a measured film is loaded, and the player comes with the swap"
+    );
+    assert_eq!(waiting, None, "and nothing is waited on for it");
+
+    // And the player is the swap's: a film the route hands to a player of its own is a film
+    // `start_video_playback` begins there, ffplay stood in here so the answer is the road's rather than this
+    // machine's (see `pinned_player_is_coming`).
+    stand_ffplay_in(Some(true));
+    stand_mpv_in(Some(false));
+    stand_video_engine_in(Some((VideoEngine::Ffmpeg, false)));
+    assert!(
+        pinned_player_is_coming(MediaType::Video, &film),
+        "a cold pin of a film the route hands to FFmpeg's player begins one, as a swap does"
+    );
+    stand_video_engine_in(None);
+    stand_ffplay_in(None);
+    stand_mpv_in(None);
+
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// **A cold pin's box is the pin's own rule, and a picture is the size it is at the share its `Scaling` row
+/// names rather than the 36-pixel spinner a hover waits in.**
+///
+/// `Preview Enabled` off is a run with no hover to have measured a box, and the rule the take-up used to borrow
+/// was the hover's: the file fitted into the wedge of screen beside the pointer and, for a file nothing had
+/// measured yet, the spinner's own square. A pin stands in the whole of the display's room instead, under its
+/// own chrome, so what it is laid out by is `pin_update_box` at `hover_preview_scale` (see `a_cold_pins_box`).
+#[test]
+fn a_cold_pins_box_is_the_files_own_size_under_the_scaling_row() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-cold-pin-box");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let picture = folder.join("a picture.png");
+    image::RgbImage::new(400, 300)
+        .save(&picture)
+        .expect("a written PNG");
+
+    // The file's own size is what a picture is measured at, and the read that answers it is held where the
+    // measure would leave it: a test has no thread to wait for (see `picture_box`).
+    let shape = picture_dimensions(&picture).expect("the picture's own size");
+    hold_box(
+        &picture,
+        &file_version(&picture),
+        &MeasureScope::File,
+        Some(shape),
+    );
+
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let dpi = TEST_DPI;
+    let _at_own_size = PictureScale::stood_at(PreviewScale::Percent(100));
+
+    let box_ = a_cold_pins_box(&picture, shape, bounds, dpi);
+    let wait = crate::readers::office_preview::WAITING_BOX as i32;
+
+    assert_eq!(
+        (box_.2 - box_.0, box_.3 - box_.1),
+        (400, 300),
+        "`Scaling → Image 100%` is the picture's own size, and never the spinner's {wait}x{wait} box"
+    );
+    assert_ne!(
+        (box_.2 - box_.0, box_.3 - box_.1),
+        (wait, wait),
+        "a cold pin of a picture is not stood in the hover's wait"
+    );
+
+    // The room the file is fitted into is the display's less the pin's own chrome, and the file's middle is the
+    // middle of it: a fresh pin is placed by the display rather than beside a hand it never had.
+    let room = pinned_room(
+        bounds,
+        dpi,
+        pin_transport_kind(Some(MediaType::StaticImage)),
+        pin_overlay_chrome(Some(MediaType::StaticImage), false),
+        pinned_caption_height(dpi, Some(MediaType::StaticImage)),
+    );
+    assert_eq!(
+        ((box_.0 + box_.2) / 2, (box_.1 + box_.3) / 2),
+        ((room.left + room.right) / 2, (room.top + room.bottom) / 2),
+        "a cold pin stands in the middle of the room its chrome leaves rather than beside the hand"
+    );
+
+    // A picture larger than the room is fitted down into it, at the shape it has.
+    let huge = (4000u32, 3000u32);
+    let fitted = a_cold_pins_box(&picture, huge, bounds, dpi);
+    let (room_width, room_height) = room.room();
+    assert!(
+        (fitted.2 - fitted.0) <= room_width as i32 && (fitted.3 - fitted.1) <= room_height as i32,
+        "the picture is fitted into the room: {}x{} of {room_width}x{room_height}",
+        fitted.2 - fitted.0,
+        fitted.3 - fitted.1
+    );
+
+    stand_pin(previous_pin);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// **A cold page is laid out at the share its `Scaling` row names**, whether it is a page of text or a PDF: a
+/// page has no size of its own to be fitted into the pointer's wedge, so the display's room is what the share
+/// is of, and `By Screen 75%` is three quarters of the `Fit to Screen` answer.
+///
+/// The share reaches the cold pin by two roads, and both are the hover's own: a text page's share is the
+/// room its measure wraps it to (see `text_box_room`), and a PDF's is the reduction `fit_reduced` puts on
+/// the fit (see `a_cold_pins_box`, which fits what the measure answered at `hover_preview_scale`).
+#[test]
+fn a_cold_page_is_laid_out_at_the_scaling_share_of_the_room() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-cold-pin-page");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let page = folder.join("a page.txt");
+    std::fs::write(&page, "word ".repeat(500)).expect("a written page");
+    let document = folder.join("a page.pdf");
+    std::fs::write(&document, b"%PDF-1.4 a page nothing has read").expect("a written document");
+
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1000,
+        bottom: 800,
+    };
+    let dpi = TEST_DPI;
+    let wait = crate::readers::office_preview::WAITING_BOX as i32;
+    let quarter = |box_: ScreenRegion| (box_.2 - box_.0, box_.3 - box_.1);
+
+    let at = |text: PreviewScale, ebook: PreviewScale| {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        config.text_scale = text;
+        config.ebook_scale = ebook;
+    };
+
+    let text_room = pinned_room(
+        bounds,
+        dpi,
+        pin_transport_kind(Some(MediaType::Text)),
+        pin_overlay_chrome(Some(MediaType::Text), false),
+        pinned_caption_height(dpi, Some(MediaType::Text)),
+    );
+
+    // What the measure answers for the page at each share, which is the box the take-up is laid out for
+    // (see `text_box`).
+    at(PreviewScale::FitToScreen, PreviewScale::FitToScreen);
+    let fit_shape = text_box_room(bounds);
+    let fit = a_cold_pins_box(&page, fit_shape, bounds, dpi);
+
+    at(PreviewScale::Percent(75), PreviewScale::Percent(75));
+    let three_shape = text_box_room(bounds);
+    let three_quarters = a_cold_pins_box(&page, three_shape, bounds, dpi);
+
+    assert_eq!(
+        three_shape,
+        (fit_shape.0 * 3 / 4, fit_shape.1 * 3 / 4),
+        "`By Screen 75%` measures a page in three quarters of the room `Fit to Screen` gives it"
+    );
+
+    // The page has no shape of its own to be fitted into a bound, so what a cold pin gives it is the room
+    // the pin has: the page's own box, fitted into the display less the pin's chrome, rather than into the
+    // wedge of screen beside a hand (see `pin_keeps_its_box` and `a_cold_pins_box`).
+    let (room_width, room_height) = text_room.room();
+    assert!(
+        quarter(fit).1 == room_height as i32 && quarter(fit).0 <= room_width as i32,
+        "a cold pin of a text page fills the room the pin has ({room_width}x{room_height}) rather than \
+         standing in the wedge beside a hand: {:?}",
+        quarter(fit)
+    );
+    assert_eq!(
+        quarter(three_quarters),
+        (three_shape.0 as i32, three_shape.1 as i32),
+        "and at `By Screen 75%` the page is the smaller box its measure wrapped: {:?}",
+        quarter(three_quarters)
+    );
+    assert_ne!(
+        quarter(three_quarters),
+        (wait, wait),
+        "and never the spinner's box"
+    );
+
+    // A PDF is a page with a shape of its own: a fit is that shape at the largest size the room holds, and a
+    // reduced fit is three quarters of it.
+    let pdf_shape = (600u32, 800u32);
+    at(PreviewScale::FitToScreen, PreviewScale::FitToScreen);
+    let pdf_fit = a_cold_pins_box(&document, pdf_shape, bounds, dpi);
+    at(PreviewScale::FitToScreen, PreviewScale::Percent(75));
+    let pdf_three_quarters = a_cold_pins_box(&document, pdf_shape, bounds, dpi);
+
+    let room = pinned_room(
+        bounds,
+        dpi,
+        pin_transport_kind(Some(MediaType::Pdf)),
+        pin_overlay_chrome(Some(MediaType::Pdf), false),
+        pinned_caption_height(dpi, Some(MediaType::Pdf)),
+    );
+    assert_eq!(
+        quarter(pdf_fit).1,
+        room.bottom - room.top,
+        "a PDF at `Fit to Screen` is fitted to the whole height of the display's room"
+    );
+    assert!(
+        (quarter(pdf_three_quarters).1 - quarter(pdf_fit).1 * 3 / 4).abs() <= 1,
+        "and at `By Screen 75%` it is three quarters of that: {} of {}",
+        quarter(pdf_three_quarters).1,
+        quarter(pdf_fit).1
+    );
+    assert_ne!(
+        quarter(pdf_fit),
+        (wait, wait),
+        "and never the spinner's box"
+    );
+
+    at(
+        crate::config::config::DEFAULT_TEXT_SCALE,
+        crate::config::config::DEFAULT_EBOOK_SCALE,
+    );
+
+    stand_pin(previous_pin);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// **A film whose probe has not answered raises no window**, and what is asked for is the probe: the box a cold
+/// pin stands at is the one the file really has, and the spinner the probe answers with is no box at all (see
+/// `a_cold_pins_shape` and `a_cold_pins_file_is_owed`).
+#[test]
+fn a_cold_film_nothing_has_probed_raises_no_window_and_asks_for_the_probe() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+
+    let folder = std::env::temp_dir().join("rust-hover-preview-cold-pin-film");
+    std::fs::create_dir_all(&folder).expect("a test folder");
+    let film = folder.join("a film nothing probed.mp4");
+    std::fs::write(&film, b"a file no probe has seen").expect("a written file");
+
+    let mut waiting = None;
+    let wait = Some((
+        crate::readers::office_preview::WAITING_BOX,
+        crate::readers::office_preview::WAITING_BOX,
+    ));
+    let owed = a_cold_pins_file_is_owed(&film, 3, (1920, 1080), wait, &mut waiting);
+
+    assert_eq!(
+        owed,
+        ColdPinOwed::TheBox,
+        "a film nothing has probed owes the box its probe answers with"
+    );
+    assert_eq!(
+        waiting.as_deref(),
+        Some(film.as_path()),
+        "and the file the loop watches for the answer is written down"
+    );
+    assert_eq!(
+        a_cold_pins_shape(wait, owed),
+        None,
+        "so the spinner's box raises no window: the pin comes up where the probe answers"
+    );
+
+    stand_pin(previous_pin);
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// **A press of the pin key is one window, however many times it is pressed.** With a pin up — standing, or
+/// put away as its bubble — the press is about the window that is there, and a cold take-up of the file under
+/// the hand would be a second window built over the first, a tick after it was built (see
+/// `a_cold_press_raises_a_window`). It is the one window there is, so the answer is about the pin and not
+/// about the file: nothing of the press reaches the take-up at all.
+#[test]
+fn a_cold_press_raises_no_second_window_over_one_that_is_up() {
+    let _room = the_room_to_itself();
+
+    // The pin is process-wide, so what the tests beside this one left standing is put down first.
+    stand_pin(None);
+    assert!(
+        a_cold_press_raises_a_window(),
+        "with nothing pinned, a press is the pin arriving on the file under the hand"
+    );
+
+    let mut pin = PinnedPreview::for_test();
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    assert!(
+        !a_cold_press_raises_a_window(),
+        "a pin put away as its bubble is still the window the press is about"
+    );
+
+    stand_pin(Some(PinnedPreview::for_test()));
+    assert!(
+        !a_cold_press_raises_a_window(),
+        "and a pin standing is owed the answer every press over it gets, not a second window"
+    );
+
+    stand_pin(None);
+    assert!(
+        a_cold_press_raises_a_window(),
+        "and the take-up is the next press's once the window has gone"
+    );
+}

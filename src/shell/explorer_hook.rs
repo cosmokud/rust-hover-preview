@@ -133,11 +133,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 // What the rest of the crate asks for by name.
+#[cfg(test)]
+use main_loop::a_pin_may_stand;
 /// What a ui test drives when it presses a button of the pin's own: the queue the loop drains, answered
 /// by the side that owns the setting. Nothing in this side's own code calls it by that path — the loop is
 /// its caller (see `answer_what_the_preview_side_asked`).
 #[cfg(test)]
 pub(crate) use main_loop::answer_what_the_preview_side_asked;
+#[cfg(test)]
+use main_loop::previews_are_held_back;
 pub use main_loop::run_explorer_hook;
 pub(crate) use probe_trace::window_class_of;
 pub use view_sort::note_explorer_restart;

@@ -5,6 +5,7 @@ mod display;
 mod everything;
 mod file_dialog;
 mod picks;
+mod pin_without_previews;
 mod presses;
 mod q_dir;
 mod view;

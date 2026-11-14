@@ -138,6 +138,11 @@ pub(crate) struct ViewerFacts {
     /// A count of the writes to `pin_path`, odd in the middle of one, so that a reader can tell a name it
     /// read whole from one it read being written.
     pin_path_writing: AtomicU32,
+    /// The file under the pointer, published by the hook so that a pin key pressed with nothing on screen
+    /// to pin has a file to name, in the same shape as `pin_path` (see `publish_the_pointer_file`).
+    pointer_path: [AtomicU32; SEAM_POINTER_PATH_UNITS],
+    pointer_path_len: AtomicU32,
+    pointer_path_writing: AtomicU32,
     /// The five boxes, each packed the way `PublishedRegion` packs one (see there).
     pin_volume_region: AtomicU64,
     pin_fps_region: AtomicU64,
@@ -227,6 +232,9 @@ impl ViewerFacts {
             pin_path: [const { AtomicU32::new(0) }; SEAM_PIN_PATH_UNITS],
             pin_path_len: AtomicU32::new(0),
             pin_path_writing: AtomicU32::new(0),
+            pointer_path: [const { AtomicU32::new(0) }; SEAM_POINTER_PATH_UNITS],
+            pointer_path_len: AtomicU32::new(0),
+            pointer_path_writing: AtomicU32::new(0),
             pin_volume_region: AtomicU64::new(NO_REGION),
             pin_fps_region: AtomicU64::new(NO_REGION),
             text_scroll_region: AtomicU64::new(NO_REGION),
@@ -438,6 +446,10 @@ impl SeamFacts {
 /// How many UTF-16 units of a pin's path the facts carry, which is how long a name a pin can be showing
 /// there (see `publish_the_pinned_path`).
 const SEAM_PIN_PATH_UNITS: usize = SEAM_TEXT_UNITS;
+
+/// How many UTF-16 units of the file under the pointer the facts carry, which is how long a name a cold
+/// pin can be asked for (see `publish_the_pointer_file`): the same bound a pin's own name is carried under.
+const SEAM_POINTER_PATH_UNITS: usize = SEAM_TEXT_UNITS;
 
 /// How many messages one direction's ring holds, which is how far a sender may be behind before a
 /// message is dropped rather than kept.
@@ -948,6 +960,17 @@ pub(crate) enum PreviewMessage {
         path: PathBuf,
         rect: ScreenRegion,
         arriving: bool,
+    },
+    /// The pin key was pressed with no preview on screen to take up: the Explorer hook named the file under
+    /// the pointer, and the pin comes up cold on it.
+    ///
+    /// **It is not a hover, and it is not a pick of the listing's.** `preview_enabled` off is a run with no
+    /// hovers at all, and the pin key in one is the user naming a file: the pin is measured and built here
+    /// from nothing, where every other take-up is built from a preview that is already on screen (see
+    /// `PreviewMessage::Pin` and `take_up_a_cold_pin`). The box is measured beside the hand as the loop reads
+    /// it, which is the reading every placement is made at.
+    PinCold {
+        path: PathBuf,
     },
     /// The pinned window was given another box — maximized, restored, or resized by an
     /// edge — and the media in it is laid out again for that box. It is the same
@@ -2149,6 +2172,7 @@ impl SeamMessage {
     const VIEWER_DETACHED: u8 = 29;
     const PIN_WALK_AGAIN: u8 = 30;
     const PIN_RESTORE: u8 = 31;
+    const PIN_COLD: u8 = 32;
 
     /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
     fn of(tag: u8, numbers: &[i64]) -> Self {
@@ -2263,6 +2287,9 @@ impl SeamMessage {
             PreviewMessage::PinBox(rect) => {
                 let (left, top, right, bottom) = a_box(Some(*rect));
                 Some(Self::of(Self::PIN_BOX, &[left, top, right, bottom]))
+            }
+            PreviewMessage::PinCold { path } => {
+                Self::of(Self::PIN_COLD, &[]).with_text(path.as_os_str().encode_wide())
             }
             PreviewMessage::PinUpdate(path) => {
                 Self::of(Self::PIN_UPDATE, &[]).with_text(path.as_os_str().encode_wide())
@@ -2389,6 +2416,7 @@ impl SeamMessage {
                 arriving: numbers[4] != 0,
             },
             Self::PIN_BOX => PreviewMessage::PinBox(box_of(numbers, 0)),
+            Self::PIN_COLD => PreviewMessage::PinCold { path: self.path()? },
             Self::PIN_UPDATE => PreviewMessage::PinUpdate(self.path()?),
             Self::PIN_PRESS => PreviewMessage::PinPress {
                 window: numbers[0] as isize,
@@ -2872,6 +2900,72 @@ fn a_pinned_path_of(facts: &'static ViewerFacts) -> Option<PathBuf> {
     if facts.pin_path_writing.load(Ordering::Acquire) != before {
         return None;
     }
+
+    Some(PathBuf::from(OsString::from_wide(&units)))
+}
+
+/// Publish the file under the pointer, or `None` where the pointer is on no file: what a pin press names
+/// when there is no preview on screen to take up (see `take_the_pointer_file`).
+///
+/// **The hook resolves it and the viewer pins it, and only one of them may.** A press is counted by a hook
+/// callback that has no window and no media, and what a pin is built from is the viewer's — so the name
+/// crosses, in the shape `publish_the_pinned_path` writes its own in. It is *taken* rather than read on
+/// the far side: a name left standing is a press with nothing under it pinning the file the last press was
+/// over.
+///
+/// **It is the block the hovers are served from and no other** (see `the_serving_facts`): the file under the
+/// pointer is the serving viewer's question wherever a pin stands, which is why this is a `Fact` rather than
+/// a `RunFact`.
+///
+/// shortcut: a path longer than the buffer is published as no path, which is a press that does nothing
+/// rather than one that pins another file's name; upgrade if a user ever meets a path that long.
+pub(crate) fn publish_the_pointer_file(path: Option<&Path>) {
+    let facts = the_serving_facts();
+    // Odd for the length of the write, as `publish_the_pinned_path` is: a reader that sees the count move
+    // takes nothing rather than half of one name and half of another.
+    facts.pointer_path_writing.fetch_add(1, Ordering::AcqRel);
+
+    let mut len = 0;
+    let fits =
+        path.is_some_and(|path| path.as_os_str().encode_wide().count() <= SEAM_POINTER_PATH_UNITS);
+    if let Some(path) = path.filter(|_| fits) {
+        for unit in path.as_os_str().encode_wide() {
+            facts.pointer_path[len].store(u32::from(unit), Ordering::Relaxed);
+            len += 1;
+        }
+    }
+
+    facts.pointer_path_len.store(len as u32, Ordering::Release);
+    facts.pointer_path_writing.fetch_add(1, Ordering::Release);
+}
+
+/// The file under the pointer, taken: `None` where there is none, or where the name was being written when
+/// it was asked for (see `publish_the_pointer_file`).
+///
+/// **Taken, so a stale name can never be pinned twice.** The hook publishes one on the tick a press was
+/// counted and the loop reads it on a tick of its own, so the two are never the same instant; an ask that
+/// had already been answered is not one to answer again.
+pub(crate) fn take_the_pointer_file() -> Option<PathBuf> {
+    let facts = the_serving_facts();
+    let before = facts.pointer_path_writing.load(Ordering::Acquire);
+    if before & 1 == 1 {
+        return None;
+    }
+
+    let len = facts.pointer_path_len.load(Ordering::Acquire) as usize;
+    if len == 0 || len > SEAM_POINTER_PATH_UNITS {
+        return None;
+    }
+
+    let units: Vec<u16> = (0..len)
+        .map(|at| facts.pointer_path[at].load(Ordering::Relaxed) as u16)
+        .collect();
+    if facts.pointer_path_writing.load(Ordering::Acquire) != before {
+        return None;
+    }
+
+    // Cleared before the name is answered, so the answer is the only copy there is.
+    facts.pointer_path_len.store(0, Ordering::Release);
 
     Some(PathBuf::from(OsString::from_wide(&units)))
 }
@@ -3504,6 +3598,7 @@ mod tests {
                 rect: (9, 10, 11, 12),
                 arriving: true,
             },
+            PreviewMessage::PinCold { path: path.clone() },
             PreviewMessage::PinBox((13, 14, 15, 16)),
             PreviewMessage::PinUpdate(path.clone()),
             PreviewMessage::PinPress { window: 4242 },
@@ -3693,6 +3788,33 @@ mod tests {
         at_rest(&facts.viewers[1]);
         facts.viewers[0].owner.store(0, Ordering::Release);
         facts.viewers[1].owner.store(0, Ordering::Release);
+    }
+
+    /// **The file under the pointer is taken, not read** (see `take_the_pointer_file`): a press that has
+    /// already been answered is not one to answer again, and a second tick holding the same name is the same
+    /// press pinning the same file twice.
+    #[test]
+    fn the_file_under_the_pointer_is_taken_once() {
+        let path = Path::new("listing/a file under the hand.png");
+
+        publish_the_pointer_file(None);
+        assert_eq!(
+            take_the_pointer_file(),
+            None,
+            "nothing under the pointer is nothing"
+        );
+
+        publish_the_pointer_file(Some(path));
+        assert_eq!(
+            take_the_pointer_file().as_deref(),
+            Some(path),
+            "the hook's own answer is the file the press names"
+        );
+        assert_eq!(
+            take_the_pointer_file(),
+            None,
+            "once: a stale name can never be pinned twice"
+        );
     }
 
     #[test]
