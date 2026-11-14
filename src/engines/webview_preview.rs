@@ -62,6 +62,8 @@ pub(crate) use pages::{hide, hide_html_preview, place, raise, show, shutdown, wa
 // What the tests below and the pinned-preview tests elsewhere reach for, out of the five
 // submodules this is split across.
 #[cfg(test)]
+pub(crate) use api::stand_the_shown_document_in;
+#[cfg(test)]
 pub(crate) use api::stand_the_shown_page_in;
 #[cfg(test)]
 use api::{drop_placement, take_placement, ENGINE, PLACED, PLACE_ASKED};

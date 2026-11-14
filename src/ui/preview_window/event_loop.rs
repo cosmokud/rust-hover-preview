@@ -262,6 +262,11 @@ pub fn run_preview_window() {
         // until that answer lands, and the engine is asked once per press — a second ask would be a second
         // launch for a page the first one is already writing (see `a_cold_pins_file_is_owed`).
         let mut pin_cold_wait: Option<PathBuf> = None;
+        // The page this loop last raised the pin's window on, for a pin of an engine kind: the window is put
+        // up where the page is drawn rather than at the take-up, and what answers for it is a page the engine
+        // has published (see `the_pins_page_is_on_the_screen` and `show_pinned_window`, which refuses the
+        // show until it has).
+        let mut pin_page_shown: Option<PathBuf> = None;
         // The return a put-away pin is owed once a file it can be shown is on the window: a pick
         // names a file nothing has read yet, and a window put up on the pick shows the file before it
         // for as long as the read and the decode take — the flash the user sees between the two
@@ -3650,6 +3655,9 @@ pub fn run_preview_window() {
                 // A cold pin's wait is the window's too: the engine is writing a page for a pin that is
                 // not there, and the file it was owed is nobody's to load.
                 pin_cold_wait = None;
+                // And the page it was raised on belongs to the window that has gone: the next pin's own page
+                // is what the road below is owed.
+                pin_page_shown = None;
                 // A file a pin that is over was loading is not waited for: the window it was
                 // being shown in has gone, and the answer landing for it would be installed
                 // into a pin that is not there (see `PinLoad`).
@@ -4038,6 +4046,28 @@ pub fn run_preview_window() {
                         }
                     }
                 }
+            }
+
+            // **A pin the window was held back from is owed it the moment its page is drawn.** The
+            // take-up, a swap and a walk all raise the window on a file that is in hand, and a page a
+            // browser draws is not: what stands in the band is the Shell's picture of the page's window,
+            // and a source that has presented nothing is pictured with its window's icon — so
+            // `show_pinned_window` refuses the show until the engine has named the file, and this is the
+            // other half of that refusal (see `the_pins_page_is_on_the_screen`).
+            //
+            // Nothing else asks for the band: the window and the Shell's registration of its picture are
+            // both owed here, and the loop's own record is what keeps one page from being raised twice.
+            match webview_preview::showing_path() {
+                Some(shown) if pinned_path().as_deref() == Some(shown.as_path()) => {
+                    if pin_page_shown.as_deref() != Some(shown.as_path()) {
+                        pin_page_shown = Some(shown);
+                        show_pinned_window(pinned_window());
+                        place_pinned_siblings();
+                    }
+                }
+                // A page that is not the pin's file is nobody's show, and the pin's next page is one to
+                // raise on all the same (see `a_walk_between_documents_keeps_the_viewer`).
+                _ => pin_page_shown = None,
             }
 
             // The pin's window is this app's own to keep on the screen, where Windows is not already

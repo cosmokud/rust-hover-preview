@@ -99,6 +99,23 @@ pub(super) fn the_page_was_placed(content: Option<ScreenRegion>) {
     }
     held.pin = pin.0 as isize;
     held.page = page;
+
+    // **A registration made against a page that has not been drawn is a band the Shell pictures with
+    // the source's own icon** — the default application pictogram, stretched — until the page presents
+    // something. So the Shell is not asked until the page is on the screen (see
+    // `pin_lifecycle::the_pins_page_is_on_the_screen`).
+    //
+    // A registration already standing is never dropped for this: a walk between two pages keeps the page
+    // it is showing up until the next one commits, exactly as the PDF viewer's walk does (see
+    // `engines::pdf_viewer::a_walk_between_documents_keeps_the_viewer`).
+    if !registration_is_owed(
+        held.registration == 0,
+        pin_lifecycle::the_pins_page_is_on_the_screen(),
+    ) {
+        note_pin_trace!("page band: waiting for the page before it is registered");
+        return;
+    }
+
     if held.registration == 0 {
         match unsafe { DwmRegisterThumbnail(pin, HWND(page as *mut _)) } {
             Ok(registration) => held.registration = registration,
@@ -225,9 +242,35 @@ fn the_band_in_the_client(content: ScreenRegion, origin: (i32, i32), client: (i3
     (left, top, (right - left).max(1), (bottom - top).max(1))
 }
 
+/// Whether the Shell is owed a registration this time: a *new* one (`held_registration_is_zero`) waits
+/// for the page it is to draw, and a standing one is kept whatever the answer is (see
+/// `the_page_was_placed`).
+fn registration_is_owed(held_registration_is_zero: bool, page_is_on_the_screen: bool) -> bool {
+    !held_registration_is_zero || page_is_on_the_screen
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fresh registration waits for the page it is to draw, and a standing one is kept: the Shell pictures
+    /// a source that has presented nothing with its window's icon (see `registration_is_owed`).
+    #[test]
+    fn a_registration_waits_for_the_page_and_a_standing_one_is_kept() {
+        assert!(
+            !registration_is_owed(true, false),
+            "a band with no picture behind it yet is no registration"
+        );
+        assert!(
+            registration_is_owed(true, true),
+            "and the page on the screen is the registration the band is owed"
+        );
+        assert!(
+            registration_is_owed(false, false),
+            "a standing registration is never dropped for a page that has not landed"
+        );
+        assert!(registration_is_owed(false, true), "nor for one that has");
+    }
 
     /// **The band is the same rectangle in the pin's client coordinates wherever the pin stands**, which
     /// is the whole of why a drag costs the Shell nothing: the band and the client move together. And a
