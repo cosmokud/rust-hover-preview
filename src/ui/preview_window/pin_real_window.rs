@@ -85,13 +85,33 @@ fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
 /// `pin_film_host::own_the_pin_window`). A window's place in the Shell's lists is asked of the window
 /// rather than of the asker, so it is written with the road and not with the setting.
 ///
+/// Write a window's taskbar bit **and no show**: the road every *arrival* takes, because the show the
+/// pair is about to be given is the one the Shell reads the bit with (see
+/// `pin_film_host::promote_the_hover_film_host` and `pin_lifecycle::show_pinned_window`).
+///
+/// **A bit written this way is read at the window's next show, and that is the price of the road.** A
+/// promotion takes a host that is already on the screen, so its own show here would be a hide and a
+/// re-show — a hole where the film is, which is the flash this road exists to avoid. What the Shell
+/// therefore answers with is the button the pair wore before the take-up: it gains the setting's one at
+/// the next show the host is given, which is the first collapse and restore of the pair or the next
+/// film's own appearance (see `set_the_pin_film_host_visible`, whose show writes the bit again).
+pub(super) unsafe fn write_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
+    if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
+        unsafe { ask_the_window_to_re_read_its_style(hwnd) };
+    }
+}
+
 /// **A button is the Shell's answer to a window being *shown*, and a bit written behind a visible
 /// window's back is not re-read for it.** Measured: a window that stays up wears the button it was
 /// shown with, however the bit is re-read — which is why the pair's button was intermittent. So a
 /// window that is on the screen when its bit changes is put down and up again, which is the show the
-/// Shell reads. A window that is down is left alone: the show it is owed is the one that brings it
-/// (see `pin_film_host::create` and `promote_the_hover_film_host`, which write the bit before any
-/// show rather than paying for one here).
+/// Shell reads.
+///
+/// **That show is paid here and only where no other show is coming.** Every *arrival* writes the bit
+/// through `write_the_pin_window_appwindow` instead: the pair is about to be shown, and that show is
+/// the one the Shell reads it with. A hide paid here is a hole where the pin is — measured, a hover a
+/// pin was taken up from carried one `WM_SHOWWINDOW` 0 and 1 a millisecond apart, and the frames the
+/// compositor made between them were the listing's rows rather than the film.
 pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
     if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
         unsafe { ask_the_window_to_re_read_its_style(hwnd) };
@@ -134,13 +154,12 @@ fn the_pins_own_window(hwnd: HWND) -> bool {
     super::pinned() && super::pinned_window() == hwnd
 }
 
-/// The windows this run has put down and up again so that the Shell reads a taskbar bit: the one
-/// thing this road does that a style write behind a visible window's back cannot, and what a test
-/// holds a road to where the Shell itself cannot be asked (see `set_the_pin_window_appwindow`).
+/// The windows whose taskbar bit this run has paid a show for: the one thing that road does that a
+/// style write behind a visible window's back cannot (see `set_the_pin_window_appwindow`).
 #[cfg(test)]
 static APPWINDOW_SHOWS: std::sync::Mutex<Vec<isize>> = std::sync::Mutex::new(Vec::new());
 
-/// The windows whose taskbar bit this run has paid a show for (see `APPWINDOW_SHOWS`).
+/// The shows this run has put a window down and up again for (see `set_the_pin_window_appwindow`).
 #[cfg(test)]
 pub(super) fn the_appwindow_shows() -> Vec<isize> {
     APPWINDOW_SHOWS

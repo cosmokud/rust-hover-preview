@@ -287,7 +287,7 @@ pub(super) fn chrome_rows_are_hit_testable(overlay: bool) -> bool {
 /// band is the fourth, and the one painted *whole*: Chromium's viewer stands in the middle of
 /// it and the margin the viewer is inset by is the pin's own frame (see
 /// `the_document_holds_the_band` and `PIN_DOCUMENT_MARGIN_PIXELS`).
-pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
+pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) -> bool {
     // The temporary `RHP_RESIZE_TRACE` diagnostic's own clock, taken only where a resize step is being
     // measured (see `pin_resize_probe`).
     let started = pin_resize_probe::a_step_started();
@@ -298,7 +298,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     // a point that moves it arrives as a message on this same thread.
     the_pan_was_drawn();
     let Some(paint) = pinned_paint() else {
-        return;
+        return false;
     };
 
     let (width, height) = (paint.width, paint.height);
@@ -310,7 +310,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         ));
     let rows = height + slack;
     let Some(bits) = ensure_layered_surface(hwnd.0 as isize, width as u32, rows as u32) else {
-        return;
+        return false;
     };
     let stride = width as usize * 4;
     let whole = std::slice::from_raw_parts_mut(bits, stride * rows as usize);
@@ -547,15 +547,68 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
                     // registration that is gone, and a band still claiming that pixel would be the
                     // black rectangle that stands where the film was for the whole rest of the run
                     // (see `pin_film_host::take_the_film_off_the_band`).
-                    if pin_film_host::the_band_is_a_standing_host() {
-                        if let Some(host) = pin_film_host::film_host() {
-                            note_pin_trace!(
+                    // **And where there is no host at all**, which a take-up that adopts a hover's
+                    // film leaves for as long as its promotion is away: the band is a hole with
+                    // nothing of this app's behind it there, so the pin's own black is the only
+                    // truth (see `pin_film_host::the_band_has_no_host`).
+                    // **Except where a take-up took a frame of the film the band stood over**: the
+                    // pin's band is painted from that frame until the host has the picture, so a band
+                    // that is a hole with nothing behind it — or a black one over a host whose client
+                    // has painted nothing since the promotion dropped it — is the film the user was
+                    // already watching rather than the desktop through a window (see
+                    // `pin_film_host::BandStill`).
+                    let still_paints_the_band = film_band_is_hit_testable(media.media_type)
+                        && pin_film_host::a_band_still_stands()
+                        && !pin_film_host::the_host_has_drawn_the_band_still();
+                    let a_film_stands_in_the_band = !still_paints_the_band
+                        && (pin_film_host::the_band_is_a_standing_host()
+                            || (film_band_is_hit_testable(media.media_type)
+                                && pin_film_host::the_band_has_no_host()));
+                    if a_film_stands_in_the_band {
+                        match pin_film_host::film_host() {
+                            Some(host) => note_pin_trace!(
                                 "pin band filled black: host {:?} drawing 0 cover 0",
                                 host,
-                            );
+                            ),
+                            None => note_pin_trace!("pin band filled black: no host"),
                         }
                         fill_band_opaque(out, band_width, band_top.max(0) as u32, band_height);
+                    } else if still_paints_the_band {
+                        let painted = pin_film_host::with_the_pins_band_still(
+                            |pixels, still_width, still_height| {
+                                // The frame is the film's own size and the band is the film's own
+                                // shape, so this is the picture whole rather than a crop of it: the
+                                // same one the registration is about to draw, which is what makes the
+                                // flip to the live picture a step nothing can see (see
+                                // `pin_film_host::BandStill`).
+                                compose_media_into_band(
+                                    pixels,
+                                    still_width,
+                                    still_height,
+                                    (band_width, band_height),
+                                    TransparentBackground::Black,
+                                    true,
+                                    BandTarget {
+                                        out,
+                                        width: band_width,
+                                        origin_y: band_top.max(0) as u32,
+                                        height: band_height,
+                                        frame: (0, 0, band_width as i32, band_height as i32),
+                                        exact: (0.0, 0.0, band_width as f32, band_height as f32),
+                                    },
+                                );
+                                (still_width, still_height)
+                            },
+                        );
+                        if let Some((still_width, still_height)) = painted {
+                            note_pin_trace!(
+                                "pin band painted from the take-up's frame {still_width}x{still_height}"
+                            );
+                        }
                     } else {
+                        if pin_film_host::film_host().is_none() {
+                            note_pin_trace!("pin band left a hole: no host");
+                        }
                         fill_band_hit_testable(
                             out,
                             band_width,
@@ -899,8 +952,11 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
 
-    if let Some(mem_dc) = layered_surface_dc(hwnd.0 as isize) {
-        let _ = UpdateLayeredWindow(
+    // **Whether the surface reached the window**, which is what a caller that is about to show it
+    // needs: a window shown without one is the desktop through an empty frame (see
+    // `show_pinned_window` and `the_pin_paint_is_owed`).
+    let painted = match layered_surface_dc(hwnd.0 as isize) {
+        Some(mem_dc) => UpdateLayeredWindow(
             hwnd,
             None,
             Some(&dst_point),
@@ -910,8 +966,10 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
             COLORREF(0),
             Some(&blend),
             ULW_ALPHA,
-        );
-    }
+        )
+        .is_ok(),
+        None => false,
+    };
 
     // And the strips the chrome stands in, which carry what this paint just painted into their own
     // surfaces — the bitmap carries none of it (see `pin_chrome_strips`): asked here because the
@@ -919,6 +977,7 @@ pub(super) unsafe fn render_pinned_preview_at(hwnd: HWND, x: i32, y: i32) {
     pin_chrome_strips::sync_the_chrome_strips();
     PIN_PAINTS.fetch_add(1, Ordering::Relaxed);
     pin_resize_probe::note_the_paint(started);
+    painted
 
     // As in `render_layered_preview_at`: the hold is the tick's to publish, because a publish
     // per painted frame is what made the 500 ms throttle suppress nothing.

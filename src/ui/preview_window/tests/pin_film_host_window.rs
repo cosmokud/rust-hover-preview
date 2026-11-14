@@ -763,6 +763,53 @@ fn an_ffplay_hover_taken_up_is_moved_into_the_pin_not_begun() {
     );
 }
 
+/// **A take-up on a hover's film holds the pin's band with the frame the film had on the screen**,
+/// so the band is neither this app's black nor a hole onto whatever stands behind the pair (see
+/// `pin_film_host::BandStill`).
+///
+/// The fault this is a regression test for: the pin's band was painted while the take-up had no host
+/// at all, which left it opaque black, and the promotion then put the host at the pin's box with its
+/// client dropped — so every frame the compositor made before the registration landed was read as the
+/// pin appearing before it was ready. What the band carries instead is the film the user was already
+/// watching.
+#[test]
+fn a_take_up_holds_the_pins_band_with_the_frame_the_film_was_showing() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    with_pin(|pin| pin.transport_bar = true);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let pid = VIDEO_PID.load(Ordering::SeqCst);
+
+    // A frame of this app's own making, in the place a hover's player's would have been: one flat
+    // colour, so what the band carries is readable out of the pixels the paint wrote.
+    let a_frame = [70u8, 70, 70, 0].repeat(16 * 16);
+    assert!(
+        pin_film_host::keep_the_band_still(pid, (16, 16), a_frame),
+        "the take-up keeps the frame it was handed"
+    );
+    let (band, top, rows) = the_band_one_paint_left(&film);
+    assert!(rows > 0, "the pin has a band to assert");
+    let carried = band
+        .iter()
+        .filter(|pixel| pixel[3] == 255 && (pixel[0] as i32 - 70).abs() <= 2)
+        .count();
+    assert!(
+        carried > band.len() * 9 / 10,
+        "rows {top}..{} of the pin's bitmap are the taken frame, {} of {} pixels of it",
+        top + rows,
+        carried,
+        band.len()
+    );
+    assert!(
+        !band
+            .iter()
+            .any(|pixel| *pixel == [0, 0, 0, 255] || *pixel == [1, 1, 1, 1]),
+        "and neither the empty host's black nor a hole onto the listing behind the pair"
+    );
+
+    pin_film_host::the_band_still_gives_way();
+}
+
 /// **A take-up on a hover's mpv film takes the hover's own host up as the pin's host**: the same
 /// window, the same player, the same child, and no second decode.
 ///
@@ -2065,8 +2112,11 @@ fn the_strips_belong_to_the_pins_window_not_its_film_host() {
 }
 
 /// The pin's bitmap carries no chrome any more: the caption's and the transport's rows are the
-/// pin's own alpha-1 claim on the point, and the chrome lives in the strips (see
-/// `pin_chrome_strips`).
+/// pin's own claim on the point, and the chrome lives in the strips (see `pin_chrome_strips`).
+///
+/// **The claim of a film's band with no host at it is this app's black and not the least pixel**:
+/// there is nothing of the film's behind the band to be seen through, so the rows are painted
+/// opaque (see `pin_film_host::the_band_has_no_host`).
 #[test]
 fn the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows() {
     let _room = the_room_to_itself();
@@ -2105,7 +2155,7 @@ fn the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows() {
         for column in 0..width as usize {
             assert_eq!(
                 pixel(row, column),
-                &[1, 1, 1, 1],
+                &[0, 0, 0, 255],
                 "row {row} column {column}: the caption's rows are the pin's claim, not its chrome"
             );
         }
@@ -2114,7 +2164,7 @@ fn the_pins_bitmap_carries_no_chrome_only_the_claim_on_its_rows() {
         for column in 0..width as usize {
             assert_eq!(
                 pixel(row, column),
-                &[1, 1, 1, 1],
+                &[0, 0, 0, 255],
                 "row {row} column {column}: the transport's rows are the pin's claim, not its bar"
             );
         }
@@ -3545,6 +3595,10 @@ unsafe fn a_pin_showing_a_registered_film(film: &StandingFilm) -> (HWND, HWND) {
     );
     let source = unsafe { a_players_own_window() };
     unsafe { pin_film_thumbnail::adopt_the_source(source, pid, host) };
+    // **The picture is one the desktop is showing**: a host that is down composes nothing, and the
+    // pin's band over it is this app's black whatever registration stands in it (see
+    // `pin_film_host::the_band_is_a_standing_host`).
+    let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
     assert!(
         pin_film_host::the_host_is_drawing(),
         "the film is the host's picture before the step"
@@ -3965,6 +4019,64 @@ fn a_pin_taken_down_in_a_step_clears_the_band_it_held() {
         }
     }
     unsafe { put_away_a_window_of_the_suite(source) };
+}
+
+/// **A take-up whose listing is one of the pair's own windows is over its listing, by its own
+/// answer**, rather than chased for the whole of a press's grace.
+///
+/// The fault this is a regression test for: `the_listing_a_take_up_was_pressed_in` answers the pin
+/// itself when the foreground is empty or this app's own (pressing middle click a moment after the
+/// hover appeared is exactly that), and a middle press dispatched late is a middle press that
+/// follows it — so the chase asked the pair to stand over the pin's own window and the host's, and
+/// the walk up from the chrome never reaches them. Every tick of the answer raised the pair again:
+/// 201 chases and 132 band flips in 1.5 s of one trace, each flip a band given back under a picture
+/// that had not been repainted (see `keep_pin_at_the_front`).
+#[test]
+fn a_listing_of_the_pairs_own_windows_is_one_the_pair_stands_over() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    let (host, source) = unsafe { a_pin_showing_a_registered_film(&film) };
+
+    assert!(
+        unsafe { the_pair_stands_over(film.pin_hwnd, film.pin_hwnd) },
+        "the pin's own window is the pin's own front, not a window it stands behind"
+    );
+    assert!(
+        unsafe { the_pair_stands_over(film.pin_hwnd, host) },
+        "and the host that carries the picture is the pair's own window too, standing over the \
+         chrome it owns"
+    );
+
+    // And a window that is none of the pair's is answered off the desktop's own order.
+    let in_front = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
+        )
+    };
+    // Safety: both windows are this test's own, and the placement only reads and writes their
+    // z-order. The host is put behind it, and the chrome it owns goes with it.
+    let _ = unsafe {
+        SetWindowPos(
+            host,
+            in_front,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    };
+    let _ = unsafe { DwmFlush() };
+    assert!(
+        !unsafe { the_pair_stands_over(film.pin_hwnd, in_front) },
+        "a window over the pair is a listing the pair does not stand over"
+    );
+
+    unsafe { put_away_a_window_of_the_suite(source) };
+    unsafe { put_away_a_window_of_the_suite(in_front) };
 }
 
 /// **The film a step leaves behind is held where it stands**: mpv is told to pause the player the
@@ -7772,8 +7884,10 @@ fn a_source_with_no_lit_frame_paints_no_cover_and_leaves_the_old_picture_playing
     );
     assert_eq!(
         pin_film_host::host_erases(),
-        erases,
-        "nothing erases the host on the fallback either"
+        erases + 1,
+        "the fallback paints nothing of its own: the one erase is the host's first show, which \
+         writes the black under the picture before the window is on the screen (see \
+         `pin_film_host::erase_the_host_before_the_show`)"
     );
 
     unsafe { put_away_a_window_of_the_suite(source) };
@@ -8270,6 +8384,10 @@ fn a_cover_standing_leaves_the_pins_band_to_the_host() {
         pin_film_host::put_the_cover_in(host, vec![60u8; 8 * 8 * 4], 8, 8),
         "the host takes the still it was decoded for"
     );
+    // **A cover is a picture the desktop is showing, so the host stands on the screen with it**: a
+    // host that is down composes nothing, and this app's black is what the band over it carries (see
+    // `pin_film_host::the_band_is_a_standing_host`).
+    let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
 
     let (band, top, rows) = the_band_one_paint_left(&film);
     assert!(rows > 0, "the pin has a band to assert");
@@ -8374,6 +8492,9 @@ fn an_mpv_film_takes_the_bands_answers_as_they_were() {
         pin_film_host::put_the_cover_in(host, vec![60u8; 8 * 8 * 4], 8, 8),
         "the host takes a cover of this app's"
     );
+    // The cover is a picture on the screen only with the host that carries it up (see
+    // `pin_film_host::the_band_is_a_standing_host`).
+    let _ = unsafe { ShowWindow(host, SW_SHOWNOACTIVATE) };
     let (band, ..) = the_band_one_paint_left(&film);
     assert!(
         band.iter().all(|pixel| *pixel == [1, 1, 1, 1]),

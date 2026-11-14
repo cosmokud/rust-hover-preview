@@ -4,6 +4,8 @@
 use super::pin_trace::{self, note_pin_trace};
 use super::*;
 
+use windows::Win32::Graphics::Dwm::DwmFlush;
+
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
 /// from sleep. What a pin *is* — a window and the media under it — belongs to the
@@ -1769,6 +1771,24 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
                 if begin_the_adopted_film_in_the_host() {
                     with_pin(|pin| pin.chrome = PinChrome::hidden());
                     pin_film_host::arm_pin_handover();
+                    // **The pin is painted here but shown by the handover**: a first paint that
+                    // failed on a window made by this take-up is the one case with no frame to
+                    // show under the wait, and the handover's own show paints again (see
+                    // `pin_film_host::settle_pin_handover`).
+                    render_pinned_preview_at(hwnd, window.0, window.1);
+                    return;
+                }
+
+                // **A film whose player has not drawn yet is not shown over the desktop.** The
+                // band is a hole and the host this take-up has just made has no picture in it, so a
+                // pin shown here is the desktop through a pinned window until the player's window
+                // is adopted — the case a press made the moment a hover's film appeared. The hover
+                // is still the placeholder; the handover shows the pin when the host draws, and a
+                // player that never draws goes down the road a dead film does (see
+                // `pin_film_host::settle_pin_handover` and `the_pin_is_owed_its_first_picture`).
+                if created_now && pin_film_host::the_pin_is_owed_its_first_picture() {
+                    with_pin(|pin| pin.chrome = PinChrome::hidden());
+                    pin_film_host::arm_pin_handover();
                     render_pinned_preview_at(hwnd, window.0, window.1);
                     return;
                 }
@@ -1778,7 +1798,68 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
 
-    render_pinned_preview_at(hwnd, window.0, window.1);
+    // **A window this show made and could not paint is not shown**: there is no earlier frame of
+    // its own to stand in for the surface, so the pin stays down and the tick's own restore asks
+    // again rather than standing an empty frame where the hover was (see `the_pin_owes_a_show`).
+    // A window already on the screen is shown whatever the paint answered: its last frame is the
+    // one the hand sees, and hiding it would be the blink the whole road is for.
+    if !render_pinned_preview_at(hwnd, window.0, window.1) && created_now {
+        return;
+    }
+
+    // **A hover's host is the pin's host before the pin is shown, not after it.** The band is a
+    // hole over the Shell's picture, and while the host is still the hover's the pin's window is a
+    // hole over whatever the compositor has under it — the desktop — until the promotion lands a
+    // tick later. Made the pin's here, where the window it is owned by is still down, the picture is
+    // already the band's before the first composed frame (see
+    // `pin_film_host::promote_the_hover_film_host`).
+    //
+    // **And the band is held by the frame the film had on the screen a moment ago.** The paint above
+    // was the paint of a pin with no host: it left the band this app's black (or a hole with the
+    // listing behind it), and the promotion puts the host at the pin's box with its client dropped, so
+    // the frames the compositor makes of that host before the registration lands are whatever stands
+    // behind it rather than the film — the artifact read as the pin being shown before it was ready.
+    // A frame taken of the player's own device context is the film the user was already watching,
+    // so the band shows it and the live picture takes it over invisibly (see
+    // `pin_film_host::BandStill` and `pin_film_thumbnail::a_frame_of_the_players_picture`).
+    let a_hover_host_was_taken_up = if let Some(host) = the_hover_host {
+        let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
+        if let Some((size, pixels)) = pin_film_thumbnail::a_frame_of_the_players_picture(pid) {
+            pin_film_host::keep_the_band_still(pid, size, pixels);
+            render_pinned_preview_at(hwnd, window.0, window.1);
+        }
+        adopt_the_hovered_film_in_the_host(host);
+        true
+    } else {
+        false
+    };
+
+    // **Everything the show is about to compose is composed before it is shown.** The paint above is
+    // a compositor round trip, and a promotion restyles the host through the one road that puts it
+    // down and up again for its taskbar bit (see `pin_film_host::promote_the_hover_film_host` and
+    // `pin_real_window::set_the_pin_window_appwindow`). A show that reaches the compositor first is
+    // therefore a pin whose band — a near-transparent hole over the film — is composed over a host
+    // that has not presented since: the listing or the desktop the pin was taken up over, showing
+    // through a picture that has not landed. That is what the user reads as the pin being shown
+    // before it was ready, and it is gone in the milliseconds it takes the host to present on its
+    // own — which is why it is an artifact rather than a broken pin.
+    //
+    // **Only for an appearance**, which a show of a window that is already on the screen is not: a
+    // resize step's road would pay a compositor round trip per frame for nothing.
+    if created_now || !on_the_screen || a_hover_host_was_taken_up {
+        let _ = unsafe { DwmFlush() };
+    }
+
+    // **A page is a window of its own, and the window the show is about to close over it is not
+    // the one that carries it.** Placed here, where the pin's window exists and is still down, so
+    // the first composed frame already has the page or its thumbnail in the band rather than the
+    // pin's least pixel over the desktop. The call at the end of this function re-points and
+    // raises, which is what a page that runs needs after the pin is over it (see
+    // `place_pinned_siblings` and `pin_page_thumbnail`).
+    if engine_page_in_the_band().is_some() || the_bands_pdf_viewer_is_owed() {
+        place_pinned_siblings();
+    }
+
     // Where the pin is owed: the topmost band for a pin that is Always On Top or one that owes the
     // front while it follows the listing (see `pin_holds_the_front`), and the ordinary one for one
     // that owes neither. The second is no raise — `HWND_NOTOPMOST` asks for the place a window
@@ -1863,6 +1944,10 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    // **The taken frame's clock starts at the pin's own show**, because the moment the pair is on the
+    // screen is the moment the compositor can be asked to make a frame of it: the still is handed back
+    // to the host's picture only after that (see `pin_film_host::BandStill`).
+    pin_film_host::the_band_still_is_on_the_screen();
     note_pin_trace!(
         "show hwnd {:?} handover {} visible {} rect {:?}",
         hwnd,
@@ -1914,12 +1999,8 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // band is the setting's to say (see `pin_holds_the_front`, `showing_takes_the_band_to_appear` and
     // `band_place`); the keyboard a pin answers is the press's to give it (see `pin_take_focus`).
 
-    // The pin is painted and on the screen over the hover's still-top-level host, and only now is
-    // that host made the pin's: the promotion is the visible handover, and the picture never sits
-    // behind a pin that has not appeared yet.
-    if let Some(host) = the_hover_host {
-        adopt_the_hovered_film_in_the_host(host);
-    }
+    // The pin is painted and on the screen over the host it was given above: the promotion is the
+    // visible handover, and the picture never sits behind a pin that has not appeared yet.
 
     // **And now the hover goes**, painted, shown and settled: from here the pin is what stands in the
     // box, and the window that stood in for it while it was only a hover comes down with nothing left
@@ -2018,12 +2099,24 @@ pub(super) fn the_band_is_nobodys(debt: Option<PinFrontOwed>, now: Instant) -> b
 /// should be. Asked of the chrome alone, that state answers "the pin is over the listing" and nothing
 /// ever answers for the half that is not (see `pin_film_host::place_the_pin_in_the_band` and
 /// `keep_pin_at_the_front`).
+///
+/// **A listing that is one of the pair's own windows is nowhere to be over**, and the answer is yes
+/// for it: a take-up whose foreground was empty or this app's own names the pin as the listing it
+/// was pressed in (see `the_listing_a_take_up_was_pressed_in`), and the host stands *over* the
+/// chrome, so the walk below reads that pair as one that never came over its listing. What that
+/// cost was a chase every tick for the length of the answer, each one taking the topmost band and
+/// giving it back — 132 of them in 1.5 s of one take-up's trace, and the desktop through the band
+/// while each was in flight.
 pub(super) unsafe fn the_pair_stands_over(hwnd: HWND, window: HWND) -> bool {
+    let band_holder = pin_film_host::the_pin_window_that_holds_the_band(hwnd);
+    if window == hwnd || window == band_holder {
+        return true;
+    }
+
     if !unsafe { pin_stands_over(hwnd, window) } {
         return false;
     }
 
-    let band_holder = pin_film_host::the_pin_window_that_holds_the_band(hwnd);
     band_holder == hwnd || unsafe { pin_stands_over(band_holder, window) }
 }
 
