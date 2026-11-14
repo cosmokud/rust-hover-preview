@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A mouse pick on a row's text no longer flashes the listing over the pin** — in voidtools Everything, clicking the *text* of a result row while a pin was up put the pin behind Everything for a moment and then brought it back. The window under the press was read through the `tooltips_class32` popup Everything draws over the row, so the press read as a press in that program's window rather than in the listing: the pin was lowered for it, and the pick the same press made raised it again a tick later. A press on the row's empty space had no tooltip over it and was never read that way, which is why only the text part showed it. The point's own reading now takes a tooltip off the answer and descends into the window below it, for the press road and for the pointer the hook reads, so a hovered row under a tooltip is read again as well.
+
 ## [0.5.6] - 2026-11-13
 
 ### Added

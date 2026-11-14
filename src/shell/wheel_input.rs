@@ -137,7 +137,14 @@ fn note_a_press(point: POINT) {
     }
 
     // Safety: asks the desktop for the window under a point it was given; dereferences nothing.
-    let window = unsafe { WindowFromPoint(point) };
+    //
+    // **And it is the point's own window, not the desktop's hit test.** A tooltip standing over the
+    // row it describes is named by that hit test and is nobody's listing — so a press on the *text* of
+    // a row read through it puts the pin behind the tooltip's program (Everything's, whose rows are
+    // the ones a tooltip is up on) and the pick that press made raises the pin again a tick later: the
+    // listing flashing over the pin for the length of one click, which a press on the row's empty space
+    // never showed because no tooltip stands there (see `the_window_under_the_point`).
+    let window = crate::shell::window_classes::the_window_under_the_point(point);
     let ours = press_is_inside_ours(window, point);
     // **A press that is not ours is the one thing a pin's search field is told about.** This callback
     // stands on every press on the desktop, and a pin takes no activation: a click on another window is

@@ -154,6 +154,12 @@ pub(super) struct PointerTick {
     pub(super) dpi: u32,
     /// The window under the pointer, leaf first: what a frame's views are told apart by
     /// (see `ItemWindow`).
+    ///
+    /// **A tooltip standing over the row it describes is not that window.** It is read through
+    /// `window_classes::the_window_under_the_point` rather than off the desktop's own hit test, so a
+    /// pointer resting on a row's text while a tooltip is up is still the listing's pointer — which
+    /// is the whole of what a pick there needs, and what a hover there used to lose (see
+    /// `the_window_under_the_point`).
     pub(super) window: HWND,
 }
 
@@ -168,7 +174,7 @@ impl PointerTick {
         Self {
             point,
             dpi: monitor_dpi_from_point(point.x, point.y),
-            window: unsafe { WindowFromPoint(point) },
+            window: crate::shell::window_classes::the_window_under_the_point(point),
         }
     }
 }

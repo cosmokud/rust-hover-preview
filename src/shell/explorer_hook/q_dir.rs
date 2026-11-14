@@ -356,9 +356,16 @@ pub(super) fn the_q_dir_list_of(window: HWND) -> Option<HWND> {
 }
 
 /// The list the point's own window is in, where that window is in a Q-Dir pane.
+///
+/// The point's own reading is the window and not the desktop's hit test, so a tooltip standing over
+/// a pane's row is taken off the answer and the row under it is still the pane's (see
+/// `window_classes::the_window_under_the_point`).
 pub(super) fn the_q_dir_list_under(point: POINT) -> Option<HWND> {
-    // Safety: asks the desktop what is drawn at a point of the display; dereferences nothing.
-    the_q_dir_list_of(unsafe { WindowFromPoint(point) })
+    // Safety: asks the desktop what is drawn at a point of the display, with the tooltip that may
+    // stand over it taken off; dereferences nothing.
+    the_q_dir_list_of(crate::shell::window_classes::the_window_under_the_point(
+        point,
+    ))
 }
 
 /// The visible `SysListView32` below `ancestor`, through the `SHELLDLL_DefView` the pane draws its
