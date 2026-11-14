@@ -1147,6 +1147,12 @@ pub fn run_preview_window() {
                     render_layered_preview(hwnd);
                 }
 
+                // **A taken frame holds the pin's band until the host has the picture, and the pass
+                // that lets it go owes the paint that says so** (see `pin_film_host::BandStill`).
+                if pinned() {
+                    pin_film_host::settle_the_band_still();
+                }
+
                 // **A picture that has changed hands in the pin's host is the band painted again**,
                 // and this is the only road that paints it: a film a player draws advances no frame
                 // of this app's, so nothing else on a pinned film's tick would ever ask for this
@@ -3990,6 +3996,15 @@ pub fn run_preview_window() {
             // (see `the_pins_document_is_not_where_it_belongs` and
             // `engines::pdf_viewer::a_placement_is_owed`).
             if the_pins_document_is_not_where_it_belongs() {
+                place_pinned_siblings();
+            }
+
+            // **A page the pin frames is drawn by a registration that is not the pin's own window,
+            // and a registration the Shell refused on the take-up is one nothing else asks for** —
+            // a pin that is not moved makes no second placement (see
+            // `pin_page_thumbnail::the_band_is_owed_a_page`). The band stays the pin's least pixel
+            // until a placement retries, which is the desktop through it.
+            if pin_page_thumbnail::the_band_is_owed_a_page() {
                 place_pinned_siblings();
             }
 

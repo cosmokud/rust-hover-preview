@@ -178,6 +178,33 @@ fn point_the_thumbnail(held: &mut Held, band: Band) -> bool {
     true
 }
 
+/// Whether the pin frames an engine page the Shell is not drawing into it: a page in the band whose
+/// registration is missing, made for another pair, or never pointed at a band.
+///
+/// **A refused registration is a page that never asks again unless this is asked**: the failure is
+/// the Shell's answer to a source that has not presented, which the next placement would answer —
+/// and a pin that is not moved, resized or swapped makes no next placement. The tick reads this and
+/// asks (see `place_pinned_siblings`, and `pin_lifecycle::show_pinned_window` for the take-up).
+pub(super) fn the_band_is_owed_a_page() -> bool {
+    if pin_lifecycle::engine_page_in_the_band().is_none() {
+        return false;
+    }
+    let page = webview_preview::showing_hwnd();
+    if page == 0 {
+        return false;
+    }
+    let Some(pin) = pin_real_window::real_pin_window() else {
+        return false;
+    };
+    let Ok(held) = PAGE_THUMBNAIL.lock() else {
+        return false;
+    };
+    held.registration == 0
+        || held.shown.is_none()
+        || held.pin != pin.0 as isize
+        || held.page != page
+}
+
 /// Let the registration go, keeping the pin and the page it was made for: what a pin going down, a pin
 /// swapping the page for a picture, and a pin whose band no longer holds a page all owe the Shell.
 pub(super) fn forget_the_page_thumbnail_because(reason: &str) {
