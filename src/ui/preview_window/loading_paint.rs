@@ -117,6 +117,27 @@ pub(super) fn create_loading_media(width: u32, height: u32) -> MediaData {
     }
 }
 
+/// The same wait for a file whose kind is already known: the arc and nothing else of the file, carrying
+/// the kind so that a pin taken up cold asks its chrome — the caption, the bar, the band — of the file
+/// rather than of a spinner (see `take_up_a_cold_pin` and `take_up_pinned_window`).
+///
+/// `None` is a file nothing here names a kind for, which is the spinner as it always was; the install
+/// that follows renews the pin with the media the loader really answered, so a kind anticipated here
+/// and wrong is one frame of chrome and no more.
+pub(super) fn create_loading_media_of_kind(
+    width: u32,
+    height: u32,
+    kind: Option<MediaType>,
+) -> MediaData {
+    match kind {
+        Some(kind) => MediaData {
+            media_type: kind,
+            ..create_loading_media(width, height)
+        },
+        None => create_loading_media(width, height),
+    }
+}
+
 /// The pin's own arc, in the window's own pixels: how large its ring is, how thick it is, how
 /// far its halo reaches past it, and how far past that the box it is walked in has to go.
 ///

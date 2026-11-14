@@ -312,6 +312,17 @@ pub(crate) fn stand_the_shown_page_in(runs: bool) {
     RUNNING_DOCUMENT.store(runs, Ordering::Release);
 }
 
+/// Stand the document the engine's window is showing — and whether it is showing one at all — in for a test
+/// whose subject is a file the engine has published or has not (see `showing_path` and `is_showing`). `None`
+/// is the answer for a machine with no page on screen, which is what a test leaves behind it.
+#[cfg(test)]
+pub(crate) fn stand_the_shown_document_in(path: Option<&Path>) {
+    if let Ok(mut shown) = SHOWN.lock() {
+        *shown = path.map(Path::to_path_buf);
+    }
+    SHOWING.store(path.is_some(), Ordering::Release);
+}
+
 /// Where the engine's window is, when it has one on screen: the box the document was
 /// last handed over in, in screen coordinates.
 ///

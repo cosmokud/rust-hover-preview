@@ -1665,6 +1665,26 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         return;
     }
 
+    // **A window put up before the page has been drawn is a window with a placeholder in its band.** What
+    // fills a pin's band is the Shell's picture of the page's window, and a source that has presented
+    // nothing is drawn as its window's icon — the giant default application pictogram a cold pin of an
+    // HTML page or a specimen showed until the browser finally painted. So nothing of the pin goes up until
+    // the page is there, and what raises it then is the loop's page road (see
+    // `the_pins_page_is_on_the_screen` and `event_loop`'s `pin_page_shown`).
+    //
+    // A pin already on the screen keeps it: every other caller of this is a walk, a swap, a restore or a
+    // band change, and all of them arrive with the window up.
+    if !the_pins_page_is_on_the_screen() {
+        note_pin_trace!(
+            "pin window: waiting for the page of {}",
+            pinned_path()
+                .as_deref()
+                .map(pin_trace::path_name)
+                .unwrap_or_else(|| "-".to_string())
+        );
+        return;
+    }
+
     let Some((window, width, height)) = pinned_window_box() else {
         return;
     };
@@ -3515,6 +3535,26 @@ pub(super) fn engine_page_in_the_band() -> Option<(PathBuf, ScreenRegion)> {
 /// on it is the pin's own and the pin is raised by the click that landed on it like any other kind.
 pub(super) fn a_running_page_holds_the_band() -> bool {
     engine_page_in_the_band().is_some() && webview_preview::the_shown_page_runs()
+}
+
+/// Whether the page a pin is standing on is on the screen, which is what a pin of an engine kind waits for
+/// before anything of it is raised.
+///
+/// A page a pin is standing on is a window the browser draws, and the engine names its file only once the
+/// page is on the screen (`webview_preview::showing_path`), which is the same gate the hover road puts a
+/// document's window up by. A pin put up on a source that has presented nothing is a band the Shell fills
+/// with its own picture of that source — a window's icon, which is the system's default application
+/// pictogram for the engine's class — so the window is owed the page rather than the wait (see
+/// `show_pinned_window`).
+///
+/// Every other answer is yes: no pin at all, a pin of a kind the engine does not draw, and a pin whose file
+/// the engine has already published.
+pub(super) fn the_pins_page_is_on_the_screen() -> bool {
+    if !pinned() || !current_media_type().is_some_and(|kind| kind.is_engine()) {
+        return true;
+    }
+
+    webview_preview::is_showing() && webview_preview::showing_path() == pinned_path()
 }
 
 /// The media box of the pin that is up, or nothing when there is no pin or it is collapsed: a

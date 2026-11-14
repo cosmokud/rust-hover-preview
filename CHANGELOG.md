@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **A pin can be taken up with previews turned off** — `Enable Preview` off used to mean no hover, and a pin key pressed in that run therefore nothing at all. `Pin Mode → Enable` is a setting of its own, so the pin key now names the file under the pointer and the pin comes up cold on it: the box is measured from the file rather than from a hover that never existed, and the file is loaded into the window on the tick after. A press on a folder, a gap between rows, or a file nothing previews still does nothing. Written `pin_enabled`, `preview_enabled` in `config.ini`.
+
+### Fixed
+
+- **`Enable Preview` no longer takes a standing pin down** — the two rows are different settings, and the row about hovers was ending a window the user had put there: only `Pin Mode → Enable` off, the pin's own close button, or its media going away ends it now. The trigger key still takes a pin down where `Affect Pin Mode` asks for it.
+- **A cold pin of an HTML page or a font no longer flashes the default application icon** — the window was put up before the browser had drawn anything, and the band it framed was the Shell's picture of an engine window that had presented nothing, which the Shell draws as that window's icon: the giant blue-and-white `.exe` pictogram, standing there for as long as the page took. Nothing of the pin goes up until the page is on the screen now (`the_pins_page_is_on_the_screen`, which `show_pinned_window` and a fresh page registration both wait on), and the loop's own page road raises the window and draws the band in the same pass the engine names its file. A pin already on the screen keeps it, so a walk between two pages is unchanged.
+
 ## [0.5.6] - 2026-11-13
 
 ### Added
