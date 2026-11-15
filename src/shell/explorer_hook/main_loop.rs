@@ -144,7 +144,7 @@ pub fn run_explorer_hook() {
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
 
-    let (mut config_snapshot, mut trigger_binding, mut trigger_key_seen) = CONFIG
+    let mut config_snapshot = CONFIG
         .lock()
         .map(|c| {
             let snapshot = (
@@ -159,13 +159,6 @@ pub fn run_explorer_hook() {
                 c.tick_ms,
                 c.pin_enabled,
             );
-            // Resolved once per config change instead of once per tick: what the tick
-            // compares is the spelling, and a spelling that has not changed is a key that
-            // has not changed (see the snapshot below).
-            let binding = crate::shell::key_binding::parse_or_default(
-                &c.trigger_key,
-                crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
-            );
             // The dialog switch is published rather than kept here: the press road and the pin's
             // placement ask it from low-level callbacks, which may take no lock (see
             // `app::seam::BROWSE_DIALOG_PREVIEWS`), and Everything's and Q-Dir's with it (see
@@ -173,26 +166,19 @@ pub fn run_explorer_hook() {
             crate::app::seam::publish_browse_dialog_previews(c.browse_dialog_preview_enabled);
             crate::app::seam::publish_everything_previews(c.everything_previews);
             crate::app::seam::publish_q_dir_previews(c.q_dir_previews);
-            (snapshot, binding, c.trigger_key.clone())
+            snapshot
         })
         .unwrap_or((
-            (
-                true,
-                DEFAULT_HOVER_DELAY_MS,
-                TriggerKeyMode::Disable,
-                DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
-                DEFAULT_SETTLING_DELAY_MS,
-                true,
-                true,
-                DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
-                DEFAULT_TICK_MS,
-                true,
-            ),
-            crate::shell::key_binding::parse_or_default(
-                "",
-                crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
-            ),
-            "alt".to_string(),
+            true,
+            DEFAULT_HOVER_DELAY_MS,
+            TriggerKeyMode::Disable,
+            DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+            DEFAULT_SETTLING_DELAY_MS,
+            true,
+            true,
+            DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
+            DEFAULT_TICK_MS,
+            true,
         ));
     let mut explorer_probe_backoff_until: Option<Instant> = None;
     let mut last_display_signature = current_display_signature();
@@ -430,18 +416,6 @@ pub fn run_explorer_hook() {
                 config.tick_ms,
                 config.pin_enabled,
             );
-            // The trigger key is resolved when it is *spelled* differently, not every
-            // tick: what the tick does with it is read a key's state, and lower-casing a
-            // name and looking it up again is work a setting that has not changed does not
-            // need. The comparison is a string compare and costs no allocation; the clone
-            // behind it happens once per change.
-            if config.trigger_key != trigger_key_seen {
-                trigger_key_seen = config.trigger_key.clone();
-                trigger_binding = crate::shell::key_binding::parse_or_default(
-                    &config.trigger_key,
-                    crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
-                );
-            }
         }
 
         let preview_enabled = config_snapshot.0;
@@ -474,7 +448,7 @@ pub fn run_explorer_hook() {
             // `a` is a letter in Chromium's search box, and read here it would hold every preview and
             // end the pin the box is in (see `a_documents_window`).
             && !a_documents_window(unsafe { GetForegroundWindow() })
-            && crate::shell::key_binding::binding_is_active(&trigger_binding);
+            && crate::shell::key_input::trigger_is_held();
         let previews_allowed =
             !trigger_key_enabled || trigger_key_mode.allows_previews(trigger_key_down);
 

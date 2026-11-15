@@ -38,6 +38,8 @@ use crate::engines::pdf_viewer::a_documents_window;
 use crate::shell::explorer_hook::{a_win_key_is_down, the_shift_key_is_down};
 use crate::CONFIG;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::Instant;
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, HC_ACTION, KBDLLHOOKSTRUCT, WH_KEYBOARD_LL, WM_KEYDOWN,
@@ -53,6 +55,34 @@ static PIN_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
 /// for the same reason.
 static TOGGLE_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
     [const { AtomicU64::new(0) }; crate::shell::key_binding::MAX_ALTERNATIVES];
+
+/// The chords the trigger key is bound to, packed the same way, and the hook's own latch of
+/// whether each one's main key is down — a bit per slot, as the pin key's is.
+///
+/// **The trigger key is read by two hands because one of them can be taken away.** The tick's own
+/// read is `GetAsyncKeyState`, which asks the keyboard state Windows keeps, and a program between
+/// the keyboard and the desktop — AutoHotkey, PowerToys' Keyboard Manager, a vendor driver — can
+/// swallow or re-send an `Alt` so that the state never says what the hand is doing. This hook already
+/// sees the same keys on their way past, so it latches the edges it does see, and what the tick reads
+/// is the latch **or** the poll: an edge either hand missed is the other hand's to answer.
+static TRIGGER_CHORDS: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
+    [const { AtomicU64::new(0) }; crate::shell::key_binding::MAX_ALTERNATIVES];
+
+/// The trigger chords' main keys, a bit per slot, as the hook last saw them.
+static TRIGGER_MAIN_DOWN: AtomicU32 = AtomicU32::new(0);
+
+/// **Two clocks would be one too many.** `refresh` starts this one, so the callback only reads a
+/// number and no clock is ever made on the hook's path.
+static TRIGGER_LAST_EDGE_MS: AtomicU64 = AtomicU64::new(0);
+
+static TRIGGER_CLOCK_ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+/// **A latch nobody lets go of is a preview nobody gets.** A key released while another program had
+/// the foreground, or a hook the OS removed without saying so, leaves a bit standing with nothing
+/// holding it, and the trigger key would hold every preview back for the rest of the run. So a bit
+/// the hook has not touched for this long is checked against the poll: a key the poll says is down
+/// is a hand still on it, and one it says is not is a latch nobody let go of.
+const A_LATCH_RESYNCS_AFTER_MS: u64 = 200;
 
 /// Pin-key presses, the preview shortcut's own count beside it, and whether each chord's main key is
 /// held — a bit per `PIN_CHORDS` slot, which is what tells a press from a repeat.
@@ -447,31 +477,60 @@ fn spelled_key_to_vk(key: &str) -> Option<i32> {
 /// by the tray's own toggle — a low-level hook may not take a lock, so what it
 /// reads is this number rather than the configuration itself.
 pub(crate) fn refresh() {
-    let (wanted, toggle_wanted) = CONFIG
+    let (wanted, toggle_wanted, trigger_wanted) = CONFIG
         .lock()
         .map(|config| {
             let pin = if config.pin_enabled {
-                let binding = crate::shell::key_binding::parse_or_default(
+                let binding = crate::shell::key_binding::parse_or_default_saying(
                     &config.pin_key,
                     crate::shell::key_binding::DEFAULT_PIN_KEY,
+                    "pin_key",
                 );
                 crate::shell::key_binding::packed_binding(&binding)
             } else {
                 [0; crate::shell::key_binding::MAX_ALTERNATIVES]
             };
-            let toggle = crate::shell::key_binding::parse_or_default(
+            let toggle = crate::shell::key_binding::parse_or_default_saying(
                 &config.toggle_key,
                 crate::config::config::DEFAULT_TOGGLE_KEY,
+                "toggle_key",
             );
-            (pin, crate::shell::key_binding::packed_binding(&toggle))
+            // A trigger key switched off binds nothing, exactly as the pin key does when its feature
+            // is off: a key the user turned off holds nothing back, and the tick's own switch asks
+            // the setting again before it reads this (see `explorer_hook::main_loop`).
+            let trigger = if config.trigger_key_enabled {
+                let binding = crate::shell::key_binding::parse_or_default_saying(
+                    &config.trigger_key,
+                    crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
+                    "trigger_key",
+                );
+                crate::shell::key_binding::packed_binding(&binding)
+            } else {
+                [0; crate::shell::key_binding::MAX_ALTERNATIVES]
+            };
+            (
+                pin,
+                crate::shell::key_binding::packed_binding(&toggle),
+                trigger,
+            )
         })
         .unwrap_or((
             [0; crate::shell::key_binding::MAX_ALTERNATIVES],
             [0; crate::shell::key_binding::MAX_ALTERNATIVES],
+            // The trigger key's own fallback rather than nothing: the setting was never read, so
+            // leave the run with the binding it would have had rather than with a dead key.
+            crate::shell::key_binding::packed_binding(
+                &crate::shell::key_binding::parse_or_default(
+                    "",
+                    crate::shell::key_binding::DEFAULT_TRIGGER_KEY,
+                ),
+            ),
         ));
 
+    TRIGGER_CLOCK_ORIGIN.get_or_init(Instant::now);
     install_chords(&PIN_CHORDS, &PIN_MAIN_DOWN, wanted);
     install_chords(&TOGGLE_CHORDS, &TOGGLE_MAIN_DOWN, toggle_wanted);
+    install_chords(&TRIGGER_CHORDS, &TRIGGER_MAIN_DOWN, trigger_wanted);
 }
 
 /// Put a packed binding into the table the hook reads, clearing the down bits when a key
@@ -597,17 +656,118 @@ fn note_key_edge(
 
 /// The `PIN_CHORDS` slots whose main key is `vk`, as one bit each.
 fn pin_main_slots(vk: i32) -> u32 {
-    PIN_CHORDS
+    main_slots_of(&PIN_CHORDS, vk)
+}
+
+/// The slots of any chord table whose main key is `vk`, as one bit each, read off the packed table
+/// the hook maintains so that no callback has to take a lock.
+fn main_slots_of(chords: &[AtomicU64], vk: i32) -> u32 {
+    chords.iter().enumerate().fold(0, |slots, (index, slot)| {
+        let packed = slot.load(Ordering::Acquire);
+        if packed != 0 && crate::shell::key_binding::packed_main(packed) == vk {
+            slots | (1u32 << index)
+        } else {
+            slots
+        }
+    })
+}
+
+/// Whether any bound trigger chord's main key is latched down, which is the hook's own half of
+/// the question `trigger_is_held` answers.
+fn the_latch_holds_a_trigger_key() -> bool {
+    let down = TRIGGER_MAIN_DOWN.load(Ordering::Acquire);
+    TRIGGER_CHORDS
         .iter()
         .enumerate()
-        .fold(0, |slots, (index, slot)| {
-            let packed = slot.load(Ordering::Acquire);
-            if packed != 0 && crate::shell::key_binding::packed_main(packed) == vk {
-                slots | (1u32 << index)
-            } else {
-                slots
-            }
-        })
+        .any(|(index, slot)| down & (1u32 << index) != 0 && slot.load(Ordering::Acquire) != 0)
+}
+
+/// The other half: whether the poll says any trigger chord is held in full right now.
+fn trigger_poll_is_down() -> bool {
+    TRIGGER_CHORDS
+        .iter()
+        .any(|slot| crate::shell::key_binding::packed_held(slot.load(Ordering::Acquire)))
+}
+
+/// Latch a trigger chord's edge, and nothing else: no count, no swallow, no lock, no desktop call.
+///
+/// **The key still reaches Explorer.** The latch is cleared on the release rather than held until
+/// the tick looks, and the tick's poll is the second half of the read for the edges this hook is
+/// never given (see `trigger_is_held`).
+fn note_trigger_edge(chords: &[AtomicU64], main_down: &AtomicU32, vk: i32, down: bool) {
+    let slots = main_slots_of(chords, vk);
+    if slots == 0 {
+        return;
+    }
+
+    if down {
+        main_down.fetch_or(slots, Ordering::AcqRel);
+    } else {
+        main_down.fetch_and(!slots, Ordering::AcqRel);
+    }
+    // Stamped whether the edge was a press or a release, because the stamp is what tells the read
+    // whether this hook is still being given those edges at all.
+    TRIGGER_LAST_EDGE_MS.store(this_runs_ms(), Ordering::Release);
+}
+
+/// This run's milliseconds, for the edge stamp: `refresh` starts the clock, and the callback only
+/// reads it, so no clock is created inside a hook.
+fn this_runs_ms() -> u64 {
+    TRIGGER_CLOCK_ORIGIN
+        .get()
+        .map_or(0, |origin| origin.elapsed().as_millis() as u64)
+}
+
+/// How long ago the hook last saw a trigger chord's edge, or `None` in a run that has seen none.
+fn the_hook_saw_an_edge_ago(now_ms: u64) -> Option<u64> {
+    match TRIGGER_LAST_EDGE_MS.load(Ordering::Acquire) {
+        0 => None,
+        seen_at => Some(now_ms.saturating_sub(seen_at)),
+    }
+}
+
+/// Whether a latched chord may still be read as held, from how long ago the hook last saw an edge
+/// of a trigger chord and whether the poll says one is down.
+///
+/// A latch the hook touched recently is a hand it watched arrive, and the poll is not asked; one it
+/// has not touched is either a hand resting on a key Windows is giving this hook no repeats of, or a
+/// release the hook was never given — and only the poll can say which (see
+/// `A_LATCH_RESYNCS_AFTER_MS`).
+fn the_latch_still_stands(seen_ago: Option<u64>, poll_down: bool) -> bool {
+    match seen_ago {
+        Some(ago) => poll_down || ago < A_LATCH_RESYNCS_AFTER_MS,
+        None => poll_down,
+    }
+}
+
+/// Whether the trigger key is held right now: the hook's latch of the edge it saw, or the poll of
+/// the keyboard state where it saw none.
+///
+/// **Both hands are asked because either can be denied the key.** A remap program between the
+/// keyboard and the desktop can keep `GetAsyncKeyState` from ever agreeing that `Alt` is down, or
+/// keep this hook from ever being given its release; the OR is what leaves the trigger key working
+/// under the first and the resync under the second.
+///
+/// The resync is lazy — done inside this read — because the read is the only thing that can afford
+/// it: a timer would be a thread kept for a comparison, and a lock is what a hook cannot take. The
+/// poll is asked only once the hook has been quiet long enough for a latch to be suspect, so a tick
+/// spent with the key up touches nothing but a number.
+pub(crate) fn trigger_is_held() -> bool {
+    if !the_latch_holds_a_trigger_key() {
+        return trigger_poll_is_down();
+    }
+
+    if the_latch_still_stands(
+        the_hook_saw_an_edge_ago(this_runs_ms()),
+        trigger_poll_is_down(),
+    ) {
+        return true;
+    }
+
+    // The latch outlived the hand that put it there — a release seen by nobody — so it is let go
+    // here, and the tick's next read is the poll's own question rather than this one repeated.
+    TRIGGER_MAIN_DOWN.store(0, Ordering::Release);
+    trigger_poll_is_down()
 }
 
 /// Mark these chords' main keys down and answer whether none of them already was.
@@ -681,6 +841,11 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
         ) {
             crate::app::seam::wake_preview_loop();
         }
+
+        // The trigger key's latch, which is a state rather than a press: nothing is counted and
+        // nothing is swallowed here, and a key pressed in another program is latched too, because
+        // what the tick asks is whether the hand is still on it (see `trigger_is_held`).
+        note_trigger_edge(&TRIGGER_CHORDS, &TRIGGER_MAIN_DOWN, vk, down);
     }
 
     let main_slots = pin_main_slots(vk);
@@ -795,6 +960,75 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The latch is the hook's half of the trigger key and the poll is the other's.** A press the
+    /// hook is shown stands until the hook is shown its release, and the stamp of when it was last
+    /// shown an edge is what the tick reads to decide whether the poll gets to disagree with it.
+    #[test]
+    fn a_latch_resyncs_when_it_was_not_seen_for() {
+        assert!(
+            the_latch_still_stands(Some(0), false),
+            "an edge the hook has just seen is a hand, whatever the poll says"
+        );
+        assert!(the_latch_still_stands(
+            Some(A_LATCH_RESYNCS_AFTER_MS - 1),
+            false
+        ));
+        assert!(
+            !the_latch_still_stands(Some(A_LATCH_RESYNCS_AFTER_MS), false),
+            "a latch the hook has been quiet about for long is let go where the poll says up"
+        );
+        assert!(
+            the_latch_still_stands(Some(A_LATCH_RESYNCS_AFTER_MS), true),
+            "a hand still on the key is a hand the poll can see"
+        );
+        assert!(!the_latch_still_stands(None, false));
+        assert!(the_latch_still_stands(None, true));
+    }
+
+    /// The latch is a bit per slot against the packed table, main key only: the companions are the
+    /// poll's question, so a chord pressed in the wrong order still latches its main key.
+    #[test]
+    fn the_latch_holds_a_trigger_chord_until_its_release_arrives() {
+        let packed = crate::shell::key_binding::packed_binding(
+            &crate::shell::key_binding::parse_binding("ctrl+alt,space").expect("a binding"),
+        );
+        let table: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
+            std::array::from_fn(|index| AtomicU64::new(packed[index]));
+        let down = AtomicU32::new(0);
+
+        assert_eq!(
+            main_slots_of(&table, 0x12),
+            0b1,
+            "`ctrl+alt`'s main key is alt"
+        );
+        assert_eq!(
+            main_slots_of(&table, 0x20),
+            0b10,
+            "the second slot is space"
+        );
+        assert_eq!(
+            main_slots_of(&table, 0x11),
+            0,
+            "ctrl is a companion, not a main key"
+        );
+        assert_eq!(
+            main_slots_of(&table, 0x7A),
+            0,
+            "a key nothing binds is no slot"
+        );
+
+        note_trigger_edge(&table, &down, 0x12, true);
+        note_trigger_edge(&table, &down, 0x20, true);
+        assert_eq!(down.load(Ordering::Acquire), 0b11);
+
+        note_trigger_edge(&table, &down, 0x12, false);
+        assert_eq!(
+            down.load(Ordering::Acquire),
+            0b10,
+            "an alt release is alt's bit only"
+        );
+    }
 
     #[test]
     fn every_key_the_settings_can_name_is_read_the_way_the_file_writes_it() {
