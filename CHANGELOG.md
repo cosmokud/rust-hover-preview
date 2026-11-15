@@ -1,10 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.7] - 2026-11-15
 
 ### Added
 
 - **A pin can be taken up with previews turned off** — `Enable Preview` off used to mean no hover, and a pin key pressed in that run therefore nothing at all. `Pin Mode → Enable` is a setting of its own, so the pin key now names the file under the pointer and the pin comes up cold on it: the box is measured from the file rather than from a hover that never existed, and the file is loaded into the window on the tick after. A press on a folder, a gap between rows, or a file nothing previews still does nothing. Written `pin_enabled`, `preview_enabled` in `config.ini`.
+- **Home and End jump to the ends of a pin's playlist** — with no text page holding caret focus, `Home` and `End` jump directly to the first or last item in the pinned window's playlist or band instead of stepping one by one.
 
 ### Fixed
 
