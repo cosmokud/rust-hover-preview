@@ -780,6 +780,20 @@ pub(in super::super) fn toggle_pin_shuffle(kind: PinShuffle) {
     }
 }
 
+/// Whether a pinned sound's playlist band puts its camera on the file its walk stepped onto — the
+/// `Camera Follows on Seek` row.
+///
+/// Nothing on screen moves for the click itself: the row decides what the *next* step costs the
+/// band's scroll, and the band already up is where the file the hand hears already is. Off, the
+/// rows are the same list of the same files and the pin the same walk; what is given up is the
+/// scroll that goes looking for the row the step landed on (see `pin_playlist`).
+pub(in super::super) fn toggle_pin_camera_follows() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_mode_audio_camera_follows = !config.pin_mode_audio_camera_follows;
+        config.save();
+    }
+}
+
 pub(in super::super) fn set_follow_cursor(follow: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         config.follow_cursor = follow;

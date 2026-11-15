@@ -350,6 +350,17 @@ impl PinPlaylist {
     /// stays on its last, because a list scrolled past its own ends is a band with the file on it
     /// somewhere off the window.
     ///
+    /// Whether the file the pin is showing is a row the band already draws, at the scroll it stands
+    /// at: a file a step landed on that is in sight is a file there is nothing to go looking for,
+    /// and the camera is left exactly where it is (see `STEPPED`).
+    fn the_showing_row_is_in_sight(&self, visible: usize) -> bool {
+        let Some(position) = self.showing.and_then(|row| self.position_of_row(row)) else {
+            return true;
+        };
+
+        position >= self.scroll && position < self.scroll + visible.max(1)
+    }
+
     /// **This is where a band opens**, and it is what keeps a playlist the pin was taken up in the
     /// middle of from being drawn from the top of the folder: the rows are the walk's, in walk order,
     /// and the file the pin came up on can be any of them. **And it is where a band is put on every
@@ -554,6 +565,17 @@ pub(super) fn the_row_a_band_opens_on(rows: usize, showing: usize, visible: usiz
 /// where it stands for every other (see `STEPPED` and `park_the_showing_row`).
 pub(super) fn the_camera_follows_the_walk() {
     STEPPED.store(true, Ordering::Release);
+}
+
+/// Whether a step is what the band's camera follows at all — `Audio → Pin Mode → Playlist →
+/// Camera Follows on Seek`, on where the app starts (see `DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS`).
+/// Read once per reconcile rather than cached: the row is a click away and the band it is about is
+/// the one already up, so the next step is the first thing it can be true of.
+fn the_camera_follows_a_seek() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_mode_audio_camera_follows)
+        .unwrap_or(DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS)
 }
 
 /// The band this pin carries, as the row it begins at and how tall it is, or nothing where the pin
@@ -835,14 +857,27 @@ pub(super) fn refresh_the_rows() -> bool {
     // listing made, a file dropped on the pin: the hand is looking at the band it named the file in,
     // and the rows a filter reworks under it — its facts landing — are read at the scroll it left, with
     // only the rows that mean something brought back into sight (see `keep_the_selection_in_sight`).
-    let stepped = STEPPED.swap(false, Ordering::AcqRel);
+    //
+    // **And a step the camera follows is nothing to do where the row is in sight already**: a walk
+    // that lands on a row the band is drawing is a row the hand can read where it stands, so the
+    // scroll is left exactly where it is rather than sent down the list for the middle of a file
+    // that is on the screen (see `the_showing_row_is_in_sight`).
+    //
+    // **Whether a step moves the camera at all is a setting** — `Audio → Pin Mode → Playlist →
+    // Camera Follows on Seek`, on where the app starts: off, a step is the rows reconciling and the
+    // scroll left where the hand left it, which is the band a hand is reading rather than hearing.
+    let stepped = STEPPED.swap(false, Ordering::AcqRel) && the_camera_follows_a_seek();
     if let Some((_, height, width, scale)) = the_band_of_the_pin() {
         if let Ok(mut playlist) = THE_PLAYLIST.lock() {
             let visible = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len())
                 .visible
                 .max(0) as usize;
-            if moved || (showing_moved && stepped) {
+            if moved {
                 playlist.park_the_showing_row(visible);
+            } else if showing_moved && stepped {
+                if !playlist.the_showing_row_is_in_sight(visible) {
+                    playlist.park_the_showing_row(visible);
+                }
             } else {
                 playlist.keep_the_selection_in_sight(visible);
             }
