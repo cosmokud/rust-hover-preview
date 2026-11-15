@@ -6,6 +6,10 @@
 
 - **`Preview Settings → Audio → Pin Mode → Playlist → Camera Follows on Seek`** — a row for what a step of a pinned sound's walk costs the playlist band under it, on where the app starts and written `pin_mode_audio_camera_follows` in `config.ini`. On, the band's camera goes to the row the step landed on; off, the band keeps the scroll the hand left it at and the file is only read off the card.
 
+### Fixed
+
+- **A pinned MPV film is no longer shown zoomed in after `Win`+`Shift`+`←`/`→` carries it to a display of another scale** — Windows hands a carried window the rescaled rectangle it suggests before the player's video output has followed it, so the first `osd-dimensions` a pin reads after the carry is still the size of the display it left (measured on mpv 0.41.0: 1-6 ms stale over six of ten carries). That answer was kept against the doubled client the window already had, and nothing asked again, so the crop was fitted into half the film's width and height — the picture zoomed into its middle. A source whose player's answer is not the client its window is at is now asked again every 8 ms, off the pass that already watches the player, until the answer is that client. Native frames and FFmpeg's player were never affected: neither answers over a pipe, so both are cropped by the client the window is at.
+
 ### Changed
 
 - **A pinned sound's playlist band follows the file its walk stepped onto** — a **Next**, a **Previous**, or the file an end of file goes on to names no row of the band, so the row the walk landed on is scrolled to the middle of the list, and to the nearer end where the middle of it is not there to be had. A row the band is already showing is not scrolled for: a step into a list the hand can already read is left where it stands. Only the camera moves — the rows, the pick and the shuffled walk are untouched.
