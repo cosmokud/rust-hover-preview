@@ -107,6 +107,8 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **Pause on Minimize** — On by default: the sound a pin put away was playing is held where it stood and started again at the second it stopped at when the window comes back.
     - **Shuffle** and **End of File** — the same two rows as a film's, asked of a sound: a forward step takes a random sound rather than the one beside it, and a file that ends goes round, holds where it stopped, or steps on to the next.
     - **Seek** — Where in a file a *pinned* sound starts playing: **From the Start** (default), **Remember**, **From the Middle**, or **Random**.
+    - **Playlist** — What the band under a pinned sound's card answers.
+      - **Camera Follows on Seek** — On by default: a **Next**, a **Previous** or the file an end of file goes on to puts the band's camera on the row it landed on, at the middle of the list and at the nearer end where the list runs out. Off, the band keeps the scroll the hand left it at. A row the band is already showing is not scrolled for either way.
   - **Text** — What a text preview is painted with: the font size, how Markdown is shown, whether a page of HTML runs, and which files count as text at all.
     - **Font Size** — `400%` at the top down to `70%` at the bottom.
     - **Markdown** — Rendered or Source.

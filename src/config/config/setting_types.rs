@@ -1174,6 +1174,11 @@ pub const DEFAULT_PIN_MODE_AUDIO_END_OF_FILE: PinEndOfFile = PinEndOfFile::Loop;
 pub const DEFAULT_PIN_MODE_VIDEO_SHUFFLE: bool = false;
 /// The same for a pinned sound's walk.
 pub const DEFAULT_PIN_MODE_AUDIO_SHUFFLE: bool = false;
+/// Whether a pinned sound's playlist band puts its camera on the file the walk stepped onto —
+/// a `Next`, a `Previous`, or the file an end of file goes on to. On where the app starts: a
+/// file the hand hears and never touched in the list is a row it has to go looking for, so the
+/// band is put on it rather than left where the last file that was picked left it.
+pub const DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS: bool = true;
 /// And the same for a pinned picture's walk: a folder of pictures is walked in the
 /// folder's own order until this is on, the way a film's and a sound's are.
 pub const DEFAULT_PIN_MODE_IMAGE_SHUFFLE: bool = false;

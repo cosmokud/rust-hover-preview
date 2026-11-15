@@ -27,13 +27,13 @@ use super::ids::{
     ID_TRAY_MPV_IDLE_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME,
     ID_TRAY_OPEN_CONFIG, ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN,
     ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
-    ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
-    ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE,
-    ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
-    ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
-    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
-    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
-    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
+    ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
+    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP,
+    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
+    ID_TRAY_Q_DIR_PREVIEWS, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
+    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
+    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -51,11 +51,11 @@ use super::submenus::{
     append_background_menu, append_bitmap_scale_menu, append_codecs_menu,
     append_document_scale_menu, append_engine_idle_menu, append_labeled_item, append_loop_item,
     append_office_engine_menu, append_pin_mode_menu, append_pin_nav_menu,
-    append_pin_seek_menu_renamed, append_seek_menu_renamed, append_shuffle_item, append_tick_menu,
-    append_video_engine_menu, cache_size_label, decode_budget_label, default_label,
-    enable_preview_label, pin_key_label, pin_minimize_label, pin_update_label,
-    remember_volume_label, system_menu_label, timing_delay_menu, update_available_label,
-    MF_RADIOCHECK,
+    append_pin_seek_menu_renamed, append_playlist_menu, append_seek_menu_renamed,
+    append_shuffle_item, append_tick_menu, append_video_engine_menu, cache_size_label,
+    decode_budget_label, default_label, enable_preview_label, pin_key_label, pin_minimize_label,
+    pin_update_label, remember_volume_label, system_menu_label, timing_delay_menu,
+    update_available_label, MF_RADIOCHECK,
 };
 
 use crate::app::seam::{send_preview, PreviewMessage};
@@ -73,8 +73,9 @@ use crate::config::config::{
     DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MODEL_SCALE, DEFAULT_NORMALIZE_VIDEO_VOLUME,
     DEFAULT_NORMALIZE_VOLUME, DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE,
-    DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
-    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
+    DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_MINIMIZE_TO, DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
+    DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
@@ -796,6 +797,13 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // Mode Audio Seek` because they sit under `Audio` now rather than under `Volume`
     // (see `pin_mode_audio_seek`). `Pin Mode` is listed below the kind's own rows, so the
     // settings a hovered sound plays by come before the ones only a pinned sound has.
+    // The band a pinned sound's card grows under it is a row of its own kind: whether its camera
+    // follows the file the walk stepped onto is read here rather than with the rows above, since
+    // it is the band's answer and not a way a sound is played (see `append_playlist_menu`).
+    let pin_camera_follows = CONFIG
+        .lock()
+        .map(|c| c.pin_mode_audio_camera_follows)
+        .unwrap_or(DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS);
     let audio_preview = CreatePopupMenu().unwrap();
     append_loop_item(
         audio_preview,
@@ -816,6 +824,11 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     );
     append_pin_seek_menu_renamed(audio_pin_mode, w!("Seek"), pin_mode_audio_seek);
+    append_playlist_menu(
+        audio_pin_mode,
+        ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
+        pin_camera_follows,
+    );
     let _ = AppendMenuW(
         preview_settings,
         MF_STRING | MF_POPUP,

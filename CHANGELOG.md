@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`Preview Settings → Audio → Pin Mode → Playlist → Camera Follows on Seek`** — a row for what a step of a pinned sound's walk costs the playlist band under it, on where the app starts and written `pin_mode_audio_camera_follows` in `config.ini`. On, the band's camera goes to the row the step landed on; off, the band keeps the scroll the hand left it at and the file is only read off the card.
+
 ### Changed
 
+- **A pinned sound's playlist band follows the file its walk stepped onto** — a **Next**, a **Previous**, or the file an end of file goes on to names no row of the band, so the row the walk landed on is scrolled to the middle of the list, and to the nearer end where the middle of it is not there to be had. A row the band is already showing is not scrolled for: a step into a list the hand can already read is left where it stands. Only the camera moves — the rows, the pick and the shuffled walk are untouched.
 - **A shuffled sound pin's playlist is drawn A-Z** — with `Pin Mode → Shuffle` on, the band under a pinned sound showed the shuffled order it was stepping through, which made the list read as a jumble rather than as the folder the hand was looking at. The band is a list the hand reads and the shuffle is how the pin *steps*, so the rows are now drawn in natural name order while the walk keeps its hidden shuffled order underneath: **Next**, **Previous** and the file an end of file goes on to still follow the shuffle, and a row picked in the band still plays the file it names.
 
 ## [0.5.8] - 2026-11-15

@@ -5088,30 +5088,36 @@ fn a_walk_step_puts_the_band_on_the_file_it_landed_on() {
         .expect("a pin up");
     let (rows_before, scroll_before) = pin_playlist::the_rows_and_scroll();
 
-    // The pin steps down its walk to a file no part of the band shows, exactly as the loop takes the
-    // walk's own file up (see `pin_walk::take_pin_pick`).
-    let landed = sounds.len() * 3 / 4;
-    if let Some(mut state) = pin_state() {
-        if let Some(pin) = state.pin_mut() {
-            pin.path = sounds[landed].clone();
+    // A step of the walk, taken exactly as the loop takes one up: the pin's own file moved, its walk
+    // standing on that file, and the band told the file came off the walk rather than out of a hand
+    // (see `pin_walk::take_pin_pick`).
+    let step_to = |landed: usize| {
+        if let Some(mut state) = pin_state() {
+            if let Some(pin) = state.pin_mut() {
+                pin.path = sounds[landed].clone();
+            }
         }
-    }
-    stand_pin_walk(Some(PinStep {
-        at: sounds[landed].clone(),
-        from: sounds[landed].clone(),
-        direction: 1,
-        to_the_end: None,
-        order: sounds.clone(),
-        missed: 0,
-        shuffle: false,
-        progress: landed,
-        anchor: Some(crate::formats::routing::NavCategory::Audio),
-    }));
-    pin_playlist::the_camera_follows_the_walk();
-    assert!(
-        pin_playlist::refresh_the_rows(),
-        "the pin walked, so the band reconciles the rows"
-    );
+        stand_pin_walk(Some(PinStep {
+            at: sounds[landed].clone(),
+            from: sounds[landed].clone(),
+            direction: 1,
+            to_the_end: None,
+            order: sounds.clone(),
+            missed: 0,
+            shuffle: false,
+            progress: landed,
+            anchor: Some(crate::formats::routing::NavCategory::Audio),
+        }));
+        pin_playlist::the_camera_follows_the_walk();
+        assert!(
+            pin_playlist::refresh_the_rows(),
+            "the pin walked, so the band reconciles the rows"
+        );
+    };
+
+    // The pin steps down its walk to a file no part of the band shows.
+    let landed = sounds.len() * 3 / 4;
+    step_to(landed);
 
     let (rows_after, scroll_after) = pin_playlist::the_rows_and_scroll();
     assert_eq!(
@@ -5125,6 +5131,37 @@ fn a_walk_step_puts_the_band_on_the_file_it_landed_on() {
     assert_ne!(
         scroll_after, scroll_before,
         "and the camera is not left where it was over the file the pin walked off"
+    );
+
+    // **A row the band is already drawing is not one the camera goes looking for**: the next step
+    // lands on the row just above the one at the middle, which the band is showing, so the scroll is
+    // left exactly where the last step put it (see `the_showing_row_is_in_sight`).
+    step_to(landed - 1);
+    assert_eq!(
+        pin_playlist::the_rows_and_scroll().1,
+        scroll_after,
+        "a step onto a row in sight costs the band no scroll"
+    );
+
+    // **And the row is the whole of what `Camera Follows on Seek` decides**: off, a step onto a file
+    // far up the list is the band a push is — the row brought to the top edge of the list so that it
+    // is on the screen, and not carried down to the middle of it.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_mode_audio_camera_follows = false;
+    }
+    step_to(2);
+    let scrolled_with_the_row_off = pin_playlist::the_rows_and_scroll().1;
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_mode_audio_camera_follows = true;
+    }
+    assert_eq!(
+        scrolled_with_the_row_off, 2,
+        "with the row off, a step shows the row at the band's edge rather than at its middle"
+    );
+    assert_ne!(
+        scrolled_with_the_row_off,
+        pin_playlist::the_row_a_band_opens_on(sounds.len(), 2, visible),
+        "which is not the row the camera would be parked on"
     );
 
     let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
