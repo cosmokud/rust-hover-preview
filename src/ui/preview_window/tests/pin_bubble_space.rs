@@ -1003,108 +1003,120 @@ fn an_update_brings_a_pin_put_away_into_its_bubble_back_on_top() {
     stand_pin(previous_pin);
 }
 
-/// A preview update raises the pin into the front it owes, without taking the keyboard; with
-/// `Pin Mode → Update Preview → Move To Top` off the pin is left where the user's own clicks put it.
+/// A preview update brings a pin in front of the listing while the user is in it, and the band it
+/// keeps there is the one order neither the listing's activation nor a popup that program draws over
+/// its own rows can be put over (see `pin_holds_the_band_to_follow`).
 ///
-/// The raise is asked about rather than read off the desktop: the band it holds is the desktop's to
-/// apply, and what the update owes is the decision to hold it (`pin_holds_the_front`). The placing
-/// is read off the desktop's own list, where the press that gives the band back leaves the pin.
+/// **The rule is asked with its own facts handed in**, because a window in front is not a test
+/// process's to choose: what decides the band is three settings and the place the user is in, and
+/// each of them is asserted here. The placing itself is read off the desktop where the flip that is
+/// left for a pin that follows nothing leaves the pin.
 #[test]
-fn a_preview_update_brings_a_pin_in_front_and_leaves_it_when_the_row_is_off() {
+fn a_preview_update_keeps_the_band_for_the_listing_it_follows() {
     let _room = the_room_to_itself();
 
     let previous_pin = take_pin_for_a_test();
     let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let previous_front = PIN_FRONT_OWED.load(Ordering::SeqCst);
+    let previous_band = PIN_FOLLOWING_BAND.swap(false, Ordering::SeqCst);
     let always_on_top = pin_always_on_top();
-    let move_to_top = CONFIG
-        .lock()
-        .map(|config| config.pin_update_move_to_top)
-        .unwrap_or(true);
+    let updates = pin_update_enabled();
+    let move_to_top = pin_update_move_to_top();
 
-    // Safety: both windows are this test's own, opened where no display is. The second is made
-    // after the pin's, which is what puts it in front — the listing the file was picked in.
-    let (pin_hwnd, in_front) = unsafe {
-        let pin_hwnd = a_window_of_the_tests_own();
-        PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
-        let in_front = a_window_of_the_tests_own();
-        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
-        let _ = ShowWindow(in_front, SW_SHOWNOACTIVATE);
-        (pin_hwnd, in_front)
-    };
+    // **The three settings, which is what the rule is made of.**
+    assert!(
+        a_pin_follows_a_listing(false, true, true),
+        "a pin that is not Always On Top, with `Update Preview` on and `Move To Top` on, follows \
+         the listing the user is in"
+    );
+    assert!(
+        !a_pin_follows_a_listing(true, true, true),
+        "and one that is Always On Top holds its band for the setting rather than for a listing: a \
+         flag saying otherwise would have the tick give back a band that was never taken for one"
+    );
+    assert!(
+        !a_pin_follows_a_listing(false, false, true)
+            && !a_pin_follows_a_listing(false, true, false),
+        "and neither switch of `Update Preview` on its own is a pin that follows anything"
+    );
 
-    // A pin that is up and on the screen, with `Always On Top` off: an ordinary window, which is
-    // the one that can be standing behind the listing the user picks a file in.
+    // **And the place the user is in.** A press answered while the listing is in front holds the
+    // band; the same press with another program in front does not, because a band kept then is a pin
+    // over the program the user chose, with `Always On Top` off.
+    assert!(
+        a_following_pin_holds_the_band(false, true, true),
+        "a pin that follows a listing, up rather than in its bubble, keeps the band while the user \
+         is in that listing"
+    );
+    assert!(
+        !a_following_pin_holds_the_band(true, true, true),
+        "a pin that is a bubble has no window in any band"
+    );
+    assert!(
+        !a_following_pin_holds_the_band(false, true, false),
+        "and a program of the user's own in front is no place for that band"
+    );
+    assert!(
+        !a_following_pin_holds_the_band(false, false, true),
+        "nor is it taken by a pin that follows nothing"
+    );
+
+    // The band decided, and the desktop's own answer to it: the pair is in the topmost band while the
+    // rule says so, which is what an activation and a listing's popup cannot be put over.
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+        config.pin_update_enabled = true;
+        config.pin_update_move_to_top = true;
+    }
+    let pin_hwnd = unsafe { a_window_of_the_tests_own() };
+    PREVIEW_HWND.store(pin_hwnd.0 as isize, Ordering::SeqCst);
     stand_pin(Some(overlay_pin(
         (NOWHERE, NOWHERE, NOWHERE + 320, NOWHERE + 240),
         PinChrome::always(),
     )));
-    if let Ok(mut config) = CONFIG.lock() {
-        config.pin_always_on_top = false;
-        config.pin_update_move_to_top = true;
+    unsafe {
+        let _ = ShowWindow(pin_hwnd, SW_SHOWNOACTIVATE);
     }
 
-    // An update is a pick's raise: the pin is put at the front of the ordinary band, and that is
-    // all it is — with `Always On Top` off the band itself is not this app's to hold.
     PIN_FRONT_OWED.store(false, Ordering::SeqCst);
-    arm_pin_to_the_front();
+    PIN_FOLLOWING_BAND.store(true, Ordering::SeqCst);
     unsafe { raise_pinned_preview(pin_hwnd, false) };
     unsafe { settle_z_order() };
     assert!(
-        unsafe { stands_over(pin_hwnd, in_front) },
-        "an update raises the pin over the window the file was picked in"
-    );
-    assert!(
-        !pin_holds_the_front(),
-        "and it holds no band for it: the topmost one is the setting's, and this pin's is off"
-    );
-    assert_ne!(
-        unsafe { GetForegroundWindow() },
-        pin_hwnd,
-        "the pin is raised without taking the keyboard: the pick it answers may be one made with \
-         the arrows in the listing, and a raise that took the focus would end that walk"
+        unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "the raise of a pin that holds a band for its listing leaves the pair in the topmost band, \
+         which is the one order a listing's activation and its tooltips cannot be put over"
     );
 
-    // The press that names no file gives the band back, and the placing it makes is what can be
-    // read: the pin ends behind the window the press was made in.
-    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
-    unsafe { settle_z_order() };
-    assert!(
-        unsafe { stands_over(in_front, pin_hwnd) },
-        "the front given back is the pin behind the listing again"
-    );
-    assert!(
-        !pin_holds_the_front(),
-        "and the pin no longer owes it: the next pick decides it again"
-    );
-
-    // The row switched off: the pin is left where the user's own clicks put it.
+    // **And the tick gives it back the moment the rule stops saying so**, which is the half that keeps
+    // a pin with `Always On Top` off from standing over every program the user works in: the flag is
+    // cleared and the band goes with it.
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_update_move_to_top = false;
     }
-    arm_pin_to_the_front();
-    unsafe { raise_pinned_preview(pin_hwnd, false) };
+    unsafe { settle_the_following_band() };
     unsafe { settle_z_order() };
     assert!(
-        unsafe { stands_over(in_front, pin_hwnd) },
-        "with the row off a preview update is a file swapped into the pin where it stands, and the \
-         window stays where the user's own clicks put it"
+        !PIN_FOLLOWING_BAND.load(Ordering::SeqCst),
+        "a pin whose `Move To Top` row is off follows nothing, and the band it was holding is not \
+         its own to keep"
     );
     assert!(
-        !pin_holds_the_front(),
-        "with the row off there is no front to owe"
+        !unsafe { window_holds_the_topmost_band(pin_hwnd) },
+        "and the band given back is the pin in the ordinary one again, below the window the user is \
+         in rather than over it"
     );
 
-    // Safety: both windows are this test's own, and the handles the app holds are put back as they
-    // were.
+    // Safety: the window is this test's own, and every global written here is put back.
     unsafe {
-        let _ = DestroyWindow(in_front);
         let _ = DestroyWindow(pin_hwnd);
     }
     PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
     PIN_FRONT_OWED.store(previous_front, Ordering::SeqCst);
+    PIN_FOLLOWING_BAND.store(previous_band, Ordering::SeqCst);
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = always_on_top;
+        config.pin_update_enabled = updates;
         config.pin_update_move_to_top = move_to_top;
     }
     stand_pin(previous_pin);
