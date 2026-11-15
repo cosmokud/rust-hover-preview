@@ -43,7 +43,7 @@ pub(super) use setters::{
     set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
     set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
     set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
-    set_zoom_background, toggle_loop, toggle_pin_shuffle, PinShuffle,
+    set_zoom_background, toggle_loop, toggle_pin_camera_follows, toggle_pin_shuffle, PinShuffle,
 };
 pub(crate) use toggles::toggle_pin_always_on_top;
 pub(crate) use toggles::toggle_preview_enabled;

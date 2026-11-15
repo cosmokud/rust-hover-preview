@@ -771,6 +771,12 @@ pub(super) const ID_TRAY_AFK_TIMER_BASE: u16 = 1505;
 /// card, which is a question only mpv is asked. It sits in the slack past the `Away Timer` range,
 /// which ends at 1511, so a click on it is never read as an away time.
 pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
+/// The `Audio → Pin Mode → Playlist → Camera Follows on Seek` row: whether a pinned sound's
+/// playlist band puts its camera on the file its walk stepped onto, and whether it is left where
+/// the hand left it. It sits in the ids the `Away Timer` range (1505 to 1511) and the hardware
+/// acceleration row (1516) leave between them — 1512, the first of the four there — so a click on
+/// it is neither an away time nor the accelerator.
+pub(super) const ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS: u16 = 1512;
 /// The `Audio` submenu under `Scaling`: one command per share of the display a
 /// sound's card is laid out over, in the order it lists them. It sits in
 /// the stretch between the volume toggles, which end at 1528, and the

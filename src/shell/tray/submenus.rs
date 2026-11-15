@@ -33,9 +33,9 @@ use crate::config::config::{
     PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS,
     DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MINIMIZE_TO,
-    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_IMAGE,
-    DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE,
-    DEFAULT_VIDEO_ENGINE_FALLBACK,
+    DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS, DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_NAV_AUDIO,
+    DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_TICK_MS,
+    DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
@@ -531,6 +531,32 @@ pub(super) fn append_pause_minimized_item(menu: HMENU, pause_id: u16, pause: boo
         pause_id,
         "Pause on Minimize",
     );
+}
+
+/// The `Audio → Pin Mode → Playlist` submenu: the rows a *pinned* sound's playlist band answers
+/// — the list of the folder's sounds the card grows under itself (see `pin_playlist`). It hangs
+/// under the sound's own `Pin Mode` rather than under a kind's rows because a band is only ever a
+/// sound's card's, and it holds the one row the band is a setting of: whether its camera follows
+/// the file the walk stepped onto (see `toggle_pin_camera_follows`).
+pub(super) fn append_playlist_menu(parent: HMENU, follows_id: u16, follows: bool) {
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    append_labeled_item(
+        menu,
+        MF_STRING | if follows { MF_CHECKED } else { MF_UNCHECKED },
+        follows_id,
+        &default_label(
+            "Camera Follows on Seek",
+            DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
+        ),
+    );
+    let _ = unsafe {
+        AppendMenuW(
+            parent,
+            MF_STRING | MF_POPUP,
+            menu.0 as usize,
+            w!("Playlist"),
+        )
+    };
 }
 
 /// The `Video → Pin Mode → Shuffle`, `Audio → Pin Mode → Shuffle` and

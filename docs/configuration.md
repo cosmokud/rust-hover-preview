@@ -103,6 +103,7 @@ audio_seek=remember
 audio_volume=10
 normalize_video_volume=false
 normalize_volume=false
+pin_mode_audio_camera_follows=true
 pin_mode_audio_end_of_file=loop
 pin_mode_audio_seek=start
 pin_mode_audio_shuffle=false
@@ -170,6 +171,7 @@ spinner_delay_ms=250
 - `pin_mode_video_end_of_file` / `pin_mode_audio_end_of_file`: what a *pinned* film or sound does at the end of its file — `loop` (default), `pause` (the file left where it ended, the card holding it with a play button), or `continue` (the walk's next file).
 - `pin_mode_video_shuffle` / `pin_mode_audio_shuffle`: whether a forward step of a *pinned* walk takes a random file of the anchor's kind rather than the one beside it. Both default `false`; a step back is the file the walk came from.
 - `pin_mode_image_shuffle`: the same question asked of a *pinned* picture's walk, which has no end of file to jump from — its shuffle is the caption's buttons and the keyboard's alone. Default `false`.
+- `pin_mode_audio_camera_follows`: whether a pinned sound's playlist band puts its camera on the file its walk stepped onto — a **Next**, a **Previous**, or the file an end of file goes on to — centring that row in the band. Default `true`; off, the band keeps the scroll the hand left it at. A file the band is already showing is not scrolled for either way.
 - `pin_mode_audio_seek`: where in a file a *pinned* sound starts playing — `start` (default), `remember`, `middle`, or `random`.
 - `beat_hz`: the band a sound's card's mark beats with — `off`, or a top of band in hertz between `20` (the fixed floor) and `16000`. Default `250`. A setting of `config.ini` alone; the tray has no row for it.
 - `audio_mark_offset_y`: a vertical shift in pixels for the mark beside the name — `0` default, `-100` to `100`. A file naming it `audio_mark_vertical_offset`, `audio_mark_y_offset` or `audio_mark_vertical_alignment` is read the same way.
