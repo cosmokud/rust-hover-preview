@@ -234,6 +234,9 @@ pub(in super::super) fn toggle_trigger_key_enabled() {
         config.trigger_key_enabled = !config.trigger_key_enabled;
         config.save();
     }
+    // The hook's own chord table carries whether the key is watched at all, so the switch is
+    // handed to it here or a key turned off would keep its latch (see `key_input::refresh`).
+    crate::shell::key_input::refresh();
     refresh_preview();
 }
 
