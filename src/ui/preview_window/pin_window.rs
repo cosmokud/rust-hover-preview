@@ -414,6 +414,7 @@ pub(super) fn install(pin: PinnedPreview) {
         // And the file it is showing, published here because the side that asks what is pinned is a
         // process of its own (see `seam::publish_the_pinned_path`).
         crate::app::seam::publish_the_pinned_path(Some(pin.path.as_path()));
+        let audio_card = super::pin_shows_an_audio_card(&pin);
         *state = PinState::Up(PinUp {
             pin,
             keyboard: None,
@@ -421,6 +422,18 @@ pub(super) fn install(pin: PinnedPreview) {
             walk,
         });
         publish_pin_up(true);
+
+        // **A band is opened on the sound a pin has just come up on, where the setting asks for
+        // one.** The toggle is the opening itself, and it is asked for after the pin is standing
+        // rather than before: it measures the card, and the card is the pin's (see
+        // `pin_playlist::open_for_the_card`). The pin's own lock is held here, so the walk behind
+        // it is asked again by the caller the way the band's own opening is (see
+        // `ask_the_bands_playlist`).
+        if audio_card {
+            if let Some(pin) = state.pin() {
+                super::pin_playlist::open_for_the_card(pin);
+            }
+        }
     }
 }
 

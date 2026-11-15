@@ -794,6 +794,19 @@ pub(in super::super) fn toggle_pin_camera_follows() {
     }
 }
 
+/// Whether a sound taken up pinned comes up with its playlist band open — the `Always Open
+/// Playlist` row.
+///
+/// Nothing on screen moves for the click itself: the setting is read at the next take-up, and the
+/// band that a pin is already carrying is the one the hand left (see `pin_playlist::open_for`).
+/// A band is only ever a pin's, so this is the one road that opens one with no press behind it.
+pub(in super::super) fn toggle_pin_playlist_always_open() {
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_mode_audio_playlist_always_open = !config.pin_mode_audio_playlist_always_open;
+        config.save();
+    }
+}
+
 pub(in super::super) fn set_follow_cursor(follow: bool) {
     if let Ok(mut config) = CONFIG.lock() {
         config.follow_cursor = follow;

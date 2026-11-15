@@ -568,7 +568,9 @@ pub(super) fn the_camera_follows_the_walk() {
 }
 
 /// Whether a step is what the band's camera follows at all — `Audio → Pin Mode → Playlist →
-/// Camera Follows on Seek`, on where the app starts (see `DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS`).
+/// Camera Follows on Seek`, on where the app starts (see `DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS`);
+/// and the band itself is one the take-up opens where `Always Open Playlist` asks for it (see
+/// `open_for_the_card`).
 /// Read once per reconcile rather than cached: the row is a click away and the band it is about is
 /// the one already up, so the next step is the first thing it can be true of.
 fn the_camera_follows_a_seek() -> bool {
@@ -576,6 +578,32 @@ fn the_camera_follows_a_seek() -> bool {
         .lock()
         .map(|config| config.pin_mode_audio_camera_follows)
         .unwrap_or(DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS)
+}
+
+/// Whether a sound taken up pinned is given the band at all — `Audio → Pin Mode → Playlist →
+/// Always Open Playlist`, off where the app starts (see `DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN`).
+fn the_band_is_asked_for() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.pin_mode_audio_playlist_always_open)
+        .unwrap_or(DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN)
+}
+
+/// Open the band on the sound's card a pin has just come up on, where the setting asks for one.
+///
+/// **A take-up is the one place a band is opened with no press behind it**: the hand opened it on
+/// the last sound and every sound pinned after it comes up with one, which is what the row is for.
+/// Nothing is opened where the band is already up — that is the band the hand left, carrying its
+/// own height and scroll — and nothing is opened for a pin of another kind, which has no band to
+/// open (see `playlist_band_height`). The remaining height a band is opened at is the same one a
+/// press gives it: the height the hand last left, and the share of the display a band opens at
+/// where nothing has been left (see `toggle`, which is the opening itself).
+pub(super) fn open_for_the_card(pin: &PinnedPreview) {
+    if !the_band_is_asked_for() || the_band_is_open() || !pin_shows_an_audio_card(pin) {
+        return;
+    }
+
+    toggle(pin);
 }
 
 /// The band this pin carries, as the row it begins at and how tall it is, or nothing where the pin

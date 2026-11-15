@@ -1179,6 +1179,11 @@ pub const DEFAULT_PIN_MODE_AUDIO_SHUFFLE: bool = false;
 /// file the hand hears and never touched in the list is a row it has to go looking for, so the
 /// band is put on it rather than left where the last file that was picked left it.
 pub const DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS: bool = true;
+/// Whether a pinned sound's playlist band is opened for it — `Audio → Pin Mode → Playlist →
+/// Always Open Playlist`: a sound taken up pinned comes up with the band under it, the way a
+/// hand that opened the band on the last pin left it. Off where the app starts: a band is a
+/// list of the folder the hand has to ask for, and a card is the box its hover was.
+pub const DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN: bool = false;
 /// And the same for a pinned picture's walk: a folder of pictures is walked in the
 /// folder's own order until this is on, the way a film's and a sound's are.
 pub const DEFAULT_PIN_MODE_IMAGE_SHUFFLE: bool = false;

@@ -777,6 +777,11 @@ pub(super) const ID_TRAY_VIDEO_HW_ACCEL: u16 = 1516;
 /// acceleration row (1516) leave between them — 1512, the first of the four there — so a click on
 /// it is neither an away time nor the accelerator.
 pub(super) const ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS: u16 = 1512;
+/// The `Audio → Pin Mode → Playlist → Always Open Playlist` row: whether a sound taken up pinned
+/// comes up with the band under it. It sits beside `Camera Follows on Seek` in the ids the
+/// `Away Timer` range and the hardware acceleration row leave between them — 1513, the second
+/// of the four there — so a click on it is neither an away time nor the accelerator.
+pub(super) const ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN: u16 = 1513;
 /// The `Audio` submenu under `Scaling`: one command per share of the display a
 /// sound's card is laid out over, in the order it lists them. It sits in
 /// the stretch between the volume toggles, which end at 1528, and the

@@ -1,5 +1,8 @@
 use super::*;
-use crate::config::config::DEFAULT_IMAGE_CACHE_MB;
+use crate::config::config::{DEFAULT_IMAGE_CACHE_MB, DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN};
+use crate::shell::tray::ids::{
+    ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS, ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
+};
 use std::path::PathBuf;
 
 /// Every `… TTL` submenu offers the same nine answers in the same order: longest first, the
@@ -456,6 +459,27 @@ fn the_pin_mode_rows_are_ids_of_their_own() {
     assert_eq!(
         defaults.pin_minimize_to, DEFAULT_PIN_MINIMIZE_TO,
         "a pin put away goes to the bubble on the desktop until it is told otherwise"
+    );
+}
+
+/// `Always Open Playlist` is a switch of its own beside `Camera Follows on Seek`, and one the
+/// app starts *off* at: a band is a list the hand asks for, and the row is the one way it is
+/// opened with no press behind it.
+#[test]
+fn the_playlist_rows_carry_an_id_apiece_and_always_open_starts_off() {
+    let defaults = crate::config::config::AppConfig::default();
+
+    assert_eq!(
+        defaults.pin_mode_audio_playlist_always_open, DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
+        "the app starts where the row's own default says"
+    );
+    assert!(
+        !defaults.pin_mode_audio_playlist_always_open,
+        "and it starts off: a sound pinned with no press on its card is a card and no band"
+    );
+    assert_ne!(
+        ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
+        "the two rows of the `Playlist` submenu are ids of their own"
     );
 }
 
