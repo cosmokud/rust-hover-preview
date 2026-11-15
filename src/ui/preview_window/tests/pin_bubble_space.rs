@@ -1090,11 +1090,13 @@ fn a_preview_update_keeps_the_band_for_the_listing_it_follows() {
 
     // **And the tick gives it back the moment the rule stops saying so**, which is the half that keeps
     // a pin with `Always On Top` off from standing over every program the user works in: the flag is
-    // cleared and the band goes with it.
+    // cleared and the band goes with it. No press is owed here, which is the clock that bounds the
+    // hold: the band belongs to the answer a press is owed, and not to the listing the user is in (see
+    // `settle_the_following_band`).
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_update_move_to_top = false;
     }
-    unsafe { settle_the_following_band() };
+    unsafe { settle_the_following_band(None, Instant::now()) };
     unsafe { settle_z_order() };
     assert!(
         !PIN_FOLLOWING_BAND.load(Ordering::SeqCst),
@@ -1218,6 +1220,32 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
         "the band given back is the pin back behind the listing"
     );
     assert!(!pin_holds_the_front(), "and the cycle can be made again");
+
+    // **And a band the raise took for the listing it follows is no answer to that press either.** With
+    // `Update Preview` and `Move To Top` on, a pin with `Always On Top` off takes the band at a raise and
+    // holds it for the answer that click is owed; the press that names no file is what ends it, and the
+    // pin goes behind the listing exactly as one that follows nothing — a band kept there is a pin over
+    // the program the user works in, with the setting that says it must not be (see
+    // `lower_pinned_preview` and `settle_the_following_band`).
+    let previous_band = PIN_FOLLOWING_BAND.swap(true, Ordering::SeqCst);
+    arm_pin_to_the_front();
+    unsafe { raise_pinned_preview(pin_hwnd, false) };
+    unsafe { settle_z_order() };
+    assert!(
+        pin_holds_the_front(),
+        "a raise in the listing it follows takes the band for the press's answer"
+    );
+    unsafe { lower_pinned_preview(pin_hwnd, in_front) };
+    unsafe { settle_z_order() };
+    assert!(
+        unsafe { stands_over(in_front, pin_hwnd) },
+        "and a press that named no file puts the pin behind that listing all the same"
+    );
+    assert!(
+        !pin_holds_the_front(),
+        "the band the raise took goes back with the press that ended it"
+    );
+    PIN_FOLLOWING_BAND.store(previous_band, Ordering::SeqCst);
 
     // `Always On Top` keeps the band it is in: a press that picks no file gives back nothing there.
     if let Ok(mut config) = CONFIG.lock() {

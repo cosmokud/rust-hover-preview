@@ -558,17 +558,29 @@ pub(super) fn forget_the_following_band() {
 /// **The raise is where it is taken, and the tick is where it is given back.** A press or a pick arrives
 /// while the user is in the listing the pin follows, and the activation that click ends in — or the popup
 /// Everything draws over the text of a row — is a window that reaches the desktop *after* this app has
-/// answered, so the band is taken there and stays taken across it. What ends it is the user moving to a
-/// program of their own: with `Always On Top` off a pin over that program is the one thing that setting
-/// must never mean, and the band goes back to the front of the ordinary one below it (see
-/// `pin_holds_the_band_to_follow`, `band_place` and `give_the_band_back`).
-pub(super) unsafe fn settle_the_following_band() {
+/// answered, so the band is taken there and stays taken across it.
+///
+/// **What ends it is the press's own clock, and not the listing the user is still in.** The band belongs
+/// to the press that took it: it is held across the answer that click is owed and no longer, which is the
+/// same `band_until` every other demotion asks (`the_band_is_nobodys`). A band held for as long as the
+/// user works in a listing is a pin with `Always On Top` off standing over the program it is meant to go
+/// behind — a click in Explorer, Everything or a dialog that names no file could not put it there, because
+/// the lowering road asked `pin_holds_the_front` and this flag answered yes (see `lower_pinned_preview`).
+///
+/// Where the user is by the time the band goes back is the placement's question, not the flag's: the pin is
+/// put behind the program the user moved to, and left in the front of the ordinary band while the listing it
+/// follows is still the one they are in — where a pin with the setting off belongs, and from where a press
+/// that names no file is what takes it behind (see `pin_holds_the_band_to_follow`, `band_place` and
+/// `give_the_band_back`).
+pub(super) unsafe fn settle_the_following_band(debt: Option<PinFrontOwed>, now: Instant) {
     if !pinned() {
         PIN_FOLLOWING_BAND.store(false, Ordering::SeqCst);
         return;
     }
 
-    if pin_holds_the_band_to_follow() {
+    // **A press still being answered is what holds the band, and nothing else is.** The listing in front
+    // is what makes the hold worth taking; the debt is what bounds it.
+    if pin_holds_the_band_to_follow() && !the_band_is_nobodys(debt, now) {
         PIN_FOLLOWING_BAND.store(true, Ordering::SeqCst);
         return;
     }
@@ -594,6 +606,12 @@ pub(super) unsafe fn settle_the_following_band() {
         || front == hwnd
         || unsafe { foreground_is_ours(front) }
         || unsafe { foreground_is_the_desktop(front) }
+        // **A listing the pin follows is no window to be put behind.** The pin is meant to stand beside
+        // it while the user works in it, and the road that takes it behind that listing is the press that
+        // named no file rather than the clock running out on the press that did (see
+        // `lower_pinned_preview`). Put behind it here, a pin just picked is a pin that vanishes a quarter
+        // of a second after it appears.
+        || crate::shell::explorer_hook::the_front_is_a_listing()
     {
         HWND::default()
     } else {
@@ -2703,18 +2721,20 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     // the pin goes behind the window it was made in. That is recoverable rather than final: the pin's
     // own window is one a click may activate, so a click on the pin brings it back (see
     // `pin_set_focusable`).
-    // **A pin that holds the band for the listing the user is in is kept there**, exactly as one that is
-    // Always On Top: every press in that listing is either a file the pin is shown or a press that named
-    // none, and the listing's activation and the popup Everything draws over a row's text are both put
-    // over an ordinary window a tick after the press this app answered. The band goes back the moment
-    // the user is somewhere else (see `pin_holds_the_band_to_follow` and `settle_the_following_band`).
-    if pin_is_collapsed() || pin_holds_the_front() || !pin_update_move_to_top() {
+    // **A press that named no file ends the band a press took**, and the pin goes behind the window it
+    // was made in exactly as one that follows nothing: with `Always On Top` off, a pin over the listing
+    // the user is working in is the one thing the setting must never mean, and this press is the road
+    // that says so. What is kept here is the setting's band alone (see `pin_holds_the_band_to_follow` and
+    // `settle_the_following_band`, which is the same band given back on the press's own clock).
+    if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
         note_the_place(
             hwnd,
-            "lower: kept where it is, by the settings and the listing it follows",
+            "lower: kept where it is, by the settings and its own box",
         );
         return;
     }
+
+    PIN_FOLLOWING_BAND.store(false, Ordering::SeqCst);
 
     if window == hwnd {
         note_the_place(hwnd, "lower: the window asked for is the pin itself");
@@ -3121,15 +3141,18 @@ unsafe fn give_the_band_back(hwnd: HWND, behind: HWND) {
     // placement after it asks the setting again (see `PIN_BAND_HELD`).
     PIN_BAND_HELD.store(false, Ordering::SeqCst);
 
-    // **A band the pin holds for following its listing is not this road's to give back.** What is owed
-    // here is the front of one press — the activation its own click ends in — and the pin following
-    // that listing owes the same front for as long as the user is in it: giving it back is the pin the
-    // next popup or activation covers a tick before its own raise (see `pin_holds_the_band_to_follow`).
-    if pin_holds_the_band_to_follow() {
-        note_the_place(
-            hwnd,
-            "band kept: the pin follows the listing the user is in",
-        );
+    // **A band a press is still answering is not this road's to give back.** What is owed here is the
+    // front of one press — the activation its own click ends in — and the pin following that listing owes
+    // the same front for as long as that answer is owed: giving it back is the pin the popup or the
+    // activation covers a tick before its own raise (see `PIN_FOLLOWING_BAND`).
+    //
+    // **The flag is what is asked, and not the rule it was decided by.** A band taken for a listing is
+    // taken for the press that took it and given back on that press's own clock, so the question here is
+    // whether the hold still stands rather than whether the user is still in a listing — asked the other
+    // way, every give-back re-took the band the tick had just let go of, and the pin stayed over the
+    // listing it follows with `Always On Top` off (see `settle_the_following_band`).
+    if PIN_FOLLOWING_BAND.load(Ordering::SeqCst) {
+        note_the_place(hwnd, "band kept: a press is still being answered for");
         unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST) };
         return;
     }
