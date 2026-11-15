@@ -509,15 +509,23 @@ pub(super) fn take_pin_pick(
     // The slots are emptied by the takes below, so which road the pick came in by is read
     // here rather than after them.
     let named = pin_pick.is_some() || swap_requested.is_some();
+    let stepped = (!awaiting)
+        .then(|| walk.as_ref().map(|step| step.at.clone()))
+        .flatten();
     let path = pin_pick
         .take()
         .or_else(|| held_pick.take())
         .or_else(|| swap_requested.take())
-        .or_else(|| {
-            (!awaiting)
-                .then(|| walk.as_ref().map(|step| step.at.clone()))
-                .flatten()
-        })?;
+        .or_else(|| stepped.clone())?;
+
+    // **A file the walk stepped onto is the one file the band's camera follows.** Nothing named it —
+    // not the listing, not a drop, not a row of the band's own — the pin simply walked to it, so the
+    // row it landed on is a row a hand hearing it has to find in a list that has not moved (see
+    // `pin_playlist::the_camera_follows_the_walk`). A file a hand named is left where the hand left
+    // it, and so is a file a walk re-asked for the mode that now applies keeps the pin on.
+    if stepped.as_deref() == Some(path.as_path()) && !named {
+        pin_playlist::the_camera_follows_the_walk();
+    }
     // A held pick rides with the walk it was held with, and the walk's own pick is the
     // walk's: only a listing pick and a bubble restored are files the user named.
     let user_named = named

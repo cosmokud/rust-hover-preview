@@ -5052,3 +5052,82 @@ fn a_pick_leaves_the_band_scrolled_where_the_hand_left_it() {
     assert!(opened.is_some(), "the pin the test stood up");
     stand_pin(previous_pin);
 }
+
+/// **A walk that steps is a band whose camera goes with it.** A **Next**, a **Previous** or the file an
+/// end of file goes on to names no row of the band — the hand never touched the list, it is hearing the
+/// file — so the row the walk landed on is put at the middle of the band, and at the nearer end of the
+/// list where the middle of it is not there to be had (see `park_the_showing_row`).
+///
+/// **What moves is the camera and nothing else.** The rows are the same files in the same order, the
+/// pick is the hand's, and the walk it is stepping along is untouched: a band that rerolled its list
+/// under a step would be a list nothing is stepping along any more.
+#[test]
+fn a_walk_step_puts_the_band_on_the_file_it_landed_on() {
+    let _room = the_room_to_itself();
+    let previous_pin = take_pin_for_a_test();
+    let pin = sound_pin();
+    pin_playlist::toggle(&pin);
+    let sounds = a_walk_of_twelve_sounds(pin);
+
+    // How many rows the band draws, which is the display's answer rather than a test's.
+    let visible = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            let (width, _) = pin.window_size();
+            Some(
+                pin_chrome::playlist_layout(
+                    width,
+                    pin_playlist::playlist_band_height(pin),
+                    pin.dpi as f32 / 96.0,
+                    0,
+                )
+                .visible
+                .max(0) as usize,
+            )
+        })
+        .expect("a pin up");
+    let (rows_before, scroll_before) = pin_playlist::the_rows_and_scroll();
+
+    // The pin steps down its walk to a file no part of the band shows, exactly as the loop takes the
+    // walk's own file up (see `pin_walk::take_pin_pick`).
+    let landed = sounds.len() * 3 / 4;
+    if let Some(mut state) = pin_state() {
+        if let Some(pin) = state.pin_mut() {
+            pin.path = sounds[landed].clone();
+        }
+    }
+    stand_pin_walk(Some(PinStep {
+        at: sounds[landed].clone(),
+        from: sounds[landed].clone(),
+        direction: 1,
+        to_the_end: None,
+        order: sounds.clone(),
+        missed: 0,
+        shuffle: false,
+        progress: landed,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    pin_playlist::the_camera_follows_the_walk();
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the pin walked, so the band reconciles the rows"
+    );
+
+    let (rows_after, scroll_after) = pin_playlist::the_rows_and_scroll();
+    assert_eq!(
+        (rows_after, scroll_after),
+        (
+            rows_before,
+            pin_playlist::the_row_a_band_opens_on(sounds.len(), landed, visible)
+        ),
+        "the same rows, with the file the walk landed on at the middle of the band"
+    );
+    assert_ne!(
+        scroll_after, scroll_before,
+        "and the camera is not left where it was over the file the pin walked off"
+    );
+
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
