@@ -11,7 +11,7 @@ body:
     attributes:
       label: What problem does this solve?
       description: What is hard, slow, or missing today?
-      placeholder: Example: I can't preview .svg files, so I have to open each one.
+      placeholder: "Example: I can't preview .svg files, so I have to open each one."
     validations:
       required: true
   - type: textarea
@@ -19,7 +19,7 @@ body:
     attributes:
       label: What would you like to happen?
       description: Describe your idea. Screenshots or examples help.
-      placeholder: Example: Show a small preview when I hover an .svg file.
+      placeholder: "Example: Show a small preview when I hover an .svg file."
     validations:
       required: true
   - type: textarea
@@ -27,7 +27,7 @@ body:
     attributes:
       label: Alternatives you considered
       description: Is there another way to solve this? What did you try?
-      placeholder: Optional. Example: I tried adding svg to config.ini, but nothing showed.
+      placeholder: "Optional. Example: I tried adding svg to config.ini, but nothing showed."
     validations:
       required: false
   - type: textarea

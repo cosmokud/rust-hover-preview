@@ -13,7 +13,7 @@ body:
     attributes:
       label: What happened?
       description: What went wrong? What did you expect to happen instead?
-      placeholder: Example: Hovering a .png shows no preview, but I expected a small image next to the cursor.
+      placeholder: "Example: Hovering a .png shows no preview, but I expected a small image next to the cursor."
     validations:
       required: true
   - type: textarea
@@ -32,7 +32,7 @@ body:
     attributes:
       label: App version
       description: Which release are you using? (See the tray menu Config.ini item, e.g. 0.2.6.)
-      placeholder: Example: 0.2.6
+      placeholder: "Example: 0.2.6"
     validations:
       required: true
   - type: input
@@ -40,7 +40,7 @@ body:
     attributes:
       label: Windows version
       description: Press Win+R, type winver, and paste the version here.
-      placeholder: Example: Windows 11 24H2
+      placeholder: "Example: Windows 11 24H2"
     validations:
       required: true
   - type: textarea
@@ -48,6 +48,6 @@ body:
     attributes:
       label: Anything else?
       description: File type, screenshots, logs, or anything unusual about your setup. Remove private info first.
-      placeholder: Optional. Example: Only happens with files on OneDrive.
+      placeholder: "Optional. Example: Only happens with files on OneDrive."
     validations:
       required: false
