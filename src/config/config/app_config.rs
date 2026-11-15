@@ -33,7 +33,8 @@ use super::setting_types::{
     DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_DOUBLE_CLICK_CENTER,
     DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE, DEFAULT_PIN_MINIMIZE_TO,
     DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
-    DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
+    DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, DEFAULT_PIN_MODE_AUDIO_SEEK,
+    DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
     DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
@@ -336,6 +337,10 @@ pub struct AppConfig {
     /// the row they landed on; off, the band is left where the hand left it and the file is only
     /// read off the card.
     pub pin_mode_audio_camera_follows: bool,
+    /// Whether a sound taken up pinned comes up with its playlist band open — the
+    /// `Audio → Pin Mode → Playlist → Always Open Playlist` row. Off, the band is the one the
+    /// hand opened and left, carried from pin to pin (see `pin_playlist::toggle`).
+    pub pin_mode_audio_playlist_always_open: bool,
     /// What a *pinned* film does at the end of it — the film's own answer to the same
     /// question (see `PinEndOfFile`).
     pub pin_mode_video_end_of_file: PinEndOfFile,
@@ -867,6 +872,7 @@ impl Default for AppConfig {
             pin_mode_audio_end_of_file: DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
             pin_mode_audio_shuffle: DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
             pin_mode_audio_camera_follows: DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
+            pin_mode_audio_playlist_always_open: DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
             pin_mode_video_end_of_file: DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
             pin_mode_video_shuffle: DEFAULT_PIN_MODE_VIDEO_SHUFFLE,
             pin_mode_image_shuffle: DEFAULT_PIN_MODE_IMAGE_SHUFFLE,

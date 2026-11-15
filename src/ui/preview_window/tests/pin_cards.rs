@@ -1133,6 +1133,29 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// The band a `Audio → Pin Mode → Playlist → Always Open Playlist` opens is the one a press opens:
+/// a sound taken up pinned comes up with it under the card, and nothing of another kind's window
+/// grows for a row that is only ever a sound's.
+struct AlwaysOpenPlaylist(bool);
+
+impl AlwaysOpenPlaylist {
+    fn stood_at(always_open: bool) -> Self {
+        let mut config = crate::CONFIG.lock().expect("the configuration");
+        let was = AlwaysOpenPlaylist(config.pin_mode_audio_playlist_always_open);
+        config.pin_mode_audio_playlist_always_open = always_open;
+
+        was
+    }
+}
+
+impl Drop for AlwaysOpenPlaylist {
+    fn drop(&mut self) {
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            config.pin_mode_audio_playlist_always_open = self.0;
+        }
+    }
+}
+
 /// A band under a pinned sound's card grows the window downward and leaves the card exactly where
 /// it was: the same box, the same first row, and the same media band — the rows the band takes are
 /// window the card never had, not rows of the card given away.
@@ -1143,6 +1166,7 @@ fn a_relayout_of_a_card_on_screen_keeps_the_share_it_was_painted_at() {
 fn a_band_under_a_card_grows_the_window_and_leaves_the_card_alone() {
     let _room = the_room_to_itself();
 
+    let _always_open = AlwaysOpenPlaylist::stood_at(false);
     let pin = sound_pin();
     assert_eq!(
         pin_playlist::playlist_rows(&pin),
@@ -1206,6 +1230,46 @@ fn a_band_under_a_card_grows_the_window_and_leaves_the_card_alone() {
         "and a box given back is owed a paint as much as one given: the band is down, and the \
          window it grew is the size it grew to until a paint says otherwise"
     );
+}
+
+/// `Always Open Playlist` is what gives a sound taken up pinned its band with no press behind it:
+/// the window comes up grown the way a press grows it, and the band put away by a hand stays away
+/// until the card is taken up again.
+#[test]
+fn always_open_playlist_gives_a_sound_its_band_at_the_take_up() {
+    let _room = the_room_to_itself();
+    let _always_open = AlwaysOpenPlaylist::stood_at(true);
+
+    let previous_pin = take_pin_for_a_test();
+    install(sound_pin());
+
+    assert!(
+        pin_playlist::the_band_is_open(),
+        "a band is opened for the sound the pin came up on"
+    );
+    let band = pin_state()
+        .and_then(|pinned| pinned.pin().and_then(pin_playlist::pin_playlist_band))
+        .expect("the band the take-up opened");
+    assert!(
+        band.1 > 0,
+        "and it is a band with a height, which is what grows the window"
+    );
+
+    let pin = take_pin_for_a_test().expect("the pin the test stood up");
+    pin_playlist::toggle(&pin);
+    assert!(
+        !pin_playlist::the_band_is_open(),
+        "a band the hand puts away is down until the card is taken up again"
+    );
+
+    let _closed = AlwaysOpenPlaylist::stood_at(false);
+    install(sound_pin());
+    assert!(
+        !pin_playlist::the_band_is_open(),
+        "and a take-up with the row off opens nothing"
+    );
+
+    stand_pin(previous_pin);
 }
 
 /// A window carried is a place and not a size, and the band under a card is the window's: the box a

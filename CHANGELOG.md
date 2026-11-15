@@ -4,6 +4,7 @@
 
 ### Added
 
+- **`Preview Settings → Audio → Pin Mode → Playlist → Always Open Playlist`** — a row for whether a sound taken up pinned comes up with its playlist band under it, off where the app starts and written `pin_mode_audio_playlist_always_open` in `config.ini`. A band is only ever a sound's card's, so this is the one road that opens one with no press behind it.
 - **`Preview Settings → Audio → Pin Mode → Playlist → Camera Follows on Seek`** — a row for what a step of a pinned sound's walk costs the playlist band under it, on where the app starts and written `pin_mode_audio_camera_follows` in `config.ini`. On, the band's camera goes to the row the step landed on; off, the band keeps the scroll the hand left it at and the file is only read off the card.
 
 ### Changed

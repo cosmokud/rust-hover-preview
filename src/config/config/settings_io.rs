@@ -195,6 +195,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "normalize_volume",
             "pin_mode_audio_camera_follows",
             "pin_mode_audio_end_of_file",
+            "pin_mode_audio_playlist_always_open",
             "pin_mode_audio_seek",
             "pin_mode_audio_shuffle",
             "pin_mode_image_shuffle",

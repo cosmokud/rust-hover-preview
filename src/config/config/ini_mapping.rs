@@ -335,6 +335,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "pin_mode_audio_playlist_always_open",
+            Some(self.pin_mode_audio_playlist_always_open.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "pin_mode_video_end_of_file",
             Some(self.pin_mode_video_end_of_file.as_str().to_string()),
         );
@@ -1053,6 +1058,11 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_camera_follows")
         {
             self.pin_mode_audio_camera_follows = value;
+        }
+        if let Ok(Some(value)) =
+            ini.getboolcoerce(CONFIG_SECTION, "pin_mode_audio_playlist_always_open")
+        {
+            self.pin_mode_audio_playlist_always_open = value;
         }
         // A file from the era of the master switch: a switch that was off is the sound left
         // where its file ended, which is what `Pause` says.
