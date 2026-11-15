@@ -425,20 +425,196 @@ pub fn pin_always_on_top() -> bool {
 }
 
 /// Whether the pin's window belongs in the topmost band: the band `Always On Top` asks for, and
-/// no other.
+/// the band it keeps while it follows the listing the user is working in.
 ///
-/// **There is no other band for it to stand in, and nothing to remember.** A pin that is not
-/// Always On Top is an ordinary window: Windows raises the window a click activated, and that
-/// window is then in front of the pin, which is the whole of what "not on top" means on this
-/// desktop. This app used to keep a record of a pin that "owed the front" so a preview it had just
-/// updated stayed over the listing, and every release rule that record needed was one more way to
-/// get it wrong — a pin still holding the topmost band after a resize, a restore, or `Win+D` is a
-/// window over every program the user works in, with the setting that says it must not be.
+/// **The two are one answer for every road that asks it, and neither is a record of what the window
+/// last had.** A pin that is not Always On Top is an ordinary window: Windows raises the window a click
+/// activated, and that window is then in front of the pin, which is the whole of what "not on top"
+/// means on this desktop. This app used to keep a record of a pin that "owed the front" so a preview it
+/// had just updated stayed over the listing, and every release rule that record needed was one more way
+/// to get it wrong — a pin still holding the topmost band after a resize, a restore, or `Win+D` is a
+/// window over every program the user works in, with the setting that says it must not be. What is kept
+/// now is not a record either: it is the settings and the window in front, asked every time (see
+/// `pin_holds_the_band_to_follow`).
 ///
-/// The band is the setting's. What this app asks for on the user's own press is a raise within the
-/// ordinary band, and it asks for it one press at a time (see `put_pin_at_the_front`).
+/// The band that is the setting's is the setting's. What this app asks for on the user's own press is a
+/// raise within the ordinary band for a pin that follows nothing, and it asks for it one press at a
+/// time (see `put_pin_at_the_front`).
 pub(crate) fn pin_holds_the_front() -> bool {
-    pinned() && pin_always_on_top()
+    pinned() && (pin_always_on_top() || PIN_FOLLOWING_BAND.load(Ordering::SeqCst))
+}
+
+/// Whether the pin is following the listing it was picked in: `Pin Mode → Update Preview` on, its
+/// `Move To Top` row on, and a pin that is up rather than collapsed into its bubble (see
+/// `pin_update_enabled` and `pin_update_move_to_top`).
+///
+/// **Asked without the band, because the two are different questions.** A pin can follow a listing
+/// while the user has gone to another program, and it is the one set of settings that says whether
+/// a press in that listing is a file the pin should be shown (see
+/// `app::seam::PIN_FOLLOWS_THE_LISTING`, which the press road asks for the same reason).
+fn pin_follows_the_listing() -> bool {
+    a_pin_follows_a_listing(
+        pin_always_on_top(),
+        pin_update_enabled(),
+        pin_update_move_to_top(),
+    )
+}
+
+/// The three settings of the question above, handed in rather than read: `Always On Top` off,
+/// `Pin Mode → Update Preview` on and its `Move To Top` row on (see `pin_follows_the_listing`).
+///
+/// **A pin that is Always On Top never answers this**, though it holds a band all the same: that band
+/// is the setting's, and a flag saying this app keeps it for a listing would leave the tick with a
+/// band to give back that was never taken for a listing.
+pub(super) fn a_pin_follows_a_listing(
+    always_on_top: bool,
+    updates: bool,
+    move_to_top: bool,
+) -> bool {
+    !always_on_top && updates && move_to_top
+}
+
+/// Whether the window the user is in is one a pin may stand over: the pin itself, another window of
+/// this app's (its menu, its film, its page, the bubble), a listing the file was picked in — Explorer's
+/// folder window, a dialog, Everything's results, a Q-Dir pane — or the desktop.
+///
+/// **Everything is a listing here, and that is the whole point of the question.** The band a press's
+/// grace and a step take is written down for a click that is about to land, and this is the same
+/// answer read off the desktop: while the user is working in a listing the pin follows, the window
+/// under their hands cannot be put over it.
+fn the_pin_may_stand_over_the_front() -> bool {
+    let front = unsafe { GetForegroundWindow() };
+
+    front.is_invalid()
+        || front == pinned_window()
+        || unsafe { foreground_is_ours(front) }
+        || unsafe { foreground_is_the_desktop(front) }
+        || crate::shell::explorer_hook::the_front_is_a_listing()
+}
+
+/// Whether the pin holds the topmost band for **following the listing** rather than for the setting:
+/// the band that keeps a popup or an activation from a listing off a pin the user is working with.
+///
+/// **An ordinary pin cannot be kept in front of its own listing, and only the band can do it.** The
+/// click that picks a file activates that listing — a window put over every ordinary one — and
+/// Everything draws a `tooltips_class32` popup in the topmost band over the *text* of a result row
+/// with no delay at all, both of which land on a tick after the press this app read. A pin that is
+/// not Always On Top was therefore put behind the listing, or behind its tooltip, for the length of
+/// one click and raised again by the pick: the flash the user reported twice, which only the mouse
+/// had because a key activates nothing (see `band_place` and `raise_pinned_preview`).
+///
+/// **It is held only while the user is still there, and the tick is what gives it back.** The band is a
+/// window over every program on the desktop, and with `Always On Top` off that is the one thing a pin
+/// must never be: the answer here is asked at the raise, written down in `PIN_FOLLOWING_BAND`, and asked
+/// again on every tick — the tick a it stops being true is the tick the pin goes back behind the
+/// program the user moved to (see `settle_the_following_band`).
+pub(super) fn pin_holds_the_band_to_follow() -> bool {
+    pinned()
+        && a_following_pin_holds_the_band(
+            pin_is_collapsed(),
+            pin_follows_the_listing(),
+            the_pin_may_stand_over_the_front(),
+        )
+}
+
+/// The rule above with every fact it is made of handed in: a pin that is up rather than collapsed into
+/// its bubble, one that follows a listing, and a window in front the pin may stand over (see
+/// `pin_holds_the_band_to_follow`, `a_pin_follows_a_listing` and `the_pin_may_stand_over_the_front`).
+///
+/// Handed in rather than read because the window in front is not a test process's to choose, and the
+/// rule is the half of this a test can hold: the three settings and the place the user is in.
+pub(super) fn a_following_pin_holds_the_band(
+    collapsed: bool,
+    follows_a_listing: bool,
+    front_is_one_it_may_cover: bool,
+) -> bool {
+    !collapsed && follows_a_listing && front_is_one_it_may_cover
+}
+
+/// Whether the pin keeps the topmost band for following a listing, as the last tick decided it: taken
+/// where a raise was made with the user in that listing, and given back by the tick that finds the user
+/// somewhere else (see `pin_holds_the_band_to_follow` and `settle_the_following_band`).
+///
+/// **It is a flag and not one more question asked of the window in front**, for the reason `PIN_BAND_HELD`
+/// is one: every placement of the pin's window between the press and the next tick asks the band, and a
+/// question answered off the desktop at that moment says what the click that is still on its way will
+/// change a moment later — the listing's activation, which is exactly what the band is held against.
+pub(super) static PIN_FOLLOWING_BAND: AtomicBool = AtomicBool::new(false);
+
+/// The band a pin keeps for the listing it follows, taken by the raise that answered a press or a
+/// pick in that listing and given back by the tick that finds the user somewhere else (see
+/// `settle_the_following_band`).
+///
+/// **Nothing of it outlives the pin.** A flag left set after a pin ends is a band the next pin would
+/// hold before anything decided it should, and a pin put back up over a program the user chose is the
+/// one thing `Always On Top` off must never mean.
+pub(super) fn forget_the_following_band() {
+    PIN_FOLLOWING_BAND.store(false, Ordering::SeqCst);
+}
+
+/// Take the band for the listing the user is in, or give it back: what the tick asks once, before
+/// anything else about the pin's place, and what a raise asks at the moment it raises.
+///
+/// **The raise is where it is taken, and the tick is where it is given back.** A press or a pick arrives
+/// while the user is in the listing the pin follows, and the activation that click ends in — or the popup
+/// Everything draws over the text of a row — is a window that reaches the desktop *after* this app has
+/// answered, so the band is taken there and stays taken across it. What ends it is the user moving to a
+/// program of their own: with `Always On Top` off a pin over that program is the one thing that setting
+/// must never mean, and the band goes back to the front of the ordinary one below it (see
+/// `pin_holds_the_band_to_follow`, `band_place` and `give_the_band_back`).
+pub(super) unsafe fn settle_the_following_band() {
+    if !pinned() {
+        PIN_FOLLOWING_BAND.store(false, Ordering::SeqCst);
+        return;
+    }
+
+    if pin_holds_the_band_to_follow() {
+        PIN_FOLLOWING_BAND.store(true, Ordering::SeqCst);
+        return;
+    }
+
+    if !PIN_FOLLOWING_BAND.swap(false, Ordering::SeqCst) {
+        return;
+    }
+
+    // Nothing of the band is given back where no window of the pin stands in it, and none where the
+    // setting owns it.
+    if pin_always_on_top() || pin_is_collapsed() {
+        return;
+    }
+
+    // Safety: the pin's own window, placed in the ordinary band and behind the window the user is in.
+    let hwnd = pinned_window();
+    if hwnd.is_invalid() || !unsafe { window_holds_the_topmost_band(hwnd) } {
+        return;
+    }
+
+    let front = unsafe { GetForegroundWindow() };
+    let place = if front.is_invalid()
+        || front == hwnd
+        || unsafe { foreground_is_ours(front) }
+        || unsafe { foreground_is_the_desktop(front) }
+    {
+        HWND::default()
+    } else {
+        front
+    };
+
+    if pin_trace::wanted() {
+        note_pin_trace!(
+            "following ended: the band goes to {}",
+            pin_trace::a_window_description(place)
+        );
+    }
+
+    // The band goes back for every kind of pin: a window of its own is put behind the window the user
+    // is in, and the kinds still standing in the preview's window have no band of their own to be
+    // placed in but this one — what they owe is the ordinary band and the place they already hold in
+    // it (see `give_the_band_back` and `band_place`).
+    unsafe {
+        pin_film_host::place_the_pin_in_the_band(hwnd, HWND_NOTOPMOST);
+        give_the_band_back(hwnd, place);
+    }
 }
 
 /// The band a window of this app's is placed in when it is placed for reasons of its own — a
@@ -587,6 +763,23 @@ unsafe fn take_the_band_and_give_it_back(hwnd: HWND, why: &str) {
     // band from the second call on, and a flag left saying otherwise would have the next placement put it
     // back over every program for a hold that is over (see `PIN_BAND_HELD`).
     PIN_BAND_HELD.store(false, Ordering::SeqCst);
+
+    // **A pin that follows the listing the user is in keeps the band**, which is the one band a
+    // listing's activation or its own popup cannot be put over: giving it back here is the pin an
+    // ordinary window again, covered by Everything's tooltip over a row's text a tick before its own
+    // pick raises it (see `pin_holds_the_band_to_follow` and `raise_pinned_preview`). What this road
+    // answers for is a raise into the front of the ordinary band, and the band is already the front of
+    // one of its own.
+    if PIN_FOLLOWING_BAND.load(Ordering::SeqCst) {
+        unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST) };
+        if pin_trace::wanted() {
+            note_pin_trace!(
+                "band kept: {why} the pin follows the listing the user is in, above={}",
+                pin_trace::what_is_above(hwnd)
+            );
+        }
+        return;
+    }
     // The pair's band rather than this window's: a film's host that owns the chrome is what takes and
     // gives it back, and Windows puts the chrome in it with the host (see
     // `pin_film_host::place_the_pin_in_the_band`).
@@ -1921,15 +2114,20 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         front == hwnd || crate::shell::explorer_hook::the_front_is_a_listing()
     };
     if !pin_always_on_top() && (!on_the_screen || the_front_is_the_pin_or_a_listing) {
-        // **A pin that is a window is put in front the one way Windows lets a process without the
-        // foreground do it: the topmost band, taken and given straight back.** `HWND_TOP` is refused
-        // for such a process — the call reports success and the window stays where it was — and the
-        // band is what the user sees as "exactly on top of everything" for the moment the window
-        // appears, with nothing of the setting left behind it (see
-        // `showing_takes_the_band_to_appear` and `take_the_band_and_give_it_back`).
-        if showing_takes_the_band_to_appear(on_the_screen)
+        // **A pin that follows its listing keeps the band it holds** rather than the flip below: the
+        // band is the only order the listing's activation and its own popups cannot be put over, and
+        // the placements above have already put the pair in it (see `pin_holds_the_band_to_follow`).
+        if PIN_FOLLOWING_BAND.load(Ordering::SeqCst) {
+            note_pin_trace!("show: the pin keeps the band it holds over the listing");
+        } else if showing_takes_the_band_to_appear(on_the_screen)
             || (on_the_screen && pin_is_its_own_window() && the_front_is_the_pin_or_a_listing)
         {
+            // **A pin that is a window is put in front the one way Windows lets a process without
+            // the foreground do it: the topmost band, taken and given straight back.** `HWND_TOP`
+            // is refused for such a process — the call reports success and the window stays where it
+            // was — and the band is what the user sees as "exactly on top of everything" for the
+            // moment the window appears, with nothing of the setting left behind it (see
+            // `showing_takes_the_band_to_appear` and `take_the_band_and_give_it_back`).
             // **On top of everything the moment it appears, and a normal window from then on:** what
             // is left after the band is given back is a window at the front of the ordinary one, which
             // the next click on another window puts behind it, exactly as any window behaves.
@@ -2429,8 +2627,17 @@ pub(super) unsafe fn put_pin_at_the_front(hwnd: HWND) {
     // the band is the half of this that the listing's activation cannot undo, and it is kept until
     // the user's own press gives it back (see `pin_holds_the_front`, `lower_pinned_preview`). What
     // stands in the pin's band is put in it too, in the order `place_pinned_siblings` asks for.
+    //
+    // **A pin that follows the listing holds it the same way**, and for the same half: a band taken
+    // and given straight back leaves an ordinary window, which the tooltip Everything draws over a
+    // row's text — that program's own topmost popup — and the activation the click ends in are both
+    // put over a tick later (see `pin_holds_the_band_to_follow`). The decision is written down here
+    // rather than asked again by every placement in between (see `PIN_FOLLOWING_BAND`).
+    if pin_holds_the_band_to_follow() {
+        PIN_FOLLOWING_BAND.store(true, Ordering::SeqCst);
+    }
     if pin_holds_the_front() {
-        note_the_place(hwnd, "raise: the band is kept, the pin owes the front");
+        note_the_place(hwnd, "raise: the band is kept over the listing");
         unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST) };
         place_pinned_siblings();
         settle_pinned_mpv_ontop();
@@ -2496,10 +2703,15 @@ pub(super) unsafe fn lower_pinned_preview(hwnd: HWND, window: HWND) {
     // the pin goes behind the window it was made in. That is recoverable rather than final: the pin's
     // own window is one a click may activate, so a click on the pin brings it back (see
     // `pin_set_focusable`).
-    if pin_is_collapsed() || pin_always_on_top() || !pin_update_move_to_top() {
+    // **A pin that holds the band for the listing the user is in is kept there**, exactly as one that is
+    // Always On Top: every press in that listing is either a file the pin is shown or a press that named
+    // none, and the listing's activation and the popup Everything draws over a row's text are both put
+    // over an ordinary window a tick after the press this app answered. The band goes back the moment
+    // the user is somewhere else (see `pin_holds_the_band_to_follow` and `settle_the_following_band`).
+    if pin_is_collapsed() || pin_holds_the_front() || !pin_update_move_to_top() {
         note_the_place(
             hwnd,
-            "lower: kept where it is, by the settings and its own box",
+            "lower: kept where it is, by the settings and the listing it follows",
         );
         return;
     }
@@ -2908,6 +3120,19 @@ unsafe fn give_the_band_back(hwnd: HWND, behind: HWND) {
     // Said first, whatever the window's band turns out to be: a hold that is over is over, and a
     // placement after it asks the setting again (see `PIN_BAND_HELD`).
     PIN_BAND_HELD.store(false, Ordering::SeqCst);
+
+    // **A band the pin holds for following its listing is not this road's to give back.** What is owed
+    // here is the front of one press — the activation its own click ends in — and the pin following
+    // that listing owes the same front for as long as the user is in it: giving it back is the pin the
+    // next popup or activation covers a tick before its own raise (see `pin_holds_the_band_to_follow`).
+    if pin_holds_the_band_to_follow() {
+        note_the_place(
+            hwnd,
+            "band kept: the pin follows the listing the user is in",
+        );
+        unsafe { pin_film_host::place_the_pin_in_the_band(hwnd, HWND_TOPMOST) };
+        return;
+    }
 
     if !pin_is_its_own_window() || pin_always_on_top() || !window_holds_the_topmost_band(hwnd) {
         return;

@@ -4154,6 +4154,12 @@ pub fn run_preview_window() {
                 _ => pin_press_band_until = None,
             }
 
+            // **The band a pin keeps for the listing the user is in is decided here, once a tick.** It
+            // is taken by a raise made while the user was in that listing — the press's and the pick's
+            // own — and given back the tick the user is in something else, behind that program (see
+            // `settle_the_following_band` and `pin_holds_the_band_to_follow`).
+            pin_lifecycle::settle_the_following_band();
+
             keep_pin_at_the_front(
                 pinned_window(),
                 &mut pin_front_owed,

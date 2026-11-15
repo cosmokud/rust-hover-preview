@@ -425,6 +425,21 @@ impl PinUpdateWatch {
                 window_is_gone(previous_window),
             )
         {
+            // **A press in Everything's results is raised before its row is read.** Everything's
+            // rows come out of its own process through a synchronous `LVM_*` (see `list_view`), so
+            // that read waits for the thread which is handling this very click — and the activation
+            // the click ends in is the listing put over the pin for the whole of the wait, which is
+            // the Everything window flashing over it before the file is read. The raise belongs to
+            // the press rather than to the file: a press that named none is answered behind by
+            // `pin_press_was_not_a_pick` below, in this same pass, so nothing is held in front for
+            // it. Every other listing answers from this process and is raised where its file is.
+            let raised_on_the_press = pick
+                && item_window_of(pointer.window)
+                    .is_some_and(|window| window.is(Listing::Everything));
+            if raised_on_the_press {
+                press_pinned_preview(press_frame(&pointer));
+            }
+
             // **The row the shell names can be a tick or ten behind the click**, so the file under the
             // point is read for every press rather than only for the presses the row answered: a click
             // the shell had not named yet is still the file the press picked, and answering it with "no
@@ -438,7 +453,7 @@ impl PinUpdateWatch {
             };
             let picked = match &row {
                 Some(Some(path)) if !path.is_dir() && is_media_file(path) => {
-                    if pick {
+                    if pick && !raised_on_the_press {
                         press_pinned_preview(press_frame(&pointer));
                     }
                     pick
@@ -447,7 +462,15 @@ impl PinUpdateWatch {
                     pin_press_was_not_a_pick(press_frame(&pointer));
                     false
                 }
-                Some(None) => false,
+                // A row that named no file is a press that picked nothing, and one already raised
+                // for the press is given back here rather than left held over Everything for the
+                // grace the raise began (see `raised_on_the_press`).
+                Some(None) => {
+                    if raised_on_the_press {
+                        pin_press_was_not_a_pick(press_frame(&pointer));
+                    }
+                    false
+                }
             };
             note_pin_click!(
                 "press answer  pick {}  row {}  at {},{}",
