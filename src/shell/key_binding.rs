@@ -90,16 +90,37 @@ pub(crate) fn parse_or_default(s: &str, default: &str) -> Binding {
         .expect("the built-in default is a key name")
 }
 
-/// Whether every key of any alternative is held, asked of `is_down`.
+/// The same, saying so when it falls back: a spelling the parser rejects is a setting the user
+/// meant and the app ignores, and silence would leave them pressing a key nothing answers.
+///
+/// Said once per resolution rather than once per read — the callers resolve a setting when the
+/// configuration says it changed, not per tick (see `shell::key_input::refresh`) — and said
+/// through the channel the config loader already speaks on rather than into a log of its own.
+pub(crate) fn parse_or_default_saying(s: &str, default: &str, what: &str) -> Binding {
+    match parse_binding(s) {
+        Some(binding) => binding,
+        None => {
+            // An empty setting is the file saying nothing, which the fallback is meant to answer;
+            // a setting that is *spelt* and unreadable is the one worth a line.
+            if !s.trim().is_empty() {
+                eprintln!(
+                    "config.ini: {what} \"{s}\" is not a key name this build reads; using \"{default}\""
+                );
+            }
+            parse_binding(default).expect("the built-in default is a key name")
+        }
+    }
+}
+
+/// Whether every key of any alternative is held, asked of `is_down`. The trigger key's poll
+/// used to be asked through this; it is now the hook's latch OR'd with the same question over
+/// packed chords (`key_input::trigger_is_held`), so what is left of it is the test that names
+/// the rule.
+#[cfg(test)]
 pub(crate) fn binding_is_active_with(b: &Binding, is_down: impl Fn(i32) -> bool) -> bool {
     b.alternatives
         .iter()
         .any(|alternative| alternative.keys.iter().all(|&vk| is_down(vk)))
-}
-
-/// Whether every key of any alternative is currently held.
-pub(crate) fn binding_is_active(b: &Binding) -> bool {
-    binding_is_active_with(b, key_is_down)
 }
 
 /// Whether `vk` is the main key of an alternative whose companions are all held, asked
@@ -146,6 +167,11 @@ pub(crate) fn packed_main(packed: u64) -> i32 {
 /// Whether a packed chord's main key is `vk` and its companions are all held.
 pub(crate) fn packed_press_matches(packed: u64, vk: i32) -> bool {
     packed != 0 && packed_main(packed) == vk && packed_companions_held(packed)
+}
+
+/// Whether a packed chord is held in full: its main key and every companion of it.
+pub(crate) fn packed_held(packed: u64) -> bool {
+    packed != 0 && key_is_down(packed_main(packed)) && packed_companions_held(packed)
 }
 
 /// Whether every companion of a packed chord is currently held.
@@ -277,6 +303,33 @@ mod tests {
         assert_eq!(
             parse_or_default("alt", DEFAULT_PIN_KEY),
             parse_binding("alt").unwrap()
+        );
+    }
+
+    /// A spelling the parser rejects falls back rather than failing, and the settings the app
+    /// reads are each answered from the default they name — the same three `key_input` binds.
+    #[test]
+    fn a_malformed_setting_falls_back_to_the_default_its_row_names() {
+        let pin = parse_or_default_saying("ctrl+nonsense", DEFAULT_PIN_KEY, "pin_key");
+        assert_eq!(pin, parse_binding(DEFAULT_PIN_KEY).unwrap());
+
+        let trigger = parse_or_default_saying("ctrl+nonsense", DEFAULT_TRIGGER_KEY, "trigger_key");
+        assert_eq!(trigger, parse_binding(DEFAULT_TRIGGER_KEY).unwrap());
+
+        let toggle = parse_or_default_saying(
+            "ctrl+nonsense",
+            crate::config::config::DEFAULT_TOGGLE_KEY,
+            "toggle_key",
+        );
+        assert_eq!(
+            toggle,
+            parse_binding(crate::config::config::DEFAULT_TOGGLE_KEY).unwrap()
+        );
+
+        // An empty setting is silence rather than a spelling to complain about.
+        assert_eq!(
+            parse_or_default_saying("  ", DEFAULT_PIN_KEY, "pin_key"),
+            parse_binding(DEFAULT_PIN_KEY).unwrap()
         );
     }
 
