@@ -741,6 +741,10 @@ pub(super) fn end_pin(reason: Reason, window: &dyn PinWindow) -> PinHide {
     // `subtitle_files::keep_extraction_for`).
     subtitle_files::keep_extraction_for(None);
 
+    // And the band a pin kept for the listing it followed goes with it: it is the pin's own answer, and
+    // a flag left behind would have the next pin holding a band nothing decided it should (see
+    // `pin_lifecycle::forget_the_following_band`).
+    super::pin_lifecycle::forget_the_following_band();
     publish_pin_up(false);
     // A pin that is over is a pointer that is on something new: the file the pin was of is not
     // a hover the hook has already answered, and one is due the moment the pin is gone rather
