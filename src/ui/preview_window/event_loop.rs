@@ -4156,9 +4156,10 @@ pub fn run_preview_window() {
 
             // **The band a pin keeps for the listing the user is in is decided here, once a tick.** It
             // is taken by a raise made while the user was in that listing — the press's and the pick's
-            // own — and given back the tick the user is in something else, behind that program (see
+            // own — and given back on the press's own clock, which is the debt handed in here: the band
+            // is held across the answer that click is owed and no longer (see
             // `settle_the_following_band` and `pin_holds_the_band_to_follow`).
-            pin_lifecycle::settle_the_following_band();
+            pin_lifecycle::settle_the_following_band(pin_front_owed, tick_now);
 
             keep_pin_at_the_front(
                 pinned_window(),
