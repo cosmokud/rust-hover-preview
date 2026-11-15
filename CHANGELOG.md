@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **A shuffled sound pin's playlist is drawn A-Z** — with `Pin Mode → Shuffle` on, the band under a pinned sound showed the shuffled order it was stepping through, which made the list read as a jumble rather than as the folder the hand was looking at. The band is a list the hand reads and the shuffle is how the pin *steps*, so the rows are now drawn in natural name order while the walk keeps its hidden shuffled order underneath: **Next**, **Previous** and the file an end of file goes on to still follow the shuffle, and a row picked in the band still plays the file it names.
+
 ## [0.5.8] - 2026-11-15
 
 ### Fixed
