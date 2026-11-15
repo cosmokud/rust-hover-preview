@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Pin Mode → Always On Top` off is respected again while the user works in a listing** — a pin with `Update Preview` and `Move To Top` on kept the topmost band for as long as the listing it follows was in front, which made the setting mean nothing for that listing: a click in Explorer, in Everything or in a dialog that named no file could not put the pin behind it, because the lowering road asked `pin_holds_the_front` and the band answered yes. The band belongs to the press that took it and is given back on that press's own clock — the activation and the tooltip a pick has to be kept out of, and no longer — so a press that names no file puts the pin behind the listing again.
+
 ## [0.5.7] - 2026-11-15
 
 ### Added
