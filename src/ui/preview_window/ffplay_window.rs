@@ -513,11 +513,17 @@ pub(super) fn ensure_noactivate_monitor() {
                     && pinned()
                     && !pin_is_collapsed()
                     && pin_playback::a_relaunch_is_in_flight();
+                // **And a source whose player has not yet answered with the client its window is at is
+                // looked at at the start's cadence too**: a pin carried across a display of another scale
+                // is a source whose crop must follow the player's own catch-up, and the answer arrives in
+                // a millisecond or two of the carry rather than at the idle pace (see
+                // `pin_film_thumbnail::the_pictures_area`).
+                let catching_up = pin_film_thumbnail::a_picture_is_owed_its_answer();
                 // And a player waiting to be caught before its show is looked for at the start's
                 // cadence too, whatever age the player it belongs to is.
                 wait_for_noactivate_wake(the_monitor_wait(
                     elapsed,
-                    launching || eager.is_some() || a_window_waits_to_be_unlisted,
+                    launching || catching_up || eager.is_some() || a_window_waits_to_be_unlisted,
                 ));
             } else if a_window_waits_to_be_unlisted {
                 // A window this app is waiting for is looked for at the start's cadence: it is a player's

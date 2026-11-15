@@ -85,6 +85,11 @@
 //! (measured: a 1280x720 picture standing in a 2560x1440 window). **The player is the one thing that knows
 //! what it drew**, so `osd-dimensions` answers where the crop is fitted and a player that answers nothing
 //! (FFmpeg's) draws the whole client it was placed at (see `the_pictures_area` and `note_the_crop_area`).
+//! **And a player that answers with the display the window has just left is asked again**: the answer a
+//! carriage gets is a millisecond or two of the old size, and it is kept against a client the window has
+//! already changed to — so an answer that is not that client is re-read until it is (see
+//! `the_pictures_area`), which is what makes a pin carried across a scale boundary the film and not its
+//! top-left quarter.
 //!
 //! **The invariant has teeth in this module, not only in prose.** Three calls name the source's
 //! geometry and there are no others: `size_the_source` — the one placement, reached only through
@@ -1520,6 +1525,15 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
     };
     if sized {
         forget_the_late_placement();
+        // **And a picture whose source has moved under it is re-pointed here, on the pass that asks
+        // again.** The one thing that can change a source's client without this app asking for
+        // anything is the window system rescaling it on a display change, and the crop is fitted into
+        // what its player says it drew — a read that answers with the display the window left for the
+        // first millisecond or two (see `the_pictures_area`). Nothing on this pass is paid for while
+        // nothing is owed: the whole of a pass over a settled picture is the two atomics read here.
+        if !a_still_stands() && a_picture_is_owed_its_answer() {
+            settle_the_registration(&mut held, host);
+        }
         return;
     }
     let Ok(mut armed) = LATE_PLACEMENT.lock() else {
@@ -2935,9 +2949,7 @@ fn the_source_client(source: HWND, fallback: (i32, i32)) -> (i32, i32) {
     }
 }
 
-/// **The area the film is drawn in, as the player itself says it is**: the window's client, or the
-/// area the player's own video output is configured for where the player answers one — and the second is
-/// not the first for a source whose output is a size behind its window (see `the_pictures_rectangle`).
+/// The area the film is drawn in, as the player itself says it is — see `the_pictures_area`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct PictureArea {
     source: isize,
@@ -2946,6 +2958,16 @@ struct PictureArea {
     client: (i32, i32),
     /// The area the output is configured for, in the client's own coordinates.
     area: (i32, i32),
+    /// **When this client's first answer was read.** Windows hands a player a rescaled rectangle on
+    /// `WM_DPICHANGED` *before* its video output has followed it, so the first answer a carriage gets is
+    /// the size the output was configured for on the display it left — and it is kept against a client
+    /// the window has already changed to, which no later pass asks about (see `the_pictures_area`). It
+    /// is the clock that tells that stale word from a player whose output really is smaller than its
+    /// window.
+    since: Instant,
+    /// When the player was last asked, so a source still owed its answer is asked at
+    /// `PICTURE_AREA_EVERY` rather than on every pass of the monitor.
+    asked: Instant,
 }
 
 static PICTURE_AREA: Mutex<Option<PictureArea>> = Mutex::new(None);
@@ -2978,16 +3000,50 @@ fn forget_the_pictures_area() {
 /// and this is on the road a drag crosses. The answer is kept with the client it was asked about, so a
 /// window that has not changed asks nothing; a read that is in flight is one frame of the pair that
 /// already stands rather than a frame the loop waits for.
+///
+/// **What follows a carriage is asked again, because the first answer is the display it left.**
+/// Windows sends a player `WM_DPICHANGED` with the rescaled rectangle it suggests, and mpv takes that
+/// rectangle as it stands while its video output is still configured for the display it came from
+/// (see `video_launch::mpv_box_size`): a window carried from a 96-DPI display to a 192-DPI one is
+/// its client doubled at once and its `osd-dimensions` still the size it left, for 1-6 ms measured
+/// here on mpv 0.41.0, over six of ten carries. The client the pair is kept against is the doubled
+/// one from that instant on, so a single read taken then is never asked again — and a crop fitted into
+/// it is half the film's width and height, which is exactly the pin that reads as zoomed in. What
+/// follows a carriage is therefore asked again at `PICTURE_AREA_EVERY` by the pass that watches the
+/// player (see `ffplay_window::ensure_noactivate_monitor`) until the answer is the client the window is
+/// at, so the crop follows the player's own catch-up rather than its first stale word.
 fn the_pictures_area(source: HWND, process: u32, live: (i32, i32)) -> (i32, i32) {
     if process == 0 || !mpv_ipc::answers_properties(process) {
         return live;
     }
     let number = source.0 as isize;
-    if let Some(asked) = PICTURE_AREA.lock().ok().and_then(|held| *held) {
-        if asked.source == number && asked.process == process && asked.client == live {
+    let now = Instant::now();
+    let standing = PICTURE_AREA.lock().ok().and_then(|held| *held);
+    if let Some(asked) = standing.filter(|asked| asked.is_about(number, process, live)) {
+        if asked.area_is_the_client(live) {
+            // **The answer is what the player is drawing, and it is the window**: nothing more is owed.
+            return asked.area;
+        }
+        // An answer still behind its client once the clock has run out is the player's own — a window
+        // something else resized under an output that is not following it — and nothing asks again.
+        if now.saturating_duration_since(asked.since) >= PICTURE_AREA_SETTLE {
+            return asked.area;
+        }
+        // **And never a read under a hand that is pulling the pin's edge**: a drag crosses this road on
+        // every step of the box, and a source still owed its answer is the monitor's to ask once the
+        // gesture is over (see `pin_film_host::a_resize_drag_is_live`).
+        if pin_film_host::a_resize_drag_is_live() {
+            return asked.area;
+        }
+        // And a pace on the re-asks, so a monitor that passes every few milliseconds is not a pipe asked
+        // on every pass.
+        if now.saturating_duration_since(asked.asked) < PICTURE_AREA_EVERY {
             return asked.area;
         }
     }
+    let since = standing
+        .filter(|asked| asked.is_about(number, process, live))
+        .map_or(now, |asked| asked.since);
     let Some(area) = the_outputs_area(process, live) else {
         return live;
     };
@@ -2997,9 +3053,57 @@ fn the_pictures_area(source: HWND, process: u32, live: (i32, i32)) -> (i32, i32)
             process,
             client: live,
             area,
+            since,
+            asked: now,
         });
     }
     area
+}
+
+/// How often a source whose player reported an area behind its window is asked again: the answer a
+/// carriage is owed, because the first one is the display the window left (see `the_pictures_area`).
+const PICTURE_AREA_EVERY: Duration = Duration::from_millis(8);
+
+/// How long past the first ask an answer that is still behind its client is taken as the player's own,
+/// rather than as the stale word a carriage hands out: measured 1-6 ms of staleness on mpv 0.41.0, and
+/// this bound is a good deal wider than that so that a busy machine pays a handful of reads rather than
+/// a wrong crop (see `the_pictures_area`).
+const PICTURE_AREA_SETTLE: Duration = Duration::from_millis(100);
+
+impl PictureArea {
+    /// Whether this answer is one asked about the window the pair is on now.
+    fn is_about(&self, source: isize, process: u32, client: (i32, i32)) -> bool {
+        self.source == source && self.process == process && self.client == client
+    }
+
+    /// Whether the area the player reported is the client its window is at: **the answer a carriage is
+    /// waited for**. One that is not is either the old display's size — the window has changed under it
+    /// and the output has not — or a player whose output really is smaller than its window, which the
+    /// clock in `the_pictures_area` tells apart.
+    fn area_is_the_client(&self, live: (i32, i32)) -> bool {
+        self.area == (live.0.max(1), live.1.max(1))
+    }
+}
+
+/// **Whether a source's player has not yet answered with the client its window is at**, and is still
+/// owed that answer: the monitor that watches the player passes again in a millisecond or two while this
+/// is true, rather than at the idle cadence it keeps once a film has been up a while (see
+/// `ffplay_window::the_monitor_wait` and `the_pictures_area`).
+///
+/// `try_lock` rather than a wait: a record the preview loop holds at this moment is one a pass has just
+/// answered, and the next pass asks again.
+///
+/// **A pass that is owed this answer is looked at at the start's cadence** — the same one a relaunch
+/// waiting for its window is — because the answer arrives in a millisecond or two of the carry (see
+/// `ffplay_window::ensure_noactivate_monitor`).
+pub(super) fn a_picture_is_owed_its_answer() -> bool {
+    PICTURE_AREA
+        .try_lock()
+        .ok()
+        .and_then(|held| *held)
+        .is_some_and(|asked| {
+            !asked.area_is_the_client(asked.client) && asked.since.elapsed() < PICTURE_AREA_SETTLE
+        })
 }
 
 /// `osd-dimensions`' `w`/`h` as the area the film is drawn in: the window the player's output is
@@ -4653,6 +4757,53 @@ mod tests {
         mpv_ipc::answer_a_read(pid, "osd-dimensions", None);
         forget_the_pictures_area();
         assert_eq!(the_pictures_area(source, pid, client), client);
+
+        mpv_ipc::forget_pipe(pid);
+        mpv_ipc::clear_reads();
+        forget_the_pictures_area();
+    }
+
+    /// **A crop is fitted into the area the player says it drew, and a player that says the size of
+    /// the display it left is asked again**: a pin carried across a display of another scale is a source
+    /// whose client the window system rescaled at once and whose video output is still the size it was
+    /// configured for, so the first answer is half the film's width and height — the pin that reads as
+    /// zoomed in (see `the_pictures_area`).
+    #[test]
+    fn a_carried_source_is_asked_again_until_its_player_catches_up() {
+        let _room = the_room_to_itself();
+        let pid = 0x5eed;
+        let source = HWND(0x5150 as *mut _);
+        mpv_ipc::remember_pipe(pid, "rhp-test-carried-area", false);
+        mpv_ipc::clear_reads();
+        forget_the_pictures_area();
+
+        let carried = (3840, 2160);
+        let left = r#"{"w":1920,"h":1080,"aspect":1.777778}"#;
+        let caught_up = r#"{"w":3840,"h":2160,"aspect":1.777778}"#;
+        // The window system's rectangle is taken at once and the output is not: the answer at the
+        // instant of the carry is the display the window came from.
+        mpv_ipc::answer_a_read(pid, "osd-dimensions", Some(left));
+        assert_eq!(the_pictures_area(source, pid, carried), (1920, 1080));
+        assert!(
+            a_picture_is_owed_its_answer(),
+            "a size behind its client is an answer the road is still owed"
+        );
+        // A pass within the pace is not a second read, however often the monitor runs.
+        assert_eq!(the_pictures_area(source, pid, carried), (1920, 1080));
+        assert_eq!(
+            mpv_ipc::noted_reads().len(),
+            1,
+            "one read per pace, not one per pass"
+        );
+        // The answer the player gives when its output has caught up is the client, and the crop is the
+        // film's own shape fitted into it rather than the top-left quarter of the surface.
+        mpv_ipc::answer_a_read(pid, "osd-dimensions", Some(caught_up));
+        std::thread::sleep(PICTURE_AREA_EVERY);
+        assert_eq!(the_pictures_area(source, pid, carried), carried);
+        assert!(
+            !a_picture_is_owed_its_answer(),
+            "an answer that is the client owes nothing more"
+        );
 
         mpv_ipc::forget_pipe(pid);
         mpv_ipc::clear_reads();
