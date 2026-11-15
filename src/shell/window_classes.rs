@@ -8,15 +8,25 @@
 //! here — no cache of views, no item under the pointer — so this is a module both sides own, and it
 //! kept the hook's name only because the classes it names are the shell's.
 //!
+//! **And a tooltip is taken off the point's own reading here, for the same reason.** `WindowFromPoint`
+//! names the `tooltips_class32` popup that stands over the row it describes, and the press the user
+//! made went to the row beneath it: read through the tooltip, a press on a row's *text* is a press in
+//! nobody's listing, and the pin goes behind that program only to be raised again by the pick the same
+//! press made (see `the_window_under_the_point`). Both sides ask it — the hook's pointer tick and the
+//! wheel hook's press road — so it is asked here, beside the classes it is told apart by.
+//!
 //! **Only the class**, and never the process behind a window: explorer.exe also owns the desktop, the
 //! taskbar, the Start menu and the search box, and reading one of those as an Explorer window is what
 //! made the foreground test answer yes with the desktop in front (see `is_explorer_window`, which is
 //! the cached form of the same question).
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GetAncestor, GetClassNameW, GetDlgItem, GetForegroundWindow, GA_ROOT,
+    ChildWindowFromPointEx, FindWindowExW, GetAncestor, GetClassNameW, GetDlgItem,
+    GetForegroundWindow, GetWindow, GetWindowRect, IsWindowVisible, WindowFromPoint,
+    CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, GA_ROOT, GW_HWNDNEXT,
 };
 
 /// The frame a window stands in: the top-level window whose band every part of it is drawn in.
@@ -41,6 +51,176 @@ pub(crate) fn the_frame_of(hwnd: HWND) -> HWND {
         hwnd
     } else {
         frame
+    }
+}
+
+/// The window a point is really over: what the desktop names under it, with a **tooltip** taken off
+/// the answer.
+///
+/// **A tooltip is no window the point is over, and the desktop's hit test names one anyway.** A
+/// `tooltips_class32` popup is a top-level window of the program whose row it describes, drawn
+/// without `WS_EX_TRANSPARENT` often enough — measured on both Everything's list tooltips and
+/// Explorer's own — that `WindowFromPoint` answers it, while the press itself goes through to the
+/// window beneath it, because a tooltip takes no clicks. Read as the answer, the window under a
+/// press on the *text* of a row is a window of nobody's listing: `a_listing_is_previewed` says no
+/// for it, `a_press_puts_us_behind` puts the pin behind it exactly as it would for any other
+/// program's window, and the pick that press made raises the pin again a tick later — the listing
+/// flashing over the pin for the length of one click, which is the fault this is written against.
+/// The same answer is what keeps a hover of that row from being read at all, and what leaves `the
+/// frame of the item` unplaceable while the tooltip is up.
+///
+/// **The window below it is found in the z-order rather than through the tooltip's owner**, because
+/// Everything's own tooltips carry no owner at all — measured — and one that has an owner is owned
+/// by whichever window put it up rather than by the row it stands over.
+///
+/// One `WindowFromPoint` and, where it named a tooltip, the walk below and the descent into the
+/// window it finds: the classes and boxes of the windows the walk passes, which is what a low-level
+/// hook and a tick that reads the pointer thirty times a second can both pay (see `PointerTick::of`
+/// and `note_a_press`). Nothing of it is paid where no tooltip is up.
+pub(crate) fn the_window_under_the_point(point: POINT) -> HWND {
+    // Safety: a question about the desktop's own z-order, asked of a point on it; nothing is
+    // dereferenced.
+    let named = unsafe { WindowFromPoint(point) };
+    if named.is_invalid() || !tooltip_class_matches(named) {
+        return named;
+    }
+
+    // The tooltip itself where nothing below it holds the point: the answer the desktop gave is no
+    // worse than none, and a tooltip with no window under it is a reading this app cannot improve.
+    let Some(below) = (unsafe { the_window_below_a_tooltip(named, point) }) else {
+        return named;
+    };
+
+    // **The window below it is answered as the hit test would have: the leaf, not the frame.**
+    // A listing's rows are children of its frame, and the frame answers no item the rows draw — the
+    // window an item is resolved in is the one it is drawn in (see `ItemWindow`).
+    unsafe { the_leaf_at(below, point) }
+}
+
+/// Whether a window is one the desktop draws **over** a listing rather than part of it: a tooltip,
+/// or a menu's own `#32768`.
+///
+/// **These are asked about before any frame is**, because both are their own roots: a popup's frame
+/// is the popup, so every question about a listing answers no for it, and a press read as that
+/// program's is a press the pin is lowered behind (see `window_state::the_pick_road_answers` and
+/// `a_press_puts_us_behind`). Everything puts a `tooltips_class32` up over the text of a result row
+/// with no delay at all, which is why the same press flashed the pin for one click on a row's text
+/// and never on the empty part of that row.
+///
+/// Allocation-free and one class read, because a `WH_MOUSE_LL` callback reaches this through
+/// `window_state::the_pick_road_answers`.
+pub(crate) fn popup_class_matches(hwnd: HWND) -> bool {
+    if hwnd.is_invalid() {
+        return false;
+    }
+
+    unsafe {
+        let mut class_name = [0u16; 256];
+        let len = GetClassNameW(hwnd, &mut class_name);
+        len > 0
+            && (utf16_contains_ascii_ignore_case(&class_name[..len as usize], b"tooltips_class32")
+                || utf16_contains_ascii_ignore_case(&class_name[..len as usize], b"#32768"))
+    }
+}
+
+/// The window a point is really over, inside a window the desktop has already named: the deepest
+/// visible, enabled, non-transparent child holding the point, or the window itself where it has
+/// none (see `the_window_under_the_point`).
+///
+/// It is the descent `WindowFromPoint` makes, done on a window the tooltip stands over rather than on
+/// the tooltip's own answer.
+///
+/// Safety: a question about the desktop's own window tree, asked of a window it gave out.
+unsafe fn the_leaf_at(window: HWND, point: POINT) -> HWND {
+    /// How far down one window's tree the descent goes: a listing's rows are a handful of windows
+    /// below its frame, and a bound keeps a tree this app cannot walk a walk that ends.
+    const THE_DESCENT_LIMIT: usize = 16;
+
+    let mut at = window;
+    for _ in 0..THE_DESCENT_LIMIT {
+        let mut inside = point;
+        if !unsafe { ScreenToClient(at, &mut inside) }.as_bool() {
+            return at;
+        }
+
+        // Safety: the desktop is asked for the child of a window it gave out, at a point in that
+        // window's own client coordinates.
+        let child = unsafe {
+            ChildWindowFromPointEx(
+                at,
+                inside,
+                CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT,
+            )
+        };
+        if child.is_invalid() || child == at {
+            return at;
+        }
+
+        at = child;
+    }
+
+    at
+}
+
+/// The first window below a tooltip in the z-order that is showing and holds a point, or nothing
+/// where the walk found none (see `the_window_under_the_point`).
+///
+/// Safety: the window handed in is one the desktop named, and the walk is of top-level windows.
+unsafe fn the_window_below_a_tooltip(tooltip: HWND, point: POINT) -> Option<HWND> {
+    /// How far below a tooltip the walk looks: more windows than any desktop stacks, and a bound so
+    /// that a z-order this app cannot walk is a walk that ends rather than one that never does.
+    const THE_WALK_LIMIT: usize = 300;
+
+    let mut below = unsafe { GetWindow(tooltip, GW_HWNDNEXT) }.ok()?;
+    for _ in 0..THE_WALK_LIMIT {
+        if below.is_invalid() {
+            return None;
+        }
+
+        if unsafe { IsWindowVisible(below) }.as_bool()
+            && !tooltip_class_matches(below)
+            && unsafe { holds_the_point(below, point) }
+        {
+            return Some(below);
+        }
+
+        below = unsafe { GetWindow(below, GW_HWNDNEXT) }.ok()?;
+    }
+
+    None
+}
+
+/// Whether a window's own box holds a point on the screen, read the way every box here is: the
+/// right and bottom edges are outside it.
+///
+/// Safety: asks the desktop for the rectangle of a window it gave out; nothing is dereferenced.
+unsafe fn holds_the_point(window: HWND, point: POINT) -> bool {
+    let mut box_of = RECT::default();
+    if unsafe { GetWindowRect(window, &mut box_of) }.is_err() {
+        return false;
+    }
+
+    point.x >= box_of.left
+        && point.x < box_of.right
+        && point.y >= box_of.top
+        && point.y < box_of.bottom
+}
+
+/// Whether a window is one of the desktop's tooltips — a `tooltips_class32` popup, asked of the
+/// window itself rather than of its frame, since a tooltip is its own root.
+///
+/// Allocation-free and one class read, because a `WH_MOUSE_LL` callback reaches this through
+/// `the_window_under_the_point` (see `press_is_inside_ours`).
+pub(crate) fn tooltip_class_matches(hwnd: HWND) -> bool {
+    if hwnd.is_invalid() {
+        return false;
+    }
+
+    unsafe {
+        let mut class_name = [0u16; 256];
+        let len = GetClassNameW(hwnd, &mut class_name);
+        len > 0
+            && utf16_contains_ascii_ignore_case(&class_name[..len as usize], b"tooltips_class32")
     }
 }
 
@@ -743,5 +923,45 @@ mod tests {
         );
 
         crate::app::seam::publish_browse_dialog_previews(was);
+    }
+
+    /// **A tooltip is a class of its own and no listing's frame**, which is what lets the point's own
+    /// reading take it off an answer: it is a top-level popup of the program whose row it describes,
+    /// and `the_window_under_the_point` walks below it where the desktop's hit test named one
+    /// (measured on Everything's list tooltips, which often carry no `WS_EX_TRANSPARENT` and are named
+    /// by `WindowFromPoint` while the press itself goes to the row beneath — see `the_window_under_the_point`).
+    ///
+    /// The two facts the reading is made of are asserted here, on windows made where no display is:
+    /// the class a tooltip is read by, and the frame it has to be told apart from.
+    #[test]
+    fn a_tooltip_is_a_class_of_its_own_and_no_listing() {
+        let mut windows = WindowsOfTheTest::default();
+
+        // Safety: this test's own windows, made where no display is and shown never. The tooltip is
+        // made last so that it stands above the frame in the desktop's own order.
+        let (tooltip, frame) = unsafe {
+            let frame = windows.a_window_named(w!("EVERYTHING"), None);
+            let _ = windows.a_window_named(w!("SysListView32"), Some(frame));
+            let tooltip = windows.a_window_named(w!("tooltips_class32"), None);
+            (tooltip, frame)
+        };
+
+        assert!(
+            tooltip_class_matches(tooltip),
+            "a `tooltips_class32` popup is the class a tooltip is read by"
+        );
+        assert!(
+            !tooltip_class_matches(frame) && !tooltip_class_matches(HWND::default()),
+            "and nothing else is one: a listing's frame and no window at all answer no"
+        );
+        assert!(
+            !everything_class_matches(tooltip),
+            "which is what the tooltip's own class was already refused by: a tooltip is no listing, \
+             and reading one as a program's window is the pin put behind it"
+        );
+        assert!(
+            everything_class_matches(frame),
+            "while the frame the tooltip stands over is the listing the press did land in"
+        );
     }
 }
