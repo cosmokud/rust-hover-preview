@@ -400,7 +400,7 @@ fn kind_rank(kind: PreviewType) -> u8 {
 /// leading zeros so `img007` and `img7` are one number and not two spellings of it. A name
 /// that is all digits is compared as one number, so a folder of numbered screenshots is in
 /// order rather than in the order the digits happen to fall.
-fn natural_cmp(a: &Path, b: &Path) -> Ordering {
+pub(super) fn natural_cmp(a: &Path, b: &Path) -> Ordering {
     let left = a
         .file_name()
         .and_then(|name| name.to_str())

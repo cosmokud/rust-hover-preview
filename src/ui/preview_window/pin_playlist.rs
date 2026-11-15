@@ -87,6 +87,11 @@ struct PinPlaylist {
     /// list, so a press answered in rows is answered in files.
     rows: Vec<pin_chrome::PlaylistRow>,
     order: Vec<PathBuf>,
+    /// The walk's own order `order` was drawn from, and whether that walk shuffles: kept so that
+    /// the display order is worked out only when the walk moves, since it is a sort of every file
+    /// and this is asked once a tick (see `display_order`).
+    walk_order: Vec<PathBuf>,
+    shuffle: bool,
     /// The positions into `rows` the search's query lets through: the drawing, the scroll, the
     /// scrollbar and a press all count in these, while `showing`, `picked`, `hovered` and the
     /// marquees stay the rows' own indices, which the filter never renumbers (see
@@ -161,6 +166,8 @@ impl Default for PinPlaylist {
         Self {
             rows: Vec::new(),
             order: Vec::new(),
+            walk_order: Vec::new(),
+            shuffle: false,
             shown: Vec::new(),
             query: text_find_field::Field::default(),
             search_focused: false,
@@ -196,8 +203,17 @@ impl PinPlaylist {
     /// walk step moves the pin's own file and leaves the list exactly as it was. And whether the row
     /// the pin is showing moved, which is a name the band travels for and one it lets go of (see
     /// `set_the_marquee`).
-    fn hold_the_walk(&mut self, order: Vec<PathBuf>, path: PathBuf, probed: u64) -> (bool, bool) {
+    fn hold_the_walk(
+        &mut self,
+        walk_order: Vec<PathBuf>,
+        shuffle: bool,
+        path: PathBuf,
+        probed: u64,
+    ) -> (bool, bool) {
+        let order = display_order(&walk_order, shuffle);
         let moved = self.order != order;
+        self.walk_order = walk_order;
+        self.shuffle = shuffle;
         if moved {
             self.order = order;
             // A list that is not the one a pick was made in is not a list a pick means anything in.
@@ -490,6 +506,24 @@ impl PinPlaylist {
     }
 }
 
+/// The order the band draws, from the walk's own: the walk's order where it steps linearly — the
+/// folder's own, whatever sort the view it was read in was under — and the same files in natural
+/// name order where it shuffles.
+///
+/// **The shuffle is hidden here and nowhere else.** A shuffled walk's `order` is the permutation
+/// its next, previous and end of file step along, and it is not a list anybody can read: the band
+/// is a list the hand picks from, so it is drawn A-Z while that permutation is left exactly as the
+/// navigation holds it (see `pin_walk::PinStep::order`).
+fn display_order(walk_order: &[PathBuf], shuffle: bool) -> Vec<PathBuf> {
+    let mut order = walk_order.to_vec();
+
+    if shuffle {
+        order.sort_by(|a, b| super::pin_navigation::natural_cmp(a, b));
+    }
+
+    order
+}
+
 /// Where the camera of a band of `rows` rows stands when the file the pin is showing is at
 /// `showing` — the middle of the band, and the nearer end of the list where the middle of it is not
 /// there to be had: a row in the first half has nothing above it to be centred against, and one in
@@ -728,7 +762,7 @@ pub(super) fn the_tick_is_owed_a_repaint() -> bool {
 /// reads first is the pin, and a pin asked twice on one thread blocks for ever.
 pub(super) fn refresh_the_rows() -> bool {
     let probed = PROBED.load(Ordering::Acquire);
-    let (order, path) = {
+    let (walk_order, shuffle, path) = {
         let Some(pinned) = pin_state() else {
             return false;
         };
@@ -736,26 +770,33 @@ pub(super) fn refresh_the_rows() -> bool {
             return false;
         };
 
-        // A pin that holds no walk is a pin of one file, which is a band of one row.
-        let order: &[PathBuf] = match pinned.walk() {
-            Some(walk) if !walk.order.is_empty() => &walk.order,
-            _ => std::slice::from_ref(&pin.path),
-        };
+        // A pin that holds no walk is a pin of one file, which is a band of one row. **A walk that
+        // shuffles is drawn in name order**: the shuffle is how the pin *steps* — its next, its
+        // previous and the file an end of file goes on to — and the band is a list the hand reads
+        // rather than one it follows, so the rows are A-Z while the walk's own order stays the
+        // hidden one the navigation reads (see `display_order`).
+        let walk = pinned.walk().filter(|walk| !walk.order.is_empty());
+        let walk_order: Vec<PathBuf> = walk
+            .map(|walk| walk.order.clone())
+            .unwrap_or_else(|| vec![pin.path.clone()]);
+        let shuffle = walk.is_some_and(|walk| walk.shuffle);
+
         let Ok(playlist) = THE_PLAYLIST.lock() else {
             return false;
         };
-        if playlist.order == order
+        if playlist.walk_order == walk_order
+            && playlist.shuffle == shuffle
             && playlist.path.as_deref() == Some(pin.path.as_path())
             && playlist.probed == probed
         {
             return false;
         }
 
-        (order.to_vec(), pin.path.clone())
+        (walk_order, shuffle, pin.path.clone())
     };
 
     let (moved, showing_moved) = match THE_PLAYLIST.lock() {
-        Ok(mut playlist) => playlist.hold_the_walk(order, path, probed),
+        Ok(mut playlist) => playlist.hold_the_walk(walk_order, shuffle, path, probed),
         Err(_) => return false,
     };
     if moved {
