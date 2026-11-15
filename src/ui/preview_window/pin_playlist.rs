@@ -50,6 +50,16 @@ static PROBED: AtomicU64 = AtomicU64::new(0);
 #[cfg(not(test))]
 static PROBE_RUN: AtomicU64 = AtomicU64::new(0);
 
+/// Whether the file the pin is next shown is one its walk stepped onto — a **Next**, a **Previous**
+/// or the file an end of file goes on to — rather than one a hand named.
+///
+/// **The two are a different question about the same tick.** A hand that picked a row is already
+/// looking at the band it picked it in, and the band stays scrolled where it was; a walk that stepped
+/// is a file the hand is hearing and a row it has to find, so the camera goes to that row (see
+/// `the_camera_follows_the_walk` and `park_the_showing_row`). Set only where the loop takes the pin's
+/// next file off the walk itself, and spent at the reconcile that puts it up (see `pin_walk::take_pin_pick`).
+static STEPPED: AtomicBool = AtomicBool::new(false);
+
 /// The band's own state: the rows it holds, where it has scrolled to, which row the hand is on and
 /// which it has picked, and the names the band is travelling.
 static THE_PLAYLIST: Lazy<Mutex<PinPlaylist>> = Lazy::new(|| Mutex::new(PinPlaylist::default()));
@@ -342,7 +352,9 @@ impl PinPlaylist {
     ///
     /// **This is where a band opens**, and it is what keeps a playlist the pin was taken up in the
     /// middle of from being drawn from the top of the folder: the rows are the walk's, in walk order,
-    /// and the file the pin came up on can be any of them.
+    /// and the file the pin came up on can be any of them. **And it is where a band is put on every
+    /// file the pin steps onto** — a `Next` or a `Previous` moves the camera to the row it landed on
+    /// and changes nothing else about the band, which is still the same list of the same files.
     fn park_the_showing_row(&mut self, visible: usize) {
         let Some(showing) = self.showing.and_then(|row| self.position_of_row(row)) else {
             return;
@@ -526,13 +538,22 @@ fn display_order(walk_order: &[PathBuf], shuffle: bool) -> Vec<PathBuf> {
 
 /// Where the camera of a band of `rows` rows stands when the file the pin is showing is at
 /// `showing` — the middle of the band, and the nearer end of the list where the middle of it is not
-/// there to be had: a row in the first half has nothing above it to be centred against, and one in
+/// there to be had, which is what a band opening and every step the walk takes both ask for: a row in the first half has nothing above it to be centred against, and one in
 /// the last half nothing below, and a list scrolled past either of them is a band of the background
 /// with the file on it somewhere off the window (see `PinPlaylist::park_the_showing_row`).
 pub(super) fn the_row_a_band_opens_on(rows: usize, showing: usize, visible: usize) -> usize {
     showing
         .saturating_sub(visible / 2)
         .min(pin_chrome::playlist_scroll_max(rows, visible))
+}
+
+/// **The camera follows the walk's own steps.** The loop takes the pin's next file off its walk
+/// exactly where a press of the pin's own stepped it — a `Next`, a `Previous`, an end of file that
+/// continues — and never where the file was named by a hand or by the listing (see
+/// `pin_walk::take_pin_pick`). The band is put on the row of a file that arrived that way, and left
+/// where it stands for every other (see `STEPPED` and `park_the_showing_row`).
+pub(super) fn the_camera_follows_the_walk() {
+    STEPPED.store(true, Ordering::Release);
 }
 
 /// The band this pin carries, as the row it begins at and how tall it is, or nothing where the pin
@@ -803,22 +824,24 @@ pub(super) fn refresh_the_rows() -> bool {
         start_the_prober();
     }
 
-    // **A walk that moved is a band that keeps the rows the hand is on where they are.** The rows a
-    // filter reworks under a pick are the pick's own rows — the file the press named, its facts
-    // landing, the stripe moving onto it — so the scroll the hand left is the scroll it is read at,
-    // and only the two rows that mean something are brought back into sight: the picked row and the
-    // one the pin is showing (see `keep_the_selection_in_sight`).
+    // **A band put on another file is a band whose camera goes with it.** The order moving — the band
+    // just opened, or the walk behind it did — and the pin stepping onto another file by its walk are
+    // both a file the hand is now hearing and a row it is looking for: the camera is put on that row,
+    // at the middle of the band and at the nearer end where the list runs out (see
+    // `park_the_showing_row`). **Only the camera**: the rows and the walk's own order are exactly what
+    // they were (see `display_order`).
     //
-    // **And a walk that moved is a band put on the file the pin is showing.** The playlist is new —
-    // the band just opened, or the order behind it did — so there is no scroll the hand left to
-    // keep, and the file the pin came up on is the row the camera goes to (see
-    // `park_the_showing_row`).
+    // **A file a hand named is not one the camera follows.** A row pressed in the band, a pick the
+    // listing made, a file dropped on the pin: the hand is looking at the band it named the file in,
+    // and the rows a filter reworks under it — its facts landing — are read at the scroll it left, with
+    // only the rows that mean something brought back into sight (see `keep_the_selection_in_sight`).
+    let stepped = STEPPED.swap(false, Ordering::AcqRel);
     if let Some((_, height, width, scale)) = the_band_of_the_pin() {
         if let Ok(mut playlist) = THE_PLAYLIST.lock() {
             let visible = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len())
                 .visible
                 .max(0) as usize;
-            if moved {
+            if moved || (showing_moved && stepped) {
                 playlist.park_the_showing_row(visible);
             } else {
                 playlist.keep_the_selection_in_sight(visible);
