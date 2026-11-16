@@ -302,6 +302,8 @@ pub(super) unsafe extern "system" fn window_proc(
             // again, as it always has been.
             if !pinned() {
                 reset_preview_after_display_change(hwnd);
+            } else {
+                unsafe { pin_film_host::sync_film_host_from_pin(hwnd) };
             }
             DISPLAY_RESET.store(true, Ordering::Release);
             LRESULT(0)
@@ -583,6 +585,9 @@ pub(super) unsafe extern "system" fn window_proc(
             // and a pin that cannot show its popup hides it rather than leaving it on the desktop (see
             // `follow_the_pin`).
             pin_chrome_strips::follow_the_pin(hwnd);
+            if pinned() {
+                unsafe { pin_film_host::sync_film_host_from_pin(hwnd) };
+            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CHAR => {
