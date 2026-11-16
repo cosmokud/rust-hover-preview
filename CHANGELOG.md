@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.9] - 2026-11-16
 
 ### Added
 
@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **A pinned film's chrome frame stays in sync with its film host across display movements and snapping** — moving the film host across displays or snapping it via `Win`+`Shift`+`←`/`→` or Aero Snap dispatches `WM_WINDOWPOSCHANGED` and `WM_DPICHANGED` to the host, which now synchronizes the pin chrome window's position, DPI, and layered preview rendering, while moving the pin chrome window synchronizes the film host window in return.
 - **A pinned MPV film is no longer shown zoomed in after `Win`+`Shift`+`←`/`→` carries it to a display of another scale** — Windows hands a carried window the rescaled rectangle it suggests before the player's video output has followed it, so the first `osd-dimensions` a pin reads after the carry is still the size of the display it left (measured on mpv 0.41.0: 1-6 ms stale over six of ten carries). That answer was kept against the doubled client the window already had, and nothing asked again, so the crop was fitted into half the film's width and height — the picture zoomed into its middle. A source whose player's answer is not the client its window is at is now asked again every 8 ms, off the pass that already watches the player, until the answer is that client. Native frames and FFmpeg's player were never affected: neither answers over a pipe, so both are cropped by the client the window is at.
 
 ### Changed
