@@ -3044,7 +3044,7 @@ fn the_pictures_area(source: HWND, process: u32, live: (i32, i32)) -> (i32, i32)
     let since = standing
         .filter(|asked| asked.is_about(number, process, live))
         .map_or(now, |asked| asked.since);
-    let Some(area) = the_outputs_area(process, live) else {
+    let Some(area) = the_outputs_area(source, process, live) else {
         return live;
     };
     if let Ok(mut held) = PICTURE_AREA.lock() {
@@ -3120,13 +3120,26 @@ pub(super) fn a_picture_is_owed_its_answer() -> bool {
 /// has already grown past are all this question unanswered: the client is the area, as it always was.
 /// **Clamped into the client and never past it**, because a rect the surface the Shell samples does not
 /// have is the band of desktop a crop must never name (see `ThumbnailBox`).
-fn the_outputs_area(process: u32, live: (i32, i32)) -> Option<(i32, i32)> {
+fn the_outputs_area(source: HWND, process: u32, live: (i32, i32)) -> Option<(i32, i32)> {
     let answer = mpv_ipc::get_property(process, "osd-dimensions")?;
     let (width, height) = (a_node_field(&answer, "w")?, a_node_field(&answer, "h")?);
     if width <= 0 || height <= 0 {
         return None;
     }
-    Some((width.min(live.0.max(1)), height.min(live.1.max(1))))
+    if width == live.0 && height == live.1 {
+        return Some(live);
+    }
+    let dpi = unsafe { client_origin(source) }.map_or(96, |(x, y)| displays::dpi_at(x, y));
+    let (phys_w, phys_h) = if dpi != 96 {
+        let scale = dpi as f64 / 96.0;
+        (
+            (width as f64 * scale).round() as i32,
+            (height as f64 * scale).round() as i32,
+        )
+    } else {
+        (width, height)
+    };
+    Some((phys_w.min(live.0.max(1)), phys_h.min(live.1.max(1))))
 }
 
 /// **Give up the shape of the film before this one.** A [`SourceShape`] is the placement of one
