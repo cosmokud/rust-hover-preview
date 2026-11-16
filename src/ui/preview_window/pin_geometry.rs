@@ -735,7 +735,7 @@ pub(super) unsafe fn pin_command_request(
             // A window carried whole to the display beside this one: the same box, at the same place on
             // another display, and refused where that display has no room for it (see `carried_pin_box`).
             PinCommand::MoveToDisplay(side) => {
-                carry_pinned_window_to_the_display_beside(hwnd, side);
+                carry_pinned_window_to_the_display_beside(hwnd, side, request);
                 None
             }
             PinCommand::Previous => {
@@ -1339,44 +1339,156 @@ pub(super) fn carried_pin_box(
     Some((left, top, left + size.0, top + size.1))
 }
 
-/// Carry a pinned window whole to the display beside the one it stands on: what a `Win`+`Shift`+an arrow asks
+/// Translate an unmaximized restore rect from one display work area to another.
+///
+/// Keeps relative center offset from the work area's center, scaling dimensions and offset
+/// by DPI ratio when display DPIs differ, and clamps within the target work area.
+pub(super) fn translate_restore_rect(
+    previous: ScreenRegion,
+    from: ScreenBounds,
+    to: ScreenBounds,
+    from_dpi: u32,
+    to_dpi: u32,
+) -> ScreenRegion {
+    let prev_w = if from_dpi > 0 && to_dpi > 0 && from_dpi != to_dpi {
+        ((previous.2 - previous.0).max(1) as i64 * to_dpi as i64 / from_dpi as i64) as i32
+    } else {
+        (previous.2 - previous.0).max(1)
+    }
+    .min((to.right - to.left).max(1));
+
+    let prev_h = if from_dpi > 0 && to_dpi > 0 && from_dpi != to_dpi {
+        ((previous.3 - previous.1).max(1) as i64 * to_dpi as i64 / from_dpi as i64) as i32
+    } else {
+        (previous.3 - previous.1).max(1)
+    }
+    .min((to.bottom - to.top).max(1));
+
+    let offset_x = if from_dpi > 0 && to_dpi > 0 && from_dpi != to_dpi {
+        (((previous.0 + previous.2) / 2 - (from.left + from.right) / 2) as i64 * to_dpi as i64
+            / from_dpi as i64) as i32
+    } else {
+        (previous.0 + previous.2) / 2 - (from.left + from.right) / 2
+    };
+
+    let offset_y = if from_dpi > 0 && to_dpi > 0 && from_dpi != to_dpi {
+        (((previous.1 + previous.3) / 2 - (from.top + from.bottom) / 2) as i64 * to_dpi as i64
+            / from_dpi as i64) as i32
+    } else {
+        (previous.1 + previous.3) / 2 - (from.top + from.bottom) / 2
+    };
+
+    let to_cx = (to.left + to.right) / 2;
+    let to_cy = (to.top + to.bottom) / 2;
+    let max_left = (to.right - prev_w).max(to.left);
+    let max_top = (to.bottom - prev_h).max(to.top);
+    let left = (to_cx + offset_x - prev_w / 2).clamp(to.left, max_left);
+    let top = (to_cy + offset_y - prev_h / 2).clamp(to.top, max_top);
+
+    (left, top, left + prev_w, top + prev_h)
+}
+
+/// Carry a pinned window to the display beside the one it stands on: what a `Win`+`Shift`+an arrow asks
 /// for while the pin is the window the user is in (see `key_input::pin_win_chord`).
 ///
-/// It is the road `centre_pinned_window` is and not the road a new box is: only the place changes, so nothing
-/// is laid out again, no player is begun again, and a picture travels with the surface the window already
-/// carries.
-///
-/// **The box the pin remembers is written before the window is moved**, because every repaint places the
-/// window from it: a window moved without that box being told is a window put back where it came from by the
-/// next frame. A maximize goes the way a hand's own move sends it (see `pin_restore_box`).
-///
-/// shortcut: the pin keeps the display scale it was taken up at, so a window carried to a display drawn at
-/// another scale arrives at the pixels of the one it left. Upgrade to re-boxing per display when a pin is asked
-/// to survive a scale change as well as a place one (see `WM_DPICHANGED`).
-pub(super) unsafe fn carry_pinned_window_to_the_display_beside(hwnd: HWND, side: PinSide) {
-    let Some((window, restore, dpi, transport, overlay, caption, playlist)) =
-        pin_state().and_then(|pinned| {
-            let pin = pinned.pin()?;
-            Some((
-                pin.window_box(),
-                pin.restore,
-                pin.dpi,
-                pin.transport_bar,
-                pin.overlay,
-                pin.caption,
-                pin_playlist::playlist_rows(pin),
-            ))
-        })
+/// If maximized, the window is refitted to the target display's work area and DPI while translating
+/// the restore geometry so un-maximizing later restores properly on the new monitor.
+/// If unmaximized, the window arrives at the same pixel size and offset on the adjacent display,
+/// refused where that display has no room for it (see `carried_pin_box`).
+pub(super) unsafe fn carry_pinned_window_to_the_display_beside(
+    hwnd: HWND,
+    side: PinSide,
+    request: &mut Option<PreviewMessage>,
+) {
+    carry_pinned_window_to_the_display_beside_with(hwnd, side, &DESKTOPS, request);
+}
+
+pub(super) unsafe fn carry_pinned_window_to_the_display_beside_with(
+    hwnd: HWND,
+    side: PinSide,
+    displays: &dyn Displays,
+    request: &mut Option<PreviewMessage>,
+) {
+    let Some(PinBoxInputs {
+        path,
+        dpi,
+        frame,
+        overlay,
+        transport_bar,
+        caption,
+        content,
+        restore,
+        playlist,
+    }) = pin_box_inputs()
     else {
         return;
     };
 
-    let Some(moved) = carried_pin_box(&DESKTOPS, window, side) else {
+    if let Some(previous) = restore {
+        let from = display_at(
+            displays,
+            (content.0 + content.2) / 2,
+            (content.1 + content.3) / 2,
+        )
+        .work_area;
+        let Some(to) = the_display_beside(displays, from, side) else {
+            note_pin_trace!("carry: no display beside {side:?}");
+            return;
+        };
+
+        let target_dpi =
+            display_at(displays, (to.left + to.right) / 2, (to.top + to.bottom) / 2).dpi;
+        let target_caption = pinned_caption_height(target_dpi, current_media_type());
+        let room = pinned_room(to, target_dpi, transport_bar, overlay, target_caption);
+        let shape =
+            media_dimensions(&path, to, target_dpi).filter(|shape| !box_is_the_wait(*shape));
+
+        let (maximized_content, _) = pin_maximize_decided(PinMaximize {
+            frame,
+            content,
+            restore: None,
+            shape,
+            room,
+        });
+        let maximized_content = clamp_pinned_box(maximized_content, target_dpi, displays);
+        let new_restore = translate_restore_rect(previous, from, to, dpi, target_dpi);
+
+        let written = pin_state()
+            .and_then(|mut pinned| {
+                let pin = pinned.pin_mut()?;
+                if pin.path != path || pin.restore != restore {
+                    return None;
+                }
+
+                pin.dpi = target_dpi;
+                pin.caption = target_caption;
+                pin.content = maximized_content;
+                pin.restore = Some(new_restore);
+                pin.bound = Some(
+                    (maximized_content.2 - maximized_content.0)
+                        .max(maximized_content.3 - maximized_content.1)
+                        .max(1),
+                );
+                reset_pin_zoom(pin);
+                Some(())
+            })
+            .is_some();
+
+        if written {
+            *request = Some(PreviewMessage::PinBox(maximized_content));
+        }
+        return;
+    }
+
+    let placed = pinned_window_box_of(content, dpi, transport_bar, overlay, caption);
+    let window = (placed.0, placed.1, placed.2, placed.3 + playlist);
+
+    let Some(moved) = carried_pin_box(displays, window, side) else {
         note_pin_trace!("carry: no room for the pin on the display {side:?}");
         return;
     };
 
-    let content = content_box_of(moved, dpi, transport, overlay, caption, playlist);
+    let content = content_box_of(moved, dpi, transport_bar, overlay, caption, playlist);
     {
         let Some(mut pinned) = pin_state() else {
             return;
@@ -1389,7 +1501,7 @@ pub(super) unsafe fn carry_pinned_window_to_the_display_beside(hwnd: HWND, side:
         reset_pin_zoom(pin);
     }
 
-    let placed = pinned_window_box_of(content, dpi, transport, overlay, caption);
+    let placed = pinned_window_box_of(content, dpi, transport_bar, overlay, caption);
     let placed = (placed.0, placed.1, placed.2, placed.3 + playlist);
     let size = ((placed.2 - placed.0).max(1), (placed.3 - placed.1).max(1));
     let _ = SetWindowPos(

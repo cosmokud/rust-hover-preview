@@ -2213,6 +2213,91 @@ fn a_maximized_pin_carried_to_another_display_comes_out_unmaximized() {
     );
 }
 
+#[test]
+fn translate_restore_rect_preserves_relative_position_and_scales_with_dpi() {
+    let from = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let to = ScreenBounds {
+        left: 1920,
+        top: 0,
+        right: 3840,
+        bottom: 1080,
+    };
+    let prev = (200, 100, 600, 500);
+
+    // Same DPI (96 -> 96)
+    let translated = translate_restore_rect(prev, from, to, 96, 96);
+    assert_eq!(translated, (2120, 100, 2520, 500));
+
+    // Scaling to higher DPI (96 -> 144 = 1.5x)
+    let to_144 = ScreenBounds {
+        left: 1920,
+        top: 0,
+        right: 4800,
+        bottom: 1620,
+    };
+    let translated_dpi = translate_restore_rect(prev, from, to_144, 96, 144);
+    assert_eq!(translated_dpi.2 - translated_dpi.0, 600);
+    assert_eq!(translated_dpi.3 - translated_dpi.1, 600);
+}
+
+#[test]
+fn a_maximized_pin_carried_to_the_display_beside_re_maximizes_and_translates_restore() {
+    let desk = RecordedDisplays::desk_of(&[bounds(), right_of_bounds()], 96);
+    let mut media = create_loading_media(800, 600);
+    media.media_type = MediaType::StaticImage;
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    let b = bounds();
+    let maximized = (b.left, b.top, b.right, b.bottom);
+    let restore_rect = (b.left + 100, b.top + 100, b.left + 500, b.top + 400);
+
+    let mut pin = overlay_pin(maximized, PinChrome::always());
+    pin.restore = Some(restore_rect);
+    stand_pin(Some(pin));
+
+    let mut request = None;
+    unsafe {
+        carry_pinned_window_to_the_display_beside_with(
+            HWND(0x1000 as *mut _),
+            PinSide::Right,
+            &desk,
+            &mut request,
+        );
+    }
+
+    let Some(PreviewMessage::PinBox(new_content)) = request else {
+        panic!("moving maximized pin did not emit PinBox");
+    };
+
+    let r = right_of_bounds();
+    assert!(new_content.0 >= r.left && new_content.2 <= r.right);
+    assert!(new_content.1 >= r.top && new_content.3 <= r.bottom);
+
+    let (written_restore, written_content) = pin_state()
+        .and_then(|pinned| {
+            let pin = pinned.pin()?;
+            Some((pin.restore, pin.content))
+        })
+        .expect("pinned state");
+
+    assert_eq!(written_content, new_content);
+    let Some(restored) = written_restore else {
+        panic!("pin.restore was cleared");
+    };
+    assert!(restored.0 >= r.left && restored.2 <= r.right);
+    assert_eq!(restored.2 - restored.0, 400);
+    assert_eq!(restored.3 - restored.1, 300);
+
+    stand_pin(None);
+}
+
 /// The second display of the two these tests stand on: the same room, to the right of the first.
 fn right_of_bounds() -> ScreenBounds {
     let first = bounds();
