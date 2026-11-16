@@ -659,6 +659,65 @@ fn the_film_host_follows_the_pins_band() {
         "the host stands where the band is, shown or not"
     );
 }
+
+/// **A film host moved by Windows (e.g. Win+Shift+Left/Right) synchronizes the pin chrome window.**
+#[test]
+fn the_pin_follows_the_film_hosts_motion() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    let moved_box = (
+        film.box_.0 + 500,
+        film.box_.1 + 300,
+        film.box_.0 + 900,
+        film.box_.1 + 600,
+    );
+    unsafe {
+        let _ = SetWindowPos(
+            host,
+            HWND::default(),
+            moved_box.0,
+            moved_box.1,
+            moved_box.2 - moved_box.0,
+            moved_box.3 - moved_box.1,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        let _ = pin_film_host::answer_a_host(host, WM_WINDOWPOSCHANGED, WPARAM(0), LPARAM(0));
+    }
+
+    let content = pin_state().and_then(|pinned| pinned.pin().map(|pin| pin.content));
+    assert_eq!(
+        content,
+        Some(moved_box),
+        "the pin's content is synchronized when the film host is moved"
+    );
+}
+
+/// **A pin chrome window moved synchronizes the film host window.**
+#[test]
+fn the_film_host_follows_the_pin_windows_motion() {
+    let _room = the_room_to_itself();
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+    let host = pin_film_host::film_host().expect("the film's host");
+
+    let moved_box = (
+        film.box_.0 + 400,
+        film.box_.1 + 250,
+        film.box_.0 + 800,
+        film.box_.1 + 550,
+    );
+    with_pin(|pin| pin.content = moved_box);
+    unsafe { pin_film_host::sync_film_host_from_pin(film.pin_hwnd) };
+
+    assert_eq!(
+        unsafe { window_rect(host) },
+        moved_box,
+        "the film host is synchronized when the pin chrome window is moved"
+    );
+}
 /// A hover's film drawn in the app-owned top-level host, with the player's own window adopted as the
 /// source the Shell draws into it: the state a take-up can promote into the pin rather than begin
 /// again.
