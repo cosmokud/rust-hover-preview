@@ -48,7 +48,7 @@
 //! another player behind the same host. It goes down with the pin (see
 //! `take_down_the_pin_film_host`, called from the state a road out of a pin clears).
 
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::{Once, OnceLock};
 
 use windows::core::w;
@@ -62,14 +62,15 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GetClientRect,
-    GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, RegisterClassExW,
-    SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
-    GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE,
-    SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE, WINDOW_EX_STYLE,
-    WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE, WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST,
-    WM_PAINT, WM_QUERYOPEN, WM_SETFOCUS, WM_SETICON, WM_SIZE, WM_SYSCOMMAND, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+    IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST,
+    HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE,
+    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE,
+    WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE, WM_DPICHANGED,
+    WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT, WM_QUERYOPEN, WM_SETFOCUS,
+    WM_SETICON, WM_SIZE, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WS_CLIPCHILDREN,
+    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
 use super::pin_trace::{
@@ -237,6 +238,28 @@ pub(super) unsafe fn answer_a_host(
     // took of this very window (see `keep_the_pins_picture_for_the_taskbar`).
     if msg == WM_DWMSENDICONICTHUMBNAIL {
         return Some(unsafe { pin_taskbar_mirror::answer_a_thumbnail_ask(hwnd, lparam) });
+    }
+
+    if msg == WM_WINDOWPOSCHANGED && film_host() == Some(hwnd) {
+        unsafe { sync_pin_with_film_host_position(hwnd) };
+        return None;
+    }
+
+    if msg == WM_DPICHANGED && film_host() == Some(hwnd) {
+        let suggested_rect = unsafe { *(lparam.0 as *const RECT) };
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                HWND::default(),
+                suggested_rect.left,
+                suggested_rect.top,
+                suggested_rect.right - suggested_rect.left,
+                suggested_rect.bottom - suggested_rect.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            sync_pin_with_film_host_position(hwnd);
+        }
+        return Some(LRESULT(0));
     }
 
     None
@@ -2168,6 +2191,107 @@ pub(super) unsafe fn place_the_pin_film_host(content: ScreenRegion) {
     pin_film_thumbnail::the_band_was_placed(host);
     pin_resize_probe::note_the_host_placement(started);
     pin_chrome_strips::place_the_chrome_strips();
+}
+
+/// Re-entrancy guard preventing circular geometry sync between the film host and the pin chrome window.
+static SYNCING_PAIR: AtomicBool = AtomicBool::new(false);
+
+/// Sync the pin chrome window's position and DPI when the film host window moves or rescales
+/// (e.g. via Win+Shift+Left/Right or Aero Snap).
+pub(super) unsafe fn sync_pin_with_film_host_position(host: HWND) {
+    if SYNCING_PAIR.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    struct ResetGuard;
+    impl Drop for ResetGuard {
+        fn drop(&mut self) {
+            SYNCING_PAIR.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = ResetGuard;
+
+    if !unsafe { IsWindow(host) }.as_bool() || unsafe { IsIconic(host) }.as_bool() {
+        return;
+    }
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(host, &mut rect) }.is_err() {
+        return;
+    }
+
+    let content: ScreenRegion = (rect.left, rect.top, rect.right, rect.bottom);
+    let dpi = displays::dpi_at(rect.left, rect.top);
+
+    let pin_box = {
+        let Some(mut pinned) = pin_state() else {
+            return;
+        };
+        let Some(pin) = pinned.pin_mut() else {
+            return;
+        };
+        if pin.content == content && pin.dpi == dpi {
+            return;
+        }
+        pin.content = content;
+        pin.dpi = dpi;
+        pin.window_box()
+    };
+
+    let pin = pinned_window();
+    if !pin.is_invalid() && unsafe { IsWindow(pin) }.as_bool() {
+        let _ = unsafe {
+            SetWindowPos(
+                pin,
+                HWND::default(),
+                pin_box.0,
+                pin_box.1,
+                (pin_box.2 - pin_box.0).max(1),
+                (pin_box.3 - pin_box.1).max(1),
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+    }
+
+    pin_chrome_strips::place_the_chrome_strips();
+    if !pin.is_invalid() {
+        unsafe { paint::render_layered_preview(pin) };
+    }
+    pin_film_thumbnail::the_band_was_placed(host);
+}
+
+/// Sync the film host window's position to follow the pin chrome window when the pin moves.
+pub(super) unsafe fn sync_film_host_from_pin(_pin: HWND) {
+    if SYNCING_PAIR.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    struct ResetGuard;
+    impl Drop for ResetGuard {
+        fn drop(&mut self) {
+            SYNCING_PAIR.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = ResetGuard;
+
+    let Some(host) = film_host() else {
+        return;
+    };
+    if !unsafe { IsWindow(host) }.as_bool() || unsafe { IsIconic(host) }.as_bool() {
+        return;
+    }
+
+    let Some(content) = pinned_content() else {
+        return;
+    };
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(host, &mut rect) }.is_ok() {
+        let host_content = (rect.left, rect.top, rect.right, rect.bottom);
+        if host_content == content {
+            return;
+        }
+    }
+
+    unsafe { place_the_pin_film_host(content) };
 }
 
 /// Put the pair where it belongs the moment the window that carries the film appears: the band the
