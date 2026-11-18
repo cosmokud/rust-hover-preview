@@ -65,10 +65,11 @@ use std::path::Path;
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::GENERIC_READ;
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory2, GUID_WICPixelFormat32bppBGRA, IWICBitmap, IWICBitmapFrameDecode,
-    IWICBitmapScaler, IWICBitmapSource, IWICBitmapSourceTransform, IWICFormatConverter,
-    IWICImagingFactory, WICBitmapDitherTypeNone, WICBitmapInterpolationModeHighQualityCubic,
-    WICBitmapPaletteTypeCustom, WICBitmapTransformRotate0, WICDecodeMetadataCacheOnDemand,
+    CLSID_WICImagingFactory2, GUID_ContainerFormatIco, GUID_WICPixelFormat32bppBGRA, IWICBitmap,
+    IWICBitmapDecoder, IWICBitmapFrameDecode, IWICBitmapScaler, IWICBitmapSource,
+    IWICBitmapSourceTransform, IWICFormatConverter, IWICImagingFactory, WICBitmapDitherTypeNone,
+    WICBitmapInterpolationModeHighQualityCubic, WICBitmapPaletteTypeCustom,
+    WICBitmapTransformRotate0, WICDecodeMetadataCacheOnDemand,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
@@ -213,11 +214,11 @@ fn open_frame(path: &Path) -> Option<IWICBitmapFrameDecode> {
         let stream = unsafe { SHCreateMemStream(Some(&bitmap_resource_bytes(path)?)) }?;
 
         return unsafe {
-            factory
+            let decoder = factory
                 .CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)
-                .ok()?
-                .GetFrame(0)
-                .ok()
+                .ok()?;
+
+            its_largest_frame(&decoder)
         };
     }
 
@@ -237,8 +238,57 @@ fn open_frame(path: &Path) -> Option<IWICBitmapFrameDecode> {
             )
             .ok()?;
 
-        decoder.GetFrame(0).ok()
+        its_largest_frame(&decoder)
     }
+}
+
+/// The frame a file is shown as: its first, or — in the one container that holds the same
+/// picture at several sizes — the largest of them.
+///
+/// An `.ico` and a `.cur` are not one picture but a collection of one: the same icon at
+/// 16, 24, 32, 48, 64, 128 and 256 pixels, and the codec numbers every entry a frame of
+/// its own. What that order is, is not a size order — it is the file's, or the codec's
+/// own, and neither promises anything about which entry is the biggest. So the largest
+/// is found rather than assumed: frame `0` of a seven-size icon is the 16-pixel entry,
+/// and a preview built from it is the box the largest entry asks for filled with that
+/// sixteen-pixel picture upscaled into it — blurred rather than sharp, which is what a
+/// hover onto an `.ico` used to be. The largest entry is the one measured and the one
+/// decoded, so `dimensions` and `decode` are then the same entry's.
+///
+/// A container of any other kind is read by its first frame: a WebP or a GIF holds the
+/// frames of a picture that moves, and the still one is the first of them.
+fn its_largest_frame(decoder: &IWICBitmapDecoder) -> Option<IWICBitmapFrameDecode> {
+    let first = unsafe { decoder.GetFrame(0) }.ok()?;
+
+    let collection = unsafe { decoder.GetContainerFormat() }
+        .is_ok_and(|format| format == GUID_ContainerFormatIco);
+    if !collection {
+        return Some(first);
+    }
+
+    let count = unsafe { decoder.GetFrameCount() }.unwrap_or(1);
+    let mut largest = first;
+    let mut largest_area =
+        frame_size(&largest).map_or(0, |(width, height)| width.saturating_mul(height));
+
+    // An entry that will not be read is not the file's largest one: it is skipped, and the
+    // largest of those that do read is what answers.
+    for index in 1..count {
+        let Ok(frame) = (unsafe { decoder.GetFrame(index) }) else {
+            continue;
+        };
+        let Some((width, height)) = frame_size(&frame) else {
+            continue;
+        };
+
+        let area = width.saturating_mul(height);
+        if area > largest_area {
+            largest = frame;
+            largest_area = area;
+        }
+    }
+
+    Some(largest)
 }
 
 /// Whether the file is the bitmap the codec will not open by itself — see `open_frame`.
@@ -711,6 +761,105 @@ mod tests {
                 "`{name}` comes back in the order the frame is composed in"
             );
         }
+    }
+
+    /// An icon that holds the same picture at several sizes, which is what every icon on a
+    /// machine is: the entries written in the order the format usually has them, smallest first,
+    /// and each one a colour of its own so that which of them was read is read too.
+    ///
+    /// A preview built from the first entry is a preview of the *smallest* one upscaled to the
+    /// box the largest asks for, which is what a hover onto an `.ico` used to be: blurred, and
+    /// blurrier the larger the icon's biggest entry. What this asks is that the largest entry is
+    /// the one measured and the one decoded — see `its_largest_frame`.
+    #[test]
+    fn reads_the_largest_entry_of_an_icon() {
+        initialize_apartment();
+
+        let folder = std::env::temp_dir().join("rust-hover-preview-wic-tests");
+        std::fs::create_dir_all(&folder).expect("a test folder");
+
+        let entries = [
+            (16u32, [PROBE_BLUE, PROBE_GREEN, PROBE_RED, 255]),
+            (32, [PROBE_RED, PROBE_GREEN, PROBE_BLUE, 255]),
+            (48, [PROBE_GREEN, PROBE_RED, PROBE_BLUE, 255]),
+        ];
+        let path = folder.join("probe.ico");
+        std::fs::write(&path, icon(&entries)).expect("a written icon");
+
+        let Some(measured) = dimensions(&path) else {
+            // A machine whose icon codec answers nothing to a hand-written entry is a machine
+            // this stands down on, the way the cursor above does.
+            return;
+        };
+
+        assert_eq!(
+            measured,
+            (48, 48),
+            "the largest entry is what the layout is placed from"
+        );
+
+        let pixels = decode(&path, 48, 48).expect("the largest entry decodes");
+        assert_eq!(
+            &pixels[..4],
+            &entries[2].1,
+            "the pixels are the largest entry's rather than the smallest one's"
+        );
+
+        // Scaled down, which is the preview of an icon that fits the room at less than its own
+        // size: still the largest entry, and still its colour.
+        let small = decode(&path, 12, 12).expect("the largest entry scales down");
+        assert_eq!(small.len(), 12 * 12 * 4);
+        assert_eq!(&small[..4], &entries[2].1);
+    }
+
+    /// An icon of the entries given: the directory, one entry per picture, and the images behind
+    /// it. Every image is a 32-bit bitmap under a mask, which is the shape an icon entry has when
+    /// it carries no PNG — see `cursor`, whose images these are without the directory's own two
+    /// fields.
+    fn icon(entries: &[(u32, [u8; 4])]) -> Vec<u8> {
+        let directory = 6 + entries.len() * 16;
+        let mut images = Vec::new();
+        let mut directory_entries = Vec::new();
+
+        for (size, colour) in entries {
+            let offset = (directory + images.len()) as u32;
+            let image = masked_bitmap(*size, *colour);
+
+            directory_entries.extend_from_slice(&[*size as u8, *size as u8, 0, 0]);
+            directory_entries.extend_from_slice(&0u16.to_le_bytes());
+            directory_entries.extend_from_slice(&0u16.to_le_bytes());
+            directory_entries.extend_from_slice(&(image.len() as u32).to_le_bytes());
+            directory_entries.extend_from_slice(&offset.to_le_bytes());
+
+            images.extend_from_slice(&image);
+        }
+
+        // `ICONDIR` — reserved, 1 for an icon, the number of entries — then the entries, then the
+        // images they point at.
+        let mut bytes = Vec::with_capacity(directory + images.len());
+        bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&directory_entries);
+        bytes.extend_from_slice(&images);
+
+        bytes
+    }
+
+    /// One entry's image of one colour: the header, the pixels and the clear mask under them.
+    fn masked_bitmap(size: u32, colour: [u8; 4]) -> Vec<u8> {
+        let mut bytes = bitmap_info_header(size, size * 2, 32);
+
+        for _ in 0..size {
+            for _ in 0..size {
+                bytes.extend_from_slice(&colour);
+            }
+        }
+
+        let mask_row = (size as usize).div_ceil(32) * 4;
+        bytes.extend(std::iter::repeat_n(0u8, mask_row * size as usize));
+
+        bytes
     }
 
     /// A device-independent bitmap of one colour: the `BITMAPINFOHEADER` and the rows under it,
