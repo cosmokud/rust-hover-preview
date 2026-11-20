@@ -4445,6 +4445,11 @@ pub fn run_preview_window() {
                         // its center resolves to that window's monitor.
                         let center = ((il + ir) / 2, (it + ib) / 2);
                         set_text_scroll_anchor(center.0, center.1);
+                        // The keyboard's arm answers a custom preview the way the pointer's
+                        // does: the program's window is the picture (see `custom_preview`).
+                        if custom_preview::show(&path, center) {
+                            continue;
+                        }
 
                         let bounds = work_area_at(center.0, center.1);
                         let dpi = dpi_at(center.0, center.1);

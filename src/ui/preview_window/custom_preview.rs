@@ -62,6 +62,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::displays::work_area_at;
+use crate::app::engine_processes;
 use crate::config::config::{custom_preset_for, CustomPreset, PreviewScale, TransparentBackground};
 use crate::CONFIG;
 
@@ -154,6 +155,13 @@ pub(super) fn show(path: &Path, cursor: (i32, i32)) -> bool {
     if let Ok(mut held) = CHILD.lock() {
         *held = Some(child);
     }
+    // **The program is this app's while it draws the hover.** It is put in the run's job so a
+    // crash takes it with the app, and written down so a run that never got to end it is
+    // answered for by the next one — the same charge every engine of this app's is under
+    // (see `engine_processes`). A program opened by the pin is not: that one is the user's,
+    // opened the way the listing opens it.
+    let _ = engine_processes::adopt(pid);
+    engine_processes::record_player(&exe, pid);
 
     // The window is found, framed, parked and registered on a thread of its own: a program that
     // takes a second to make its window must not hold the loop that draws every other preview.
@@ -166,8 +174,10 @@ pub(super) fn show(path: &Path, cursor: (i32, i32)) -> bool {
 pub(super) fn hide() {
     let child = CHILD.lock().ok().and_then(|mut held| held.take());
     if let Some(mut child) = child {
+        let pid = child.id();
         let _ = child.kill();
         let _ = child.wait();
+        engine_processes::forget(pid);
     }
 
     let thumbnail = THUMBNAIL
