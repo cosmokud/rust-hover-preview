@@ -286,10 +286,29 @@ fn persist(state: &State) -> Result<(), String> {
 }
 
 fn run() {
+    let Some(hwnd) = create_window() else {
+        return;
+    };
+
+    unsafe {
+        WINDOW.store(hwnd.0 as isize, Ordering::SeqCst);
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = UpdateWindow(hwnd);
+
+        let mut message = MSG::default();
+        while GetMessageW(&mut message, HWND::default(), 0, 0).as_bool() {
+            let _ = TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+}
+
+/// Make the window and its controls, without showing it: what `run` shows and pumps.
+fn create_window() -> Option<HWND> {
     unsafe {
         let hinstance = match GetModuleHandleW(None) {
             Ok(instance) => instance,
-            Err(_) => return,
+            Err(_) => return None,
         };
 
         let class = WNDCLASSEXW {
@@ -325,18 +344,10 @@ fn run() {
             HINSTANCE(hinstance.0),
             None,
         ) else {
-            return;
+            return None;
         };
 
-        WINDOW.store(hwnd.0 as isize, Ordering::SeqCst);
-        let _ = ShowWindow(hwnd, SW_SHOW);
-        let _ = UpdateWindow(hwnd);
-
-        let mut message = MSG::default();
-        while GetMessageW(&mut message, HWND::default(), 0, 0).as_bool() {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
+        Some(hwnd)
     }
 }
 
@@ -675,7 +686,6 @@ unsafe fn build(hwnd: HWND) -> State {
         }
     }
 
-    // The combo boxes' items and the trackbar's range, filled once.
     let scaling = unsafe { GetDlgItem(hwnd, ID_SCALING) }.unwrap_or_default();
     for (label, _) in SCALE_CHOICES {
         unsafe { combo_add(scaling, label) };
@@ -686,6 +696,11 @@ unsafe fn build(hwnd: HWND) -> State {
     for background in BACKGROUNDS {
         unsafe { combo_add(background_combo, background_label(background)) };
     }
+
+    // Neither combo is left unselected: a blank one is a field the user cannot read and a
+    // `WM_DRAWITEM` with nothing to draw.
+    unsafe { SendMessageW(scaling, CB_SETCURSEL, WPARAM(0), LPARAM(0)) };
+    unsafe { SendMessageW(background_combo, CB_SETCURSEL, WPARAM(0), LPARAM(0)) };
 
     let volume = unsafe { GetDlgItem(hwnd, ID_VOLUME) }.unwrap_or_default();
     unsafe {
@@ -1428,6 +1443,16 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
             }
         };
 
+        // **A control with nothing to say is drawn as its colour and no more.** An empty
+        // `Vec<u16>` hands `DrawTextW` the pointer a zero-length allocation gives out — the
+        // alignment, not an address — and the call reads through it and takes the process down.
+        // It is reached the first time the window is shown with no preset chosen, which is a
+        // combo box with no item selected, and it is why the window has to be shown to be tested
+        // at all.
+        if text.is_empty() {
+            return 1;
+        }
+
         let mut text: Vec<u16> = text.encode_utf16().collect();
         let mut rect = item.rcItem;
         let flags = if is_button(item.CtlID) {
@@ -1444,4 +1469,58 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
 
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// **A control with nothing to say is drawn as its colour and no more.**
+///
+/// A combo box with no item selected has no text, and `DrawTextW` handed a zero-length slice reads
+/// through the pointer such a slice gives out — the alignment, not an address. That is what took
+/// the whole process down, tray and all, the first time this window was shown: the window starts
+/// with no preset chosen and the first paint draws both combos. So the selection is cleared here
+/// and the drawing asked for directly, on a window that is made but never shown.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
+    use windows::Win32::UI::Controls::{ODA_DRAWENTIRE, ODS_FLAGS, ODT_COMBOBOX};
+
+    #[test]
+    fn drawing_a_combo_with_nothing_selected_does_not_take_the_process_down() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+
+        unsafe {
+            let combo = GetDlgItem(hwnd, ID_SCALING).unwrap_or_default();
+            SendMessageW(combo, CB_SETCURSEL, WPARAM(usize::MAX), LPARAM(0));
+
+            let hdc = GetDC(hwnd);
+            let mut item = DRAWITEMSTRUCT {
+                CtlType: ODT_COMBOBOX,
+                CtlID: ID_SCALING as u32,
+                itemID: u32::MAX,
+                itemAction: ODA_DRAWENTIRE,
+                itemState: ODS_FLAGS(0),
+                hwndItem: combo,
+                hDC: hdc,
+                rcItem: RECT {
+                    left: 0,
+                    top: 0,
+                    right: 160,
+                    bottom: 24,
+                },
+                itemData: 0,
+            };
+            let drawn = SendMessageW(
+                hwnd,
+                WM_DRAWITEM,
+                WPARAM(ID_SCALING as usize),
+                LPARAM(&mut item as *mut _ as isize),
+            );
+            assert_eq!(drawn.0, 1, "the empty combo was not drawn");
+
+            ReleaseDC(hwnd, hdc);
+            let _ = DestroyWindow(hwnd);
+        }
+    }
 }
