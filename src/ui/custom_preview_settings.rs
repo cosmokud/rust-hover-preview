@@ -802,7 +802,8 @@ unsafe fn lay_out(state: &State) {
         "Volume",
     ];
     let mut y = pad;
-    for (index, _) in labels.iter().enumerate() {
+    for (index, label) in labels.iter().enumerate() {
+        unsafe { set_text(state.hwnd, ID_LABEL_BASE + index as i32, label) };
         place(
             ID_LABEL_BASE + index as i32,
             left,
