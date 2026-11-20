@@ -624,8 +624,10 @@ impl AppConfig {
             Some(self.pdf_full_mode.to_string()),
         );
         // Every list the configuration holds is one row of the table to write (see
-        // `formats::lists`).
+        // `formats::lists`), and every custom preview is a section of its own beside them
+        // (see `custom_presets`).
         lists::write_all(self, &mut ini);
+        super::custom_presets::write_all(self, &mut ini);
         ini
     }
 
@@ -1403,6 +1405,10 @@ impl AppConfig {
         // ran over the file before this did, and which list it walks is a fact about the row
         // rather than about this read.
         lists::read_all(ini, self);
+        // And the custom previews, which are sections of their own rather than keys of the
+        // settings section: every `[custom:<name>]` the file holds is one preset (see
+        // `custom_presets`).
+        super::custom_presets::read_all(ini, self);
     }
 }
 

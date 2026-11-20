@@ -738,6 +738,11 @@ pub struct AppConfig {
     /// tick that follows it rather than at the next take-up.
     pub pdf_full_mode: bool,
     /// Extensions previewed as images, already normalized for lookup.
+    /// The user's own previews: one external program per extension, written as
+    /// `[custom:<name>]` sections beside the lists and read back the same way (see
+    /// `custom_presets`). A preset outranks every list below — a name it claims is previewed by
+    /// its program whatever the lists would have said about the name.
+    pub custom_presets: Vec<crate::config::config::CustomPreset>,
     pub image_extensions: Vec<String>,
     /// The video names the media engine Windows has is asked to play, as `[video] extensions`
     /// in `config.ini`: the containers and streams the codecs Windows ships demux and decode,
@@ -934,6 +939,7 @@ impl Default for AppConfig {
             text_dont_preview_secrets: DEFAULT_TEXT_DONT_PREVIEW_SECRETS,
             pdf_autofocus: DEFAULT_PDF_AUTOFOCUS,
             pdf_full_mode: DEFAULT_PDF_FULL_MODE,
+            custom_presets: Vec::new(),
             image_extensions: Vec::new(),
             video_extensions: Vec::new(),
             ffmpeg_extensions: Vec::new(),
