@@ -1,6 +1,6 @@
 [package]
 name = "rust-hover-preview"
-version = "0.5.10"
+version = "0.6.0"
 edition = "2021"
 description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
@@ -35,6 +35,10 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
     "Win32_UI_Controls",
+    # `GetOpenFileNameW`, the one browse dialog the custom preview window opens: naming a
+    # program is a path, and a path is chosen rather than typed (see
+    # `ui::custom_preview_settings`).
+    "Win32_UI_Controls_Dialogs",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_Com",
     "Win32_System_DataExchange",

@@ -454,6 +454,30 @@ pub fn kind_of(path: &Path, config: &AppConfig) -> Option<PreviewType> {
     claims(path, config, Asked::File, None)
 }
 
+/// The custom preview that claims `path`, where the user made one: the one answer that outranks
+/// every list below it.
+///
+/// A preset is the user naming a program for an extension, and it takes precedence over every
+/// kind this app ships — `[archive]`, `[audio]`, `[magick]`, `[ffmpeg]` and the rest — because a
+/// name in a preset is a name the user has said how to preview. The claim is the extension
+/// alone and never the file's bytes: nothing here opens the file, so the hook may ask it.
+///
+/// It is asked before [`kind_of`] by every side that decides what a file is (see
+/// `custom_preview`), and it is a plain read of the configuration handed in rather than a lock,
+/// so a hook callback may ask it too.
+pub fn custom_preset_for<'a>(
+    path: &Path,
+    config: &'a AppConfig,
+) -> Option<&'a crate::config::config::CustomPreset> {
+    crate::config::config::custom_preset_for(config, path)
+}
+
+/// Whether a custom preview is what a file is: the question the hook, the loader, the layout and
+/// the pin each ask before they ask anything else about it.
+pub fn is_custom_preview(path: &Path, config: &AppConfig) -> bool {
+    custom_preset_for(path, config).is_some()
+}
+
 /// The same question, of a file whose directory entry the caller has already read.
 ///
 /// It is [`kind_of`] with the one thing it would have read for itself handed in, and it exists

@@ -497,6 +497,15 @@ pub(super) fn is_media_file_with_facts(path: &Path, facts: &crate::formats::head
         return false;
     };
 
+    // **A custom preview is the user's own answer and outranks everything below.** A file a
+    // preset claims is previewed by that preset's program whatever its content says and
+    // whatever list would have claimed the name — so it is a file worth a hover, and the
+    // preset's own extension is the whole of the question (see
+    // `formats::routing::custom_preset_for` and `ui::preview_window::custom_preview`).
+    if crate::formats::routing::is_custom_preview(path, &config) {
+        return true;
+    }
+
     let content = crate::formats::content_type::of_with_facts(path, facts, &config);
 
     match content {

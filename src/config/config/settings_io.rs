@@ -850,11 +850,16 @@ impl AppConfig {
     /// asked for during a first run is still a first run.
     pub fn reset_to_recommended(&mut self) {
         let taken = lists::held(self);
+        let presets = self.custom_presets.clone();
         let is_first_run = self.is_first_run;
 
         *self = Self::default();
         self.is_first_run = is_first_run;
         lists::put(self, taken);
+        // A custom preview is the user's own program rather than a setting of this app's, so a
+        // reset of the settings leaves the presets exactly as they were — the same reason the
+        // extension lists are carried across.
+        self.custom_presets = presets;
     }
 
     /// Every extension list back at the built-in one, with every other setting left alone.

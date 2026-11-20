@@ -4330,6 +4330,13 @@ pub fn run_preview_window() {
                 match preview_msg {
                     PreviewMessage::Show(path, x, y, avoid) => {
                         show_requested = true;
+                        // A file a custom preset claims is drawn by that preset's program rather
+                        // than by this app: its window is the picture, composed into a host of
+                        // its own, so there is nothing here to lay out or paint (see
+                        // `custom_preview`).
+                        if custom_preview::show(&path, (x, y)) {
+                            continue;
+                        }
                         // Remember where this preview was opened from: the region
                         // that keeps a scrollable preview alive stretches from
                         // here to the preview, so the pointer can travel between
@@ -4503,6 +4510,9 @@ pub fn run_preview_window() {
                         }
                     }
                     PreviewMessage::Hide => {
+                        // A custom preview is a window of this hover's as much as this one is,
+                        // and it goes with it (see `custom_preview`).
+                        custom_preview::hide();
                         // A pin that stands in a window of its own is not the hover this message
                         // was posted for: the dismissal (or the abandoned load above) can be in
                         // the channel before the take-up, and a hide already queued must not
@@ -4583,6 +4593,16 @@ pub fn run_preview_window() {
                         rect,
                         arriving,
                     } => {
+                        // **A custom preview's pin is the program itself.** A file a preset
+                        // claims is not this app's to draw, so the key starts the program the
+                        // way the listing would and this preview goes: the user asked for the
+                        // file, not for a picture of it (see `custom_preview::open_fully`).
+                        if custom_preview::open_fully(&path) {
+                            if pinned() {
+                                request_pin_end();
+                            }
+                            continue;
+                        }
                         // **A pin that has ended is not given a file, and a pin that is arriving is
                         // not one that has ended.** The take-up below writes the pin's state whole,
                         // so a file that lands after the window went would re-create the pin it
@@ -4941,6 +4961,12 @@ pub fn run_preview_window() {
                     // **Nothing is gated on `Pin Mode → Update Preview`**: that row is about a pin that
                     // follows the listing's picks, and this press is the user naming a file.
                     PreviewMessage::PinCold { path } => {
+                        // The same answer the take-up gives: a file a custom preset claims is
+                        // opened by that program rather than pinned (see
+                        // `custom_preview::open_fully`).
+                        if custom_preview::open_fully(&path) {
+                            continue;
+                        }
                         let at = cursor_screen_point().unwrap_or_default();
                         // **A press while a cold pin is up is a press over a standing pin**, not a second
                         // window: the pin is already standing on the file the press named — a press that

@@ -599,6 +599,13 @@ pub(super) const ID_TRAY_PDF_AUTOFOCUS: u16 = 1738;
 /// It is the id after the autofocus row's, and past every other one the tray hands out, for the reason
 /// given there: a click on it is read as this row and as no other submenu's.
 pub(super) const ID_TRAY_PDF_FULL_MODE: u16 = 1739;
+/// The `Preview Settings → Custom Preview` row: the window a user's own previews are made in.
+///
+/// It is the row after the PDF pair and past every other id the tray hands out, so a click on it
+/// is read as this row and as no other submenu's (see `ID_TRAY_PDF_AUTOFOCUS`). The row is not a
+/// setting: it opens a window, and the presets that window writes are `[custom:<name>]` sections
+/// of `config.ini` (see `config::config::custom_presets`).
+pub(super) const ID_TRAY_CUSTOM_PREVIEW: u16 = 1740;
 /// The `Preview Types` submenu, one command per kind of preview.
 pub(super) const ID_TRAY_TYPE_IMAGES: u16 = 1062;
 pub(super) const ID_TRAY_TYPE_VIDEOS: u16 = 1063;

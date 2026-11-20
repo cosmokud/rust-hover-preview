@@ -45,7 +45,7 @@ use super::ids::{
     ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_ANIMATED_WEBP_BUDGET_BASE,
     ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_SHUFFLE,
     ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE, ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED,
-    ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE, ID_TRAY_DDS_BACKGROUND_BASE,
+    ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE, ID_TRAY_CUSTOM_PREVIEW, ID_TRAY_DDS_BACKGROUND_BASE,
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
     ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
     ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
@@ -550,6 +550,10 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS => toggle_text_dont_preview_secrets(),
                     ID_TRAY_PDF_AUTOFOCUS => toggle_pdf_autofocus(),
                     ID_TRAY_PDF_FULL_MODE => toggle_pdf_full_mode(),
+                    // The one row of `Preview Settings` that is not a setting: it opens the
+                    // window a user's own previews are made in, on a thread of its own (see
+                    // `ui::custom_preview_settings`).
+                    ID_TRAY_CUSTOM_PREVIEW => crate::ui::custom_preview_settings::open(),
                     ID_TRAY_TYPE_IMAGES => toggle_preview_type(PreviewType::Images),
                     ID_TRAY_TYPE_VIDEOS => toggle_preview_type(PreviewType::Videos),
                     ID_TRAY_TYPE_AUDIO => toggle_preview_type(PreviewType::Audio),
