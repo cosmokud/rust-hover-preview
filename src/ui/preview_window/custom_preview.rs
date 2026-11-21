@@ -72,17 +72,18 @@
 //! picture of this app's is — the picture's rule, `bitmap_at_display_scale`: `100%` is the picture
 //! at its own size and `Fit to Screen` is that same size, never a photograph stretched over the
 //! display, which is what a preview of one filling the screen would be (see `share_for`).
-//! **And the box is the size the program's window took.** A window is not obliged to draw itself in
-//! the box a preview asks for: Windows 11's Paint answers `WM_GETMINMAXINFO` with a floor of 704x500
-//! and takes anything smaller as 704x500 — measured with its frame stripped, as it is here, and by a
-//! `SetWindowPlacement` as well as a `SetWindowPos` — so a box cut to a tall picture's own shape can
-//! be one the window refuses the width of, and a window that takes a size of its own inside a narrow
-//! box is the host's background in a band above and below the picture. The size is read off the
-//! window itself rather than from a list of programs (see `the_size_it_took`), and where it is larger
-//! than the box the box is that size at `100%`: the hover shows the program's picture filling it (see
-//! `the_box_around`). A program that draws smaller than the box it was asked for keeps that box, and
-//! `background` is what the host paints around its picture (see `the_picture_in`). It is one rule for
-//! every program rather than a list of programs: what the window took is the box it gets.
+//! **And the box is the file's size, while the window is asked for its shape.** A window is not
+//! obliged to draw itself in the box a preview asks for: Windows 11's Paint answers
+//! `WM_GETMINMAXINFO` with a floor of 704x500 and takes anything smaller as 704x500 — measured with
+//! its frame stripped, as it is here, and by a `SetWindowPlacement` as well as by a `SetWindowPos` —
+//! so a box the size of a small picture is refused, and a window that stands at its floor inside that
+//! box has a shape of its own: composed into the box as it stands it left the picture in a band of
+//! background, and grown to the box it took it left a small picture's hover at the window's size
+//! rather than the picture's. So the window is asked again for the box's own shape at the smallest
+//! size it will take (see `the_ask_for`), and composed into the box at exactly that shape (see
+//! `the_picture_in`): the hover is the size the preset's `scaling` says it is, and the program's
+//! picture fills it. It is one rule for every program rather than a list of programs: what the window
+//! will take is read off the window.
 //! **A program's window is not that size**: it opens at whatever size it was last left at — one
 //! left maximized is the whole display — so a box read off it is the size of the last file
 //! somebody opened with the program, and a tall picture is shown in a wide window that fills the
@@ -728,9 +729,9 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
     // into the window's own placement, so a second reading would be the shape of the last preview
     // rather than of the program (see the module note). It is the file's own where the file
     // declares one, and the program's window only where it does not (see `base_size`) — and which
-    // of the two it is is also which rule the preset's scale is read by (see `share_for`). A
-    // program that will not draw itself at that size is answered by the size it took instead (see
-    // `the_box_around`).
+    // of the two it is is also which rule the preset's scale is read by (see `share_for`). The box
+    // is that size whatever the program will take, and the window is asked for the box's shape at a
+    // size it will take instead (see `the_ask_for`).
     let base = base_size(&launch.path);
     let own = base.unwrap_or_else(|| own_size(source));
     let shape = match base {
@@ -748,6 +749,9 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
     let mut lingering: Option<Instant> = None;
+    // The size the program's window was asked for once it had answered with the least it will take:
+    // the box's own shape, raised to that least (see `the_ask_for`).
+    let mut the_ask: Option<(i32, i32)> = None;
 
     loop {
         if !is_current(launch.id) {
@@ -793,17 +797,35 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         };
         lingering = None;
 
-        let Some(asked) = layout_for(at, shape, own, scale, follow_cursor()) else {
+        let Some(layout) = layout_for(at, shape, own, scale, follow_cursor()) else {
             hide_the_host();
             std::thread::sleep(KEEP_POLL);
             continue;
         };
+        let (x, y) = (layout.pos_x, layout.pos_y);
+        let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
 
         // **The window is put back at the parking corner before it is drawn, and never drawn
         // anywhere else**: a program that restored itself, showed itself again or resized itself is
         // a window on the desktop rather than a picture, and it is hidden before it is moved.
+        //
+        // The first ask is the box itself, and the size the window answers it with is the least it
+        // will take there: the ask is then corrected to the box's own shape, once, off that answer
+        // (see `the_ask_for`). Both asks are off every display, so nothing of it is seen.
+        if the_ask.is_none() {
+            park(source, width, height);
+            if parked(source) {
+                let ask = the_ask_for((width, height), the_size_it_took(source));
+                the_ask = Some(ask);
+                if ask != (width, height) {
+                    park(source, ask.0, ask.1);
+                }
+            }
+        }
         if !parked(source) {
-            park(source, asked.preview_w as i32, asked.preview_h as i32);
+            if let Some(ask) = the_ask {
+                park(source, ask.0, ask.1);
+            }
         }
         if !parked(source) {
             // **A window that would not stand off the desktop is a picture there is none of**: it
@@ -813,18 +835,6 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
             std::thread::sleep(KEEP_POLL);
             continue;
         }
-
-        // **The box is the size the window took**, which is read after it has taken it: a program
-        // that will not be as small as the box asks is one the picture would otherwise stand
-        // letterboxed in (see `the_box_around`).
-        let Some(layout) = the_box_around(at, asked, the_size_it_took(source), follow_cursor())
-        else {
-            hide_the_host();
-            std::thread::sleep(KEEP_POLL);
-            continue;
-        };
-        let (x, y) = (layout.pos_x, layout.pos_y);
-        let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
 
         if box_of_the_host != Some((x, y, width, height)) {
             let _ = unsafe {
@@ -858,10 +868,9 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
             let _ = unsafe { GetClientRect(source, &mut picture) };
             let properties = DWM_THUMBNAIL_PROPERTIES {
                 dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE,
-                // The box's whole client where the window took the box — which is the box, raised
-                // to the size it took (see `the_box_around`) — and its own shape fitted into the
-                // client where the placement's room is smaller than the window (see
-                // `the_picture_in`).
+                // The box's whole client, the window having been asked for the box's own shape (see
+                // `the_ask_for`) — and its own shape fitted into the client where the placement's
+                // room is smaller than the window (see `the_picture_in`).
                 rcDestination: the_picture_in(
                     client.right,
                     client.bottom,
@@ -929,20 +938,7 @@ fn layout_for(
     scale: PreviewScale,
     follow_cursor: bool,
 ) -> Option<PreviewLayout> {
-    layout_at(at, own, share_for(shape, scale), follow_cursor)
-}
-
-/// The placement a box of `own` at `share` comes out at — in the room the display leaves and clear
-/// of what the placement keeps off.
-///
-/// It is the arithmetic behind [`layout_for`], and it is asked directly by the one box whose share
-/// is settled already: the size the program's own window took (see `the_box_around`).
-fn layout_at(
-    at: Where,
-    own: (u32, u32),
-    scale: PreviewScale,
-    follow_cursor: bool,
-) -> Option<PreviewLayout> {
+    let scale = share_for(shape, scale);
     match at {
         Where::Pointer { cursor, avoid } => {
             let bounds = work_area_at(cursor.0, cursor.1);
@@ -986,30 +982,29 @@ fn layout_at(
     }
 }
 
-/// The box the hover is drawn in: the one its placement asked for, raised to the size the program's
-/// window actually took where the program took a size of its own.
+/// The size the program's window is asked for: the box's own shape, raised to the smallest size the
+/// window will take at that shape.
 ///
-/// **A window that will not take the box is the box.** A tall picture makes a narrow box, and a
-/// program that will not be narrower than its own floor takes one of its own inside it — the picture
-/// then stood in the middle of that box with the host's background in a band above and below it. So
-/// the size the window stands at is read off the window (see `the_size_it_took`), and where it is
-/// larger than the box the placement is asked again for a box of exactly the window's size at
-/// `100%`: the program's own picture fills the hover, which is what the window is. A program that
-/// draws smaller than the box it was asked for keeps that box, and `the_picture_in` composes its
-/// picture into it.
-///
-/// It is one rule for every program rather than a list of programs: what the window took is the box
-/// it gets.
-fn the_box_around(
-    at: Where,
-    asked: PreviewLayout,
-    taken: (u32, u32),
-    follow_cursor: bool,
-) -> Option<PreviewLayout> {
-    if taken.0 <= asked.preview_w && taken.1 <= asked.preview_h {
-        return Some(asked);
-    }
-    layout_at(at, taken, PreviewScale::Percent(100), follow_cursor)
+/// **A window that will not take the box is asked for a bigger box of the same shape.** The box's
+/// size is the file's at the preset's scale — `100%` of a small picture is that picture's size, the
+/// rule every other picture preview of this app's is laid out by — and a program is not obliged to
+/// draw itself that small: Windows 11's Paint takes 704x500 as its floor and answers a smaller ask
+/// with that, a shape of its own rather than the box's. Composed into the box as it stands the
+/// picture was letterboxed in the host's background, and grown to the size it took the hover was the
+/// window's size rather than the picture's. So the window is asked for the box's shape at the
+/// smallest size that clears the least it will take (see `the_size_it_took`), and it is composed into
+/// the box at exactly that shape (see `the_picture_in`): the hover is the size the setting says it is
+/// and the program's picture fills it, the window being off every display where it stands.
+fn the_ask_for(box_: (i32, i32), taken: (u32, u32)) -> (i32, i32) {
+    let box_ = (box_.0.max(1), box_.1.max(1));
+    let shape = box_.0 as f32 / box_.1 as f32;
+
+    let width = (taken.0 as i32)
+        .max((taken.1 as f32 * shape).ceil() as i32)
+        .max(box_.0);
+    let height = ((width as f32 / shape).ceil() as i32).max(1);
+
+    (width, height)
 }
 
 /// The shape of the file itself, where the file declares one: the size a picture says it is in its
@@ -1070,7 +1065,8 @@ fn own_size(window: HWND) -> (u32, u32) {
 /// so the size to go by is the one the window stands at rather than the one it was asked for. It is
 /// read off the window itself rather than from a number written down for any one program, and it is
 /// read *after* the frame is stripped, because that is the window the preview draws. Nothing at all
-/// is answered where the window will not say, and the box is then the one the placement asked for.
+/// is answered where the window will not say, and it is then asked for the box itself (see
+/// `the_ask_for`).
 fn the_size_it_took(window: HWND) -> (u32, u32) {
     let mut client = RECT::default();
     if unsafe { GetClientRect(window, &mut client) }.is_err() {
@@ -1083,13 +1079,13 @@ fn the_size_it_took(window: HWND) -> (u32, u32) {
 /// The rectangle in the host's client the program's window is drawn in: the window's own client at
 /// the size it has where that fits, and its own shape fitted into the client where it does not.
 ///
-/// **The box and the window normally agree**, because the box is raised to the size the window took
-/// (see `the_box_around`) and this is then the host's whole client with the picture at its own size.
-/// They part where the box the placement leaves is smaller than the window — the room beside the text
-/// a hover keeps off, a window whose floor is larger than the display — and a preview that shows the
-/// program at its own shape inside the box says more than one that shows nothing. The window is never
-/// stretched: the shape it is drawn at is its own, and `background` is what the host paints in the
-/// letterbox.
+/// **The box and the window are the same shape normally**, because the window is asked for the box's
+/// own shape at the smallest size it will take (see `the_ask_for`), and this is then the host's whole
+/// client with the program's picture filling it. They part where the program would not take that ask
+/// either — its floor larger than the display, the room beside the text a hover keeps off — and a
+/// preview that shows the program at its own shape inside the box says more than one that shows
+/// nothing. The window is never stretched: the shape it is drawn at is its own, and `background` is
+/// what the host paints in the letterbox.
 fn the_picture_in(client_width: i32, client_height: i32, picture: (i32, i32)) -> RECT {
     let client_width = client_width.max(1);
     let client_height = client_height.max(1);
@@ -1641,75 +1637,44 @@ mod tests {
     }
 
     #[test]
-    fn a_box_is_raised_to_the_size_the_window_took() {
-        // Paint answers `WM_GETMINMAXINFO` with 704x500 and will not go smaller, whatever a small
-        // picture asks for, so the box is the size the window stands at rather than the one the
-        // placement asked for.
-        let asked = layout_for(
-            pointer((0, 0)),
-            Shape::OfTheFile,
-            (80, 60),
-            PreviewScale::Percent(100),
-            true,
-        )
-        .expect("a display has room for a preview");
+    fn a_window_is_asked_for_the_shape_of_the_box_it_will_not_take() {
+        // The box is the picture's own size — `100%` of a 4:3 picture is 4:3 — and Paint will not be
+        // smaller than 704x500, so it is asked for the box's shape at the smallest size that clears
+        // the floor it answered with.
+        let asked = the_ask_for((80, 60), (704, 500));
         assert_eq!(
-            (asked.preview_w, asked.preview_h),
-            (80, 60),
-            "the placement asks for the picture's own size first"
+            asked,
+            (704, 528),
+            "the ask keeps the box's own shape, raised to the least the window will take"
         );
 
-        let took = the_box_around(pointer((0, 0)), asked, (704, 500), true)
-            .expect("a display has room for the size the window took");
+        let picture = the_picture_in(80, 60, asked);
         assert_eq!(
-            (took.preview_w, took.preview_h),
-            (704, 500),
-            "and the box is the smallest one the window will stand in, which is the picture the \
-             hover then shows rather than a letterbox around one"
+            (picture.left, picture.top, picture.right, picture.bottom),
+            (0, 0, 80, 60),
+            "and the window fills that box, with none of the background around it"
         );
 
-        // An empty box is a window that would not say what it took, which leaves the placement it
-        // was asked for.
-        let asked_again = layout_for(
-            pointer((0, 0)),
-            Shape::OfTheFile,
-            (80, 60),
-            PreviewScale::Percent(100),
-            true,
-        )
-        .expect("a display has room for a preview");
-        let asked_at = (asked_again.pos_x, asked_again.pos_y);
-        let unsaid = the_box_around(pointer((0, 0)), asked_again, (0, 0), true)
-            .expect("a display has room for a preview");
+        // A tall box is asked for at its own shape too, tall past the floor's own height. This is
+        // the reported hover: a 2135x6012 picture's box refused its width was a window in a band of
+        // background above and below the picture.
+        let asked = the_ask_for((490, 1380), (704, 1380));
         assert_eq!(
-            (
-                unsaid.pos_x,
-                unsaid.pos_y,
-                unsaid.preview_w,
-                unsaid.preview_h
-            ),
-            (asked_at.0, asked_at.1, 80, 60),
-            "a window that takes the box leaves the placement as it was"
+            asked,
+            (704, 1983),
+            "a box narrower than the window is asked for taller, keeping its own shape"
+        );
+        let picture = the_picture_in(490, 1380, asked);
+        assert_eq!(
+            (picture.left, picture.top, picture.right, picture.bottom),
+            (0, 0, 490, 1380),
+            "so the picture fills the box rather than standing letterboxed in it"
         );
 
-        // And the case the report was of: a tall picture makes a narrow box, and the window takes
-        // its own width at the height it was asked for — the box is that, at the window's own
-        // height, rather than the narrow one with the picture's bands of background above and below.
-        let tall = layout_for(
-            pointer((0, 0)),
-            Shape::OfTheFile,
-            (40, 120),
-            PreviewScale::Percent(100),
-            true,
-        )
-        .expect("a display has room for a preview");
-        let took = the_box_around(pointer((0, 0)), tall, (704, 500), true)
-            .expect("a display has room for the size the window took");
-        assert_eq!(
-            (took.preview_w, took.preview_h),
-            (704, 500),
-            "a window that would not be as narrow as the box is the box"
-        );
+        // A window that took the box is asked for nothing more, and one that will not say what it
+        // took leaves the box it was asked for.
+        assert_eq!(the_ask_for((600, 400), (600, 400)), (600, 400));
+        assert_eq!(the_ask_for((600, 400), (0, 0)), (600, 400));
     }
 
     #[test]
