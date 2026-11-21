@@ -105,8 +105,9 @@ const ID_STATUS: i32 = 130;
 const ID_LABEL_BASE: i32 = 140;
 
 /// The scale a preset's combo lists, in the order it lists them: the fit first, then the three
-/// shares of the room this app's own scaling menu offers. The fourth entry is `Custom…`, chosen by
-/// the window itself for a percentage none of the three is.
+/// shares this app's own scaling menu offers — of the file's own size where it declares one and
+/// of the room beside the item where it does not. The fourth entry is `Custom…`, chosen by the
+/// window itself for a percentage none of the three is.
 const SCALE_CHOICES: [(&str, Option<u32>); 4] = [
     ("Fit to screen", None),
     ("Screen 100%", Some(100)),
