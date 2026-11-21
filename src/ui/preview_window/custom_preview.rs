@@ -42,11 +42,14 @@
 //! pointer's own (`compute_mouse_layout`) or the focused item's (`compute_keyboard_layout`),
 //! which is what reads `Tray → Placement` — the position mode, the pointer standoff and the
 //! `Avoid` region — and the room of the display the hover is on. `scaling` is then read the way
-//! every other kind's is: a percentage is a share of the size the program's own window opens at,
-//! so `100%` is that window at the size it is rather than the whole display, and `Fit to Screen`
-//! is the room the placement left. That size is read **once**, before the window is parked,
-//! because parking writes the parked box into the window's own placement and a second reading
-//! would be a share of the last preview rather than of the program. `background` is what the host
+//! every kind without a size of its own is — the document's rule, `fit_reduced`: a percentage is a
+//! share of the room the placement leaves, and `Fit to Screen` is the whole of it, which is what
+//! the tray's own scaling menu calls `Screen 100%`. A program's window is the one thing here with
+//! a size of its own, and what it gives is the **shape** of the box rather than its size: the box
+//! is cut to the window's proportions and fitted into that room, so `50%` is a box of that shape
+//! at half the room and `100%` is as large as the room holds. That shape is read **once**, before
+//! the window is parked, because parking writes the parked box into the window's own placement and
+//! a second reading would be the shape of the last preview rather than of the program. `background` is what the host
 //! paints where the program's window is smaller than the box. `volume` is kept in the preset and
 //! written back; a program of the user's own is not told what level to play at — there is no
 //! portable way to set another process's audio — so it is a setting a future engine-backed preset
@@ -102,6 +105,7 @@ use super::layout::{
 use super::load_dispatch::HoverPlacement;
 use super::never_shown::{self, NeverShown};
 use super::pointer::{AvoidRegion, ScreenRegion};
+use super::preview_scale::fit_reduced;
 use crate::app::engine_processes;
 use crate::config::config::{custom_preset_for, CustomPreset, PreviewScale, TransparentBackground};
 use crate::CONFIG;
@@ -578,9 +582,9 @@ fn run_it(host: HWND, pid: u32, scale: PreviewScale, launch: u64) {
     SOURCE.store(source.0 as isize, Ordering::SeqCst);
     strip_the_frame(source);
 
-    // **How large the program opens at, read once and never again**: parking writes the parked
-    // box into the window's own placement, so a second reading would be a share of the last
-    // preview rather than of the program (see the module note).
+    // **The shape the box is cut to, read once and never again**: parking writes the parked box
+    // into the window's own placement, so a second reading would be the shape of the last preview
+    // rather than of the program (see the module note).
     let own = own_size(source);
 
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
@@ -689,13 +693,20 @@ fn run_it(host: HWND, pid: u32, scale: PreviewScale, launch: u64) {
 }
 
 /// The box the preview is drawn in: the placement the tray's settings and the display ask for,
-/// at the size the preset's scale makes of the program's own window.
+/// at the share of the room the preset's scale names, cut to the shape of the program's own
+/// window.
+///
+/// **The scale is the room's, not the window's** (see `fit_reduced`): a preset is written the way
+/// the tray's own menu offers it — `Fit to screen`, `Screen 100%`, `Screen 50%` — and `100%` of a
+/// program's window would be a preview the size of whatever the program last remembered, which is
+/// a setting about the display read as a setting about somebody else's window.
 fn layout_for(
     at: Where,
     own: (u32, u32),
     scale: PreviewScale,
     follow_cursor: bool,
 ) -> Option<PreviewLayout> {
+    let scale = fit_reduced(scale);
     match at {
         Where::Pointer { cursor, avoid } => {
             let bounds = work_area_at(cursor.0, cursor.1);
@@ -1004,22 +1015,55 @@ mod tests {
     }
 
     #[test]
-    fn a_hundred_percent_is_the_size_the_program_opens_at_not_the_display() {
+    fn a_hundred_percent_is_the_room_cut_to_the_windows_shape() {
+        let room = work_area_at(0, 0);
         let layout = layout_for(
             pointer((0, 0)),
             (600, 400),
             PreviewScale::Percent(100),
             true,
         )
-        .expect("a 600x400 window is a preview a display can hold");
-        assert_eq!((layout.preview_w, layout.preview_h), (600, 400));
+        .expect("a display has room for a preview");
+
+        assert!(
+            layout.preview_w as i32 > 600 || layout.preview_h as i32 > 400,
+            "the share is of the room rather than of the size the program's window opens at"
+        );
+        assert!(
+            layout.pos_x >= room.left
+                && layout.pos_x + layout.preview_w as i32 <= room.right
+                && layout.pos_y >= room.top
+                && layout.pos_y + layout.preview_h as i32 <= room.bottom,
+            "and the box it comes out at is one the display holds"
+        );
+        let shape = layout.preview_w as f32 / layout.preview_h as f32;
+        assert!(
+            (shape - 600.0 / 400.0).abs() < 0.01,
+            "cut to the window's own shape, which is {shape} rather than 1.5"
+        );
     }
 
     #[test]
-    fn a_percentage_is_that_share_of_the_programs_own_window() {
-        let layout = layout_for(pointer((0, 0)), (600, 400), PreviewScale::Percent(50), true)
-            .expect("half of a 600x400 window is a preview a display can hold");
-        assert_eq!((layout.preview_w, layout.preview_h), (300, 200));
+    fn a_percentage_is_that_share_of_the_room() {
+        let whole = layout_for(
+            pointer((0, 0)),
+            (600, 400),
+            PreviewScale::Percent(100),
+            true,
+        )
+        .expect("a display has room for a preview");
+        let half = layout_for(pointer((0, 0)), (600, 400), PreviewScale::Percent(50), true)
+            .expect("half of a room is a preview a display can hold");
+
+        assert!(
+            (half.preview_w as f32 - whole.preview_w as f32 / 2.0).abs() <= 2.0
+                && (half.preview_h as f32 - whole.preview_h as f32 / 2.0).abs() <= 2.0,
+            "50% is half the box 100% is: {}x{} against {}x{}",
+            half.preview_w,
+            half.preview_h,
+            whole.preview_w,
+            whole.preview_h
+        );
     }
 
     #[test]

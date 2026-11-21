@@ -26,10 +26,12 @@
 //! not decode a file a preset claims. The program is started with the file, its window is what
 //! the preview shows, and a pin opens that program properly rather than pinning a picture of it
 //! (see `ui::preview_window::custom_preview`). So `scaling` is how large the program's window is
-//! drawn in the hover — a percentage of the size that window opens at, and the fit for the room
-//! the display leaves — `background` is what stands behind it where the window is smaller than the
-//! band, and `volume` is the level a preview of it is played at — the same three settings the
-//! tray's own rows are, read from the preset rather than from the configuration.
+//! drawn in the hover — a percentage of the room the display leaves beside the item, and the fit
+//! for the whole of that room, which is what the tray's own menu offers a document: the program's
+//! window gives the shape of the box rather than its size — `background` is what stands behind it
+//! where the window is smaller than the band, and `volume` is the level a preview of it is played
+//! at — the same three settings the tray's own rows are, read from the preset rather than from the
+//! configuration.
 
 use std::path::Path;
 
@@ -70,8 +72,8 @@ pub struct CustomPreset {
     /// The extensions it claims, each a bare extension without its dot, lowercased — the same
     /// shape `formats::lists` keeps its own entries in.
     pub extensions: Vec<String>,
-    /// How large the program's window is drawn in the hover: a share of the size it opens at, or
-    /// the room the display leaves beside the item.
+    /// How large the program's window is drawn in the hover: a share of the room the display
+    /// leaves beside the item, at the shape of the window itself, or the whole of that room.
     pub scaling: PreviewScale,
     /// What stands behind it where the window is smaller than the band.
     pub background: TransparentBackground,
