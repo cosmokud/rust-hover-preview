@@ -16,6 +16,17 @@
 //! answers a capture with black. It is the road a film of this app's own already takes (see
 //! `pin_film_host` and `pin_film_thumbnail`), used here for a window nothing of this app's owns.
 //!
+//! **Which window is the program's.** Not simply the launched process's: a packaged program —
+//! Windows 11's Paint among them — is begun by an activator that hands the file to a process of
+//! its own, so the window that is the picture belongs to a process this app never started, and a
+//! search by the launched id alone finds the activator's stub instead: an empty host beside the
+//! program's real window, standing on the desktop where nobody put it. So the window is the
+//! **new** one — one that was not on the desktop when the program was begun — whose process is
+//! either in the launched tree or running the same image as the preset's program (see `census`),
+//! and of those the one the program actually *shows*: the window the user would have seen, which
+//! is the only window a program can be assumed to draw its document in. A window that is never
+//! shown (the launch asked for that) is taken after a moment on the same terms.
+//!
 //! **Why the program outlives the hover.** A program makes its own window and shows it at its own
 //! size, and it does so *after* this app has started it — so for the first moment of its life a
 //! window of somebody else's stands on the desktop, and often under the hand that asked for the
@@ -25,7 +36,7 @@
 //! before it ever opens the file it was given. So the two lifetimes are not the same one: the
 //! *host* goes with the hover at once, and the *program* is kept for [`LINGER`] after it, so that
 //! a hover the pointer gives back is the same program shown again rather than a second launch. It
-//! is killed when the moment passes, when another file is hovered, or when the pin opens it.
+//! is ended when the moment passes, when another file is hovered, or when the pin opens it.
 //!
 //! **And why it is hidden before it is ever seen, and parked before it is ever drawn.** The launch
 //! carries `SW_HIDE` in its `STARTUPINFO` (the road a model's viewer already takes, see
@@ -49,34 +60,37 @@
 //! is cut to the window's proportions and fitted into that room, so `50%` is a box of that shape
 //! at half the room and `100%` is as large as the room holds. That shape is read **once**, before
 //! the window is parked, because parking writes the parked box into the window's own placement and
-//! a second reading would be the shape of the last preview rather than of the program. `background` is what the host
-//! paints where the program's window is smaller than the box. `volume` is kept in the preset and
-//! written back; a program of the user's own is not told what level to play at — there is no
-//! portable way to set another process's audio — so it is a setting a future engine-backed preset
-//! can use and nothing on this road reads it.
+//! a second reading would be the shape of the last preview rather than of the program.
+//! `background` is what the host paints where the program's window is smaller than the box.
+//! `volume` is kept in the preset and written back; a program of the user's own is not told what
+//! level to play at — there is no portable way to set another process's audio — so it is a setting
+//! a future engine-backed preset can use and nothing on this road reads it.
 //!
 //! **Why the host is a window of the hover's own.** The preview window paints a card and must
 //! never take the focus; the host is the same shape as a hovered film's (`hover_film_host`):
-//! a borderless, non-activating, topmost window that is shown only once the Shell has the
-//! picture composed in it, and taken down with the hover. It is disabled, so a press on it is the
-//! hover's press and lands on the listing behind it. It is made once and kept hidden between
-//! hovers: making it again for every hover is a second window where one will do, and one more
-//! thing that can flicker.
+//! a borderless, non-activating, topmost window that is shown only once the Shell has the picture
+//! composed in it, and taken down with the hover. It is disabled, so a press on it is the hover's
+//! press and lands on the listing behind it. It is made once and kept hidden between hovers:
+//! making it again for every hover is a second window where one will do, and one more thing that
+//! can flicker.
 //!
 //! **And the pin is not a pin.** Pressing the pin key on one of these does not freeze a picture
 //! of the program: it starts the program properly, with its own frame, at its own place on the
 //! desktop, and this app's preview goes away — the user asked for the file, not for a picture of
 //! it (see [`open_fully`]).
 
+use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
 
 use windows::core::w;
-use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, BOOL, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_VISIBLE,
@@ -85,6 +99,10 @@ use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteObject, FillRect, GetStockObject, HBRUSH, HGDIOBJ, NULL_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, EnumWindows, GetClientRect, GetWindow, GetWindowLongPtrW,
@@ -92,7 +110,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindow, IsWindowVisible, IsZoomed, PostMessageW, RegisterClassExW, SetWindowLongPtrW,
     SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-    WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_ERASEBKGND, WM_NCDESTROY,
+    WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY,
     WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
     WS_THICKFRAME,
@@ -128,6 +146,11 @@ const WM_THERE_IS_NOTHING_TO_SHOW: u32 = WM_APP + 42;
 const WINDOW_WAIT: Duration = Duration::from_secs(6);
 const WINDOW_POLL: Duration = Duration::from_millis(10);
 
+/// How long a program that never shows a window is given to show one before the window it has is
+/// taken as the picture anyway: a program that honours the hidden launch never shows one, and one
+/// that is merely slow to show it is not a program with no window.
+const SHOWN_WAIT: Duration = Duration::from_millis(300);
+
 /// How often the launched process's own tree is read again while its window is looked for: a
 /// program that hands its file to a process of its own is a window under that process's id.
 const TREE_POLL: Duration = Duration::from_millis(200);
@@ -156,7 +179,7 @@ const PARKING: i32 = -30000;
 ///
 /// It is the whole of what the hover knows about *where* the preview goes, and it is read on the
 /// worker thread rather than here because the box cannot be worked out before the program's
-/// window exists: a percentage is a share of the size that window opens at (see the module note).
+/// window exists: the shape of the box is the window's (see the module note).
 #[derive(Clone, Copy)]
 pub(super) enum Where {
     /// A pointer's hover: where the hand is, and the region the `Avoid` setting keeps a preview
@@ -191,12 +214,36 @@ struct Program {
     pid: u32,
 }
 
+/// What one launch is: the process it began, the image that program runs under, and the windows
+/// and processes that were on the machine before it — which is what tells the program's own
+/// window from everything else, and the process it may end from the ones that are the user's.
+struct Launch {
+    /// The process this app began.
+    pid: u32,
+    /// The preset program's own file name, lowercased: what a process the program hands its file
+    /// to is running, however it was begun.
+    exe: String,
+    /// Every top-level window there was before the launch, so that the program's own are the ones
+    /// that were not.
+    windows_before: Vec<isize>,
+    /// Every process there was before the launch, so that one the program started is the only one
+    /// this app may end (see `end_the_program`).
+    processes_before: Vec<u32>,
+    /// Which launch this is, so that a worker begun for an earlier one stands down.
+    id: u64,
+}
+
 /// The host window, made once and kept off the screen between hovers.
 static HOST: AtomicIsize = AtomicIsize::new(0);
 /// Whether the host is on the screen.
 static SHOWN: AtomicBool = AtomicBool::new(false);
 /// The program's window registered into it, while one is.
 static SOURCE: AtomicIsize = AtomicIsize::new(0);
+/// The process that window belongs to, which is not the launched one where the program is
+/// packaged.
+static SOURCE_PID: AtomicU32 = AtomicU32::new(0);
+/// Whether that process is one the launch made, which is the only kind this app ends.
+static SOURCE_IS_NEW: AtomicBool = AtomicBool::new(false);
 /// The thumbnail registration the Shell is drawing through, while one stands.
 static THUMBNAIL: Mutex<isize> = Mutex::new(0);
 /// The hover on screen, while there is one.
@@ -261,6 +308,11 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     // goes now rather than at the end of its linger.
     end_the_program();
 
+    // **The desktop is read before the program is begun**, so that the windows it puts up are the
+    // ones that were not there, and the process it hands the file to is one this app may end.
+    let windows_before = top_level_windows();
+    let processes_before = engine_processes::running().unwrap_or_default();
+
     let Some(child) = launch(&exe, path) else {
         return false;
     };
@@ -272,6 +324,10 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     BACKGROUND.store(color_of(preset.background).0 as isize, Ordering::SeqCst);
     let pid = child.pid;
     let scale = preset.scaling;
+    let exe_file = Path::new(&exe)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
     if let Ok(mut held) = PROGRAM.lock() {
         *held = Some(Program {
             path: path.to_path_buf(),
@@ -293,11 +349,18 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 
     // Read after the launch is written down, so a worker begun for it is current exactly when it
     // is the program on screen.
-    let launch = LAUNCH.fetch_add(1, Ordering::SeqCst) + 1;
+    let id = LAUNCH.fetch_add(1, Ordering::SeqCst) + 1;
+    let launch = Launch {
+        pid,
+        exe: exe_file,
+        windows_before,
+        processes_before,
+        id,
+    };
     // The window is carried as a number: `HWND` is a pointer and a pointer is not `Send`, and
     // what the worker does with it is a placement the Shell answers for either way.
     let host = host.0 as isize;
-    std::thread::spawn(move || run_it(HWND(host as *mut _), pid, scale, launch));
+    std::thread::spawn(move || run_it(HWND(host as *mut _), launch, scale));
     true
 }
 
@@ -346,9 +409,27 @@ fn end_the_program() {
     }
 
     let program = PROGRAM.lock().ok().and_then(|mut held| held.take());
+    let launched_pid = program.as_ref().map(|program| program.pid).unwrap_or(0);
     if let Some(program) = program {
         let _ = program.child.kill();
         engine_processes::forget(program.pid);
+    }
+
+    // **The window this app asked for is closed, and the process that opened it is ended only
+    // where the launch is what made it.** A packaged program's window belongs to a process this
+    // app never started, and that process may be one the user had open before the hover: its
+    // window is the document this app asked for, so the window goes and the process stays.
+    let source = SOURCE.swap(0, Ordering::SeqCst);
+    let source_pid = SOURCE_PID.swap(0, Ordering::SeqCst);
+    let source_is_new = SOURCE_IS_NEW.swap(false, Ordering::SeqCst);
+    if source != 0 {
+        let source = HWND(source as *mut _);
+        if unsafe { IsWindow(source) }.as_bool() {
+            let _ = unsafe { PostMessageW(source, WM_CLOSE, WPARAM(0), LPARAM(0)) };
+        }
+    }
+    if source_is_new && source_pid != 0 && source_pid != launched_pid {
+        end_process(source_pid);
     }
 
     let thumbnail = THUMBNAIL
@@ -358,8 +439,17 @@ fn end_the_program() {
     if thumbnail != 0 {
         let _ = unsafe { DwmUnregisterThumbnail(thumbnail) };
     }
-    SOURCE.store(0, Ordering::SeqCst);
     hide_the_host();
+}
+
+/// End a process this app did not begin: a program that hands its file to a process of its own is
+/// one whose window outlives the launcher, and it is the window that is the preview.
+fn end_process(pid: u32) {
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) }) else {
+        return;
+    };
+    let _ = unsafe { TerminateProcess(process, 1) };
+    let _ = unsafe { CloseHandle(process) };
 }
 
 /// Take the host off the screen, on the thread that made it.
@@ -553,8 +643,8 @@ unsafe fn ensure_host() -> Option<HWND> {
 }
 
 /// Whether the program this worker was begun for is still the one on screen.
-fn is_current(launch: u64) -> bool {
-    LAUNCH.load(Ordering::SeqCst) == launch
+fn is_current(id: u64) -> bool {
+    LAUNCH.load(Ordering::SeqCst) == id
 }
 
 /// Find the program's window, keep the box and the picture in step with the hover, and keep the
@@ -562,16 +652,16 @@ fn is_current(launch: u64) -> bool {
 ///
 /// **One worker per program**, not per hover: the hover can come and go while the program is
 /// starting, and what that must cost is a hidden host and a kept window rather than a launch.
-fn run_it(host: HWND, pid: u32, scale: PreviewScale, launch: u64) {
-    let Some(source) = wait_for_a_window(pid, launch) else {
+fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
+    let Some(source) = wait_for_a_window(&launch) else {
         // A program that made no window is a preview with nothing to show: it goes, and the host
         // is already off the screen.
-        if is_current(launch) {
+        if is_current(launch.id) {
             end_the_program();
         }
         return;
     };
-    if !is_current(launch) {
+    if !is_current(launch.id) {
         return;
     }
 
@@ -579,7 +669,13 @@ fn run_it(host: HWND, pid: u32, scale: PreviewScale, launch: u64) {
     // the desktop is a window the hand is over, and a hover whose pointer left the file is a
     // hover this app is asked to take down (see the module note).
     let _ = unsafe { ShowWindow(source, SW_HIDE) };
+    let source_pid = pid_of(source);
     SOURCE.store(source.0 as isize, Ordering::SeqCst);
+    SOURCE_PID.store(source_pid, Ordering::SeqCst);
+    SOURCE_IS_NEW.store(
+        !launch.processes_before.contains(&source_pid),
+        Ordering::SeqCst,
+    );
     strip_the_frame(source);
 
     // **The shape the box is cut to, read once and never again**: parking writes the parked box
@@ -587,21 +683,40 @@ fn run_it(host: HWND, pid: u32, scale: PreviewScale, launch: u64) {
     // rather than of the program (see the module note).
     let own = own_size(source);
 
+    let mut processes = process_tree(launch.pid);
+    if !processes.contains(&source_pid) {
+        processes.push(source_pid);
+    }
+    let mut tree_read = Instant::now();
+    let mut images: HashMap<u32, Option<String>> = HashMap::new();
+
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
     let mut lingering: Option<Instant> = None;
 
     loop {
-        if !is_current(launch) {
+        if !is_current(launch.id) {
             return;
         }
         if !unsafe { IsWindow(source) }.as_bool() {
             // A program that closed its own window has nothing left to draw, and nothing left to
             // keep: it is ended here rather than left running behind a hover that shows nothing.
-            if is_current(launch) {
+            if is_current(launch.id) {
                 end_the_program();
             }
             return;
+        }
+
+        // **Every other window the program puts up is hidden at once.** A splash, a dialog or a
+        // second frame is not the picture, and a window of the program's on the desktop is a
+        // window under the hand.
+        census(&launch, &processes, &mut images, source.0 as isize).take();
+        if tree_read.elapsed() >= Duration::from_secs(1) {
+            processes = process_tree(launch.pid);
+            if !processes.contains(&source_pid) {
+                processes.push(source_pid);
+            }
+            tree_read = Instant::now();
         }
 
         let at = WANT
@@ -750,12 +865,12 @@ fn layout_for(
     }
 }
 
-/// The size the program's own window opens at: what `100%` is a hundred percent of.
+/// The size the program's own window opens at: the shape `100%` is a hundred percent of.
 ///
 /// It is the window's *restored* box and not the one it is showing at, because a program that
-/// remembers being maximized is showing at the whole display — and the display is what the fit
-/// is for, not what a percentage means. A window that never had a restored box is measured where
-/// it stands.
+/// remembers being maximized is showing at the whole display — and the display is what the fit is
+/// for, not what the shape means. A window that never had a restored box is measured where it
+/// stands.
 fn own_size(window: HWND) -> (u32, u32) {
     let mut placement = WINDOWPLACEMENT {
         length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
@@ -799,10 +914,7 @@ fn parked(window: HWND, width: i32, height: i32) -> bool {
     }
     let parked = the_parked_box(width, height);
 
-    rect.left == parked.left
-        && rect.top == parked.top
-        && rect.right == parked.right
-        && rect.bottom == parked.bottom
+    parked_at_the_box(window, &parked)
         && unsafe { IsWindowVisible(window) }.as_bool()
         && !unsafe { IsZoomed(window) }.as_bool()
         && !unsafe { IsIconic(window) }.as_bool()
@@ -888,33 +1000,133 @@ fn strip_the_frame(window: HWND) {
     let _ = unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, stripped as isize) };
 }
 
-/// The program's first top-level window with a title, waited for within [`WINDOW_WAIT`].
+/// One look at the desktop: every window the program has put up since it was begun.
 ///
-/// It is the window the user would have seen, which is the only window a program can be assumed
-/// to draw its document in: a splash screen has no title, and a tool window is not what a program
-/// opens a file with. **It need not be visible**: the launch asks for a hidden window, so the one
-/// this is looking for is a window that has not been shown at all.
+/// **Each is hidden as it is found** — a program that shows its own window whatever its launch
+/// said is one whose window must be off the desktop within a frame of it being on it — and the
+/// ones that were showing are recorded, because the window a program actually shows is the one it
+/// draws its document in, and a window it keeps hidden is one it has not drawn yet.
+struct Census<'a> {
+    launch: &'a Launch,
+    processes: &'a [u32],
+    images: &'a mut HashMap<u32, Option<String>>,
+    /// The window this app has already adopted, which is the picture and not to be hidden.
+    keep: isize,
+    /// The program's windows, by the desktop's order.
+    found: Vec<HWND>,
+    /// The largest window the program was showing, and how much of the display it covers: a
+    /// splash is a window, and the document is the one that fills a frame.
+    shown: Option<(i64, HWND)>,
+}
+
+/// Look at the desktop once, on the terms `Census` states.
+fn census<'a>(
+    launch: &'a Launch,
+    processes: &'a [u32],
+    images: &'a mut HashMap<u32, Option<String>>,
+    keep: isize,
+) -> Census<'a> {
+    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let census = unsafe { &mut *(lparam.0 as *mut Census<'_>) };
+        census.visit(hwnd);
+        BOOL(1)
+    }
+
+    let mut census = Census {
+        launch,
+        processes,
+        images,
+        keep,
+        found: Vec::new(),
+        shown: None,
+    };
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut census as *mut Census<'_> as isize)) };
+    census
+}
+
+impl Census<'_> {
+    fn visit(&mut self, hwnd: HWND) {
+        if hwnd.0 as isize == self.keep || hwnd.0.is_null() {
+            return;
+        }
+        let owner = pid_of(hwnd);
+        if owner == 0 || !self.belongs(owner) {
+            return;
+        }
+        // Not a window the program put up: it was on the desktop before the program was begun.
+        if self.launch.windows_before.contains(&(hwnd.0 as isize)) {
+            return;
+        }
+
+        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|owner| !owner.0.is_null());
+        let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
+
+        if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            let mut rect = RECT::default();
+            let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+                (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64
+            } else {
+                0
+            };
+            if self.shown.is_none_or(|(best, _)| area > best) {
+                self.shown = Some((area, hwnd));
+            }
+            // Hidden as it is found, and before anything is decided about it: a window the
+            // program showed is a window the hand may be over.
+            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+        }
+
+        if titled && !owned && ex_style & WS_EX_TOOLWINDOW.0 == 0 {
+            self.found.push(hwnd);
+        }
+    }
+
+    /// Whether a process is one the program's: in the tree it was begun in, or running the image
+    /// the preset names — which is how a packaged program's own window is found, the activator
+    /// having handed the file to a process this app never started.
+    fn belongs(&mut self, pid: u32) -> bool {
+        if self.processes.contains(&pid) {
+            return true;
+        }
+        image_name_of(pid, self.images).is_some_and(|name| name == self.launch.exe)
+    }
+
+    /// Nothing is read out of the census: what it did is the hiding, and what it found is what the
+    /// caller asked for (see `wait_for_a_window`).
+    fn take(self) {}
+}
+
+/// The program's window, waited for within [`WINDOW_WAIT`].
 ///
-/// **Every window the program shows is hidden on the way**, on every poll: a program that shows
-/// its own window whatever its launch said is one whose window must be off the desktop within a
-/// frame of it being on it — the hand is over that window, and a hand over somebody's window is a
-/// hover this app is asked to take down (see the module note). The window the wait is *for* is
-/// hidden as soon as it is found; the others are hidden so that they are never a flash.
-fn wait_for_a_window(pid: u32, launch: u64) -> Option<HWND> {
+/// The window is the one the program **shows** — the window the user would have seen, which is
+/// the only one a program can be assumed to draw its document in — and where it shows none (the
+/// launch asked it not to) the first titled, top-level, unowned, non-tool window of its own is
+/// the window it has.
+fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
-    let mut processes = process_tree(pid);
+    let began = Instant::now();
+    let mut processes = process_tree(launch.pid);
     let mut read = Instant::now();
+    let mut images: HashMap<u32, Option<String>> = HashMap::new();
 
     while Instant::now() < deadline {
-        if !is_current(launch) {
+        if !is_current(launch.id) {
             return None;
         }
-        hide_every_window_of(&processes);
-        if let Some(window) = first_window_of(&processes) {
+
+        let look = census(launch, &processes, &mut images, 0);
+        if let Some((_, window)) = look.shown {
             return Some(window);
         }
+        if began.elapsed() >= SHOWN_WAIT {
+            if let Some(window) = look.found.first().copied() {
+                return Some(window);
+            }
+        }
+
         if read.elapsed() >= TREE_POLL {
-            processes = process_tree(pid);
+            processes = process_tree(launch.pid);
             read = Instant::now();
         }
         std::thread::sleep(WINDOW_POLL);
@@ -948,59 +1160,63 @@ fn process_tree(pid: u32) -> Vec<u32> {
     found
 }
 
-/// Hide every visible top-level window of the processes, so that a program that shows its own
-/// window anyway is a program whose window is on the desktop for no longer than one poll.
-fn hide_every_window_of(processes: &[u32]) {
-    struct Search<'a> {
-        processes: &'a [u32],
-    }
+/// The window's process.
+fn pid_of(window: HWND) -> u32 {
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+    pid
+}
 
+/// Every top-level window on the desktop, as handles a `Send` fact can hold.
+fn top_level_windows() -> Vec<isize> {
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let search = unsafe { &*(lparam.0 as *const Search) };
-        let mut owner = 0u32;
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
-        if search.processes.contains(&owner) && unsafe { IsWindowVisible(hwnd) }.as_bool() {
-            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-        }
+        let found = unsafe { &mut *(lparam.0 as *mut Vec<isize>) };
+        found.push(hwnd.0 as isize);
         BOOL(1)
     }
 
-    let search = Search { processes };
-    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&search as *const Search as isize)) };
+    let mut found: Vec<isize> = Vec::new();
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut found as *mut Vec<isize> as isize)) };
+    found
 }
 
-/// The first titled, top-level, non-tool window of one of `processes`.
-fn first_window_of(processes: &[u32]) -> Option<HWND> {
-    struct Search<'a> {
-        processes: &'a [u32],
-        found: Option<HWND>,
+/// The image a process is running, as its file name and lowercased, or nothing where the machine
+/// will not say.
+///
+/// Asked once per process per launch: the answer does not change while the process lives, and
+/// every window on the desktop is asked about on every look.
+fn image_name_of(pid: u32, images: &mut HashMap<u32, Option<String>>) -> Option<String> {
+    if let Some(known) = images.get(&pid) {
+        return known.clone();
     }
+    let name = unsafe { process_image_name(pid) };
+    images.insert(pid, name.clone());
+    name
+}
 
-    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let search = unsafe { &mut *(lparam.0 as *mut Search) };
-        let mut owner = 0u32;
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
-        if !search.processes.contains(&owner) {
-            return BOOL(1);
-        }
-        // A tool window is a palette or a tip, and an owned one is a dialog over something else:
-        // neither is the window a document is drawn in.
-        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
-        let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|owner| !owner.0.is_null());
-        if ex_style & WS_EX_TOOLWINDOW.0 != 0 || owned || unsafe { GetWindowTextLengthW(hwnd) } == 0
-        {
-            return BOOL(1);
-        }
-        search.found = Some(hwnd);
-        BOOL(0)
-    }
-
-    let mut search = Search {
-        processes,
-        found: None,
+/// Safety: opens the process for the query alone and closes it again; nothing is dereferenced.
+unsafe fn process_image_name(pid: u32) -> Option<String> {
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let mut buffer = [0u16; 1024];
+    let mut length = buffer.len() as u32;
+    let queried = unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            windows::core::PWSTR(buffer.as_mut_ptr()),
+            &mut length,
+        )
     };
-    let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize)) };
-    search.found
+    let _ = unsafe { CloseHandle(process) };
+    queried.ok()?;
+
+    let path = String::from_utf16_lossy(&buffer[..length as usize]);
+    Some(
+        path.rsplit(['\\', '/'])
+            .next()
+            .unwrap_or(&path)
+            .to_lowercase(),
+    )
 }
 
 #[cfg(test)]
