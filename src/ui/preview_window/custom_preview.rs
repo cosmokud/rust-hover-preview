@@ -56,9 +56,11 @@
 //! moment its first window exists. A window that opens maximized is *restored* rather than
 //! resized: a `SetWindowPos` on a maximized window changes the size it would have been restored to
 //! and leaves it covering the display it is maximized on. And it is shown only where it
-//! **verifiably stands at the parked box** (see `park`): a window this app could not move is one it
-//! must not put in front of the user, because a frame of somebody's program over the listing is
-//! worse than no picture at all.
+//! **verifiably stands off the desktop at the parking corner** (see `park`): a window this app could
+//! not move is one it must not put in front of the user, because a frame of somebody's program over
+//! the listing is worse than no picture at all. The window may stand there at a size of its own —
+//! the corner is what says it is off the desktop, and its size is what `the_picture_in` composes
+//! into the box.
 //!
 //! **Where the box is, and how big.** The placement is the one every other preview takes: the
 //! pointer's own (`compute_mouse_layout`) or the focused item's (`compute_keyboard_layout`),
@@ -70,6 +72,16 @@
 //! picture of this app's is — the picture's rule, `bitmap_at_display_scale`: `100%` is the picture
 //! at its own size and `Fit to Screen` is that same size, never a photograph stretched over the
 //! display, which is what a preview of one filling the screen would be (see `share_for`).
+//! **And the box is never cut smaller than the program will take.** A window is not obliged to
+//! draw itself in the box a preview asks for: Windows 11's Paint answers `WM_GETMINMAXINFO` with a
+//! floor of 704x500 and takes anything smaller as 704x500 — measured with its frame stripped, as
+//! it is here, and by a `SetWindowPlacement` as well as a `SetWindowPos` — so a hover of a small
+//! picture asked for a box no window could be parked in and showed the host's background and
+//! nothing else. The floor is the window's own answer and is read from the window (see
+//! `the_smallest_it_takes`), the base the box is cut from is raised to it, and a program that keeps
+//! a size of its own anyway is composed into the box at its own shape rather than given up on (see
+//! `the_picture_in`). It is one rule for every program rather than a list of programs: what the
+//! window says is the floor it gets.
 //! **A program's window is not that size**: it opens at whatever size it was last left at — one
 //! left maximized is the whole display — so a box read off it is the size of the last file
 //! somebody opened with the program, and a tall picture is shown in a wide window that fills the
@@ -126,13 +138,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, EnumWindows, GetClientRect, GetWindow, GetWindowLongPtrW,
     GetWindowPlacement, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic,
-    IsWindow, IsWindowVisible, IsZoomed, PostMessageW, RegisterClassExW, SetWindowLongPtrW,
-    SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-    WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
-    WS_THICKFRAME,
+    IsWindow, IsWindowVisible, IsZoomed, PostMessageW, RegisterClassExW, SendMessageW,
+    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
+    GW_OWNER, MINMAXINFO, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_CLOSE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_NCDESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::dimensions::picture_dimensions;
@@ -711,6 +723,11 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
     );
     strip_the_frame(source);
 
+    // **The smallest box the window will draw itself in**: the window's own answer rather than a
+    // number written here, read once because a floor belongs to the window a hover adopts rather
+    // than to the file it was opened with (see `the_smallest_it_takes`).
+    let floor = the_smallest_it_takes(source);
+
     // **The size the box is cut from, read once and never again**: parking writes the parked box
     // into the window's own placement, so a second reading would be the shape of the last preview
     // rather than of the program (see the module note). It is the file's own where the file
@@ -718,6 +735,11 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
     // of the two it is is also which rule the preset's scale is read by (see `share_for`).
     let base = base_size(&launch.path);
     let own = base.unwrap_or_else(|| own_size(source));
+    // Never smaller than the window's own floor (see `the_smallest_it_takes`): `100%` of a small
+    // picture is that picture's size, and where the program will not draw itself that small the box
+    // is the smallest one it will take — which is what keeps the picture at its own size in a window
+    // the program accepts, rather than in a box the program refuses to stand in.
+    let own = (own.0.max(floor.0), own.1.max(floor.1));
     let shape = match base {
         Some(_) => Shape::OfTheFile,
         None => Shape::OfTheProgram,
@@ -801,11 +823,19 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
             box_of_the_host = Some((x, y, width, height));
         }
 
-        // **The window is put back at the box before it is drawn, and never drawn anywhere
-        // else**: a program that restored itself, showed itself again or resized itself is a
-        // window on the desktop rather than a picture, and it is hidden before it is moved.
-        if !parked(source, width, height) {
+        // **The window is put back at the parking corner before it is drawn, and never drawn
+        // anywhere else**: a program that restored itself, showed itself again or resized itself is
+        // a window on the desktop rather than a picture, and it is hidden before it is moved.
+        if !parked(source) {
             park(source, width, height);
+        }
+        if !parked(source) {
+            // **A window that would not stand off the desktop is a picture there is none of**: it
+            // is left hidden by `park`, and the hover waits on the next look with nothing up rather
+            // than a background card standing in for a picture that is not there.
+            hide_the_host();
+            std::thread::sleep(KEEP_POLL);
+            continue;
         }
 
         // The registration is the Shell's, and a program that has not presented yet is a window
@@ -821,9 +851,17 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         if registered != 0 {
             let mut client = RECT::default();
             let _ = unsafe { GetClientRect(host, &mut client) };
+            let mut picture = RECT::default();
+            let _ = unsafe { GetClientRect(source, &mut picture) };
             let properties = DWM_THUMBNAIL_PROPERTIES {
                 dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE,
-                rcDestination: client,
+                // The box's whole client where the window took the box, and the window's own shape
+                // fitted into it where it took one of its own (see `the_picture_in`).
+                rcDestination: the_picture_in(
+                    client.right,
+                    client.bottom,
+                    (picture.right, picture.bottom),
+                ),
                 rcSource: RECT::default(),
                 opacity: 255,
                 fVisible: true.into(),
@@ -979,6 +1017,80 @@ fn own_size(window: HWND) -> (u32, u32) {
     (800, 600)
 }
 
+/// The smallest box the program's window will draw itself in, read from the window itself.
+///
+/// **A program is not obliged to take the box a preview asks for.** Windows 11's Paint answers
+/// `WM_GETMINMAXINFO` with a floor of 704x500 and takes anything smaller as 704x500 — measured with
+/// its frame stripped, as it is here, and by a `SetWindowPlacement` as well as by a `SetWindowPos` —
+/// so a hover of a picture smaller than that asked for a box no window could be parked at and drew
+/// the host's background and nothing else. The floor is the window's own answer rather than a number
+/// read off any one program, and it is read *after* the frame is stripped, because that is the
+/// window the preview draws: a program whose floor is its frame's would otherwise be asked to take
+/// a box it never has to.
+///
+/// It is asked once per adopted window: a floor belongs to the window rather than to the file it was
+/// opened with, and a window does not change it while it stands. A program that clamps without
+/// saying so — answering with a floor of nothing and then refusing the box anyway — is the case
+/// `the_picture_in` covers, since the box is then fitted into rather than given up on.
+fn the_smallest_it_takes(window: HWND) -> (u32, u32) {
+    let mut info = MINMAXINFO::default();
+    let _ = unsafe {
+        SendMessageW(
+            window,
+            WM_GETMINMAXINFO,
+            WPARAM(0),
+            LPARAM(&mut info as *mut MINMAXINFO as isize),
+        )
+    };
+
+    (
+        info.ptMinTrackSize.x.max(0) as u32,
+        info.ptMinTrackSize.y.max(0) as u32,
+    )
+}
+
+/// The rectangle in the host's client the program's window is drawn in: the window's own client at
+/// the size it has where that fits, and its own shape fitted into the client where it does not.
+///
+/// **A program that took a size of its own is composed into the box rather than dropped.** The box
+/// the hover asked for is the setting's — the file at its share of the base — and the program's
+/// floor is what the base is raised to, so the two normally agree and this is the host's whole
+/// client with the picture at its own size. They part where the floor the window reports is larger
+/// than the room the display leaves: the box is then smaller than any window this program can be
+/// parked at, and a preview that shows the program at its own shape inside the box says more than one
+/// that shows nothing. The window is never stretched: the shape it is drawn at is its own, and
+/// `background` is what the host paints in the letterbox.
+fn the_picture_in(client_width: i32, client_height: i32, picture: (i32, i32)) -> RECT {
+    let client_width = client_width.max(1);
+    let client_height = client_height.max(1);
+    let picture_width = picture.0.max(1);
+    let picture_height = picture.1.max(1);
+
+    let (width, height) = if picture_width <= client_width && picture_height <= client_height {
+        // The window is no bigger than the box: it is drawn at its own size, which is the case
+        // every program that takes the box is in — and a window smaller than the box is a picture
+        // at its own size with the background around it rather than one stretched to fill it.
+        (picture_width, picture_height)
+    } else {
+        let scale = (client_width as f32 / picture_width as f32)
+            .min(client_height as f32 / picture_height as f32);
+        (
+            ((picture_width as f32 * scale).round() as i32).clamp(1, client_width),
+            ((picture_height as f32 * scale).round() as i32).clamp(1, client_height),
+        )
+    };
+
+    let left = (client_width - width) / 2;
+    let top = (client_height - height) / 2;
+
+    RECT {
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+    }
+}
+
 /// The box a window parked at this size stands in.
 fn the_parked_box(width: i32, height: i32) -> RECT {
     RECT {
@@ -989,22 +1101,35 @@ fn the_parked_box(width: i32, height: i32) -> RECT {
     }
 }
 
-/// Whether a window stands, visibly, at the box a window of this size is parked in.
-fn parked(window: HWND, width: i32, height: i32) -> bool {
+/// The corner a parked window's box is put at: its top-right, which is the one corner of that box
+/// that stands in the same place whatever size the window takes there.
+fn at_the_parking_corner(rect: &RECT) -> bool {
+    rect.right == PARKING && rect.top == PARKING
+}
+
+/// Whether a window stands off the desktop, visibly, at the parking corner — whatever size it took
+/// there.
+///
+/// **The corner is what says a window is parked, not the box it was asked for.** A window that keeps
+/// a size of its own keeps it however it is asked (see `the_smallest_it_takes`), so the box the
+/// hover asks for is the program's own floor and the two agree — and where they still do not, the
+/// window is one this app *did* move off every display, which is the whole of what parking is for,
+/// and `the_picture_in` composes it into the box. A window that is not at the corner is a window
+/// standing somewhere a display reaches.
+fn parked(window: HWND) -> bool {
     let mut rect = RECT::default();
     if unsafe { GetWindowRect(window, &mut rect) }.is_err() {
         return false;
     }
-    let parked = the_parked_box(width, height);
 
-    parked_at_the_box(window, &parked)
+    at_the_parking_corner(&rect)
         && unsafe { IsWindowVisible(window) }.as_bool()
         && !unsafe { IsZoomed(window) }.as_bool()
         && !unsafe { IsIconic(window) }.as_bool()
 }
 
-/// Restore the window out of any maximized or minimized state, put it at the parked box at the
-/// preview's size, and show it where no display reaches — **only where it verifiably stands
+/// Restore the window out of any maximized or minimized state, put its top-right corner at the
+/// parking place, and show it where no display reaches — **only where it verifiably stands
 /// there**.
 ///
 /// **`SetWindowPlacement` is what restores it**, and it is given the parked box as the box to
@@ -1014,8 +1139,13 @@ fn parked(window: HWND, width: i32, height: i32) -> bool {
 /// is hidden before the move and hidden again after it, so nothing of somebody's program is on a
 /// screen at any point of it, and a window that could not be moved is left hidden rather than
 /// shown where it stands — a program's frame over the listing is worse than no picture at all.
+///
+/// **And the corner is asked for again once the window has answered**, because the box is what the
+/// window is asked to *take*: one that keeps a size of its own takes it, and its right edge then
+/// stands past the parking place by the difference. The second ask moves it by the size it actually
+/// took and asks for no size at all (see `at_the_parking_corner`).
 fn park(window: HWND, width: i32, height: i32) {
-    let parked = the_parked_box(width, height);
+    let parked_box = the_parked_box(width, height);
 
     let _ = unsafe { ShowWindow(window, SW_HIDE) };
 
@@ -1023,7 +1153,7 @@ fn park(window: HWND, width: i32, height: i32) {
         let placement = WINDOWPLACEMENT {
             length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
             showCmd: SW_SHOWNORMAL.0 as u32,
-            rcNormalPosition: parked,
+            rcNormalPosition: parked_box,
             ..Default::default()
         };
         let _ = unsafe { SetWindowPlacement(window, &placement) };
@@ -1034,35 +1164,37 @@ fn park(window: HWND, width: i32, height: i32) {
         SetWindowPos(
             window,
             HWND::default(),
-            parked.left,
-            parked.top,
+            parked_box.left,
+            parked_box.top,
             width,
             height,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
     };
 
-    if !parked_at_the_box(window, &parked) {
-        // **A window this app could not move is a window it must not show.** The next look hides
-        // it again, and the hover is the host's background until the program lets itself be
-        // parked.
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(window, &mut rect) }.is_ok() && !at_the_parking_corner(&rect) {
+        let _ = unsafe {
+            SetWindowPos(
+                window,
+                HWND::default(),
+                PARKING - (rect.right - rect.left),
+                PARKING,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+    }
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(window, &mut rect) }.is_err() || !at_the_parking_corner(&rect) {
+        // **A window this app could not move is a window it must not show.** It is left hidden for
+        // the next look to try again, and a window that is not off the desktop stays off the screen.
         let _ = unsafe { ShowWindow(window, SW_HIDE) };
         return;
     }
     let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
-}
-
-/// Whether a window's own box is the one it was asked to stand in.
-fn parked_at_the_box(window: HWND, box_of: &RECT) -> bool {
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(window, &mut rect) }.is_err() {
-        return false;
-    }
-
-    rect.left == box_of.left
-        && rect.top == box_of.top
-        && rect.right == box_of.right
-        && rect.bottom == box_of.bottom
 }
 
 /// Take the frame off the window, and keep it out of the taskbar and out of the focus: what the
@@ -1442,6 +1574,65 @@ mod tests {
             (half.preview_w, half.preview_h),
             (300, 200),
             "a percentage below a fit is that share of the picture's own size"
+        );
+    }
+
+    #[test]
+    fn a_window_that_keeps_a_size_of_its_own_is_composed_into_the_box() {
+        let whole = the_picture_in(704, 500, (704, 500));
+        assert_eq!(
+            (whole.left, whole.top, whole.right, whole.bottom),
+            (0, 0, 704, 500),
+            "a window that took the box is drawn in the whole of it, at its own size"
+        );
+
+        let smaller = the_picture_in(300, 200, (100, 60));
+        assert_eq!(
+            (smaller.left, smaller.top, smaller.right, smaller.bottom),
+            (100, 70, 200, 130),
+            "and a window smaller than the box is centred in it rather than stretched to fill it"
+        );
+
+        let fitted = the_picture_in(200, 150, (704, 500));
+        assert_eq!(
+            (fitted.left, fitted.top, fitted.right, fitted.bottom),
+            (0, 4, 200, 146),
+            "a window too big for the box is its own shape fitted into it, and the letterbox is \
+             what the background shows"
+        );
+        assert!(
+            fitted.top == 150 - fitted.bottom,
+            "the window stands in the middle of the box rather than against one edge"
+        );
+        assert!(
+            fitted.right - fitted.left <= 200 && fitted.bottom - fitted.top <= 150,
+            "and never past the box it is drawn in"
+        );
+    }
+
+    #[test]
+    fn a_box_is_never_cut_below_the_floor_the_window_reports() {
+        // Paint answers `WM_GETMINMAXINFO` with 704x500 and will not go smaller, so a picture that
+        // is smaller than that is raised to the window's floor rather than asked for at its own
+        // size and refused.
+        let floor = (704u32, 500u32);
+        let picture = (80u32, 60u32);
+        let own = (picture.0.max(floor.0), picture.1.max(floor.1));
+
+        let layout = layout_for(
+            pointer((0, 0)),
+            Shape::OfTheFile,
+            own,
+            PreviewScale::Percent(100),
+            true,
+        )
+        .expect("a display has room for a preview");
+
+        assert_eq!(
+            (layout.preview_w, layout.preview_h),
+            floor,
+            "the box is the smallest one the window will stand in, rather than the picture's own \
+             size refused there"
         );
     }
 
