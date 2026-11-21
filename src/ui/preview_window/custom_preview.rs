@@ -55,12 +55,17 @@
 //! `Avoid` region — and the room of the display the hover is on. `scaling` is then read the way
 //! every kind without a size of its own is — the document's rule, `fit_reduced`: a percentage is a
 //! share of the room the placement leaves, and `Fit to Screen` is the whole of it, which is what
-//! the tray's own scaling menu calls `Screen 100%`. A program's window is the one thing here with
-//! a size of its own, and what it gives is the **shape** of the box rather than its size: the box
-//! is cut to the window's proportions and fitted into that room, so `50%` is a box of that shape
-//! at half the room and `100%` is as large as the room holds. That shape is read **once**, before
-//! the window is parked, because parking writes the parked box into the window's own placement and
-//! a second reading would be the shape of the last preview rather than of the program.
+//! the tray's own scaling menu calls `Screen 100%`. The **shape** of the box is the file's own: a
+//! picture says how wide and how tall it is in its own header, so a picture that is taller than it
+//! is wide is a tall box — the box is cut to those proportions and fitted into that room, so `50%`
+//! is a box of that shape at half the room and `100%` is as large as the room holds (see
+//! `base_size`). **A program's window is not that shape**: it opens at whatever size it was last
+//! left at, so a shape read off it is the shape of the last file somebody opened with the program,
+//! and a tall picture is shown in a wide window. A file that declares no size of its own — a
+//! document, an archive, a sound — is the one case where the program's window is the only shape
+//! there is, and that shape is read **once**, before the window is parked, because parking writes
+//! the parked box into the window's own placement and a second reading would be the shape of the
+//! last preview rather than of the program.
 //! `background` is what the host paints where the program's window is smaller than the box.
 //! `volume` is kept in the preset and written back; a program of the user's own is not told what
 //! level to play at — there is no portable way to set another process's audio — so it is a setting
@@ -116,6 +121,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_THICKFRAME,
 };
 
+use super::dimensions::picture_dimensions;
 use super::displays::{dpi_at, work_area_at};
 use super::layout::{
     compute_keyboard_layout, compute_mouse_layout, KeyboardPlacement, PreviewLayout,
@@ -218,6 +224,9 @@ struct Program {
 /// and processes that were on the machine before it — which is what tells the program's own
 /// window from everything else, and the process it may end from the ones that are the user's.
 struct Launch {
+    /// The file the program was begun for: the size the box is cut to is the file's own, and it is
+    /// read on the worker rather than here (see `base_size`).
+    path: PathBuf,
     /// The process this app began.
     pid: u32,
     /// The preset program's own file name, lowercased: what a process the program hands its file
@@ -351,6 +360,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     // is the program on screen.
     let id = LAUNCH.fetch_add(1, Ordering::SeqCst) + 1;
     let launch = Launch {
+        path: path.to_path_buf(),
         pid,
         exe: exe_file,
         windows_before,
@@ -680,8 +690,9 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
 
     // **The shape the box is cut to, read once and never again**: parking writes the parked box
     // into the window's own placement, so a second reading would be the shape of the last preview
-    // rather than of the program (see the module note).
-    let own = own_size(source);
+    // rather than of the program (see the module note). It is the file's own where the file
+    // declares one, and the program's window only where it does not (see `base_size`).
+    let own = base_size(&launch.path).unwrap_or_else(|| own_size(source));
 
     let mut processes = process_tree(launch.pid);
     if !processes.contains(&source_pid) {
@@ -808,13 +819,12 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
 }
 
 /// The box the preview is drawn in: the placement the tray's settings and the display ask for,
-/// at the share of the room the preset's scale names, cut to the shape of the program's own
-/// window.
+/// at the share of the room the preset's scale names, cut to the shape of the file itself.
 ///
-/// **The scale is the room's, not the window's** (see `fit_reduced`): a preset is written the way
-/// the tray's own menu offers it — `Fit to screen`, `Screen 100%`, `Screen 50%` — and `100%` of a
-/// program's window would be a preview the size of whatever the program last remembered, which is
-/// a setting about the display read as a setting about somebody else's window.
+/// **The scale is the room's, not the file's** (see `fit_reduced`): a preset is written the way
+/// the tray's own menu offers it — `Fit to screen`, `Screen 100%`, `Screen 50%` — and a percentage
+/// of a picture's own pixels would be a preview of the picture at the size the picture happens to
+/// be, which is a setting about the display read as a setting about a file.
 fn layout_for(
     at: Where,
     own: (u32, u32),
@@ -865,7 +875,25 @@ fn layout_for(
     }
 }
 
-/// The size the program's own window opens at: the shape `100%` is a hundred percent of.
+/// The shape of the file itself, where the file declares one: the size a picture says it is in its
+/// own header.
+///
+/// **This is what a program's window cannot answer.** A program opens at the size it was last left
+/// at — the window Paint was left at yesterday is a wide window whatever the picture in it is — so
+/// a shape read off it is the shape of the last file somebody opened with the program, and a tall
+/// picture is shown in a wide box. A picture's own bytes say how wide and how tall it is before
+/// anything is decoded, and that is the shape the box is cut to (see `picture_dimensions`).
+///
+/// A file that is not a picture this app measures — a document, an archive, a sound — has no such
+/// answer, and the program's window is the only shape there is to go by (see `own_size`).
+fn base_size(path: &Path) -> Option<(u32, u32)> {
+    picture_dimensions(path).filter(|&(width, height)| width > 0 && height > 0)
+}
+
+/// The size the program's own window opens at: the shape of a file that declares none of its own.
+///
+/// It is the fallback [`base_size`] leaves, and it is a shape of the program's rather than of the
+/// file's, which is the whole reason it is the fallback.
 ///
 /// It is the window's *restored* box and not the one it is showing at, because a program that
 /// remembers being maximized is showing at the whole display — and the display is what the fit is
@@ -1300,6 +1328,31 @@ mod tests {
         assert!(layout.pos_x + layout.preview_w as i32 <= room.right);
         assert!(layout.pos_y >= room.top);
         assert!(layout.pos_y + layout.preview_h as i32 <= room.bottom);
+    }
+
+    #[test]
+    fn a_tall_picture_is_a_tall_box_whatever_the_program_last_opened_at() {
+        let folder = std::env::temp_dir().join("rust-hover-preview-custom-shape");
+        let _ = std::fs::create_dir_all(&folder);
+        let tall = folder.join("tall.png");
+        image::RgbaImage::from_pixel(40, 90, image::Rgba([10, 20, 30, 255]))
+            .save(&tall)
+            .expect("a picture to write");
+
+        assert_eq!(
+            base_size(&tall),
+            Some((40, 90)),
+            "the shape is the picture's own rather than the window the program opens at"
+        );
+
+        let words = folder.join("notes.txt");
+        std::fs::write(&words, "a file with no size of its own").expect("a file to write");
+        assert!(
+            base_size(&words).is_none(),
+            "a file that is not a picture leaves the program's window as the shape"
+        );
+
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]
