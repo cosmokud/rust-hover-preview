@@ -52,20 +52,23 @@
 //! **Where the box is, and how big.** The placement is the one every other preview takes: the
 //! pointer's own (`compute_mouse_layout`) or the focused item's (`compute_keyboard_layout`),
 //! which is what reads `Tray → Placement` — the position mode, the pointer standoff and the
-//! `Avoid` region — and the room of the display the hover is on. `scaling` is then read the way
-//! every kind without a size of its own is — the document's rule, `fit_reduced`: a percentage is a
-//! share of the room the placement leaves, and `Fit to Screen` is the whole of it, which is what
-//! the tray's own scaling menu calls `Screen 100%`. The **shape** of the box is the file's own: a
-//! picture says how wide and how tall it is in its own header, so a picture that is taller than it
-//! is wide is a tall box — the box is cut to those proportions and fitted into that room, so `50%`
-//! is a box of that shape at half the room and `100%` is as large as the room holds (see
-//! `base_size`). **A program's window is not that shape**: it opens at whatever size it was last
-//! left at, so a shape read off it is the shape of the last file somebody opened with the program,
-//! and a tall picture is shown in a wide window. A file that declares no size of its own — a
-//! document, an archive, a sound — is the one case where the program's window is the only shape
-//! there is, and that shape is read **once**, before the window is parked, because parking writes
-//! the parked box into the window's own placement and a second reading would be the shape of the
-//! last preview rather than of the program.
+//! `Avoid` region — and the room of the display the hover is on. The **size and the shape** of the
+//! box are the file's own: a picture says how wide and how tall it is in its own header, so a
+//! picture that is taller than it is wide is a tall box, and the box is that picture's size before
+//! the preset's `scaling` is read (see `base_size`). `scaling` is then read the way every other
+//! picture of this app's is — the picture's rule, `bitmap_at_display_scale`: `100%` is the picture
+//! at its own size and `Fit to Screen` is that same size, never a photograph stretched over the
+//! display, which is what a preview of one filling the screen would be (see `share_for`).
+//! **A program's window is not that size**: it opens at whatever size it was last left at — one
+//! left maximized is the whole display — so a box read off it is the size of the last file
+//! somebody opened with the program, and a tall picture is shown in a wide window that fills the
+//! screen. A file that declares no size of its own — a document, an archive, a sound — is the one
+//! case where the program's window is the only size there is, and that size is read **once**,
+//! before the window is parked, because parking writes the parked box into the window's own
+//! placement and a second reading would be the shape of the last preview rather than of the
+//! program. Such a file keeps the document's rule, `fit_reduced`: a percentage is a share of the
+//! room the placement leaves, and `Fit to Screen` is the whole of it, which is what the tray's own
+//! scaling menu calls `Screen 100%`.
 //! `background` is what the host paints where the program's window is smaller than the box.
 //! `volume` is kept in the preset and written back; a program of the user's own is not told what
 //! level to play at — there is no portable way to set another process's audio — so it is a setting
@@ -129,7 +132,7 @@ use super::layout::{
 use super::load_dispatch::HoverPlacement;
 use super::never_shown::{self, NeverShown};
 use super::pointer::{AvoidRegion, ScreenRegion};
-use super::preview_scale::fit_reduced;
+use super::preview_scale::{bitmap_at_display_scale, fit_reduced};
 use crate::app::engine_processes;
 use crate::config::config::{custom_preset_for, CustomPreset, PreviewScale, TransparentBackground};
 use crate::CONFIG;
@@ -185,7 +188,8 @@ const PARKING: i32 = -30000;
 ///
 /// It is the whole of what the hover knows about *where* the preview goes, and it is read on the
 /// worker thread rather than here because the box cannot be worked out before the program's
-/// window exists: the shape of the box is the window's (see the module note).
+/// window exists: the size the box is cut from is the file's own where it declares one, and the
+/// window's only where it does not (see the module note).
 #[derive(Clone, Copy)]
 pub(super) enum Where {
     /// A pointer's hover: where the hand is, and the region the `Avoid` setting keeps a preview
@@ -688,11 +692,17 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
     );
     strip_the_frame(source);
 
-    // **The shape the box is cut to, read once and never again**: parking writes the parked box
+    // **The size the box is cut from, read once and never again**: parking writes the parked box
     // into the window's own placement, so a second reading would be the shape of the last preview
     // rather than of the program (see the module note). It is the file's own where the file
-    // declares one, and the program's window only where it does not (see `base_size`).
-    let own = base_size(&launch.path).unwrap_or_else(|| own_size(source));
+    // declares one, and the program's window only where it does not (see `base_size`) — and which
+    // of the two it is is also which rule the preset's scale is read by (see `share_for`).
+    let base = base_size(&launch.path);
+    let own = base.unwrap_or_else(|| own_size(source));
+    let shape = match base {
+        Some(_) => Shape::OfTheFile,
+        None => Shape::OfTheProgram,
+    };
 
     let mut processes = process_tree(launch.pid);
     if !processes.contains(&source_pid) {
@@ -749,7 +759,7 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         };
         lingering = None;
 
-        let Some(layout) = layout_for(at, own, scale, follow_cursor()) else {
+        let Some(layout) = layout_for(at, shape, own, scale, follow_cursor()) else {
             hide_the_host();
             std::thread::sleep(KEEP_POLL);
             continue;
@@ -818,20 +828,46 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
     }
 }
 
-/// The box the preview is drawn in: the placement the tray's settings and the display ask for,
-/// at the share of the room the preset's scale names, cut to the shape of the file itself.
+/// What the box's size and shape were read off, which is also what the preset's `scaling` is a
+/// share of.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// The file's own header: a picture's size, which is the picture rule's base.
+    OfTheFile,
+    /// The program's window, for a file that declares no size of its own: a page in a window
+    /// rather than a picture with pixels of its own, which is the document rule's base.
+    OfTheProgram,
+}
+
+/// The share the box is drawn at, for the base its size was read off.
 ///
-/// **The scale is the room's, not the file's** (see `fit_reduced`): a preset is written the way
-/// the tray's own menu offers it — `Fit to screen`, `Screen 100%`, `Screen 50%` — and a percentage
-/// of a picture's own pixels would be a preview of the picture at the size the picture happens to
-/// be, which is a setting about the display read as a setting about a file.
+/// **The two rules are the two this app already has.** A picture is a bitmap, so a share of it is
+/// a share of its own pixels and a fit is the picture at the size it is — never a photograph
+/// enlarged over the display, which is what `bitmap_at_display_scale` states and why `100%` is a
+/// preview rather than a screen. A file that declares no size of its own is a page or a listing in
+/// a window, drawn at whatever size it is asked for, so a share of it is a share of the room the
+/// placement leaves — `fit_reduced`'s rule.
+fn share_for(shape: Shape, scale: PreviewScale) -> PreviewScale {
+    match shape {
+        Shape::OfTheFile => bitmap_at_display_scale(scale),
+        Shape::OfTheProgram => fit_reduced(scale),
+    }
+}
+
+/// The box the preview is drawn in: the placement the tray's settings and the display ask for,
+/// at the share of that base the preset's scale names, cut to the base's own shape.
+///
+/// **The share is a share of the base** (see `share_for`), which is what makes a preset's scale
+/// mean what a tray menu's does: `100%` of a picture is the picture at its own size, and `100%` of
+/// a file with no size of its own is the room the placement leaves.
 fn layout_for(
     at: Where,
+    shape: Shape,
     own: (u32, u32),
     scale: PreviewScale,
     follow_cursor: bool,
 ) -> Option<PreviewLayout> {
-    let scale = fit_reduced(scale);
+    let scale = share_for(shape, scale);
     match at {
         Where::Pointer { cursor, avoid } => {
             let bounds = work_area_at(cursor.0, cursor.1);
@@ -1259,10 +1295,11 @@ mod tests {
     }
 
     #[test]
-    fn a_hundred_percent_is_the_room_cut_to_the_windows_shape() {
+    fn a_hundred_percent_of_a_program_window_is_the_room_cut_to_its_shape() {
         let room = work_area_at(0, 0);
         let layout = layout_for(
             pointer((0, 0)),
+            Shape::OfTheProgram,
             (600, 400),
             PreviewScale::Percent(100),
             true,
@@ -1291,13 +1328,20 @@ mod tests {
     fn a_percentage_is_that_share_of_the_room() {
         let whole = layout_for(
             pointer((0, 0)),
+            Shape::OfTheProgram,
             (600, 400),
             PreviewScale::Percent(100),
             true,
         )
         .expect("a display has room for a preview");
-        let half = layout_for(pointer((0, 0)), (600, 400), PreviewScale::Percent(50), true)
-            .expect("half of a room is a preview a display can hold");
+        let half = layout_for(
+            pointer((0, 0)),
+            Shape::OfTheProgram,
+            (600, 400),
+            PreviewScale::Percent(50),
+            true,
+        )
+        .expect("half of a room is a preview a display can hold");
 
         assert!(
             (half.preview_w as f32 - whole.preview_w as f32 / 2.0).abs() <= 2.0
@@ -1315,6 +1359,7 @@ mod tests {
         let room = work_area_at(0, 0);
         let layout = layout_for(
             pointer((0, 0)),
+            Shape::OfTheProgram,
             (600, 400),
             PreviewScale::FitToScreen,
             false,
@@ -1328,6 +1373,52 @@ mod tests {
         assert!(layout.pos_x + layout.preview_w as i32 <= room.right);
         assert!(layout.pos_y >= room.top);
         assert!(layout.pos_y + layout.preview_h as i32 <= room.bottom);
+    }
+
+    #[test]
+    fn a_picture_is_the_picture_at_its_own_size_whatever_the_scale_says() {
+        let at_a_hundred = layout_for(
+            pointer((0, 0)),
+            Shape::OfTheFile,
+            (600, 400),
+            PreviewScale::Percent(100),
+            true,
+        )
+        .expect("a display has room for a preview");
+        assert_eq!(
+            (at_a_hundred.preview_w, at_a_hundred.preview_h),
+            (600, 400),
+            "the base is the picture's own size, so a preview of one is that picture rather than \
+             the screen"
+        );
+
+        let fitted = layout_for(
+            pointer((0, 0)),
+            Shape::OfTheFile,
+            (600, 400),
+            PreviewScale::FitToScreen,
+            true,
+        )
+        .expect("a display has room for a preview");
+        assert_eq!(
+            (fitted.preview_w, fitted.preview_h),
+            (600, 400),
+            "and a fit is the picture at the size it is rather than stretched over the display"
+        );
+
+        let half = layout_for(
+            pointer((0, 0)),
+            Shape::OfTheFile,
+            (600, 400),
+            PreviewScale::Percent(50),
+            true,
+        )
+        .expect("a display has room for a preview");
+        assert_eq!(
+            (half.preview_w, half.preview_h),
+            (300, 200),
+            "a percentage below a fit is that share of the picture's own size"
+        );
     }
 
     #[test]

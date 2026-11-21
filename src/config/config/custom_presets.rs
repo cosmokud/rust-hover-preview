@@ -72,8 +72,8 @@ pub struct CustomPreset {
     /// The extensions it claims, each a bare extension without its dot, lowercased — the same
     /// shape `formats::lists` keeps its own entries in.
     pub extensions: Vec<String>,
-    /// How large the program's window is drawn in the hover: a share of the room the display
-    /// leaves beside the item, at the shape of the window itself, or the whole of that room.
+    /// How large the preview is drawn in the hover: a share of the size the box is cut from —
+    /// the file's own where it declares one, the room beside the item where it does not.
     pub scaling: PreviewScale,
     /// What stands behind it where the window is smaller than the band.
     pub background: TransparentBackground,
