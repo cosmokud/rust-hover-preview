@@ -16,28 +16,46 @@
 //! answers a capture with black. It is the road a film of this app's own already takes (see
 //! `pin_film_host` and `pin_film_thumbnail`), used here for a window nothing of this app's owns.
 //!
+//! **Why the program is begun hidden, and un-maximized before it is ever shown.** A program
+//! makes its own window and shows it at its own size — and one that remembers being maximized is
+//! the whole display from the moment it appears until this app moves it. That is not only a flash
+//! of somebody else's window over the listing: it is a window *under the pointer*, so the hook
+//! takes the hover down, the launch is killed with it, the pointer is over the file again, and
+//! the whole thing repeats — a preview that blinks instead of one that is read. So the launch
+//! carries `SW_HIDE` in its `STARTUPINFO` (the road a model's viewer already takes, see
+//! `never_shown`), the window is hidden again the moment it is found, and a window that opens
+//! maximized is *restored* rather than resized — a `SetWindowPos` on a maximized window changes
+//! the size it would have been restored to and leaves it full screen. It is shown only once it
+//! stands at the parked box, and it is kept there for as long as the hover is up (see
+//! `keep_it_parked`).
+//!
+//! **Where the box is, and how big.** The placement is the one every other preview takes: the
+//! pointer's own (`compute_mouse_layout`) or the focused item's (`compute_keyboard_layout`),
+//! which is what reads `Tray → Placement` — the position mode, the pointer standoff and the
+//! `Avoid` region — and the room of the display the hover is on. `scaling` is then read the way
+//! every other kind's is: a percentage is a share of the size the program's own window opens at,
+//! so `100%` is that window at the size it is rather than the whole display, and `Fit to Screen`
+//! is the room the placement left. `background` is what the host paints where the program's
+//! window is smaller than the box. `volume` is kept in the preset and written back; a program of
+//! the user's own is not told what level to play at — there is no portable way to set another
+//! process's audio — so it is a setting a future engine-backed preset can use and nothing on this
+//! road reads it.
+//!
 //! **Why the host is a window of the hover's own.** The preview window paints a card and must
 //! never take the focus; the host is the same shape as a hovered film's (`hover_film_host`):
 //! a borderless, non-activating, topmost window that is shown only once the Shell has the
 //! picture composed in it, and taken down with the hover. It is disabled, so a press on it is the
 //! hover's press and lands on the listing behind it.
 //!
-//! **What the preset's three settings mean here.** `scaling` is the share of the display's work
-//! area the box is — a foreign window has no native size to take a percentage of, so every
-//! percentage is a share of the room, which is what a sound's card means by its own scale.
-//! `background` is what the host paints where the program's window is smaller than the box.
-//! `volume` is kept in the preset and written back; a program of the user's own is not told what
-//! level to play at — there is no portable way to set another process's audio — so it is a
-//! setting a future engine-backed preset can use and nothing on this road reads it.
-//!
 //! **And the pin is not a pin.** Pressing the pin key on one of these does not freeze a picture
 //! of the program: it starts the program properly, with its own frame, at its own place on the
 //! desktop, and this app's preview goes away — the user asked for the file, not for a picture of
 //! it (see [`open_fully`]).
 
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::process::Command;
+use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
 
@@ -53,15 +71,24 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumWindows, GetClientRect, GetWindowLongPtrW,
-    GetWindowTextLengthW, GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW,
-    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_STYLE, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_APP, WM_ERASEBKGND, WM_NCDESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumWindows, GetClientRect, GetWindow,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
+    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed, PostMessageW,
+    RegisterClassExW, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE,
+    GWL_STYLE, GW_OWNER, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
+    SW_SHOWNOACTIVATE, SW_SHOWNORMAL, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_ERASEBKGND, WM_NCDESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    WS_VISIBLE,
 };
 
-use super::displays::work_area_at;
+use super::displays::{dpi_at, work_area_at};
+use super::layout::{
+    compute_keyboard_layout, compute_mouse_layout, KeyboardPlacement, PreviewLayout,
+};
+use super::load_dispatch::HoverPlacement;
+use super::never_shown::{self, NeverShown};
+use super::pointer::{AvoidRegion, ScreenRegion};
 use crate::app::engine_processes;
 use crate::config::config::{custom_preset_for, CustomPreset, PreviewScale, TransparentBackground};
 use crate::CONFIG;
@@ -78,14 +105,44 @@ const WM_THERE_IS_NOTHING_TO_SHOW: u32 = WM_APP + 42;
 ///
 /// A program that takes longer than this is one whose preview never appears — a slow launch is
 /// not a preview, and the hover has moved on by then. The wait runs on the worker thread, so
-/// nothing of this app's is held by it.
+/// nothing of this app's is held by it. The cadence is the one a window is *taken down* at: the
+/// program shows its own window the moment it has one, and every poll is a poll a window can be
+/// hidden on.
 const WINDOW_WAIT: Duration = Duration::from_secs(6);
-const WINDOW_POLL: Duration = Duration::from_millis(40);
+const WINDOW_POLL: Duration = Duration::from_millis(15);
+
+/// How often a parked window is looked at again, and kept at the box if the program moved itself:
+/// a window shown again by its own program, or restored by it, is one the Shell would compose at
+/// the place the program chose rather than at the hover's.
+const KEEP_POLL: Duration = Duration::from_millis(200);
 
 /// Where a parked window is put: past the right edge of every display, at a coordinate Windows
 /// still accepts. The window is real, visible and drawing there — which is what the Shell needs
 /// to compose it — and no user can see it.
 const PARKING: i32 = -30000;
+
+/// What a hover of a custom preview is asked to be drawn at: the pointer's own placement, or the
+/// focused item's.
+///
+/// It is the whole of what the hover knows about *where* the preview goes, and it is read on the
+/// worker thread rather than here because the box cannot be worked out before the program's
+/// window exists: a percentage is a share of the size that window opens at (see the module note).
+#[derive(Clone, Copy)]
+pub(super) enum Where {
+    /// A pointer's hover: where the hand is, and the region the `Avoid` setting keeps a preview
+    /// off.
+    Pointer {
+        cursor: (i32, i32),
+        avoid: Option<AvoidRegion>,
+    },
+    /// A keyboard hover: the focused item's box, the region kept off, and whether its text is
+    /// drawn as a row of its view (see `KeyboardPlacement`).
+    Item {
+        rect: ScreenRegion,
+        avoid: Option<ScreenRegion>,
+        columns: bool,
+    },
+}
 
 /// The host window, while one is up.
 static HOST: AtomicIsize = AtomicIsize::new(0);
@@ -96,9 +153,12 @@ static THUMBNAIL: Mutex<isize> = Mutex::new(0);
 /// The file on screen, so that the same hover is not a second launch.
 static SHOWING: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// The program this app started for it, which is ended with the hover.
-static CHILD: Mutex<Option<Child>> = Mutex::new(None);
+static CHILD: Mutex<Option<NeverShown>> = Mutex::new(None);
 /// The colour the host paints where the program's window does not reach.
 static BACKGROUND: AtomicIsize = AtomicIsize::new(0);
+/// How many previews have been taken down: a worker that was begun for an earlier one is one
+/// whose hover is gone, and it neither places nor shows anything.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 static CLASS_REGISTERED: Once = Once::new();
 
 /// Whether a custom preview is on screen.
@@ -106,11 +166,12 @@ pub(super) fn is_showing() -> bool {
     SHOWING.lock().map(|held| held.is_some()).unwrap_or(false)
 }
 
-/// Show `path` in the program its preset names, at the box that preset's scale asks for.
+/// Show `path` in the program its preset names, at the box that preset's scale and the tray's
+/// placement ask for.
 ///
 /// It answers whether a custom preview is what this hover is: `false` means no preset claims the
 /// file and the caller goes on to lay out and load it the way it always would.
-pub(super) fn show(path: &Path, cursor: (i32, i32)) -> bool {
+pub(super) fn show(path: &Path, at: Where) -> bool {
     let Some(preset) = preset_for(path) else {
         // A file no preset claims is not this road's, and one a preset no longer claims — a
         // preset deleted while its preview was up — takes the preview down with it.
@@ -134,24 +195,20 @@ pub(super) fn show(path: &Path, cursor: (i32, i32)) -> bool {
         return false;
     };
 
-    let (x, y, width, height) = box_for(&preset, cursor);
-    let background = color_of(preset.background);
-    BACKGROUND.store(background.0 as isize, Ordering::SeqCst);
-
-    let Some(host) = (unsafe { create_host(x, y, width, height) }) else {
+    // **The program is begun before its box is known, and never on a screen.** Its window is
+    // what says how large `100%` is, so the placement waits for it — and the launch is hidden so
+    // that the wait is not a window over the listing (see the module note and `launch`).
+    let Some(child) = launch(&exe, path) else {
         return false;
     };
-    if let Ok(mut held) = SHOWING.lock() {
-        *held = Some(path.to_path_buf());
-    }
+    let pid = child.pid;
 
-    let path = path.to_path_buf();
-    let spawned = Command::new(&exe).arg(&path).spawn();
-    let Ok(child) = spawned else {
-        hide();
+    BACKGROUND.store(color_of(preset.background).0 as isize, Ordering::SeqCst);
+    let Some(host) = (unsafe { create_host() }) else {
+        let _ = child.kill();
         return false;
     };
-    let pid = child.id();
+
     if let Ok(mut held) = CHILD.lock() {
         *held = Some(child);
     }
@@ -163,21 +220,30 @@ pub(super) fn show(path: &Path, cursor: (i32, i32)) -> bool {
     let _ = engine_processes::adopt(pid);
     engine_processes::record_player(&exe, pid);
 
-    // The window is found, framed, parked and registered on a thread of its own: a program that
-    // takes a second to make its window must not hold the loop that draws every other preview.
+    if let Ok(mut held) = SHOWING.lock() {
+        *held = Some(path.to_path_buf());
+    }
+
+    // Read after the show is written down, so a worker begun for this preview is current exactly
+    // when this preview is the one on screen.
+    let generation = GENERATION.load(Ordering::SeqCst);
+    let scale = preset.scaling;
+    // The window is carried as a number: `HWND` is a pointer and a pointer is not `Send`, and
+    // what the worker does with it is a placement the Shell answers for either way.
     let host = host.0 as isize;
-    std::thread::spawn(move || adopt(HWND(host as *mut _), pid, width, height));
+    std::thread::spawn(move || adopt(HWND(host as *mut _), pid, at, scale, generation));
     true
 }
 
 /// Take the preview down: the host window, the registration in it, and the program itself.
 pub(super) fn hide() {
+    // First, so that a worker still waiting on the program's window stops placing and showing.
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+
     let child = CHILD.lock().ok().and_then(|mut held| held.take());
-    if let Some(mut child) = child {
-        let pid = child.id();
+    if let Some(child) = child {
         let _ = child.kill();
-        let _ = child.wait();
-        engine_processes::forget(pid);
+        engine_processes::forget(child.pid);
     }
 
     let thumbnail = THUMBNAIL
@@ -233,42 +299,26 @@ fn preset_for(path: &Path) -> Option<CustomPreset> {
         .and_then(|config| custom_preset_for(&config, path).cloned())
 }
 
-/// The box a preset's preview is drawn in, from the display under the pointer and the preset's
-/// own scale.
+/// Whether the tray's `Placement → Position` follows the pointer rather than choosing the
+/// roomiest side of it, which is the one setting a placement is made by.
+fn follow_cursor() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.follow_cursor)
+        .unwrap_or(true)
+}
+
+/// Begin the program with its window never shown, and answer the process it is.
 ///
-/// A foreign window has no native size, so every scale is a share of the display's work area:
-/// the fit is the whole of it, and a percentage is that share of it. The box is placed beside
-/// the pointer, kept inside the display, and never smaller than a window a program could draw in.
-pub(super) fn box_for(preset: &CustomPreset, cursor: (i32, i32)) -> (i32, i32, i32, i32) {
-    let room = work_area_at(cursor.0, cursor.1);
-    let width = room.right - room.left;
-    let height = room.bottom - room.top;
-
-    let share = match preset.scaling {
-        PreviewScale::FitToScreen => 1.0,
-        PreviewScale::FitToScreenReduced(percent) | PreviewScale::Percent(percent) => {
-            percent.clamp(1, 1000) as f32 / 100.0
-        }
-    }
-    .min(1.0);
-
-    let box_width = ((width as f32 * share) as i32).clamp(320, width);
-    let box_height = ((height as f32 * share) as i32).clamp(240, height);
-
-    // Beside the pointer rather than under it, the way every other preview is placed, and kept
-    // inside the display it was measured on.
-    let mut x = cursor.0 + 24;
-    let mut y = cursor.1 + 24;
-    if x + box_width > room.right {
-        x = cursor.0 - 24 - box_width;
-    }
-    if y + box_height > room.bottom {
-        y = cursor.1 - 24 - box_height;
-    }
-    let x = x.clamp(room.left, (room.right - box_width).max(room.left));
-    let y = y.clamp(room.top, (room.bottom - box_height).max(room.top));
-
-    (x, y, box_width, box_height)
+/// It is `CreateProcessW` and not `Command`'s spawn for the one field `Command` cannot carry:
+/// `STARTUPINFO.wShowWindow` of `SW_HIDE`, which is what keeps a window off every screen from its
+/// first instruction (see `never_shown`). A program that ignores it is one whose window is hidden
+/// again as soon as it is found, which is the same road a frame later.
+fn launch(exe: &str, path: &Path) -> Option<NeverShown> {
+    let mut command = Command::new(exe);
+    command.arg(path);
+    command.creation_flags(engine_processes::CREATE_NO_WINDOW);
+    never_shown::spawn(&mut command)
 }
 
 /// The colour a backdrop names, as a host window fills it.
@@ -320,8 +370,9 @@ unsafe extern "system" fn host_proc(
     }
 }
 
-/// Make the host at the box and leave it off the screen until the picture is composed in it.
-unsafe fn create_host(x: i32, y: i32, width: i32, height: i32) -> Option<HWND> {
+/// Make the host, off the screen and at no size, until the box the program's window is drawn in
+/// is known.
+unsafe fn create_host() -> Option<HWND> {
     CLASS_REGISTERED.call_once(|| {
         let Ok(hinstance) = (unsafe { GetModuleHandleW(None) }) else {
             return;
@@ -352,10 +403,10 @@ unsafe fn create_host(x: i32, y: i32, width: i32, height: i32) -> Option<HWND> {
             HOST_CLASS,
             w!("custom preview"),
             WINDOW_STYLE(WS_POPUP.0 | WS_CLIPCHILDREN.0),
-            x,
-            y,
-            width,
-            height,
+            0,
+            0,
+            1,
+            1,
             None,
             None,
             hinstance,
@@ -369,15 +420,52 @@ unsafe fn create_host(x: i32, y: i32, width: i32, height: i32) -> Option<HWND> {
     Some(host)
 }
 
-/// Find the program's window, strip its frame, park it at the box's size and register it into
-/// the host: the whole of what makes the hover a live picture of another process.
-fn adopt(host: HWND, pid: u32, width: i32, height: i32) {
-    let Some(source) = wait_for_a_window(pid) else {
+/// Whether the preview this worker was begun for is still the one on screen.
+fn is_current(generation: u64) -> bool {
+    GENERATION.load(Ordering::SeqCst) == generation && is_showing()
+}
+
+/// Find the program's window, place the host and the window at the box, and register the window
+/// into the host: the whole of what makes the hover a live picture of another process.
+fn adopt(host: HWND, pid: u32, at: Where, scale: PreviewScale, generation: u64) {
+    let Some(source) = wait_for_a_window(pid, generation) else {
         // A program that made no window is a preview with nothing to show: the host is kept off
         // the screen rather than standing empty over the listing, and the hover that ended
         // takes it down the way it takes any preview down.
+        if is_current(generation) {
+            let _ =
+                unsafe { PostMessageW(host, WM_THERE_IS_NOTHING_TO_SHOW, WPARAM(0), LPARAM(0)) };
+        }
+        return;
+    };
+    if !is_current(generation) {
+        return;
+    }
+
+    // **Hidden before anything else is done with it.** A program that showed its own window on
+    // the desktop is a window the hand is over, and a hover whose pointer left the file is a
+    // hover this app is asked to take down (see the module note).
+    let _ = unsafe { ShowWindow(source, SW_HIDE) };
+
+    let Some(layout) = layout_for(at, own_size(source), scale, follow_cursor()) else {
         let _ = unsafe { PostMessageW(host, WM_THERE_IS_NOTHING_TO_SHOW, WPARAM(0), LPARAM(0)) };
         return;
+    };
+    if !is_current(generation) {
+        return;
+    }
+
+    let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
+    let _ = unsafe {
+        SetWindowPos(
+            host,
+            HWND::default(),
+            layout.pos_x,
+            layout.pos_y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
     };
 
     // **A frame is not part of the picture.** The title bar, the resize border and the system
@@ -396,18 +484,7 @@ fn adopt(host: HWND, pid: u32, width: i32, height: i32) {
 
     // Parked past every display and sized to the box: the window is real and drawing, and no
     // user can see it. The Shell composes it into the host from there.
-    let _ = unsafe {
-        SetWindowPos(
-            source,
-            HWND::default(),
-            PARKING - width,
-            PARKING,
-            width,
-            height,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        )
-    };
-    let _ = unsafe { ShowWindow(source, SW_SHOWNOACTIVATE) };
+    park(source, width, height);
     SOURCE.store(source.0 as isize, Ordering::SeqCst);
 
     let Ok(registration) = (unsafe { DwmRegisterThumbnail(host, source) }) else {
@@ -436,16 +513,172 @@ fn adopt(host: HWND, pid: u32, width: i32, height: i32) {
     // **The host is shown by its own thread, after the picture is in it**: a host shown before
     // the Shell has composed anything is its own black rectangle over the listing.
     let _ = unsafe { PostMessageW(host, WM_THE_PICTURE_IS_READY, WPARAM(0), LPARAM(0)) };
+
+    keep_it_parked(source, width, height, generation);
 }
 
-/// The program's first visible top-level window with a title, waited for within [`WINDOW_WAIT`].
+/// The box the preview is drawn in: the placement the tray's settings and the display ask for,
+/// at the size the preset's scale makes of the program's own window.
+fn layout_for(
+    at: Where,
+    own: (u32, u32),
+    scale: PreviewScale,
+    follow_cursor: bool,
+) -> Option<PreviewLayout> {
+    match at {
+        Where::Pointer { cursor, avoid } => {
+            let bounds = work_area_at(cursor.0, cursor.1);
+            let dpi = dpi_at(cursor.0, cursor.1);
+            compute_mouse_layout(
+                cursor.0,
+                cursor.1,
+                HoverPlacement {
+                    orig_dims: own,
+                    avoid,
+                    follow_cursor,
+                    preview_scale: scale,
+                    at_the_pointer_corner: false,
+                },
+                bounds,
+                dpi,
+            )
+        }
+        Where::Item {
+            rect,
+            avoid,
+            columns,
+        } => {
+            let (left, top, right, bottom) = rect;
+            let center = ((left + right) / 2, (top + bottom) / 2);
+            let bounds = work_area_at(center.0, center.1);
+            let dpi = dpi_at(center.0, center.1);
+            compute_keyboard_layout(
+                KeyboardPlacement {
+                    item_rect: rect,
+                    avoid,
+                    columns,
+                    orig_dims: own,
+                    follow_cursor,
+                    preview_scale: scale,
+                },
+                bounds,
+                dpi,
+            )
+        }
+    }
+}
+
+/// The size the program's own window opens at: what `100%` is a hundred percent of.
+///
+/// It is the window's *restored* box and not the one it is showing at, because a program that
+/// remembers being maximized is showing at the whole display — and the display is what the fit
+/// is for, not what a percentage means. A window that never had a restored box is measured where
+/// it stands.
+fn own_size(window: HWND) -> (u32, u32) {
+    let mut placement = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetWindowPlacement(window, &mut placement) }.is_ok() {
+        let rect = placement.rcNormalPosition;
+        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+        if width >= 64 && height >= 64 {
+            return (width as u32, height as u32);
+        }
+    }
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(window, &mut rect) }.is_ok() {
+        let (width, height) = (
+            (rect.right - rect.left).max(1),
+            (rect.bottom - rect.top).max(1),
+        );
+        return (width as u32, height as u32);
+    }
+
+    (800, 600)
+}
+
+/// Restore the window out of any maximized or minimized state, put it at the parked box at the
+/// preview's size, and show it where no display reaches.
+///
+/// **`SetWindowPlacement` is what restores it**, and it is given the parked box as the box to
+/// restore to: a `SetWindowPos` on a maximized window only changes the size it *would* have been
+/// restored to and leaves the window covering the display it is maximized on, and a restore to the
+/// window's own rect would be a full screen for as long as it takes to hide it again. The window
+/// is hidden again at once and shown only where no display reaches.
+fn park(window: HWND, width: i32, height: i32) {
+    let parked = RECT {
+        left: PARKING - width,
+        top: PARKING,
+        right: PARKING,
+        bottom: PARKING + height,
+    };
+    let placement = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        showCmd: SW_SHOWNORMAL.0 as u32,
+        rcNormalPosition: parked,
+        ..Default::default()
+    };
+    let _ = unsafe { SetWindowPlacement(window, &placement) };
+    let _ = unsafe { ShowWindow(window, SW_HIDE) };
+
+    let _ = unsafe {
+        SetWindowPos(
+            window,
+            HWND::default(),
+            parked.left,
+            parked.top,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+    };
+    let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+}
+
+/// Keep the parked window parked for as long as the hover is up.
+///
+/// A program that shows, restores or resizes its own window after this app has placed it is one
+/// whose window is no longer the picture: it is on the desktop, or at a size the preview was not
+/// laid out for. It is put back at the box the same way it was put there the first time.
+fn keep_it_parked(source: HWND, width: i32, height: i32, generation: u64) {
+    while is_current(generation) {
+        std::thread::sleep(KEEP_POLL);
+        if !is_current(generation) {
+            return;
+        }
+        if !unsafe { IsWindow(source) }.as_bool() {
+            return;
+        }
+
+        let mut rect = RECT::default();
+        let _ = unsafe { GetWindowRect(source, &mut rect) };
+        let drifted = rect.left != PARKING - width
+            || rect.top != PARKING
+            || rect.right - rect.left != width
+            || rect.bottom - rect.top != height
+            || unsafe { IsZoomed(source) }.as_bool()
+            || unsafe { IsIconic(source) }.as_bool()
+            || !unsafe { IsWindowVisible(source) }.as_bool();
+        if drifted {
+            park(source, width, height);
+        }
+    }
+}
+
+/// The program's first top-level window with a title, waited for within [`WINDOW_WAIT`].
 ///
 /// It is the window the user would have seen, which is the only window a program can be assumed
-/// to draw its document in: a splash screen has no title, and a hidden window is not what a
-/// program opens a file with.
-fn wait_for_a_window(pid: u32) -> Option<HWND> {
+/// to draw its document in: a splash screen has no title, and a tool window is not what a program
+/// opens a file with. **It need not be visible**: the launch asks for a hidden window, so the one
+/// this is looking for is a window that has not been shown at all.
+fn wait_for_a_window(pid: u32, generation: u64) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
     while Instant::now() < deadline {
+        if !is_current(generation) {
+            return None;
+        }
         if let Some(window) = first_window_of(pid) {
             return Some(window);
         }
@@ -454,7 +687,7 @@ fn wait_for_a_window(pid: u32) -> Option<HWND> {
     None
 }
 
-/// The first visible, titled, top-level window of `pid`.
+/// The first titled, top-level, non-tool window of `pid`.
 fn first_window_of(pid: u32) -> Option<HWND> {
     struct Search {
         pid: u32,
@@ -465,14 +698,19 @@ fn first_window_of(pid: u32) -> Option<HWND> {
         let search = unsafe { &mut *(lparam.0 as *mut Search) };
         let mut owner = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) };
-        if owner == search.pid
-            && unsafe { IsWindowVisible(hwnd) }.as_bool()
-            && unsafe { GetWindowTextLengthW(hwnd) } > 0
-        {
-            search.found = Some(hwnd);
-            return BOOL(0);
+        if owner != search.pid {
+            return BOOL(1);
         }
-        BOOL(1)
+        // A tool window is a palette or a tip, and an owned one is a dialog over something else:
+        // neither is the window a document is drawn in.
+        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|owner| !owner.0.is_null());
+        if ex_style & WS_EX_TOOLWINDOW.0 != 0 || owned || unsafe { GetWindowTextLengthW(hwnd) } == 0
+        {
+            return BOOL(1);
+        }
+        search.found = Some(hwnd);
+        BOOL(0)
     }
 
     let mut search = Search { pid, found: None };
@@ -484,28 +722,49 @@ fn first_window_of(pid: u32) -> Option<HWND> {
 mod tests {
     use super::*;
 
-    fn preset(scale: PreviewScale) -> CustomPreset {
-        let mut preset = CustomPreset::named("Test");
-        preset.exe = "C:/tools/program.exe".into();
-        preset.set_extensions_text("rmc");
-        preset.scaling = scale;
-        preset
+    fn pointer(cursor: (i32, i32)) -> Where {
+        Where::Pointer {
+            cursor,
+            avoid: None,
+        }
     }
 
     #[test]
-    fn the_fit_takes_the_room_and_a_percentage_takes_its_share() {
-        let (_, _, width, height) = box_for(&preset(PreviewScale::FitToScreen), (0, 0));
-        assert!(width >= 320 && height >= 240);
-
-        let (_, _, half_width, _) = box_for(&preset(PreviewScale::FitToScreenReduced(50)), (0, 0));
-        assert!(half_width <= width);
+    fn a_hundred_percent_is_the_size_the_program_opens_at_not_the_display() {
+        let layout = layout_for(
+            pointer((0, 0)),
+            (600, 400),
+            PreviewScale::Percent(100),
+            true,
+        )
+        .expect("a 600x400 window is a preview a display can hold");
+        assert_eq!((layout.preview_w, layout.preview_h), (600, 400));
     }
 
     #[test]
-    fn the_box_stays_inside_the_display_it_was_measured_on() {
+    fn a_percentage_is_that_share_of_the_programs_own_window() {
+        let layout = layout_for(pointer((0, 0)), (600, 400), PreviewScale::Percent(50), true)
+            .expect("half of a 600x400 window is a preview a display can hold");
+        assert_eq!((layout.preview_w, layout.preview_h), (300, 200));
+    }
+
+    #[test]
+    fn the_fit_takes_the_room_and_the_box_stays_on_the_display() {
         let room = work_area_at(0, 0);
-        let (x, y, width, height) = box_for(&preset(PreviewScale::FitToScreen), (0, 0));
-        assert!(x >= room.left && x + width <= room.right);
-        assert!(y >= room.top && y + height <= room.bottom);
+        let layout = layout_for(
+            pointer((0, 0)),
+            (600, 400),
+            PreviewScale::FitToScreen,
+            false,
+        )
+        .expect("a display has room for a preview");
+        assert!(
+            layout.preview_w as i32 > 600 || layout.preview_h as i32 > 400,
+            "a fit is the room rather than the program's own size"
+        );
+        assert!(layout.pos_x >= room.left);
+        assert!(layout.pos_x + layout.preview_w as i32 <= room.right);
+        assert!(layout.pos_y >= room.top);
+        assert!(layout.pos_y + layout.preview_h as i32 <= room.bottom);
     }
 }
