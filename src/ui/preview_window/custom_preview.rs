@@ -27,6 +27,17 @@
 //! is the only window a program can be assumed to draw its document in. A window that is never
 //! shown (the launch asked for that) is taken after a moment on the same terms.
 //!
+//! **And it is a document window rather than every window a program owns.** A window with no
+//! title, or one the frame makes a few pixels square, is a handle a program's thread is woken on
+//! rather than a place a document is drawn: winit — the window library PhotoCraft is written on —
+//! makes a `Winit Thread Event Target` of 16 pixels at 0,0 and **that is the only one of its
+//! windows that is visible at birth**, the real `Window Class` window being born hidden because
+//! this app's launch asked it to be. A picture taken by visibility alone was that event target:
+//! the hover drew a blank 16-pixel window while the photograph's own window was never adopted at
+//! all. So the picture is a titled, unowned, non-tool window of a document's size (see
+//! `THE_SMALLEST_PICTURE`), and where the program has several, the largest is the one it draws
+//! its file in.
+//!
 //! **Why the program outlives the hover.** A program makes its own window and shows it at its own
 //! size, and it does so *after* this app has started it — so for the first moment of its life a
 //! window of somebody else's stands on the desktop, and often under the hand that asked for the
@@ -163,6 +174,14 @@ const SHOWN_WAIT: Duration = Duration::from_millis(300);
 /// How often the launched process's own tree is read again while its window is looked for: a
 /// program that hands its file to a process of its own is a window under that process's id.
 const TREE_POLL: Duration = Duration::from_millis(200);
+
+/// How small a window of the program's may be and still be the picture: a helper window is a
+/// handle a program's thread is woken on, not a place a document is drawn.
+///
+/// Measured on PhotoCraft 0.23.1: its `Window Class` window is 2580x1059 and titled `PhotoCraft`,
+/// and its `Winit Thread Event Target` is 16 pixels square at 0,0 with no title at all — and of
+/// the two it is the event target that is visible at birth, because the launch hides the other.
+const THE_SMALLEST_PICTURE: i64 = 64 * 64;
 
 /// How often the program's window is looked at again, and kept at the box if the program moved
 /// itself: a window shown again by its own program, or restored by it, is one the Shell would
@@ -1076,10 +1095,10 @@ struct Census<'a> {
     images: &'a mut HashMap<u32, Option<String>>,
     /// The window this app has already adopted, which is the picture and not to be hidden.
     keep: isize,
-    /// The program's windows, by the desktop's order.
-    found: Vec<HWND>,
-    /// The largest window the program was showing, and how much of the display it covers: a
-    /// splash is a window, and the document is the one that fills a frame.
+    /// The program's document windows, by the desktop's order, with the area each one covers.
+    found: Vec<(i64, HWND)>,
+    /// The largest document window the program was showing, and how much of the display it
+    /// covers: a splash is a window, and the document is the one that fills a frame.
     shown: Option<(i64, HWND)>,
 }
 
@@ -1125,15 +1144,19 @@ impl Census<'_> {
         let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
         let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|owner| !owner.0.is_null());
         let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
+        let mut rect = RECT::default();
+        let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+            (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64
+        } else {
+            0
+        };
+        // **A document window, and not every window a program owns** (see the module note): a
+        // helper is untitled or a few pixels square, and is never the picture.
+        let document =
+            titled && !owned && ex_style & WS_EX_TOOLWINDOW.0 == 0 && area >= THE_SMALLEST_PICTURE;
 
         if unsafe { IsWindowVisible(hwnd) }.as_bool() {
-            let mut rect = RECT::default();
-            let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
-                (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64
-            } else {
-                0
-            };
-            if self.shown.is_none_or(|(best, _)| area > best) {
+            if document && self.shown.is_none_or(|(best, _)| area > best) {
                 self.shown = Some((area, hwnd));
             }
             // Hidden as it is found, and before anything is decided about it: a window the
@@ -1141,8 +1164,8 @@ impl Census<'_> {
             let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
         }
 
-        if titled && !owned && ex_style & WS_EX_TOOLWINDOW.0 == 0 {
-            self.found.push(hwnd);
+        if document {
+            self.found.push((area, hwnd));
         }
     }
 
@@ -1165,8 +1188,9 @@ impl Census<'_> {
 ///
 /// The window is the one the program **shows** — the window the user would have seen, which is
 /// the only one a program can be assumed to draw its document in — and where it shows none (the
-/// launch asked it not to) the first titled, top-level, unowned, non-tool window of its own is
-/// the window it has.
+/// launch asked it not to) the **largest** titled, top-level, unowned, non-tool window of a
+/// document's size that it has (see `THE_SMALLEST_PICTURE`): a program's helper windows are
+/// windows too, and the one it draws its file in is the one with a frame to draw in.
 fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
     let began = Instant::now();
@@ -1184,7 +1208,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             return Some(window);
         }
         if began.elapsed() >= SHOWN_WAIT {
-            if let Some(window) = look.found.first().copied() {
+            if let Some((_, window)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
                 return Some(window);
             }
         }
