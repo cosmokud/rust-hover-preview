@@ -4334,7 +4334,13 @@ pub fn run_preview_window() {
                         // than by this app: its window is the picture, composed into a host of
                         // its own, so there is nothing here to lay out or paint (see
                         // `custom_preview`).
-                        if custom_preview::show(&path, (x, y)) {
+                        if custom_preview::show(
+                            &path,
+                            custom_preview::Where::Pointer {
+                                cursor: (x, y),
+                                avoid,
+                            },
+                        ) {
                             continue;
                         }
                         // Remember where this preview was opened from: the region
@@ -4447,7 +4453,14 @@ pub fn run_preview_window() {
                         set_text_scroll_anchor(center.0, center.1);
                         // The keyboard's arm answers a custom preview the way the pointer's
                         // does: the program's window is the picture (see `custom_preview`).
-                        if custom_preview::show(&path, center) {
+                        if custom_preview::show(
+                            &path,
+                            custom_preview::Where::Item {
+                                rect: (il, it, ir, ib),
+                                avoid,
+                                columns,
+                            },
+                        ) {
                             continue;
                         }
 
