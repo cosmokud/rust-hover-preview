@@ -13,7 +13,6 @@ use super::signatures::SIGNATURES;
 use crate::config::config::{AppConfig, PreviewType};
 use infer::{MatcherType, Type};
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -274,7 +273,7 @@ fn answered(key: crate::formats::head::Key, probe: &Probe, config: &AppConfig) -
         return Content::Kind(PreviewType::Audio);
     }
 
-    if let Ok(answers) = ANSWERS.lock() {
+    if let Ok(mut answers) = ANSWERS.lock() {
         if let Some(answer) = answers.get(&key) {
             return *answer;
         }
@@ -283,9 +282,6 @@ fn answered(key: crate::formats::head::Key, probe: &Probe, config: &AppConfig) -
     let answer = read(probe, config);
 
     if let Ok(mut answers) = ANSWERS.lock() {
-        if answers.len() >= ANSWERS_MAX_ENTRIES {
-            answers.clear();
-        }
         answers.insert(key, answer);
     }
 
@@ -641,5 +637,5 @@ fn kind_claiming(names: &[&str], config: &AppConfig) -> Option<PreviewType> {
 /// What has been asked and answered, for the hovers of this run. A file saved again is a
 /// file to ask about again, and what says so is what says it everywhere else in this app:
 /// when it was last written and what it weighed (see `head::key`).
-static ANSWERS: Lazy<Mutex<HashMap<crate::formats::head::Key, Content>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static ANSWERS: Lazy<Mutex<crate::cache::BoundedCache<crate::formats::head::Key, Content>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(ANSWERS_MAX_ENTRIES)));

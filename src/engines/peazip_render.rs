@@ -241,7 +241,8 @@ impl Key {
 /// delegate this machine was not given, an archive whose table of contents is encrypted, a file
 /// that is not an archive at all — from starting an engine on every hover to reach the same
 /// answer.
-static REFUSED: Lazy<Mutex<Vec<Key>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static REFUSED: Lazy<Mutex<crate::cache::BoundedCache<Key, ()>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(ANSWERS_MAX_ENTRIES)));
 
 /// Whether the engine has already turned this file down, for this version of it.
 pub fn refused(path: &Path) -> bool {
@@ -249,7 +250,7 @@ pub fn refused(path: &Path) -> bool {
 
     REFUSED
         .lock()
-        .map(|refused| refused.contains(&key))
+        .map(|refused| refused.contains_key(&key))
         .unwrap_or(false)
 }
 
@@ -453,13 +454,7 @@ fn refuse(key: &Key) {
         return;
     };
 
-    if refused.len() >= ANSWERS_MAX_ENTRIES {
-        refused.clear();
-    }
-
-    if !refused.contains(key) {
-        refused.push(key.clone());
-    }
+    refused.insert(key.clone(), ());
 }
 
 #[cfg(test)]

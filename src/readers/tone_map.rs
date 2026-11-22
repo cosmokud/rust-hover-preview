@@ -149,3 +149,55 @@ fn encode_srgb(linear: f32) -> f32 {
         1.055 * linear.powf(1.0 / 2.4) - 0.055
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn curve_round_trips_and_aliases() {
+        for curve in [Curve::Off, Curve::Srgb, Curve::Reinhard, Curve::Aces] {
+            assert_eq!(Curve::from_str(curve.as_str()), Some(curve));
+        }
+        assert_eq!(Curve::from_str("NONE"), Some(Curve::Off));
+        assert_eq!(Curve::from_str(" clamp "), Some(Curve::Off));
+        assert_eq!(Curve::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn encode_handles_non_finite_negative_and_monotonic_hdr() {
+        for curve in [Curve::Off, Curve::Srgb, Curve::Reinhard, Curve::Aces] {
+            let tm = ToneMap {
+                curve,
+                exposure: 0.0,
+            };
+            assert_eq!(tm.encode(f32::NAN), 0);
+            assert_eq!(tm.encode(f32::INFINITY), 0);
+            assert_eq!(tm.encode(f32::NEG_INFINITY), 0);
+            assert_eq!(tm.encode(-2.0), 0);
+            assert_eq!(tm.encode(0.0), 0);
+            assert!(tm.encode(0.5) <= tm.encode(1.0));
+            assert!(tm.encode(1.0) <= tm.encode(10.0));
+        }
+
+        // Reinhard maps 1.0 -> 0.5 linear (~188 sRGB), never clips at 1.0, and approaches 255 at high radiance.
+        let reinhard = ToneMap {
+            curve: Curve::Reinhard,
+            exposure: 0.0,
+        };
+        assert!((185..=190).contains(&reinhard.encode(1.0)));
+        assert!(reinhard.encode(100.0) > reinhard.encode(1.0));
+
+        // Positive exposure brightens; negative exposure darkens.
+        let brighter = ToneMap {
+            curve: Curve::Reinhard,
+            exposure: 2.0,
+        };
+        let darker = ToneMap {
+            curve: Curve::Reinhard,
+            exposure: -2.0,
+        };
+        assert!(darker.encode(0.25) < reinhard.encode(0.25));
+        assert!(reinhard.encode(0.25) < brighter.encode(0.25));
+    }
+}

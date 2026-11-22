@@ -2,7 +2,6 @@ use crate::config::config::{image_decode_limits, PreviewType};
 use crate::shell::cloud_files;
 use crate::CONFIG;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::os::windows::ffi::OsStrExt;
@@ -43,9 +42,13 @@ struct PageDimensionKey {
 
 /// Page size in DIPs, keyed by the file and its version. `None` records a file that
 /// could not be opened as a PDF, so a broken file is not re-parsed on every hover.
-type PageDimensionCache = HashMap<PageDimensionKey, Option<(u32, u32)>>;
+type PageDimensionCache = crate::cache::BoundedCache<PageDimensionKey, Option<(u32, u32)>>;
 
-static PAGE_DIMENSIONS: Lazy<Mutex<PageDimensionCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static PAGE_DIMENSIONS: Lazy<Mutex<PageDimensionCache>> = Lazy::new(|| {
+    Mutex::new(crate::cache::BoundedCache::new(
+        PAGE_DIMENSION_CACHE_MAX_ENTRIES,
+    ))
+});
 
 /// Which page of a converted book a preview is drawn from, keyed by the file and its version the
 /// way a size is: a book converted again is a book to look at again.
@@ -53,9 +56,13 @@ static PAGE_DIMENSIONS: Lazy<Mutex<PageDimensionCache>> = Lazy::new(|| Mutex::ne
 /// `None` records a file that could not be opened at all, so a document that is not a PDF is not
 /// parsed on every hover of it. What is *not* remembered is a book whose pages are all one colour:
 /// that is an answer about the pages, and it is written down like any other.
-type BookPageCache = HashMap<PageDimensionKey, Option<BookPage>>;
+type BookPageCache = crate::cache::BoundedCache<PageDimensionKey, Option<BookPage>>;
 
-static BOOK_PAGES: Lazy<Mutex<BookPageCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static BOOK_PAGES: Lazy<Mutex<BookPageCache>> = Lazy::new(|| {
+    Mutex::new(crate::cache::BoundedCache::new(
+        PAGE_DIMENSION_CACHE_MAX_ENTRIES,
+    ))
+});
 
 /// Initialize the apartment this module's WinRT calls need. Every thread that
 /// probes or renders a page has to call this once before its first call.
@@ -150,7 +157,7 @@ pub fn is_pdf_preview(path: &Path) -> bool {
 /// previewable" rather than as "use a guessed size".
 pub fn page_dimensions(path: &Path) -> Option<(u32, u32)> {
     let key = page_dimension_key(path);
-    if let Ok(cache) = PAGE_DIMENSIONS.lock() {
+    if let Ok(mut cache) = PAGE_DIMENSIONS.lock() {
         if let Some(cached) = cache.get(&key) {
             return *cached;
         }
@@ -185,9 +192,6 @@ fn page_dimension_key(path: &Path) -> PageDimensionKey {
 /// find a second time.
 fn remember_page_dimensions(key: PageDimensionKey, dimensions: Option<(u32, u32)>) {
     if let Ok(mut cache) = PAGE_DIMENSIONS.lock() {
-        if !cache.contains_key(&key) && cache.len() >= PAGE_DIMENSION_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
         cache.insert(key, dimensions);
     }
 }
@@ -195,9 +199,6 @@ fn remember_page_dimensions(key: PageDimensionKey, dimensions: Option<(u32, u32)
 /// The same, for the page a book is previewed from.
 fn remember_book_page(key: PageDimensionKey, page: Option<BookPage>) {
     if let Ok(mut cache) = BOOK_PAGES.lock() {
-        if !cache.contains_key(&key) && cache.len() >= PAGE_DIMENSION_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
         cache.insert(key, page);
     }
 }
@@ -282,7 +283,7 @@ pub struct BookPage {
 /// and a page that has been looked at once is not looked at again (see `BOOK_PAGES`).
 pub fn book_page(path: &Path) -> Option<BookPage> {
     let key = page_dimension_key(path);
-    if let Ok(cache) = BOOK_PAGES.lock() {
+    if let Ok(mut cache) = BOOK_PAGES.lock() {
         if let Some(cached) = cache.get(&key) {
             return *cached;
         }

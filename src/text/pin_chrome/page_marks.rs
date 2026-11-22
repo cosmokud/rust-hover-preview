@@ -14,8 +14,8 @@
 //! drawn at the caption's own stroke width and scale so that it belongs to the strip it stands on.
 
 use super::primitives::{
-    caption_style, fill_box, fill_round_rect, measure_text, stroke_round_rect, stroke_top_arc,
-    surface_pixels, ChromePalette, GLYPH_STROKE_PIXELS,
+    caption_style, fill_box, fill_round_rect, stroke_round_rect, stroke_top_arc, surface_pixels,
+    ChromePalette, DpiScale, GdiTextMeasurer, TextMeasurer, GLYPH_STROKE_PIXELS,
 };
 use crate::text::text_paint::{self, DibSurface};
 use windows::Win32::Foundation::RECT;
@@ -48,7 +48,7 @@ pub(crate) fn paint_text_caret(
     palette: &ChromePalette,
     dpi: u32,
 ) {
-    let scale = dpi as f32 / 96.0;
+    let scale = DpiScale::from_dpi(dpi).factor();
     let stroke = text_paint::scaled(CARET_PIXELS as i32, scale).max(1);
 
     // The bar is the line's height less a little at either end, centered on the line: a caret that
@@ -83,16 +83,39 @@ pub(super) const READ_ONLY_PILL_GAP_PIXELS: f32 = 8.0;
 /// says so rather than leaving the reader to work out why.
 const READ_ONLY_WORDS: &str = "Read only";
 
+thread_local! {
+    static READ_ONLY_PILL_WIDTHS: std::cell::RefCell<crate::cache::BoundedCache<u32, i32>> =
+        std::cell::RefCell::new(crate::cache::BoundedCache::new(16));
+}
+
+/// How wide the pill is at `dpi`, measured via `measurer`.
+pub(super) fn read_only_pill_width_with(measurer: &impl TextMeasurer, dpi: DpiScale) -> i32 {
+    let padding = dpi.scaled(7);
+    let lock = dpi.scaled(9);
+    let gap = dpi.scaled(5);
+    let words = measurer.measure_width(&caption_style([0, 0, 0]), READ_ONLY_WORDS, dpi);
+
+    2 * padding + lock + gap + words
+}
+
+/// Cached pill width at `dpi` using the pooled GDI measurer.
+pub(super) fn read_only_pill_width_cached(dpi: DpiScale) -> i32 {
+    if let Some(cached) =
+        READ_ONLY_PILL_WIDTHS.with(|cache| cache.borrow_mut().get(&dpi.dpi()).copied())
+    {
+        return cached;
+    }
+    let width = read_only_pill_width_with(&GdiTextMeasurer, dpi);
+    READ_ONLY_PILL_WIDTHS.with(|cache| {
+        cache.borrow_mut().insert(dpi.dpi(), width);
+    });
+    width
+}
+
 /// How wide the pill is at a display's scale: the padlock, the gap after it, the words, and the
 /// padding at either end — measured through the caption's own face, because the words are drawn in it.
 pub(super) fn read_only_pill_width(surface: &DibSurface, dpi: u32) -> i32 {
-    let scale = dpi as f32 / 96.0;
-    let padding = text_paint::scaled(7, scale);
-    let lock = text_paint::scaled(9, scale);
-    let gap = text_paint::scaled(5, scale);
-    let words = measure_text(surface, &caption_style([0, 0, 0]), READ_ONLY_WORDS, scale);
-
-    2 * padding + lock + gap + words
+    read_only_pill_width_with(surface, DpiScale::from_dpi(dpi))
 }
 
 /// The pill's box inside a caption of `width`, standing against `title_right` — the left edge of the
@@ -108,7 +131,7 @@ pub(super) fn read_only_pill_box(
     title_right: i32,
     dpi: u32,
 ) -> RECT {
-    let scale = dpi as f32 / 96.0;
+    let scale = DpiScale::from_dpi(dpi).factor();
     let pill = text_paint::scaled(READ_ONLY_PILL_PIXELS as i32, scale);
     let gap = text_paint::scaled(READ_ONLY_PILL_GAP_PIXELS as i32, scale);
     let right = title_right - gap;
@@ -139,7 +162,7 @@ pub(super) fn paint_read_only_pill(
         return;
     }
 
-    let scale = dpi as f32 / 96.0;
+    let scale = DpiScale::from_dpi(dpi).factor();
     let stroke = (GLYPH_STROKE_PIXELS * scale).max(1.0);
     let radius = (box_.bottom - box_.top) as f32 / 2.0;
     let buffer = unsafe {

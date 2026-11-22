@@ -825,9 +825,6 @@ fn probe_the_geometry(path: &PathBuf) -> ProbedGeometry {
         }
 
         let mut cache = video_geometry_cache();
-        if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
         cache.insert(key, ProbedGeometry::Unmeasurable);
 
         return ProbedGeometry::Unmeasurable;
@@ -972,9 +969,6 @@ fn probe_the_geometry(path: &PathBuf) -> ProbedGeometry {
     };
 
     let mut cache = video_geometry_cache();
-    if !cache.contains_key(&key) && cache.len() >= VIDEO_GEOMETRY_CACHE_MAX_ENTRIES {
-        cache.clear();
-    }
     // Cloned rather than moved, which is the whole of what dropping `Copy` costs: one string
     // copy per file, once, on the thread that was going to wait for two processes anyway.
     cache.insert(key, ProbedGeometry::Measured(geometry.clone()));

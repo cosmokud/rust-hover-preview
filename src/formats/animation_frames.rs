@@ -18,7 +18,6 @@
 //! the film's own length before the walk could say it had no blocks to walk (see
 //! `begins_a_walked_container`).
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -139,8 +138,8 @@ struct TimelineKey {
     len: u64,
 }
 
-static TIMELINES: Lazy<Mutex<HashMap<TimelineKey, Option<Arc<FrameTimeline>>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static TIMELINES: Lazy<Mutex<crate::cache::BoundedCache<TimelineKey, Option<Arc<FrameTimeline>>>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(TIMELINES_MAX_ENTRIES)));
 
 /// The timeline of the file at `path`, or nothing where its container says nothing
 /// that can be walked — which is a bar with no length to drag, rather an animation the
@@ -150,7 +149,7 @@ static TIMELINES: Lazy<Mutex<HashMap<TimelineKey, Option<Arc<FrameTimeline>>>>> 
 /// found unreadable is a file not walked again on every repaint of the same bar.
 pub(crate) fn timeline(path: &Path) -> Option<Arc<FrameTimeline>> {
     let key = key_of(path);
-    if let Ok(timelines) = TIMELINES.lock() {
+    if let Ok(mut timelines) = TIMELINES.lock() {
         if let Some(held) = timelines.get(&key) {
             return held.clone();
         }
@@ -158,9 +157,6 @@ pub(crate) fn timeline(path: &Path) -> Option<Arc<FrameTimeline>> {
 
     let answer = read_timeline(path).map(Arc::new);
     if let Ok(mut timelines) = TIMELINES.lock() {
-        if timelines.len() >= TIMELINES_MAX_ENTRIES {
-            timelines.clear();
-        }
         timelines.insert(key, answer.clone());
     }
 

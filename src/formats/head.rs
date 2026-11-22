@@ -12,7 +12,6 @@
 //! nothing here depends on the configuration — so a list edited between hovers is a list
 //! the next hover is decided by.
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::os::windows::fs::MetadataExt;
@@ -251,7 +250,8 @@ pub(crate) fn key(path: &Path) -> Key {
         })
 }
 
-static HEADS: Lazy<Mutex<HashMap<Key, Arc<Head>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static HEADS: Lazy<Mutex<crate::cache::BoundedCache<Key, Arc<Head>>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(HEADS_MAX_ENTRIES)));
 
 fn held(key: &Key) -> Option<Arc<Head>> {
     HEADS.lock().ok()?.get(key).map(Arc::clone)
@@ -259,9 +259,6 @@ fn held(key: &Key) -> Option<Arc<Head>> {
 
 fn keep(key: Key, head: Arc<Head>) -> Arc<Head> {
     if let Ok(mut heads) = HEADS.lock() {
-        if heads.len() >= HEADS_MAX_ENTRIES {
-            heads.clear();
-        }
         heads.insert(key, Arc::clone(&head));
     }
 

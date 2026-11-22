@@ -1250,3 +1250,124 @@ pub(super) fn measure_text(
         }
     }
 }
+
+/// Sanitized display scale factor; `dpi == 0` falls back to 96 DPI (1.0x).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DpiScale {
+    dpi: u32,
+    factor: f32,
+}
+
+impl DpiScale {
+    pub(crate) const BASE_DPI: u32 = 96;
+
+    pub(crate) fn from_dpi(dpi: u32) -> Self {
+        let dpi = if dpi == 0 { Self::BASE_DPI } else { dpi };
+        Self {
+            dpi,
+            factor: dpi as f32 / Self::BASE_DPI as f32,
+        }
+    }
+
+    pub(crate) fn from_factor(factor: f32) -> Self {
+        let factor = if factor.is_finite() && factor > 0.0 {
+            factor
+        } else {
+            1.0
+        };
+        let dpi = (factor * Self::BASE_DPI as f32).round().max(1.0) as u32;
+        Self { dpi, factor }
+    }
+
+    pub(crate) fn dpi(self) -> u32 {
+        self.dpi
+    }
+
+    pub(crate) fn factor(self) -> f32 {
+        self.factor
+    }
+
+    pub(crate) fn scaled(self, pixels: i32) -> i32 {
+        text_paint::scaled(pixels, self.factor)
+    }
+}
+
+/// Text measurement seam for chrome layout; decouples layout math from GDI surfaces.
+pub(crate) trait TextMeasurer {
+    fn measure_width(&self, style: &text_paint::TextStyle, text: &str, scale: DpiScale) -> i32;
+    fn measure_run(&self, style: &text_paint::TextStyle, text: &str, scale: DpiScale) -> Vec<i32>;
+}
+
+impl TextMeasurer for DibSurface {
+    fn measure_width(&self, style: &text_paint::TextStyle, text: &str, scale: DpiScale) -> i32 {
+        measure_text(self, style, text, scale.factor())
+    }
+
+    fn measure_run(&self, style: &text_paint::TextStyle, text: &str, scale: DpiScale) -> Vec<i32> {
+        measure_run(self, style, text, scale.factor())
+    }
+}
+
+thread_local! {
+    /// Pooled 1x1 GDI scratch surface per thread; avoids per-call DIB allocation during layout.
+    static SCRATCH_MEASURE_SURFACE: std::cell::RefCell<Option<DibSurface>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Pooled GDI text measurer backed by a lazily created per-thread 1x1 `DibSurface`.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GdiTextMeasurer;
+
+impl GdiTextMeasurer {
+    pub(crate) fn with_surface<R>(f: impl FnOnce(&DibSurface) -> R) -> Option<R> {
+        SCRATCH_MEASURE_SURFACE.with(|cell| {
+            let mut cell = cell.borrow_mut();
+            if cell.is_none() {
+                *cell = DibSurface::create(1, 1);
+            }
+            cell.as_ref().map(f)
+        })
+    }
+}
+
+impl TextMeasurer for GdiTextMeasurer {
+    fn measure_width(&self, style: &text_paint::TextStyle, text: &str, scale: DpiScale) -> i32 {
+        Self::with_surface(|surface| measure_text(surface, style, text, scale.factor()))
+            .unwrap_or(0)
+    }
+
+    fn measure_run(&self, style: &text_paint::TextStyle, text: &str, scale: DpiScale) -> Vec<i32> {
+        Self::with_surface(|surface| measure_run(surface, style, text, scale.factor()))
+            .unwrap_or_else(|| vec![0])
+    }
+}
+
+/// Pure deterministic text measurer for headless layout tests.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) struct FixedWidthMeasurer {
+    pub(crate) char_width_px: f32,
+}
+
+#[cfg(test)]
+impl FixedWidthMeasurer {
+    pub(crate) const fn new(char_width_px: f32) -> Self {
+        Self { char_width_px }
+    }
+}
+
+#[cfg(test)]
+impl TextMeasurer for FixedWidthMeasurer {
+    fn measure_width(&self, _style: &text_paint::TextStyle, text: &str, scale: DpiScale) -> i32 {
+        (text.chars().count() as f32 * self.char_width_px * scale.factor()).round() as i32
+    }
+
+    fn measure_run(&self, _style: &text_paint::TextStyle, text: &str, scale: DpiScale) -> Vec<i32> {
+        let mut columns = Vec::with_capacity(text.chars().count() + 1);
+        columns.push(0);
+        for idx in 1..=text.chars().count() {
+            columns.push((idx as f32 * self.char_width_px * scale.factor()).round() as i32);
+        }
+        columns
+    }
+}

@@ -986,3 +986,82 @@ fn partial_float(bits: u32, mantissa_bits: u32) -> f32 {
         (1.0 + mantissa as f32 / (1 << mantissa_bits) as f32) * 2f32.powi(exponent as i32 - 15)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn temp_dds(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("rhp-dds-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(name);
+        let mut f = File::create(&path).expect("create temp dds");
+        f.write_all(bytes).expect("write temp dds");
+        path
+    }
+
+    fn rgba_dds(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0u8; HEADER_BYTES];
+        bytes[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+        bytes[4..8].copy_from_slice(&124u32.to_le_bytes()); // dwSize
+        bytes[12..16].copy_from_slice(&height.to_le_bytes());
+        bytes[16..20].copy_from_slice(&width.to_le_bytes());
+        bytes[76..80].copy_from_slice(&32u32.to_le_bytes()); // ddspf.dwSize
+        bytes[80..84].copy_from_slice(&(DDPF_RGB | 0x1).to_le_bytes()); // RGB + ALPHAPIXELS
+        bytes[88..92].copy_from_slice(&32u32.to_le_bytes()); // dwRGBBitCount
+        bytes[92..96].copy_from_slice(&0x0000_00ffu32.to_le_bytes()); // R
+        bytes[96..100].copy_from_slice(&0x0000_ff00u32.to_le_bytes()); // G
+        bytes[100..104].copy_from_slice(&0x00ff_0000u32.to_le_bytes()); // B
+        bytes[104..108].copy_from_slice(&0xff00_0000u32.to_le_bytes()); // A
+        bytes.extend_from_slice(pixels);
+        bytes
+    }
+
+    #[test]
+    fn rejects_malformed_truncated_and_oversized_headers() {
+        assert!(is_dds_file(Path::new("tex.DDS")));
+        assert!(!is_dds_file(Path::new("tex.png")));
+
+        let short = temp_dds("short.dds", b"DDS ");
+        assert_eq!(dimensions(&short), None);
+        assert_eq!(decode(&short, 4, 4), None);
+
+        let mut bad_magic = vec![0u8; HEADER_BYTES];
+        bad_magic[0..4].copy_from_slice(b"NOPE");
+        let bad_magic_path = temp_dds("bad-magic.dds", &bad_magic);
+        assert_eq!(dimensions(&bad_magic_path), None);
+
+        // Oversized dimensions exceeding decode budget must be rejected before allocating.
+        let huge = rgba_dds(100_000, 100_000, &[]);
+        let huge_path = temp_dds("huge.dds", &huge);
+        assert_eq!(decode(&huge_path, 64, 64), None);
+
+        // Truncated payload for valid 2x2 RGBA header returns None cleanly.
+        let truncated = rgba_dds(2, 2, &[0u8; 4]);
+        let trunc_path = temp_dds("trunc.dds", &truncated);
+        assert_eq!(dimensions(&trunc_path), Some((2, 2)));
+        assert_eq!(decode(&trunc_path, 2, 2), None);
+        assert_eq!(decode(&trunc_path, 0, 2), None);
+
+        for p in [short, bad_magic_path, huge_path, trunc_path] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    #[test]
+    fn decodes_uncompressed_rgba_dds_and_partial_float() {
+        // 1x1 RGBA pixel (R=0x10, G=0x20, B=0x30, A=0xff) -> BGRA [0x30, 0x20, 0x10, 0xff]
+        let dds = rgba_dds(1, 1, &[0x10, 0x20, 0x30, 0xff]);
+        let path = temp_dds("valid-1x1.dds", &dds);
+        assert_eq!(dimensions(&path), Some((1, 1)));
+        let bgra = decode(&path, 1, 1).expect("decode 1x1 rgba dds");
+        assert_eq!(bgra, vec![0x30, 0x20, 0x10, 0xff]);
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(partial_float(0, 6), 0.0);
+        assert_eq!(partial_float(15 << 6, 6), 1.0);
+        assert!(partial_float(0x1f << 6, 6).is_infinite());
+        assert!(partial_float((0x1f << 6) | 1, 6).is_nan());
+    }
+}

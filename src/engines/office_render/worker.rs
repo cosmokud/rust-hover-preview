@@ -5,7 +5,6 @@ use crate::formats::office_formats::{app_for, container_kind, OfficeApp};
 use crate::shell::cloud_files;
 use crate::ui::preview_window;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -68,7 +67,8 @@ struct Failure {
 }
 
 static REQUEST: Lazy<Mutex<Option<RenderRequest>>> = Lazy::new(|| Mutex::new(None));
-static FAILURES: Lazy<Mutex<HashMap<PathBuf, Failure>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static FAILURES: Lazy<Mutex<crate::cache::BoundedCache<PathBuf, Failure>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(FAILURE_CACHE_MAX_ENTRIES)));
 static WORKER_HANDLE: Lazy<Mutex<Option<std::thread::JoinHandle<()>>>> =
     Lazy::new(|| Mutex::new(None));
 static WORKER_STARTING: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
@@ -205,9 +205,6 @@ pub(crate) fn remember_failure(source: &Path) {
     };
 
     if let Ok(mut failures) = FAILURES.lock() {
-        if failures.len() >= FAILURE_CACHE_MAX_ENTRIES && !failures.contains_key(source) {
-            failures.clear();
-        }
         failures.insert(source.to_path_buf(), failure);
     }
 }
@@ -299,7 +296,7 @@ fn failed_recently(source: &Path) -> bool {
         .and_then(|metadata| metadata.modified().ok());
     let len = metadata.map(|metadata| metadata.len()).unwrap_or(0);
 
-    let Ok(failures) = FAILURES.lock() else {
+    let Ok(mut failures) = FAILURES.lock() else {
         return false;
     };
     let Some(failure) = failures.get(source) else {

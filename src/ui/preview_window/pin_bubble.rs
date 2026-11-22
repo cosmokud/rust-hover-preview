@@ -1179,7 +1179,7 @@ const SCREENSHOT_POLL: Duration = Duration::from_millis(10);
 /// unique by the player it belongs to so that two pins collapsing at once cannot write over each
 /// other's picture.
 fn screenshot_path(path: &Path, pid: u32) -> PathBuf {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = crate::cache::StableHasher::new();
     std::hash::Hash::hash(&path.to_string_lossy().to_lowercase(), &mut hasher);
     let stamp = std::hash::Hasher::finish(&hasher);
 
