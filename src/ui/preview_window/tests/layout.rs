@@ -764,7 +764,7 @@ fn a_page_the_engine_draws_keeps_the_box_it_was_measured_at() {
         orig_dims: page,
         avoid: None,
         follow_cursor: false,
-        preview_scale: hover_preview_scale_of(&hover, hover.scales),
+        preview_scale: effective_preview_scale_of(&hover, hover.scales),
         at_the_pointer_corner: false,
     };
     let layout = compute_mouse_layout(900, 500, placement, bounds, dpi).expect("a layout");

@@ -4344,7 +4344,7 @@ pub fn run_preview_window() {
                         // `fs::metadata` calls per hover down to one (see `HoverFacts`).
                         let hover = HoverFacts::read(&path);
                         let follow_cursor = hover.follow_cursor;
-                        preview_scale = hover_preview_scale_of(&hover, hover.scales);
+                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         // A document with no page rendered for it yet has nothing to
                         // measure but the wait, so its preview is laid out as the
@@ -4445,7 +4445,7 @@ pub fn run_preview_window() {
                         // this arm, as the pointer's arm above does (see `HoverFacts`).
                         let hover = HoverFacts::read(&path);
                         let follow_cursor = hover.follow_cursor;
-                        preview_scale = hover_preview_scale_of(&hover, hover.scales);
+                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
                             show_is_model = hover.is_a_model();

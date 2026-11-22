@@ -1026,7 +1026,7 @@ impl Drop for FontScale {
 /// pin's whole room: the shape the file measures at, fitted to the work area at the share a take-up
 /// names for its kind, in the middle of the box the pin occupies now. It is the box a fresh pin of
 /// the same file stands in, which is the whole of what a swap is asked to give it (see
-/// `pinned_media_box` and `hover_preview_scale`).
+/// `pinned_media_box` and `effective_preview_scale`).
 ///
 /// The old answer was the pin's room for all three of these, because all three are kinds
 /// `media_dimensions` answers for itself: a drawing laid out in a box nothing asked it for, and a
@@ -1105,7 +1105,7 @@ fn an_engine_drawn_file_is_given_the_box_its_own_preview_takes() {
         let own = pinned_media_box(
             shape,
             bounds,
-            hover_preview_scale(path, current_hover_scales()),
+            effective_preview_scale(path, current_hover_scales()),
         );
 
         let Some(PinBox::Measured(laid_out)) = pin_update_content(space(None), path, bounds, 96)
@@ -1195,7 +1195,7 @@ fn a_bound_does_not_halve_an_engine_drawn_file_below_the_box_its_own_preview_tak
     let own = pinned_media_box(
         shape,
         bounds,
-        hover_preview_scale(&specimen, current_hover_scales()),
+        effective_preview_scale(&specimen, current_hover_scales()),
     );
     let whole = pinned_media_box(shape, bounds, PreviewScale::FitToScreen);
     assert_ne!(
@@ -1301,7 +1301,7 @@ fn a_bound_fills_an_engine_drawn_file_up_as_well_as_down() {
         let own = pinned_media_box(
             media_dimensions(path, bounds, 96).expect("the file's own box"),
             bounds,
-            hover_preview_scale(path, current_hover_scales()),
+            effective_preview_scale(path, current_hover_scales()),
         );
 
         let Some(PinBox::Measured(laid_out)) =
