@@ -79,11 +79,29 @@ pub(super) struct PinSwapSpace {
 ///
 /// It is read rather than asked for piece by piece so that the lock is let go of before
 /// anything is measured or asked for an engine — the same rule `PinUpdate` keeps.
+pub(super) fn current_pin_scaling_mode() -> PinScalingMode {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.pin_scaling_mode)
+        .unwrap_or(DEFAULT_PIN_SCALING_MODE)
+}
+
 pub(super) fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
+    pin_swap_space_for(pin, current_pin_scaling_mode())
+}
+
+// UseScalingSettings drops pin.bound so swaps recompute fresh from pinned_room using configured scale.
+pub(super) fn pin_swap_space_for(
+    pin: &PinnedPreview,
+    scaling_mode: PinScalingMode,
+) -> PinSwapSpace {
     let bounds = work_area_at(pin.content.0, pin.content.1);
     PinSwapSpace {
         current: pin.content,
-        bound: pin.bound,
+        bound: match scaling_mode {
+            PinScalingMode::UntilResized => pin.bound,
+            PinScalingMode::UseScalingSettings => None,
+        },
         transport_bar: pin.transport_bar,
         overlay: pin.overlay,
         caption: pin.caption,
@@ -519,19 +537,28 @@ fn pin_update_content_measured(
     }
 
     let room = pin_swap_room(space, bounds, dpi);
-    let content = pin_update_box(room, shape, scale);
+    let swap_scale = pin_swap_scale(space.bound, scale);
+    let content = pin_update_box(room, shape, swap_scale);
 
     note_a_swap_box(
         "bound",
         path,
         &space,
         Some(shape),
-        Some(scale),
+        Some(swap_scale),
         room,
         Some(content),
     );
 
     Some(PinBox::Measured(content))
+}
+
+// Bound already constrains room; FitToScreenReduced must not re-apply fit_share on top of bound.
+pub(super) fn pin_swap_scale(bound: Option<i32>, scale: PreviewScale) -> PreviewScale {
+    match (bound, scale) {
+        (Some(_), PreviewScale::FitToScreenReduced(_)) => PreviewScale::FitToScreen,
+        _ => scale,
+    }
 }
 
 /// One line about the box a swap measured its incoming file out in, written under the name of the

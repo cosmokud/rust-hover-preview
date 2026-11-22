@@ -1125,6 +1125,33 @@ impl PinMinimizeTo {
 /// the app out of the taskbar altogether.
 pub const DEFAULT_PIN_MINIMIZE_TO: PinMinimizeTo = PinMinimizeTo::Bubble;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PinScalingMode {
+    UntilResized,
+    UseScalingSettings,
+}
+
+impl PinScalingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UntilResized => "until_resized",
+            Self::UseScalingSettings => "use_scaling_settings",
+        }
+    }
+
+    pub(super) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "until_resized" | "until resized" | "keep" => Some(Self::UntilResized),
+            "use_scaling_settings" | "use scaling settings" | "scaling" => {
+                Some(Self::UseScalingSettings)
+            }
+            _ => None,
+        }
+    }
+}
+
+pub const DEFAULT_PIN_SCALING_MODE: PinScalingMode = PinScalingMode::UntilResized;
+
 /// What a *pinned* preview does at the end of its file: stop there, go round to the start of
 /// the same file, or step on to the next file. `Pause` is the file left where it ended, the
 /// card holding it with a play button; `Loop` replays it; and `Continue` is the next file of
