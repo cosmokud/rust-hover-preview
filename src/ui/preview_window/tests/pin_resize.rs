@@ -1225,6 +1225,126 @@ fn a_pin_with_no_bound_is_fitted_into_the_room_the_display_has() {
     assert_eq!(pin_swap_room(banded, bounds, 96), (0, 30, 1920, 1050));
 }
 
+#[test]
+fn pin_swap_with_fit_to_screen_reduced_does_not_shrink_bound_or_compound() {
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    // Initial 1920x1080 video pinned at 50% of screen -> 960x540, bound = Some(960).
+    let mut current = (480, 270, 1440, 810);
+    let bound = Some(960);
+
+    for scale in [
+        PreviewScale::FitToScreenReduced(50),
+        PreviewScale::FitToScreenReduced(75),
+        PreviewScale::FitToScreen,
+    ] {
+        // Big -> low-res -> big -> portrait -> square -> big: never shrinks below bound.
+        let shapes = [
+            (640, 360),
+            (1920, 1080),
+            (1080, 1920),
+            (500, 500),
+            (320, 180),
+            (1920, 1080),
+        ];
+        let mut last = current;
+        for shape in shapes {
+            let space = PinSwapSpace {
+                current: last,
+                bound,
+                transport_bar: false,
+                overlay: true,
+                caption: pinned_caption_height(96, None),
+                maximized: false,
+                room: bounds,
+            };
+            let room = pin_swap_room(space, bounds, 96);
+            let swap_scale = pin_swap_scale(space.bound, scale);
+            last = pin_update_box(room, shape, swap_scale);
+            let longest = (last.2 - last.0).max(last.3 - last.1);
+            assert_eq!(
+                longest, 960,
+                "scale {scale:?} shape {shape:?} shrunk bound 960 -> {longest} ({last:?})"
+            );
+        }
+        assert_eq!((last.2 - last.0, last.3 - last.1), (960, 540));
+    }
+
+    // Percent(100) still honors own pixels inside bound without upscaling small files.
+    let space = PinSwapSpace {
+        current,
+        bound,
+        transport_bar: false,
+        overlay: true,
+        caption: pinned_caption_height(96, None),
+        maximized: false,
+        room: bounds,
+    };
+    let room = pin_swap_room(space, bounds, 96);
+    current = pin_update_box(
+        room,
+        (400, 250),
+        pin_swap_scale(space.bound, PreviewScale::Percent(100)),
+    );
+    assert_eq!((current.2 - current.0, current.3 - current.1), (400, 250));
+}
+
+#[test]
+fn pin_scaling_mode_until_resized_vs_use_scaling_settings() {
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let mut pin = PinnedPreview::for_test();
+    // Simulate manual resize to 400x225 -> bound = Some(400).
+    pin.content = (760, 427, 1160, 652);
+    pin.bound = Some(400);
+    pin.transport_bar = false;
+    pin.overlay = true;
+    pin.caption = pinned_caption_height(96, None);
+    pin.restore = None;
+
+    // UntilResized keeps the manual bound of 400.
+    let until_space = pin_swap_space_for(&pin, PinScalingMode::UntilResized);
+    assert_eq!(until_space.bound, Some(400));
+    let until_room = pin_swap_room(until_space, bounds, 96);
+    let until_box = pin_update_box(
+        until_room,
+        (1920, 1080),
+        pin_swap_scale(until_space.bound, PreviewScale::FitToScreenReduced(50)),
+    );
+    assert_eq!(
+        (until_box.2 - until_box.0, until_box.3 - until_box.1),
+        (400, 225)
+    );
+
+    // UseScalingSettings ignores prior bound and recomputes fresh from display room at 50%.
+    let fresh_space = pin_swap_space_for(&pin, PinScalingMode::UseScalingSettings);
+    assert_eq!(fresh_space.bound, None);
+    let fresh_room = pin_swap_room(fresh_space, bounds, 96);
+    let fresh_box = pin_update_box(
+        fresh_room,
+        (1920, 1080),
+        pin_swap_scale(fresh_space.bound, PreviewScale::FitToScreenReduced(50)),
+    );
+    assert_eq!(
+        (fresh_box.2 - fresh_box.0, fresh_box.3 - fresh_box.1),
+        (960, 540)
+    );
+
+    // Maximized state is preserved even under UseScalingSettings.
+    pin.restore = Some((760, 427, 1160, 652));
+    let max_space = pin_swap_space_for(&pin, PinScalingMode::UseScalingSettings);
+    assert!(max_space.maximized);
+    assert_eq!(max_space.bound, None);
+}
+
 /// A box change that the pin's own frame already covers owes it no decode, and the kinds a box lays
 /// out again rather than scales are owed one whatever the frame's size is. A page is the first of
 /// those as much as a picture is: what the box decides about a PDF, a slide or a book's page is how
