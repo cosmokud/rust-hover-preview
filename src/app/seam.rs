@@ -1022,6 +1022,18 @@ pub(crate) enum PreviewMessage {
     TrayTextSize {
         percent: u32,
     },
+    /// A setting the tray wrote, which a preview reads when it begins, has landed in `config.ini`:
+    /// this process's own copy of the file is brought up to date now rather than at its watch's next
+    /// look.
+    ///
+    /// Every setting a hover reads is read from this process's `CONFIG`, and in a run with a viewer
+    /// that is the viewer's copy of a file the tray has just written — kept current by a watch that
+    /// looks once a second (see `watch_the_configuration`). A hover arriving inside that second is
+    /// laid out by the value the row replaced: the first preview after a `Scaling` row was clicked was
+    /// drawn at the old share and the second at the new one, which is what this message is for.
+    /// Nothing on screen is rebuilt — a preview already up keeps the placement it was opened with, as
+    /// the rows' own docs say.
+    ConfigChanged,
     /// Every probed geometry is given up: the engine choice moved, and a geometry read by FFprobe is
     /// not the geometry a media-engine preview wants, so the next hover probes again. Given up on the
     /// loop because the cache is that side's, and a row moved in the tray is not one that reaches a
@@ -2173,6 +2185,7 @@ impl SeamMessage {
     const PIN_WALK_AGAIN: u8 = 30;
     const PIN_RESTORE: u8 = 31;
     const PIN_COLD: u8 = 32;
+    const CONFIG_CHANGED: u8 = 33;
 
     /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
     fn of(tag: u8, numbers: &[i64]) -> Self {
@@ -2307,6 +2320,7 @@ impl SeamMessage {
             PreviewMessage::TrayTextSize { percent } => {
                 Some(Self::of(Self::TRAY_TEXT_SIZE, &[*percent as i64]))
             }
+            PreviewMessage::ConfigChanged => Some(Self::of(Self::CONFIG_CHANGED, &[])),
             PreviewMessage::ForgetVideoGeometry => Some(Self::of(Self::FORGET_VIDEO_GEOMETRY, &[])),
             PreviewMessage::KeepExtraction { path } => {
                 let numbers = [a_flag(path.is_some())];
@@ -2433,6 +2447,7 @@ impl SeamMessage {
             Self::TRAY_TEXT_SIZE => PreviewMessage::TrayTextSize {
                 percent: numbers[0] as u32,
             },
+            Self::CONFIG_CHANGED => PreviewMessage::ConfigChanged,
             Self::FORGET_VIDEO_GEOMETRY => PreviewMessage::ForgetVideoGeometry,
             Self::KEEP_EXTRACTION => PreviewMessage::KeepExtraction {
                 path: if numbers[0] == 0 {
@@ -3606,6 +3621,7 @@ mod tests {
             PreviewMessage::PinChanged,
             PreviewMessage::TrayVolume { audio: true },
             PreviewMessage::TrayTextSize { percent: 175 },
+            PreviewMessage::ConfigChanged,
             PreviewMessage::ForgetVideoGeometry,
             PreviewMessage::KeepExtraction {
                 path: Some(path.clone()),
