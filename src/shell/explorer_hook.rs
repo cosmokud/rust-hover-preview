@@ -47,6 +47,7 @@
 mod everything;
 mod file_dialog;
 mod focus_items;
+mod hook_session;
 mod hover_location;
 mod input;
 mod list_view;
@@ -73,11 +74,7 @@ use crate::app::seam::{
     take_pin_handed_off, take_pin_menu_pressed, take_pin_resumed, update_pinned_preview,
     PreviewCursorHover, PreviewMessage,
 };
-use crate::config::config::{
-    AvoidMode, TriggerKeyMode, DEFAULT_HOVER_DELAY_MS, DEFAULT_PIN_UPDATE_ENABLED,
-    DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS,
-    DEFAULT_TICK_MS, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
-};
+use crate::config::config::{AvoidMode, TriggerKeyMode};
 use crate::engines::webview_preview;
 use crate::formats::video_formats::is_video_file;
 use crate::shell::wheel_input;

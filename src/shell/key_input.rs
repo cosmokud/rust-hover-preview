@@ -125,6 +125,7 @@ fn let_the_document_have_the_key(vk: i32, message: u32) {
         false,
         nothing,
     );
+    note_trigger_edge(&TRIGGER_CHORDS, &TRIGGER_MAIN_DOWN, vk, false);
 
     // And the pin's own play/pause flag, which the caret's loss is the only release of (see
     // `pin_toggle_held_after`).
@@ -672,14 +673,29 @@ fn main_slots_of(chords: &[AtomicU64], vk: i32) -> u32 {
     })
 }
 
-/// Whether any bound trigger chord's main key is latched down, which is the hook's own half of
-/// the question `trigger_is_held` answers.
+/// Pure check of whether any latched trigger slot also has all companion modifiers held.
+fn latch_holds_a_trigger_chord_with(
+    chords: &[AtomicU64],
+    down: u32,
+    is_down: impl Fn(i32) -> bool,
+) -> bool {
+    chords.iter().enumerate().any(|(index, slot)| {
+        if down & (1u32 << index) == 0 {
+            return false;
+        }
+        let packed = slot.load(Ordering::Acquire);
+        packed != 0 && crate::shell::key_binding::packed_companions_held_with(packed, &is_down)
+    })
+}
+
+/// Whether any bound trigger chord's main key is latched down and its companions are held,
+/// which is the hook's own half of the question `trigger_is_held` answers.
 fn the_latch_holds_a_trigger_key() -> bool {
-    let down = TRIGGER_MAIN_DOWN.load(Ordering::Acquire);
-    TRIGGER_CHORDS
-        .iter()
-        .enumerate()
-        .any(|(index, slot)| down & (1u32 << index) != 0 && slot.load(Ordering::Acquire) != 0)
+    latch_holds_a_trigger_chord_with(
+        &TRIGGER_CHORDS,
+        TRIGGER_MAIN_DOWN.load(Ordering::Acquire),
+        crate::shell::key_binding::key_is_down,
+    )
 }
 
 /// The other half: whether the poll says any trigger chord is held in full right now.
@@ -783,6 +799,11 @@ fn pin_chord_matches(vk: i32, slots: u32) -> bool {
     })
 }
 
+/// Focused pin owns `PIN_KEY_COMMANDS` (e.g. `Space` toggle) over `pin_key` press counting.
+fn should_count_pin_press(pin_owns_caret: bool, is_pin_command: bool) -> bool {
+    !pin_owns_caret || !is_pin_command
+}
+
 /// Starts the hook thread; `main` joins the returned handle after `request_stop`.
 pub(crate) fn spawn_key_watcher() -> std::thread::JoinHandle<()> {
     super::hook_thread::spawn(
@@ -848,6 +869,13 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
         note_trigger_edge(&TRIGGER_CHORDS, &TRIGGER_MAIN_DOWN, vk, down);
     }
 
+    let command = pin_key_command(vk);
+    let caret = if command.is_some() {
+        crate::app::seam::the_pin_of_the_window(GetForegroundWindow().0 as u64)
+    } else {
+        None
+    };
+
     let main_slots = pin_main_slots(vk);
     if main_slots != 0 {
         match message {
@@ -857,8 +885,11 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
             // held, so that a later repeat cannot turn a chord pressed in the wrong
             // order into a press.
             WM_KEYDOWN | WM_SYSKEYDOWN if pin_first_press(main_slots) => {
-                if pin_chord_matches(vk, main_slots) {
+                if should_count_pin_press(caret.is_some(), command.is_some())
+                    && pin_chord_matches(vk, main_slots)
+                {
                     crate::app::seam::note_a_pin_press();
+                    crate::app::seam::wake_preview_loop();
                 }
             }
             WM_KEYUP | WM_SYSKEYUP => {
@@ -866,19 +897,13 @@ pub(crate) unsafe extern "system" fn key_hook_proc(
             }
             _ => {}
         }
-
-        return CallNextHookEx(None, code, wparam, lparam);
     }
 
     // A key a standing pin answers, taken here and passed on to nobody, but only while the caret is
     // in one of the pin's own two windows. The pin's window eats these itself, so the swallow costs
     // a key nothing there; FFmpeg's window does not eat them, and an arrow that reaches it is a
     // seek, which is the whole of what the swallow is for.
-    if let Some(command) = pin_key_command(vk) {
-        // Which window of the run holds the caret, asked of every one it has standing: a key of the
-        // pin's belongs to whichever window of this run the user is in, and a pin that has become a
-        // window of its own is one of them.
-        let caret = crate::app::seam::the_pin_of_the_window(GetForegroundWindow().0 as u64);
+    if let Some(command) = command {
         let owns_caret = caret.is_some();
 
         // **A Win chord is answered before the key table, and differently.** It is a chord the pin has an
@@ -1541,5 +1566,76 @@ mod tests {
         assert!(note(true, true), "a fresh press in Explorer toggles once");
         assert!(!note(true, true), "and holding it does not toggle again");
         assert_eq!(presses.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn multi_key_trigger_chord_does_not_latch_without_companion_modifiers() {
+        let packed = crate::shell::key_binding::packed_binding(
+            &crate::shell::key_binding::parse_binding("ctrl+alt").expect("valid chord"),
+        );
+        let table: [AtomicU64; crate::shell::key_binding::MAX_ALTERNATIVES] =
+            std::array::from_fn(|index| AtomicU64::new(packed[index]));
+        let down = AtomicU32::new(0);
+
+        // Pressing Alt alone latches the main-key bit, but companion Ctrl is NOT down.
+        note_trigger_edge(&table, &down, 0x12, true);
+        assert_eq!(down.load(Ordering::Acquire), 0b1);
+        assert!(
+            !latch_holds_a_trigger_chord_with(&table, down.load(Ordering::Acquire), |_| false),
+            "ctrl+alt must not report latched when ctrl is not held"
+        );
+        assert!(
+            latch_holds_a_trigger_chord_with(&table, down.load(Ordering::Acquire), |vk| vk == 0x11),
+            "ctrl+alt reports latched when companion ctrl is held"
+        );
+    }
+
+    #[test]
+    fn let_the_document_have_the_key_clears_trigger_main_down_on_keyup() {
+        let packed = crate::shell::key_binding::packed_binding(
+            &crate::shell::key_binding::parse_binding("alt").expect("valid trigger"),
+        );
+        let prev_slot0 = TRIGGER_CHORDS[0].swap(packed[0], Ordering::AcqRel);
+        let prev_down = TRIGGER_MAIN_DOWN.swap(0b1, Ordering::AcqRel);
+
+        // Key-down in document does not clear latch; key-up / syskeyup does.
+        let_the_document_have_the_key(0x12, WM_KEYDOWN);
+        assert_eq!(TRIGGER_MAIN_DOWN.load(Ordering::Acquire) & 0b1, 0b1);
+
+        let_the_document_have_the_key(0x12, WM_SYSKEYUP);
+        assert_eq!(
+            TRIGGER_MAIN_DOWN.load(Ordering::Acquire) & 0b1,
+            0,
+            "WM_SYSKEYUP in document must clear TRIGGER_MAIN_DOWN"
+        );
+
+        TRIGGER_MAIN_DOWN.store(0b1, Ordering::Release);
+        let_the_document_have_the_key(0x12, WM_KEYUP);
+        assert_eq!(
+            TRIGGER_MAIN_DOWN.load(Ordering::Acquire) & 0b1,
+            0,
+            "WM_KEYUP in document must clear TRIGGER_MAIN_DOWN"
+        );
+
+        TRIGGER_CHORDS[0].store(prev_slot0, Ordering::Release);
+        TRIGGER_MAIN_DOWN.store(prev_down, Ordering::Release);
+    }
+
+    #[test]
+    fn focused_pin_command_takes_precedence_over_pin_key_press_count() {
+        // Space (0x20) is both default pin_key and PIN_COMMAND_TOGGLE_PLAYBACK.
+        assert!(pin_key_command(0x20).is_some());
+        assert!(
+            !should_count_pin_press(true, true),
+            "focused pin owns Space toggle command; must not also fire note_a_pin_press"
+        );
+        assert!(
+            should_count_pin_press(false, true),
+            "unfocused pin (Explorer in front) counts Space as pin_key press"
+        );
+        assert!(
+            should_count_pin_press(true, false),
+            "custom pin_key not in PIN_KEY_COMMANDS still counts"
+        );
     }
 }

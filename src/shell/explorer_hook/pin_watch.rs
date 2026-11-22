@@ -9,21 +9,6 @@
 
 use super::*;
 
-/// Whether a pin that is up is shown the file the user picks next, and whether the pointer's own
-/// hover is one of the ways it is told about one, as the configuration has them (see the tray's
-/// `Pin Mode … Update Preview`).
-///
-/// They are read here rather than kept in the tick's own snapshot of the configuration, and they
-/// are read only while a pin is up: the two switches are the hook's answer to a question the rest
-/// of its state has nothing to do with, and a switch thrown in the tray is honoured on the tick
-/// after it is thrown rather than at the next snapshot.
-pub(super) fn pin_update_settings() -> (bool, bool) {
-    CONFIG
-        .lock()
-        .map(|config| (config.pin_update_enabled, config.pin_update_on_hover))
-        .unwrap_or((DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_ON_HOVER))
-}
-
 /// The frame of the window a press was made in: what a press that named no file puts the pin behind,
 /// as a handle because the answer names a window without this app's own types. Zero where the shell
 /// describes no window at all, which is no place to go behind.
@@ -173,6 +158,7 @@ impl PinUpdateWatch {
     pub(super) fn follow(
         &mut self,
         resolver: &mut ItemResolver,
+        pointer: Option<&PointerTick>,
         on_hover: bool,
         hover_delay_ms: u64,
         last_focus_probe: &mut Instant,
@@ -206,7 +192,7 @@ impl PinUpdateWatch {
         // measured against, and every one of them is about where the window was (see `note_pin_box`).
         let pin_moved = self.note_pin_box(preview_window_rect());
 
-        let Some(pointer) = read_pointer() else {
+        let Some(&pointer) = pointer else {
             return;
         };
 
@@ -417,6 +403,8 @@ impl PinUpdateWatch {
         // the hit test under it names the listing the pin stands on, and so is a press read on the
         // tick this app's own window moved under a hand nobody moved (see `press_is_on_the_pin` and
         // `press_is_the_pins_own_gesture`).
+        // Cache this tick's click resolution so the pick arm below does not re-query COM/UIA.
+        let mut click_resolved: Option<Option<PathBuf>> = None;
         if !the_pins_own_press
             && press_is_answered(
                 clicked,
@@ -448,8 +436,8 @@ impl PinUpdateWatch {
             // so does a folder.
             let under_the_point = get_file_under_cursor(resolver, &pointer);
             let row = match uia_item_from_point(resolver, pointer.point, false) {
-                Some(_) => Some(under_the_point),
-                None => under_the_point.map(Some),
+                Some(_) => Some(under_the_point.as_deref()),
+                None => under_the_point.as_deref().map(Some),
             };
             let picked = match &row {
                 Some(Some(path)) if !path.is_dir() && is_media_file(path) => {
@@ -479,6 +467,7 @@ impl PinUpdateWatch {
                 pointer.point.x,
                 pointer.point.y,
             );
+            click_resolved = Some(under_the_point);
         }
 
         // A pick is already a press that landed on a listing — that is what `press_is_a_listing`
@@ -488,7 +477,11 @@ impl PinUpdateWatch {
         if pick || (hovered && over_explorer) {
             self.probed = true;
 
-            if let Some(path) = get_file_under_cursor(resolver, &pointer) {
+            let resolved_path = match click_resolved {
+                Some(cached) => cached,
+                None => get_file_under_cursor(resolver, &pointer),
+            };
+            if let Some(path) = resolved_path {
                 // What was resolved is answered whatever it turned out to be — a file nothing can
                 // be shown for is one of them — so there is nothing here left to ask about again.
                 let offered = self.offer(&path, &showing);
