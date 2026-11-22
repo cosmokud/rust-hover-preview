@@ -604,6 +604,7 @@ fn a_drag_is_stopped_by_the_room_rather_than_cut_by_it() {
 fn a_pinned_window_says_which_of_its_edges_a_point_is_on() {
     let pin = PinnedPreview {
         path: PathBuf::from("picture.png"),
+        hover_facts: None,
         bound: Some(600),
         content: (100, 100, 700, 500),
         zoom: Some(PinZoom::filling((100, 100, 700, 500))),

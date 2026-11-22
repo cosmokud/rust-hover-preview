@@ -136,6 +136,7 @@ impl HoverScales {
 /// a hover is placed at and the size its frames are decoded at are the same answer.
 ///
 /// Every other format keeps the picture scale.
+#[cfg(test)]
 pub(super) fn effective_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
     effective_preview_scale_of(&HoverFacts::read(path), scales)
 }

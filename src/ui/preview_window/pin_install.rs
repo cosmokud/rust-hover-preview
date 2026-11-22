@@ -1144,7 +1144,19 @@ pub(super) fn take_pin_load(pin_load: &mut Option<PinLoad>) -> Option<PinAnswer>
 /// `rect` is the media's own box: the hover's preview box for a first pin, and the box the swap
 /// laid the incoming file out in for the other road. Everything else is read off the machine and
 /// off the pin being replaced, and the caller publishes the result.
+#[cfg(test)]
 pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPreview {
+    take_up_pinned_window_with_facts(path, rect, None)
+}
+
+pub(super) fn take_up_pinned_window_with_facts(
+    path: &Path,
+    rect: ScreenRegion,
+    hover: Option<Arc<HoverFacts>>,
+) -> PinnedPreview {
+    let hover = hover
+        .filter(|facts| facts.probe.path() == path)
+        .unwrap_or_else(|| Arc::new(HoverFacts::read(path)));
     // The media's kind, and the share its sound's card frame was
     // painted at, read in one look: the take-up is the moment a
     // pin's card is first its own, and the pin remembers the share
@@ -1284,7 +1296,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     // A take-up runs for every file a walk lands on rather than once per
     // pin, so it is the arrow keys, the two step buttons and a pick in the
     // listing alike that pay it.
-    let keeps_its_box = pin_keeps_its_box(path);
+    let keeps_its_box = pin_keeps_its_box_of(&hover);
 
     // The name the hand-off button says is asked of the planner rather
     // than here, for the same reason and by the same rule: it is a
@@ -1312,6 +1324,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
 
     PinnedPreview {
         path: path.to_path_buf(),
+        hover_facts: Some(hover),
         content,
         // A pin taken up over another one keeps the bound the window has:
         // what a swap is measured against is the size the window was given
@@ -2260,7 +2273,7 @@ pub(super) unsafe fn take_up_a_cold_pin(
     room: (u32, u32),
     waiting: &mut Option<PathBuf>,
 ) -> Option<()> {
-    let hover = HoverFacts::read(path);
+    let hover = Arc::new(HoverFacts::read(path));
     let bounds = work_area_at(at.0, at.1);
     let dpi = dpi_at(at.0, at.1);
 
@@ -2268,7 +2281,7 @@ pub(super) unsafe fn take_up_a_cold_pin(
 
     // What the file is owed, asked before anything is built: a box to wait for is no window at all, and
     // nothing here draws it is the press that answers nothing (see `a_cold_pins_file_is_owed`).
-    let owed = a_cold_pins_file_is_owed(path, generation, room, measured, waiting);
+    let owed = a_cold_pins_file_is_owed_of(&hover, generation, room, measured, waiting);
 
     note_pin_trace!(
         "cold pin: {} is owed {:?} at {},{} w/ box {}",
@@ -2284,14 +2297,15 @@ pub(super) unsafe fn take_up_a_cold_pin(
     // A file still owed its box, and a file nothing here draws, are both the press that raises no window.
     let shape = a_cold_pins_shape(measured, owed)?;
 
-    let content = a_cold_pins_box(path, shape, bounds, dpi);
+    let content = a_cold_pins_box_of(&hover, shape, bounds, dpi);
+    let anticipated_kind = a_cold_pins_kind_of(&hover);
     note_pin_trace!(
         "cold pin: {} at {} on {},{} kind {:?} shape {}x{}",
         pin_trace::path_name(path),
         pin_trace::a_box(content),
         at.0,
         at.1,
-        a_cold_pins_kind(path),
+        anticipated_kind,
         shape.0,
         shape.1
     );
@@ -2310,14 +2324,14 @@ pub(super) unsafe fn take_up_a_cold_pin(
         None => create_loading_media_of_kind(
             (content.2 - content.0).max(1) as u32,
             (content.3 - content.1).max(1) as u32,
-            a_cold_pins_kind(path),
+            anticipated_kind,
         ),
     };
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(stand_in);
     }
 
-    let pin = take_up_pinned_window(path, content);
+    let pin = take_up_pinned_window_with_facts(path, content, Some(hover));
     let kind = current_media_type();
     pin_stands_in_its_own_window(pin_should_stand_in_its_own_window(kind, path));
     install(pin);
@@ -2365,13 +2379,24 @@ pub(super) fn a_cold_pins_shape(
 /// The chrome is asked of the file's own kind (see `a_cold_pins_kind`), which is the whole of what makes a
 /// film's box a band short and a picture's not: a take-up's own chrome is read off `CURRENT_MEDIA`, which is
 /// the stand-in this box is measured for.
+#[cfg(test)]
 pub(super) fn a_cold_pins_box(
     path: &Path,
     shape: (u32, u32),
     bounds: ScreenBounds,
     dpi: u32,
 ) -> ScreenRegion {
-    let kind = a_cold_pins_kind(path);
+    a_cold_pins_box_of(&HoverFacts::read(path), shape, bounds, dpi)
+}
+
+pub(super) fn a_cold_pins_box_of(
+    hover: &HoverFacts,
+    shape: (u32, u32),
+    bounds: ScreenBounds,
+    dpi: u32,
+) -> ScreenRegion {
+    let path = hover.probe.path();
+    let kind = a_cold_pins_kind_of(hover);
     let page_runs = matches!(kind, Some(MediaType::EngineSvg | MediaType::EngineFont))
         && webview_preview::page_runs(path);
     let room = pinned_room(
@@ -2381,10 +2406,10 @@ pub(super) fn a_cold_pins_box(
         pin_overlay_chrome(kind, page_runs),
         pinned_caption_height(dpi, kind),
     );
-    let scale = effective_preview_scale(path, current_hover_scales());
+    let scale = effective_preview_scale_of(hover, hover.scales);
 
     let laid_out = pin_update_box(room.region(), shape, scale);
-    if pin_keeps_its_box(path) {
+    if pin_keeps_its_box_of(hover) {
         return centred_at(
             (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1),
             ((room.left + room.right) / 2, (room.top + room.bottom) / 2),
@@ -2403,12 +2428,12 @@ pub(super) fn a_cold_pins_box(
 /// transport bar, and a film's box is measured a bar's rows too tall for it. The kind named here is the
 /// stand-in's, and the ordinary `install_pinned_media` renews the pin with the media the loader really
 /// answered — so a wrong anticipation costs one take-up's chrome and is put right a tick later.
-pub(super) fn a_cold_pins_kind(path: &Path) -> Option<MediaType> {
+pub(super) fn a_cold_pins_kind_of(hover: &HoverFacts) -> Option<MediaType> {
+    let path = hover.probe.path();
     if pinned_engine_media(path).is_some() {
         return None;
     }
 
-    let hover = HoverFacts::read(path);
     let routed = hover.routed_kind()?;
 
     // A picture that plays is the one kind a name cannot settle, and the goods are only worth the read when
@@ -2483,6 +2508,21 @@ pub(super) fn a_cold_pins_file_is_owed(
     measured: Option<(u32, u32)>,
     waiting: &mut Option<PathBuf>,
 ) -> ColdPinOwed {
+    if measured.is_none() {
+        *waiting = None;
+        return ColdPinOwed::Nothing;
+    }
+    a_cold_pins_file_is_owed_of(&HoverFacts::read(path), generation, room, measured, waiting)
+}
+
+pub(super) fn a_cold_pins_file_is_owed_of(
+    hover: &HoverFacts,
+    generation: u64,
+    room: (u32, u32),
+    measured: Option<(u32, u32)>,
+    waiting: &mut Option<PathBuf>,
+) -> ColdPinOwed {
+    let path = hover.probe.path();
     // **No box is no window**, whatever the file is: a measure is what lays a preview out to stand a window
     // in, and a file it measured nothing of — a name no list claims, a kind switched off, a reader with no
     // box for the file — is the press on something nothing can show (see `take_up_a_cold_pin`).
@@ -2491,8 +2531,7 @@ pub(super) fn a_cold_pins_file_is_owed(
         return ColdPinOwed::Nothing;
     }
 
-    let hover = HoverFacts::read(path);
-    let unprobed = video_probe_due(&hover);
+    let unprobed = video_probe_due(hover);
     let paging = page_is_on_the_way(path);
     let reading = measure_waiting(path);
 
