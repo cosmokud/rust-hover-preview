@@ -21,11 +21,11 @@ use super::commands::{
     set_image_cache_mb, set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode,
     set_model_scale, set_mpv_engine_idle, set_mpv_path, set_office_engine, set_office_engine_idle,
     set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek, set_pin_nav_audio,
-    set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_preview_scale,
-    set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
-    set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
-    set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
-    set_zoom_background, toggle_browse_dialog_preview, toggle_bypass_placement,
+    set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_pin_scaling_mode,
+    set_preview_scale, set_same_file_rehover_delay, set_settling_delay, set_text_font_scale,
+    set_text_scale, set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode,
+    set_vector_background, set_vector_scale, set_video_engine, set_video_scale, set_video_volume,
+    set_webview_idle, set_zoom_background, toggle_browse_dialog_preview, toggle_bypass_placement,
     toggle_check_for_updates, toggle_everything_previews, toggle_loop,
     toggle_normalize_video_volume, toggle_normalize_volume, toggle_pdf_autofocus,
     toggle_pdf_full_mode, toggle_pin_always_on_top, toggle_pin_camera_follows, toggle_pin_enabled,
@@ -68,11 +68,12 @@ use super::ids::{
     ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_IMAGE_ALL, ID_TRAY_PIN_NAV_IMAGE_CATEGORY,
     ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
     ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
-    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP,
-    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
-    ID_TRAY_Q_DIR_PREVIEWS, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
-    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_SCALING_UNTIL_RESIZED, ID_TRAY_PIN_SCALING_USE_SETTINGS,
+    ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
+    ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
+    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
+    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
+    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -93,8 +94,8 @@ use super::submenus::{install_engine, open_codec_page};
 
 use crate::app::{dialogs, updates, winget};
 use crate::config::config::{
-    MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewType, TextTheme,
-    TriggerKeyMode, VOLUME_CHOICES,
+    MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PinScalingMode, PreviewType,
+    TextTheme, TriggerKeyMode, VOLUME_CHOICES,
 };
 use crate::shell::explorer_hook;
 use crate::{StartupTrace, RUNNING};
@@ -302,6 +303,12 @@ unsafe extern "system" fn tray_window_proc(
                     }
                     ID_TRAY_PIN_MINIMIZE_BUBBLE => set_pin_minimize_to(PinMinimizeTo::Bubble),
                     ID_TRAY_PIN_MINIMIZE_TASKBAR => set_pin_minimize_to(PinMinimizeTo::Taskbar),
+                    ID_TRAY_PIN_SCALING_UNTIL_RESIZED => {
+                        set_pin_scaling_mode(PinScalingMode::UntilResized)
+                    }
+                    ID_TRAY_PIN_SCALING_USE_SETTINGS => {
+                        set_pin_scaling_mode(PinScalingMode::UseScalingSettings)
+                    }
                     ID_TRAY_PIN_NAV_IMAGE_ALL => set_pin_nav_image(PinNavFileTypes::All),
                     ID_TRAY_PIN_NAV_IMAGE_CATEGORY => set_pin_nav_image(PinNavFileTypes::Category),
                     ID_TRAY_PIN_NAV_VIDEO_ALL => set_pin_nav_video(PinNavFileTypes::All),

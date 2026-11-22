@@ -30,12 +30,13 @@ use crate::app::dialogs;
 use crate::app::winget;
 use crate::config::config::{
     AppConfig, AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinEndOfFile, PinMinimizeTo,
-    PinNavFileTypes, PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS,
-    DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
-    DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MINIMIZE_TO,
+    PinNavFileTypes, PinScalingMode, PreviewScale, TransparentBackground, VideoEngine,
+    DEFAULT_AFK_TIMER_SECS, DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_SEEK,
+    DEFAULT_AVOID_MODE, DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MINIMIZE_TO,
     DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS, DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_IMAGE,
-    DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE,
+    DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_SCALING_MODE, DEFAULT_TICK_MS,
+    DEFAULT_VIDEO_ENGINE,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
@@ -407,6 +408,15 @@ pub(super) fn pin_minimize_label(target: PinMinimizeTo) -> String {
     };
 
     default_label(label, target == DEFAULT_PIN_MINIMIZE_TO)
+}
+
+pub(super) fn pin_scaling_label(mode: PinScalingMode) -> String {
+    let label = match mode {
+        PinScalingMode::UntilResized => "Until Resized",
+        PinScalingMode::UseScalingSettings => "Use Scaling Settings",
+    };
+
+    default_label(label, mode == DEFAULT_PIN_SCALING_MODE)
 }
 
 /// The row under each half of the `Volume` submenu's `Normalize`: whether a

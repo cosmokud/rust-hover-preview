@@ -37,8 +37,8 @@ use crate::config::config::{
     sanitize_animated_webp_budget_mb, sanitize_decode_budget_gb, sanitize_document_cache_mb,
     sanitize_general_disk_cache_mb, sanitize_image_cache_mb, sanitize_image_disk_cache_mb,
     sanitize_text_font_scale_percent, sanitize_tick_ms, AudioSeek, AvoidMode, MarkdownMode,
-    OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewScale, PreviewType, TextTheme,
-    TriggerKeyMode, VideoEngine, VOLUME_CHOICES,
+    OfficeEngine, PinMinimizeTo, PinNavFileTypes, PinScalingMode, PreviewScale, PreviewType,
+    TextTheme, TriggerKeyMode, VideoEngine, VOLUME_CHOICES,
 };
 use crate::config::{commit_config, publish_config_change, snapshot};
 use crate::formats::codecs;
@@ -618,6 +618,12 @@ pub(in super::super) fn set_pin_nav_others(mode: PinNavFileTypes) {
 pub(in super::super) fn set_pin_minimize_to(target: PinMinimizeTo) {
     commit_config(|config| {
         config.pin_minimize_to = target;
+    });
+}
+
+pub(in super::super) fn set_pin_scaling_mode(mode: PinScalingMode) {
+    commit_config(|config| {
+        config.pin_scaling_mode = mode;
     });
 }
 
