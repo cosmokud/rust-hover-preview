@@ -2887,6 +2887,17 @@ pub fn run_preview_window() {
                     // neither what is wanted there nor what is showing is the page the switch was
                     // turned off under (see `hide_html_page`).
                     PreviewMessage::HideHtmlPage => hide_html_page(),
+                    // A setting the tray wrote that a hover reads when it begins — a `Scaling` row's
+                    // share is part of the placement a hover is opened with. This process's copy of
+                    // the file is brought up to date now rather than at its watch's next look, or a
+                    // hover arriving before that look is laid out by the value the row replaced: the
+                    // first preview after a change was drawn at the old share and the second at the
+                    // new one (see `PreviewMessage::ConfigChanged`). Nothing on screen is rebuilt.
+                    PreviewMessage::ConfigChanged => {
+                        if let Ok(mut config) = CONFIG.lock() {
+                            config.reload_from_disk_keeping_our_own_levels();
+                        }
+                    }
                     // A budget made smaller is trimmed here for the same reason: what a trim may
                     // not give up is this process's, and none of the tray's (see `trim_caches`).
                     PreviewMessage::TrimCaches => trim_caches(),
@@ -4568,9 +4579,13 @@ pub fn run_preview_window() {
                     // where the engines, the caches and the page are: none of them is a hover's,
                     // and none is a thing a layout is made for (see `PreviewMessage::StopEngines`,
                     // `HideHtmlPage`, `TrimCaches` and `KillStrayPlayer`).
+                    // A setting written to the file is answered above, where this process's copy of it
+                    // is reloaded: it is not a hover's and it is not a thing a layout is made for (see
+                    // `PreviewMessage::ConfigChanged`).
                     PreviewMessage::StopEngines
                     | PreviewMessage::HideHtmlPage
                     | PreviewMessage::TrimCaches
+                    | PreviewMessage::ConfigChanged
                     | PreviewMessage::KillStrayPlayer => {}
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the

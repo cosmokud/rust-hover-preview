@@ -240,6 +240,7 @@ pub(in super::super) fn reset_settings_from_tray() {
         send_preview(PreviewMessage::StopEngines);
     }
 
+    tell_the_viewer_the_configuration_moved();
     refresh_preview_types();
     refresh_preview();
 }
@@ -575,6 +576,7 @@ pub(in super::super) fn set_text_font_scale(percent: u32) {
     // a size hand-edited into the file, is left alone by everything but this row (see
     // `publish_text_font_size`).
     crate::app::seam::send_preview(crate::app::seam::PreviewMessage::TrayTextSize { percent });
+    tell_the_viewer_the_configuration_moved();
     refresh_preview();
 }
 
@@ -861,6 +863,17 @@ pub(in super::super) fn set_tick_ms(index: u16) {
     }
 }
 
+/// Tell the process that draws previews that a setting it reads when a hover begins has moved.
+///
+/// A `Scaling` row is not rebuilt for: the share is part of the placement a hover is opened
+/// with, and the next hover answers for itself — but only where the process drawing the hover
+/// is this one. With a viewer, the hover is drawn by a process whose copy of `config.ini` is
+/// reloaded by a watch that looks once a second, so the first hover after the row was picked
+/// was laid out at the share it replaced (see `PreviewMessage::ConfigChanged`).
+fn tell_the_viewer_the_configuration_moved() {
+    send_preview(PreviewMessage::ConfigChanged);
+}
+
 /// How large a picture is drawn, by the position the item was listed at.
 ///
 /// The size a bitmap is drawn at is part of the placement that was made when the preview
@@ -875,6 +888,8 @@ pub(in super::super) fn set_preview_scale(index: u16) {
         config.preview_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// The same for a video, at the share `video_scale` names: the frame that stands in for
@@ -890,6 +905,8 @@ pub(in super::super) fn set_video_scale(index: u16) {
         config.video_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// And the same for an animated picture, at the share `animated_scale` names: the frames
@@ -906,6 +923,8 @@ pub(in super::super) fn set_animated_scale(index: u16) {
         config.animated_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// How much of the display a PDF page — the `Ebook` kind — is drawn over, by the position
@@ -924,6 +943,8 @@ pub(in super::super) fn set_ebook_scale(index: u16) {
         config.ebook_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// How much of the display a page of the `Document` kind is shown over, by the position the
@@ -938,6 +959,8 @@ pub(in super::super) fn set_document_scale(index: u16) {
         config.document_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// How much of the display a sound's card is laid out over, by the position the
@@ -954,6 +977,8 @@ pub(in super::super) fn set_audio_scale(index: u16) {
         config.audio_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// How much of the display a font specimen is drawn over, by the position the item was
@@ -967,6 +992,8 @@ pub(in super::super) fn set_font_scale(index: u16) {
         config.font_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// How much of the display a design document is drawn over, by the position the item was
@@ -983,6 +1010,8 @@ pub(in super::super) fn set_design_scale(index: u16) {
         config.design_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// How much of the display a vector drawing is replayed over, by the position the item was
@@ -997,6 +1026,8 @@ pub(in super::super) fn set_vector_scale(index: u16) {
         config.vector_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// How much of the display a model is drawn over, by the position the item was listed at.
@@ -1013,6 +1044,8 @@ pub(in super::super) fn set_model_scale(index: u16) {
         config.model_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// How much of the display a page of text is measured in, by the position the item was listed
@@ -1028,6 +1061,8 @@ pub(in super::super) fn set_text_scale(index: u16) {
         config.text_scale = scale;
         config.save();
     }
+
+    tell_the_viewer_the_configuration_moved();
 }
 
 /// The share an item of the `Image`, `Video` or `Animated`
