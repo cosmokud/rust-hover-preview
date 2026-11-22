@@ -199,9 +199,14 @@ pub(crate) fn request_check() {
 /// than windows because a menu is the one thing answered on a thread an install ends, and the
 /// row under the pointer is the one it would take away mid-click.
 pub(crate) fn the_app_is_idle() -> bool {
+    the_app_is_idle_with(crate::app::engine_processes::is_running)
+}
+
+fn the_app_is_idle_with(is_alive: impl Fn(u32) -> bool) -> bool {
     idle_with(
         crate::app::seam::the_pin_is_up(),
-        crate::app::detach::is_detached(),
+        crate::app::detach::is_detached()
+            || crate::app::seam::has_active_detached_viewer_with(is_alive),
         crate::app::seam::HOLD_REGION_JOURNEY.get().is_some(),
         crate::app::seam::HOLD_REGION_PREVIEW.get().is_some(),
         crate::app::seam::ENGINE_SHOWING.load(Ordering::Acquire),
@@ -932,6 +937,21 @@ mod tests {
         assert!(!idle_with(
             false, false, false, true, false, true, false, false
         ));
+    }
+
+    #[test]
+    fn detached_viewer_recorded_over_seam_blocks_silent_update_idle_gate() {
+        // Synthetic PID avoids colliding with the test binary's own PID in parallel tests.
+        const DETACHED_PID: u32 = 777_777;
+        crate::app::seam::note_a_detached_viewer(DETACHED_PID);
+        assert!(crate::app::seam::has_active_detached_viewer_with(|pid| {
+            pid == DETACHED_PID
+        }));
+        assert!(!the_app_is_idle_with(|pid| pid == DETACHED_PID));
+        crate::app::seam::clear_detached_viewer_for_test(DETACHED_PID);
+        assert!(!crate::app::seam::has_active_detached_viewer_with(|pid| {
+            pid == DETACHED_PID
+        }));
     }
 
     /// The period a check waits is the hours the file names, one for every check whatever moment

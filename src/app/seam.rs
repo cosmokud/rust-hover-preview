@@ -87,6 +87,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// starts.
 ///
 /// What each field is and why it exists is said beside its `Fact` in the rest of this module.
+/// Transitional `owner` sentinel held while a slot is being reset before publishing the new PID.
+const CLAIMING_OWNER: u32 = u32::MAX;
+
+#[repr(C)]
 pub(crate) struct ViewerFacts {
     /// The pid of the process standing in this block, or 0 while it is free: claimed once, at start-up,
     /// by the viewer that draws in it (see `claim_a_block`).
@@ -263,6 +267,78 @@ impl ViewerFacts {
             pin_buttons: [const { AtomicU64::new(NO_REGION) }; PIN_BUTTONS],
         }
     }
+
+    /// Zero/reset all mutable fields back to at-rest defaults before exposing a reclaimed slot's PID.
+    fn reset(&self) {
+        self.text_scroll_delta.store(0, Ordering::Relaxed);
+        self.pin_zoom_delta.store(0, Ordering::Relaxed);
+        self.pin_volume_delta.store(0, Ordering::Relaxed);
+        self.pin_fps_delta.store(0, Ordering::Relaxed);
+        self.pin_text_size_delta.store(0, Ordering::Relaxed);
+        self.pin_playlist_delta.store(0, Ordering::Relaxed);
+        self.preview_under_pointer.store(0, Ordering::Relaxed);
+        self.pin_keys_owner.store(0, Ordering::Relaxed);
+        self.pin_keys_video.store(0, Ordering::Relaxed);
+        self.pin_keys_topmost.store(false, Ordering::Relaxed);
+        self.pin_follows_the_listing.store(false, Ordering::Relaxed);
+        for slot in &self.pin_key_presses {
+            slot.store(0, Ordering::Relaxed);
+        }
+        for slot in &self.pin_win_chords {
+            slot.store(0, Ordering::Relaxed);
+        }
+        self.pin_find_bar_up.store(false, Ordering::Relaxed);
+        self.pin_playlist_search_up.store(false, Ordering::Relaxed);
+        self.pin_up.store(false, Ordering::Relaxed);
+        self.pin_end_requested.store(false, Ordering::Relaxed);
+        self.pin_menu_dismiss_requested
+            .store(false, Ordering::Relaxed);
+        self.pin_menu_pressed.store(false, Ordering::Relaxed);
+        self.pin_resumed.store(false, Ordering::Relaxed);
+        self.pin_handed_off.store(false, Ordering::Relaxed);
+        self.pin_bubble_hwnd.store(0, Ordering::Relaxed);
+        self.pin_menu_hwnd.store(0, Ordering::Relaxed);
+        self.pin_file_in_flight.store(0, Ordering::Relaxed);
+        self.pin_behind_ask.store(0, Ordering::Relaxed);
+        for unit in &self.pin_path {
+            unit.store(0, Ordering::Relaxed);
+        }
+        self.pin_path_len.store(0, Ordering::Relaxed);
+        self.pin_path_writing.store(0, Ordering::Relaxed);
+        for unit in &self.pointer_path {
+            unit.store(0, Ordering::Relaxed);
+        }
+        self.pointer_path_len.store(0, Ordering::Relaxed);
+        self.pointer_path_writing.store(0, Ordering::Relaxed);
+        self.pin_volume_region.store(NO_REGION, Ordering::Relaxed);
+        self.pin_fps_region.store(NO_REGION, Ordering::Relaxed);
+        self.text_scroll_region.store(NO_REGION, Ordering::Relaxed);
+        self.text_size_region.store(NO_REGION, Ordering::Relaxed);
+        self.pin_zoom_region.store(NO_REGION, Ordering::Relaxed);
+        self.models_band.store(NO_REGION, Ordering::Relaxed);
+        self.pin_playlist_band.store(NO_REGION, Ordering::Relaxed);
+        self.pin_window_box.store(NO_REGION, Ordering::Relaxed);
+        self.models_notches.store(0, Ordering::Relaxed);
+        self.models_notch_point.store(0, Ordering::Relaxed);
+        self.pin_presses.store(0, Ordering::Relaxed);
+        self.preview_hover.store(0, Ordering::Relaxed);
+        self.preview_rect.store(NO_REGION, Ordering::Relaxed);
+        self.engine_page_runs.store(false, Ordering::Relaxed);
+        self.engine_page_drag.store(false, Ordering::Relaxed);
+        self.engine_hwnd.store(0, Ordering::Relaxed);
+        self.engine_showing.store(false, Ordering::Relaxed);
+        self.text_preview_holding.store(false, Ordering::Relaxed);
+        self.waiting_preview_holding.store(false, Ordering::Relaxed);
+        self.hold_region_journey.store(NO_REGION, Ordering::Relaxed);
+        self.hold_region_preview.store(NO_REGION, Ordering::Relaxed);
+        self.pointer_item_box.store(NO_REGION, Ordering::Relaxed);
+        self.pin_media_left_down.store(false, Ordering::Relaxed);
+        self.pin_media_left_presses.store(0, Ordering::Relaxed);
+        self.preview_alive_unix_ms.store(0, Ordering::Relaxed);
+        for btn in &self.pin_buttons {
+            btn.store(NO_REGION, Ordering::Relaxed);
+        }
+    }
 }
 
 /// How many viewers one run may have standing at once, which is how many blocks its section holds:
@@ -292,6 +368,7 @@ const SEAM_VIEWERS: usize = DETACHED_VIEWERS + 4;
 ///
 /// The section a run opens is one of these, which is what makes a viewer's block the same address in
 /// both processes (see `a_section_of_this_run`).
+#[repr(C)]
 pub(crate) struct SeamFacts {
     viewers: [ViewerFacts; SEAM_VIEWERS],
     /// Messages the tray side sends the preview side, and the other way, each with an event of its own
@@ -319,6 +396,10 @@ pub(crate) struct SeamFacts {
     /// Whether a Q-Dir pane is a listing the app previews a file in (see `Q_DIR_PREVIEWS`), for the same
     /// reason.
     q_dir_previews: AtomicBool,
+    /// Monotonic config revision counter bumped on live config publication.
+    config_generation: AtomicU64,
+    /// Set by tray on graceful exit so serving and detached viewers tear down cleanly before job close.
+    shutdown_requested: AtomicBool,
 }
 
 // Safety: every field is an atomic or a block of them, and the two rings are written through their own
@@ -339,12 +420,14 @@ impl SeamFacts {
             browse_dialog_previews: AtomicBool::new(true),
             everything_previews: AtomicBool::new(true),
             q_dir_previews: AtomicBool::new(true),
+            config_generation: AtomicU64::new(0),
+            shutdown_requested: AtomicBool::new(false),
         }
     }
 
     /// The block the viewer `pid` stands in, or `None` where no viewer of that pid is standing.
     fn facts_of(&'static self, pid: u32) -> Option<&'static ViewerFacts> {
-        if pid == 0 {
+        if pid == 0 || pid == CLAIMING_OWNER {
             return None;
         }
 
@@ -370,7 +453,8 @@ impl SeamFacts {
         }
 
         for (slot, block) in blocks.iter_mut().zip(self.viewers.iter()) {
-            *slot = (block.owner.load(Ordering::Acquire) != 0).then_some(block);
+            let owner = block.owner.load(Ordering::Acquire);
+            *slot = (owner != 0 && owner != CLAIMING_OWNER).then_some(block);
         }
 
         // Nothing is claimed: this is a run of one process drawing its own previews, and the block it
@@ -382,46 +466,42 @@ impl SeamFacts {
         blocks
     }
 
-    /// Claim a free block of this run for `pid`, answering its place in `viewers`.
-    ///
-    /// **A block is claimed once and by one process**, with a compare and swap on its owner: two viewers
-    /// begun at the same moment cannot stand in the same one, and the pid a block holds is what every
-    /// other process asks it by (see `facts_of`). `None` is every block held by a running process, which
-    /// a viewer's start-up is the one thing that can meet: it answers false to `join_the_seam_section`
-    /// and stops, rather than standing as a process with no facts to draw from.
-    ///
-    /// **A block nothing is standing in is taken, whether or not it was given back.** Nothing releases a
-    /// block when its viewer ends — a detached window's block ends with the window, and a viewer that dies
-    /// ends without telling anyone — so the second pass takes one whose owner is no longer running. That is
-    /// asked of the kernel rather than recorded anywhere (see `engine_processes::is_running`), and only on
-    /// a viewer's start-up path, where the syscall costs nothing an eye can see.
-    ///
-    /// **And it is swapped away from the pid seen in it, not from zero**, which is what keeps a block out
-    /// of two processes' hands: two viewers beginning together both find this block, and the swap fails for
-    /// whichever of them comes second. A pid Windows has since handed to another process answers as
-    /// running, and the block stays claimed — a block lost rather than a block shared.
-    fn claim_a_block(&'static self, pid: u32) -> Option<usize> {
+    /// Claim a free or dead-owner block of this run for `pid`, resetting all mutable fields before
+    /// publishing `pid` so concurrent readers never observe stale dead-viewer state.
+    fn claim_a_block(&self, pid: u32) -> Option<usize> {
+        self.claim_a_block_with(pid, crate::app::engine_processes::is_running)
+    }
+
+    fn claim_a_block_with(&self, pid: u32, is_alive: impl Fn(u32) -> bool) -> Option<usize> {
+        if pid == 0 || pid == CLAIMING_OWNER {
+            return None;
+        }
+
         for (at, block) in self.viewers.iter().enumerate() {
             if block
                 .owner
-                .compare_exchange(0, pid, Ordering::AcqRel, Ordering::Acquire)
+                .compare_exchange(0, CLAIMING_OWNER, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
+                block.reset();
+                block.owner.store(pid, Ordering::Release);
                 return Some(at);
             }
         }
 
         for (at, block) in self.viewers.iter().enumerate() {
             let gone = block.owner.load(Ordering::Acquire);
-            if gone == 0 || gone == pid || crate::app::engine_processes::is_running(gone) {
+            if gone == 0 || gone == CLAIMING_OWNER || gone == pid || is_alive(gone) {
                 continue;
             }
 
             if block
                 .owner
-                .compare_exchange(gone, pid, Ordering::AcqRel, Ordering::Acquire)
+                .compare_exchange(gone, CLAIMING_OWNER, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
+                block.reset();
+                block.owner.store(pid, Ordering::Release);
                 return Some(at);
             }
         }
@@ -435,10 +515,26 @@ impl SeamFacts {
     /// Asked before a pin is detached into a window of its own, which is the one road on this side that
     /// needs a block the run does not already have: the window keeps the block it stands in, and the tray
     /// begins a viewer for the hovers that one leaves (see `pin_detach::detach_the_pinned_window`).
-    fn a_block_can_be_had(&'static self) -> bool {
+    fn a_block_can_be_had(&self) -> bool {
         self.viewers.iter().any(|block| {
             let owner = block.owner.load(Ordering::Acquire);
-            owner == 0 || !crate::app::engine_processes::is_running(owner)
+            owner == 0
+                || (owner != CLAIMING_OWNER && !crate::app::engine_processes::is_running(owner))
+        })
+    }
+
+    /// Whether any claimed block belongs to a live process other than `exclude_pids`.
+    fn has_live_viewer_excluding(
+        &self,
+        exclude_pids: &[u32],
+        is_alive: impl Fn(u32) -> bool,
+    ) -> bool {
+        self.viewers.iter().any(|block| {
+            let owner = block.owner.load(Ordering::Acquire);
+            owner != 0
+                && owner != CLAIMING_OWNER
+                && !exclude_pids.contains(&owner)
+                && is_alive(owner)
         })
     }
 }
@@ -2896,27 +2992,49 @@ pub(crate) fn pinned_path() -> Option<PathBuf> {
     the_pin_block().and_then(a_pinned_path_of)
 }
 
-/// The name the block `facts` holds, or `None` where it holds none or was being written (see
-/// `publish_the_pinned_path`).
-fn a_pinned_path_of(facts: &'static ViewerFacts) -> Option<PathBuf> {
-    let before = facts.pin_path_writing.load(Ordering::Acquire);
-    if before & 1 == 1 {
-        return None;
+/// Bounded retry limit for seqlock readers under concurrent writes.
+const SEQLOCK_MAX_ATTEMPTS: usize = 64;
+
+fn seqlock_backoff(attempt: usize) {
+    if attempt & 7 == 7 {
+        std::thread::yield_now();
+    } else {
+        std::hint::spin_loop();
+    }
+}
+
+/// The name the block `facts` holds, retrying on concurrent writes up to `SEQLOCK_MAX_ATTEMPTS`.
+fn a_pinned_path_of(facts: &ViewerFacts) -> Option<PathBuf> {
+    let mut units = [0u16; SEAM_PIN_PATH_UNITS];
+    for attempt in 0..SEQLOCK_MAX_ATTEMPTS {
+        let before = facts.pin_path_writing.load(Ordering::Acquire);
+        if before & 1 == 1 {
+            seqlock_backoff(attempt);
+            continue;
+        }
+
+        let len = facts.pin_path_len.load(Ordering::Acquire) as usize;
+        if len == 0 || len > SEAM_PIN_PATH_UNITS {
+            if facts.pin_path_writing.load(Ordering::Acquire) != before {
+                seqlock_backoff(attempt);
+                continue;
+            }
+            return None;
+        }
+
+        for (at, slot) in units[..len].iter_mut().enumerate() {
+            *slot = facts.pin_path[at].load(Ordering::Relaxed) as u16;
+        }
+        std::sync::atomic::fence(Ordering::Acquire);
+        if facts.pin_path_writing.load(Ordering::Acquire) != before {
+            seqlock_backoff(attempt);
+            continue;
+        }
+
+        return Some(PathBuf::from(OsString::from_wide(&units[..len])));
     }
 
-    let len = facts.pin_path_len.load(Ordering::Acquire) as usize;
-    if len == 0 || len > SEAM_PIN_PATH_UNITS {
-        return None;
-    }
-
-    let units: Vec<u16> = (0..len)
-        .map(|at| facts.pin_path[at].load(Ordering::Relaxed) as u16)
-        .collect();
-    if facts.pin_path_writing.load(Ordering::Acquire) != before {
-        return None;
-    }
-
-    Some(PathBuf::from(OsString::from_wide(&units)))
+    None
 }
 
 /// Publish the file under the pointer, or `None` where the pointer is on no file: what a pin press names
@@ -2961,28 +3079,47 @@ pub(crate) fn publish_the_pointer_file(path: Option<&Path>) {
 /// counted and the loop reads it on a tick of its own, so the two are never the same instant; an ask that
 /// had already been answered is not one to answer again.
 pub(crate) fn take_the_pointer_file() -> Option<PathBuf> {
-    let facts = the_serving_facts();
-    let before = facts.pointer_path_writing.load(Ordering::Acquire);
-    if before & 1 == 1 {
-        return None;
+    take_pointer_file_from(the_serving_facts())
+}
+
+fn take_pointer_file_from(facts: &ViewerFacts) -> Option<PathBuf> {
+    let mut units = [0u16; SEAM_POINTER_PATH_UNITS];
+    for attempt in 0..SEQLOCK_MAX_ATTEMPTS {
+        let before = facts.pointer_path_writing.load(Ordering::Acquire);
+        if before & 1 == 1 {
+            seqlock_backoff(attempt);
+            continue;
+        }
+
+        let len = facts.pointer_path_len.load(Ordering::Acquire) as usize;
+        if len == 0 || len > SEAM_POINTER_PATH_UNITS {
+            if facts.pointer_path_writing.load(Ordering::Acquire) != before {
+                seqlock_backoff(attempt);
+                continue;
+            }
+            return None;
+        }
+
+        for (at, slot) in units[..len].iter_mut().enumerate() {
+            *slot = facts.pointer_path[at].load(Ordering::Relaxed) as u16;
+        }
+        std::sync::atomic::fence(Ordering::Acquire);
+        if facts.pointer_path_writing.load(Ordering::Acquire) != before {
+            seqlock_backoff(attempt);
+            continue;
+        }
+
+        // Only clear len if still matching our read, so a concurrent newer publish is not erased.
+        let _ = facts.pointer_path_len.compare_exchange(
+            len as u32,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        return Some(PathBuf::from(OsString::from_wide(&units[..len])));
     }
 
-    let len = facts.pointer_path_len.load(Ordering::Acquire) as usize;
-    if len == 0 || len > SEAM_POINTER_PATH_UNITS {
-        return None;
-    }
-
-    let units: Vec<u16> = (0..len)
-        .map(|at| facts.pointer_path[at].load(Ordering::Relaxed) as u16)
-        .collect();
-    if facts.pointer_path_writing.load(Ordering::Acquire) != before {
-        return None;
-    }
-
-    // Cleared before the name is answered, so the answer is the only copy there is.
-    facts.pointer_path_len.store(0, Ordering::Release);
-
-    Some(PathBuf::from(OsString::from_wide(&units)))
+    None
 }
 
 /// The number a path is published as, asked the same way on both sides so that the two answers are the
@@ -3504,6 +3641,13 @@ pub(crate) fn note_a_detached_viewer(pid: u32) {
     DETACHED_VIEWER_PIDS[at].store(pid, Ordering::Release);
 }
 
+#[cfg(test)]
+pub(crate) fn clear_detached_viewer_for_test(pid: u32) {
+    for slot in &DETACHED_VIEWER_PIDS {
+        let _ = slot.compare_exchange(pid, 0, Ordering::AcqRel, Ordering::Acquire);
+    }
+}
+
 /// Whether the process this run's previews are drawn in has become a window of its own: the viewer the
 /// hovers are served by has left, and one is owed (see `app::detach` and `app::viewer`).
 pub(crate) fn the_viewer_has_left() -> bool {
@@ -3517,6 +3661,56 @@ fn is_a_window_of_its_own(pid: u32) -> bool {
     DETACHED_VIEWER_PIDS
         .iter()
         .any(|slot| slot.load(Ordering::Acquire) == pid)
+}
+
+/// Current live-config publication generation.
+#[allow(dead_code)] // Consumed in Wave 2 live-config publication.
+pub(crate) fn config_generation() -> u64 {
+    the_run_facts().config_generation.load(Ordering::Acquire)
+}
+
+/// Bump live-config publication generation and return the new value.
+#[allow(dead_code)] // Consumed in Wave 2 live-config publication.
+pub(crate) fn bump_config_generation() -> u64 {
+    the_run_facts()
+        .config_generation
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
+}
+
+/// Signal all viewers (serving + detached) to tear down gracefully and wake their preview loops.
+pub(crate) fn request_shutdown() {
+    the_run_facts()
+        .shutdown_requested
+        .store(true, Ordering::Release);
+    wake_preview_loop();
+}
+
+/// Whether the tray has requested graceful shutdown.
+pub(crate) fn shutdown_requested() -> bool {
+    the_run_facts().shutdown_requested.load(Ordering::Acquire)
+}
+
+/// Whether any viewer slot belongs to a live process other than `exclude_pid`.
+pub(crate) fn any_live_viewer_other_than(exclude_pid: u32) -> bool {
+    the_run_facts()
+        .has_live_viewer_excluding(&[exclude_pid], crate::app::engine_processes::is_running)
+}
+
+/// Whether any detached viewer process of this run is still alive (checks both the detached PID ring
+/// and claimed seam blocks outside the tray and current serving viewer).
+pub(crate) fn has_active_detached_viewer_with(is_alive: impl Fn(u32) -> bool) -> bool {
+    let any_recorded = DETACHED_VIEWER_PIDS.iter().any(|slot| {
+        let pid = slot.load(Ordering::Acquire);
+        pid != 0 && is_alive(pid)
+    });
+    if any_recorded {
+        return true;
+    }
+
+    let tray_pid = std::process::id();
+    let serving_pid = THE_VIEWER.load(Ordering::Acquire);
+    the_run_facts().has_live_viewer_excluding(&[tray_pid, serving_pid], is_alive)
 }
 
 fn the_viewer_process() -> u32 {
@@ -4573,5 +4767,115 @@ mod tests {
             1,
             "and so did the press it counted for every window standing"
         );
+    }
+
+    #[test]
+    fn reclaiming_dead_viewer_slot_zeroes_all_stale_fields() {
+        let seam = SeamFacts::new();
+        // Fill every slot with dead PIDs and dirty mutable fields.
+        for (i, block) in seam.viewers.iter().enumerate() {
+            let dead_pid = 10_000 + i as u32;
+            block.owner.store(dead_pid, Ordering::Release);
+            block.pin_up.store(true, Ordering::Relaxed);
+            block.pin_path[0].store(u32::from(b'X'), Ordering::Relaxed);
+            block.pin_path_len.store(1, Ordering::Relaxed);
+            block.pin_path_writing.store(4, Ordering::Relaxed);
+            block.engine_hwnd.store(0x1234, Ordering::Relaxed);
+            block.engine_showing.store(true, Ordering::Relaxed);
+            block.pin_buttons[0].store(42, Ordering::Relaxed);
+            block.pin_presses.store(9, Ordering::Relaxed);
+            block.pin_end_requested.store(true, Ordering::Relaxed);
+        }
+
+        // Reclaim slot 0 for a new viewer PID (all previous PIDs report dead).
+        let slot = seam
+            .claim_a_block_with(99_999, |_| false)
+            .expect("dead slot must be reclaimed");
+        let block = &seam.viewers[slot];
+
+        assert_eq!(block.owner.load(Ordering::Acquire), 99_999);
+        assert!(!block.pin_up.load(Ordering::Acquire));
+        assert_eq!(block.pin_path_len.load(Ordering::Acquire), 0);
+        assert_eq!(block.pin_path_writing.load(Ordering::Acquire), 0);
+        assert_eq!(block.engine_hwnd.load(Ordering::Acquire), 0);
+        assert!(!block.engine_showing.load(Ordering::Acquire));
+        assert_eq!(block.pin_buttons[0].load(Ordering::Acquire), NO_REGION);
+        assert_eq!(block.pin_presses.load(Ordering::Acquire), 0);
+        assert!(!block.pin_end_requested.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn seqlock_readers_retry_under_concurrent_writes() {
+        use std::sync::Arc;
+
+        let facts = Arc::new(ViewerFacts::new());
+        let done = Arc::new(AtomicBool::new(false));
+        let path_a = PathBuf::from(r"C:\folder\alpha_file_name.png");
+        let path_b = PathBuf::from(r"C:\folder\beta_longer_file_name.mkv");
+        write_pin_path_into(&facts, &path_a);
+
+        // Concurrent write stress: no torn reads and high success rate under active updates.
+        let w_facts = Arc::clone(&facts);
+        let w_done = Arc::clone(&done);
+        let w_a = path_a.clone();
+        let w_b = path_b.clone();
+        let writer = std::thread::spawn(move || {
+            let mut flip = false;
+            while !w_done.load(Ordering::Relaxed) {
+                write_pin_path_into(&w_facts, if flip { &w_a } else { &w_b });
+                flip = !flip;
+                std::thread::sleep(Duration::from_micros(50));
+            }
+        });
+
+        let mut successes = 0usize;
+        for _ in 0..500 {
+            if let Some(read) = a_pinned_path_of(&facts) {
+                assert!(
+                    read == path_a || read == path_b,
+                    "torn seqlock read: {read:?}"
+                );
+                successes += 1;
+            }
+        }
+
+        done.store(true, Ordering::Relaxed);
+        let _ = writer.join();
+        assert!(
+            successes > 450,
+            "expected retrying seqlock to succeed overwhelmingly, got {successes}/500"
+        );
+    }
+
+    fn write_pin_path_into(facts: &ViewerFacts, path: &Path) {
+        facts.pin_path_writing.fetch_add(1, Ordering::AcqRel);
+        let mut len = 0;
+        for unit in path.as_os_str().encode_wide() {
+            facts.pin_path[len].store(u32::from(unit), Ordering::Relaxed);
+            len += 1;
+        }
+        facts.pin_path_len.store(len as u32, Ordering::Release);
+        facts.pin_path_writing.fetch_add(1, Ordering::Release);
+    }
+
+    #[test]
+    fn seam_tracks_shutdown_flag_config_generation_and_live_detached_viewers() {
+        let seam = SeamFacts::new();
+        assert!(!seam.shutdown_requested.load(Ordering::Acquire));
+        assert_eq!(seam.config_generation.load(Ordering::Acquire), 0);
+
+        seam.shutdown_requested.store(true, Ordering::Release);
+        assert!(seam.shutdown_requested.load(Ordering::Acquire));
+        assert_eq!(seam.config_generation.fetch_add(1, Ordering::AcqRel) + 1, 1);
+
+        // Tray PID 10, serving viewer PID 20, detached viewer PID 30.
+        seam.viewers[0].owner.store(10, Ordering::Release);
+        seam.viewers[1].owner.store(20, Ordering::Release);
+        seam.viewers[2].owner.store(30, Ordering::Release);
+
+        // Detached viewer 30 is alive -> blocks idle.
+        assert!(seam.has_live_viewer_excluding(&[10, 20], |pid| pid == 30));
+        // Once detached viewer 30 exits -> idle allowed.
+        assert!(!seam.has_live_viewer_excluding(&[10, 20], |_| false));
     }
 }

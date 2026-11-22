@@ -56,7 +56,7 @@ use super::submenus::{
     append_shuffle_item, append_tick_menu, append_video_engine_menu, cache_size_label,
     decode_budget_label, default_label, enable_preview_label, pin_key_label, pin_minimize_label,
     pin_update_label, remember_volume_label, system_menu_label, timing_delay_menu,
-    update_available_label, MF_RADIOCHECK,
+    update_available_label, MenuGuard, MF_RADIOCHECK,
 };
 
 use crate::app::seam::{send_preview, PreviewMessage};
@@ -98,18 +98,32 @@ use crate::{app::startup, CONFIG};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CheckMenuRadioItem, CreatePopupMenu, DestroyMenu, GetCursorPos,
-    SetForegroundWindow, TrackPopupMenu, HMENU, MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED,
-    MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    AppendMenuW, CheckMenuRadioItem, GetCursorPos, SetForegroundWindow, TrackPopupMenu, HMENU,
+    MF_BYCOMMAND, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_SEPARATOR, MF_STRING, MF_UNCHECKED,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN,
 };
 
+struct MenuOpenGuard;
+
+impl Drop for MenuOpenGuard {
+    fn drop(&mut self) {
+        updates::note_a_menu_is_open(false);
+    }
+}
+
 pub(super) unsafe fn show_context_menu(hwnd: HWND) {
-    let menu = CreatePopupMenu().unwrap();
+    let _ = try_show_context_menu(hwnd);
+}
+
+unsafe fn try_show_context_menu(hwnd: HWND) -> Option<()> {
+    let root_menu_guard = MenuGuard::new()?;
+    let menu = root_menu_guard.handle();
     // The row that asked for the update check is the one a silent install landing mid-click would
     // take away, so a menu is open from here to the moment `TrackPopupMenu` returns — before
     // `DestroyMenu`, since the install it holds back ends this app and a menu whose window is gone
     // is no menu at all (see `updates::note_a_menu_is_open`).
     updates::note_a_menu_is_open(true);
+    let open_guard = MenuOpenGuard;
     // Lock released before the publish: the message a publish sends locks `CONFIG` again on
     // the preview loop. A level this process wrote itself is not an edit, and is not reported
     // as one (see `reload_from_disk_keeping_our_own_levels`).
@@ -224,7 +238,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let pin_key_display = pin_key_label(&pin_key);
     let pin_label = format!("Enable ({pin_key_display})");
     let pin_label_wide: Vec<u16> = pin_label.encode_utf16().chain(std::iter::once(0)).collect();
-    let pin_menu = CreatePopupMenu().unwrap();
+    let pin_menu_guard = MenuGuard::new()?;
+    let pin_menu = pin_menu_guard.handle();
     let _ = AppendMenuW(
         pin_menu,
         MF_STRING
@@ -258,7 +273,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // pin that follows nothing has no update to come forward for, and one that follows nothing
     // does not follow a hover either. A row that could be ticked without effect would be a setting
     // a user cannot tell from one that does nothing.
-    let update_menu = CreatePopupMenu().unwrap();
+    let update_menu_guard = MenuGuard::new()?;
+    let update_menu = update_menu_guard.handle();
     append_labeled_item(
         update_menu,
         MF_STRING | if pin_update { MF_CHECKED } else { MF_UNCHECKED },
@@ -302,12 +318,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_PIN_UPDATE_HOVER as usize,
         w!("On Hover"),
     );
-    let _ = AppendMenuW(
-        pin_menu,
-        MF_STRING | MF_POPUP,
-        update_menu.0 as usize,
-        w!("Update Preview"),
-    );
+    let _ = update_menu_guard.append_to(pin_menu, MF_STRING, w!("Update Preview"));
 
     // The `Minimize` submenu: where a pin the minimize button puts away goes. The two
     // places are one of two rather than a switch — a
@@ -319,7 +330,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // on Minimize` rows hang under the kind's own `Pin Mode` instead, because a film and a sound
     // are two different things to want quiet and each kind's submenu is the one that knows
     // which of the two is on screen (see `append_pause_minimized_item`).
-    let minimize_menu = CreatePopupMenu().unwrap();
+    let minimize_menu_guard = MenuGuard::new()?;
+    let minimize_menu = minimize_menu_guard.handle();
     let minimize_flag = |candidate: PinMinimizeTo| {
         MF_STRING
             | if pin_minimize_to == candidate {
@@ -340,12 +352,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_PIN_MINIMIZE_TASKBAR,
         &pin_minimize_label(PinMinimizeTo::Taskbar),
     );
-    let _ = AppendMenuW(
-        pin_menu,
-        MF_STRING | MF_POPUP,
-        minimize_menu.0 as usize,
-        w!("Minimize"),
-    );
+    let _ = minimize_menu_guard.append_to(pin_menu, MF_STRING, w!("Minimize"));
 
     // The `Navigation` submenu: four anchors — Image, Video, Audio, Others, in menu
     // order — each with its own All/Same Category pair. The walk is anchored on the first
@@ -359,12 +366,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         pin_nav_others,
     );
 
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        pin_menu.0 as usize,
-        w!("Pin Mode"),
-    );
+    let _ = pin_menu_guard.append_to(menu, MF_STRING, w!("Pin Mode"));
 
     // Add the "Preview Types" submenu: one gate per kind of preview, on by
     // default, in three groups — what is looked at and heard, what is
@@ -391,7 +393,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         (PreviewType::Design, ID_TRAY_TYPE_DESIGN, w!("Design")),
         (PreviewType::Models, ID_TRAY_TYPE_MODELS, w!("3D")),
     ];
-    let types_menu = CreatePopupMenu().unwrap();
+    let types_menu_guard = MenuGuard::new()?;
+    let types_menu = types_menu_guard.handle();
 
     for (index, (kind, id, label)) in kinds.into_iter().enumerate() {
         // The three groups — media, things read, and graphics — are
@@ -411,12 +414,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         let _ = AppendMenuW(types_menu, flags, id as usize, label);
     }
 
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        types_menu.0 as usize,
-        w!("Preview Types"),
-    );
+    let _ = types_menu_guard.append_to(menu, MF_STRING, w!("Preview Types"));
 
     // The `Preview Settings` submenu, below `Preview Types`: one half per kind that has
     // settings of its own beyond whether it previews at all — what its previews are like, the
@@ -485,7 +483,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
         ));
 
-    let preview_settings = CreatePopupMenu().unwrap();
+    let preview_settings_guard = MenuGuard::new()?;
+    let preview_settings = preview_settings_guard.handle();
     let append_levels = |levels: HMENU, current: u32, base: u16, default: u32| {
         // Largest first, which is the order a level is looked for in: a pointer crossing a folder
         // of sounds is most often turning one down, and the whole of the scale standing at the top
@@ -581,7 +580,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             );
         };
 
-    let video_levels = CreatePopupMenu().unwrap();
+    let video_levels_guard = MenuGuard::new()?;
+    let video_levels = video_levels_guard.handle();
     append_switches(
         video_levels,
         normalize_video,
@@ -597,7 +597,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_VIDEO_VOLUME,
     );
 
-    let audio_levels = CreatePopupMenu().unwrap();
+    let audio_levels_guard = MenuGuard::new()?;
+    let audio_levels = audio_levels_guard.handle();
     append_switches(
         audio_levels,
         normalize_audio,
@@ -617,19 +618,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // kind: what a film and a sound are heard at is one question asked of both, so it is one
     // menu with a half apiece rather than a row of the film's and the sound's halves of
     // `Preview Settings` (see `append_switches` and `append_levels`).
-    let volume_menu = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        volume_menu,
-        MF_STRING | MF_POPUP,
-        video_levels.0 as usize,
-        w!("Video"),
-    );
-    let _ = AppendMenuW(
-        volume_menu,
-        MF_STRING | MF_POPUP,
-        audio_levels.0 as usize,
-        w!("Audio"),
-    );
+    let volume_menu_guard = MenuGuard::new()?;
+    let volume_menu = volume_menu_guard.handle();
+    let _ = video_levels_guard.append_to(volume_menu, MF_STRING, w!("Video"));
+    let _ = audio_levels_guard.append_to(volume_menu, MF_STRING, w!("Audio"));
 
     // The picture kind's own half, above the film's: the two questions a picture answers that
     // no other kind's rows answer for it — whether a *pinned* one takes the next file of the
@@ -646,7 +638,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // offers the three backdrops that fill a band rather than the four a preview can be drawn
     // over, and the paint reads it only for a picture with no transparency in it (see
     // `pinned_band_backdrop`).
-    let image_pin_mode = CreatePopupMenu().unwrap();
+    let image_pin_mode_guard = MenuGuard::new()?;
+    let image_pin_mode = image_pin_mode_guard.handle();
     append_shuffle_item(
         image_pin_mode,
         ID_TRAY_IMAGE_SHUFFLE,
@@ -665,13 +658,9 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         zoom_background,
         DEFAULT_ZOOM_BACKGROUND,
     );
-    let image_menu = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        image_menu,
-        MF_STRING | MF_POPUP,
-        image_pin_mode.0 as usize,
-        w!("Pin Mode"),
-    );
+    let image_menu_guard = MenuGuard::new()?;
+    let image_menu = image_menu_guard.handle();
+    let _ = image_pin_mode_guard.append_to(image_menu, MF_STRING, w!("Pin Mode"));
 
     // The `General` half, above the kinds and before the picture's own: whether a preview is made
     // where a **browse dialog** is showing. It is not a question about a kind of file — the same
@@ -693,7 +682,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_EVERYTHING_PREVIEWS,
             DEFAULT_Q_DIR_PREVIEWS,
         ));
-    let general = CreatePopupMenu().unwrap();
+    let general_guard = MenuGuard::new()?;
+    let general = general_guard.handle();
     append_labeled_item(
         general,
         MF_STRING
@@ -731,26 +721,17 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_Q_DIR_PREVIEWS,
         "Enable in Q-Dir",
     );
-    let _ = AppendMenuW(
-        preview_settings,
-        MF_STRING | MF_POPUP,
-        general.0 as usize,
-        w!("General"),
-    );
+    let _ = general_guard.append_to(preview_settings, MF_STRING, w!("General"));
 
-    let _ = AppendMenuW(
-        preview_settings,
-        MF_STRING | MF_POPUP,
-        image_menu.0 as usize,
-        w!("Image"),
-    );
+    let _ = image_menu_guard.append_to(preview_settings, MF_STRING, w!("Image"));
 
     // The film kind's own rows: whether a hovered film goes round at the end of
     // it, and what a *pinned* one does — whether its forward steps shuffle, and what its end
     // does, which is stop there, go round, or step on to the next file that the `Shuffle` row
     // decides between the file beside it and a random one (see `append_loop_item` and
     // `append_pin_mode_menu`).
-    let video_preview = CreatePopupMenu().unwrap();
+    let video_preview_guard = MenuGuard::new()?;
+    let video_preview = video_preview_guard.handle();
     // The film's own row, above `Loop`: whether its own subtitle tracks are probed for and
     // copied out at all — a switch about a film's picture rather than a level, so it is a row
     // of `Preview Settings → Video` and the film's alone and not the sound's (see
@@ -784,12 +765,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         pin_video_end_of_file,
         DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
     );
-    let _ = AppendMenuW(
-        preview_settings,
-        MF_STRING | MF_POPUP,
-        video_preview.0 as usize,
-        w!("Video"),
-    );
+    let _ = video_preview_guard.append_to(preview_settings, MF_STRING, w!("Video"));
 
     // And the sound kind's own: the same `Loop` row and a `Seek` row of its own, with the
     // `Pin Mode` submenu below them — where in a file a hovered sound starts as the `Seek`
@@ -809,7 +785,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| c.pin_mode_audio_playlist_always_open)
         .unwrap_or(DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN);
-    let audio_preview = CreatePopupMenu().unwrap();
+    let audio_preview_guard = MenuGuard::new()?;
+    let audio_preview = audio_preview_guard.handle();
     append_loop_item(
         audio_preview,
         ID_TRAY_AUDIO_LOOP,
@@ -828,26 +805,24 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         pin_audio_end_of_file,
         DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     );
-    append_pin_seek_menu_renamed(audio_pin_mode, w!("Seek"), pin_mode_audio_seek);
-    append_playlist_menu(
-        audio_pin_mode,
-        ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
-        pin_playlist_always_open,
-        ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
-        pin_camera_follows,
-    );
-    let _ = AppendMenuW(
-        preview_settings,
-        MF_STRING | MF_POPUP,
-        audio_preview.0 as usize,
-        w!("Audio"),
-    );
+    if let Some(audio_pin_mode) = audio_pin_mode {
+        append_pin_seek_menu_renamed(audio_pin_mode, w!("Seek"), pin_mode_audio_seek);
+        append_playlist_menu(
+            audio_pin_mode,
+            ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
+            pin_playlist_always_open,
+            ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
+            pin_camera_follows,
+        );
+    }
+    let _ = audio_preview_guard.append_to(preview_settings, MF_STRING, w!("Audio"));
 
     // Add the "Text" submenu: the size and Markdown mode a text preview is
     // painted with. What a text preview *is* rather than what it shows — the scrollbar, the
     // selection and the keys that copy it — is the pin's business rather than a setting's: a
     // text preview pinned with the key becomes one to work in (see the pin in `preview_window`).
-    let text_menu = CreatePopupMenu().unwrap();
+    let text_menu_guard = MenuGuard::new()?;
+    let text_menu = text_menu_guard.handle();
 
     // Add the Theme submenu
     let theme = CONFIG.lock().map(|c| c.theme).unwrap_or(TextTheme::Light);
@@ -859,7 +834,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let mut custom_themes = theme_files::names();
     custom_themes.truncate(MAX_TRAY_CUSTOM_THEMES);
 
-    let theme_menu = CreatePopupMenu().unwrap();
+    let theme_menu_guard = MenuGuard::new()?;
+    let theme_menu = theme_menu_guard.handle();
 
     // A file theme that no longer loads is painted with the default — see
     // `text_theme::loaded` — so the default is what is marked while the name it
@@ -923,7 +899,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| sanitize_text_font_scale_percent(c.text_font_scale_percent))
         .unwrap_or(DEFAULT_TEXT_FONT_SCALE_PERCENT);
-    let font_menu = CreatePopupMenu().unwrap();
+    let font_menu_guard = MenuGuard::new()?;
+    let font_menu = font_menu_guard.handle();
 
     let font_flag = |percent: u32| {
         MF_STRING
@@ -953,19 +930,15 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             PCWSTR(font_labels[index].as_ptr()),
         );
     }
-    let _ = AppendMenuW(
-        text_menu,
-        MF_STRING | MF_POPUP,
-        font_menu.0 as usize,
-        w!("Font Size"),
-    );
+    let _ = font_menu_guard.append_to(text_menu, MF_STRING, w!("Font Size"));
 
     // Add the Markdown submenu
     let markdown_mode = CONFIG
         .lock()
         .map(|c| c.markdown_mode)
         .unwrap_or(MarkdownMode::Rendered);
-    let markdown_menu = CreatePopupMenu().unwrap();
+    let markdown_menu_guard = MenuGuard::new()?;
+    let markdown_menu = markdown_menu_guard.handle();
 
     let markdown_flag = |candidate: MarkdownMode| {
         MF_STRING
@@ -987,12 +960,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_MARKDOWN_SOURCE as usize,
         w!("Source"),
     );
-    let _ = AppendMenuW(
-        text_menu,
-        MF_STRING | MF_POPUP,
-        markdown_menu.0 as usize,
-        w!("Markdown"),
-    );
+    let _ = markdown_menu_guard.append_to(text_menu, MF_STRING, w!("Markdown"));
 
     // Whether a page of HTML is drawn by the browser engine rather than shown as its markup.
     // The whole menu is built from the configuration each time it is opened, so this is read
@@ -1045,12 +1013,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Don't Preview Secret Files"),
     );
 
-    let _ = AppendMenuW(
-        preview_settings,
-        MF_STRING | MF_POPUP,
-        text_menu.0 as usize,
-        w!("Text"),
-    );
+    let _ = text_menu_guard.append_to(preview_settings, MF_STRING, w!("Text"));
 
     // The document kind's own half: what a *pinned* document does, which is two rows — whether the
     // pin hands the document to Chromium's own viewer at all, and, where it does, whose the keyboard
@@ -1069,7 +1032,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| c.pdf_full_mode)
         .unwrap_or(DEFAULT_PDF_FULL_MODE);
-    let pdf_pin_mode = CreatePopupMenu().unwrap();
+    let pdf_pin_mode_guard = MenuGuard::new()?;
+    let pdf_pin_mode = pdf_pin_mode_guard.handle();
     append_labeled_item(
         pdf_pin_mode,
         MF_STRING
@@ -1100,19 +1064,10 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_PDF_AUTOFOCUS,
         &default_label("Autofocus on PDF", DEFAULT_PDF_AUTOFOCUS),
     );
-    let pdf_menu = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        pdf_menu,
-        MF_STRING | MF_POPUP,
-        pdf_pin_mode.0 as usize,
-        w!("Pin Mode"),
-    );
-    let _ = AppendMenuW(
-        preview_settings,
-        MF_STRING | MF_POPUP,
-        pdf_menu.0 as usize,
-        w!("PDF"),
-    );
+    let pdf_menu_guard = MenuGuard::new()?;
+    let pdf_menu = pdf_menu_guard.handle();
+    let _ = pdf_pin_mode_guard.append_to(pdf_menu, MF_STRING, w!("Pin Mode"));
+    let _ = pdf_menu_guard.append_to(preview_settings, MF_STRING, w!("PDF"));
 
     // The theme no longer hangs on the top menu beside the text preview it themes: it is
     // moved into `System`, between the two rows about this app's own place in the machine and
@@ -1123,12 +1078,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // And the whole of it goes on the top menu below `Preview Types`, one row rather than
     // three: the kinds it holds are the three that have settings beyond whether they preview
     // at all, which is what `Preview Types` answers for them.
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        preview_settings.0 as usize,
-        w!("Preview Settings"),
-    );
+    let _ = preview_settings_guard.append_to(menu, MF_STRING, w!("Preview Settings"));
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 
@@ -1136,7 +1086,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // a hover waits before its preview opens, how long the same file is held off after its
     // preview was dismissed, how long the pointer must be still before anything previews at
     // all, and what the trigger key does.
-    let timing_menu = CreatePopupMenu().unwrap();
+    let timing_menu_guard = MenuGuard::new()?;
+    let timing_menu = timing_menu_guard.handle();
 
     // Whether the keyboard driving Explorer holds a parked pointer back instead of the file
     // under it previewing: the first row here, the one switch among the submenu's delays and
@@ -1168,7 +1119,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             )
         })
         .unwrap_or(("alt".to_string(), TriggerKeyMode::Disable, true));
-    let trigger_menu = CreatePopupMenu().unwrap();
+    let trigger_menu_guard = MenuGuard::new()?;
+    let trigger_menu = trigger_menu_guard.handle();
 
     let mut trigger_key_chars = trigger_key.chars();
     let trigger_key_display = match trigger_key_chars.next() {
@@ -1238,12 +1190,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_BYCOMMAND.0,
     );
 
-    let _ = AppendMenuW(
-        timing_menu,
-        MF_STRING | MF_POPUP,
-        trigger_menu.0 as usize,
-        PCWSTR(trigger_label_wide.as_ptr()),
-    );
+    let _ =
+        trigger_menu_guard.append_to(timing_menu, MF_STRING, PCWSTR(trigger_label_wide.as_ptr()));
 
     // Add the "Hover Delay" submenu: how long the pointer rests on a file
     // before a preview is put up for it.
@@ -1251,14 +1199,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| c.hover_delay_ms)
         .unwrap_or(DEFAULT_HOVER_DELAY_MS);
-    let delay_menu = timing_delay_menu(ID_TRAY_DELAY_BASE, hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
-
-    let _ = AppendMenuW(
-        timing_menu,
-        MF_STRING | MF_POPUP,
-        delay_menu.0 as usize,
-        w!("Hover Delay"),
-    );
+    let delay_menu = timing_delay_menu(ID_TRAY_DELAY_BASE, hover_delay_ms, DEFAULT_HOVER_DELAY_MS)?;
+    let _ = delay_menu.append_to(timing_menu, MF_STRING, w!("Hover Delay"));
 
     // Add the Rehover Delay submenu: how long the same file waits before a preview of it
     // is put up again.
@@ -1270,14 +1212,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_REHOVER_DELAY_BASE,
         same_file_rehover_delay_ms,
         DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
-    );
-
-    let _ = AppendMenuW(
-        timing_menu,
-        MF_STRING | MF_POPUP,
-        rehover_delay_menu.0 as usize,
-        w!("Rehover Delay"),
-    );
+    )?;
+    let _ = rehover_delay_menu.append_to(timing_menu, MF_STRING, w!("Rehover Delay"));
 
     // Add the Settling Delay submenu: how long the pointer must be still before a
     // preview may open for anything. It is what a hand crossing a list waits out before
@@ -1290,25 +1226,15 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         ID_TRAY_SETTLING_DELAY_BASE,
         settling_delay_ms,
         DEFAULT_SETTLING_DELAY_MS,
-    );
+    )?;
+    let _ = settling_delay_menu.append_to(timing_menu, MF_STRING, w!("Settling Delay"));
 
-    let _ = AppendMenuW(
-        timing_menu,
-        MF_STRING | MF_POPUP,
-        settling_delay_menu.0 as usize,
-        w!("Settling Delay"),
-    );
-
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        timing_menu.0 as usize,
-        w!("Timing"),
-    );
+    let _ = timing_menu_guard.append_to(menu, MF_STRING, w!("Timing"));
 
     // Add the "Placement" submenu: where a preview lands relative to the cursor or
     // the focused item.
-    let placement_menu = CreatePopupMenu().unwrap();
+    let placement_menu_guard = MenuGuard::new()?;
+    let placement_menu = placement_menu_guard.handle();
 
     // Add the Position submenu: which side a preview takes. The two placements are one
     // setting shown two ways, so they carry a radio mark each.
@@ -1316,7 +1242,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .lock()
         .map(|c| c.follow_cursor)
         .unwrap_or(DEFAULT_FOLLOW_CURSOR);
-    let position_menu = CreatePopupMenu().unwrap();
+    let position_menu_guard = MenuGuard::new()?;
+    let position_menu = position_menu_guard.handle();
 
     // The two placements are one setting shown two ways, so the one it starts at carries
     // the default mark — read from that setting, which is what puts it on `Best Position`
@@ -1343,12 +1270,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         MF_BYCOMMAND.0,
     );
 
-    let _ = AppendMenuW(
-        placement_menu,
-        MF_STRING | MF_POPUP,
-        position_menu.0 as usize,
-        w!("Position"),
-    );
+    let _ = position_menu_guard.append_to(placement_menu, MF_STRING, w!("Position"));
 
     // Add the Avoid submenu: how far a preview is kept off the item it is about —
     // nothing, the item's name alone, the name with the column it is drawn in, or
@@ -1361,16 +1283,12 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
 
     append_avoid_menu(placement_menu, w!("Avoid"), ID_TRAY_AVOID_BASE, avoid_mode);
 
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        placement_menu.0 as usize,
-        w!("Placement"),
-    );
+    let _ = placement_menu_guard.append_to(menu, MF_STRING, w!("Placement"));
 
     // Add the "Scaling" submenu below it: how large a preview of each kind is drawn,
     // rather than where it lands.
-    let scaling_menu = CreatePopupMenu().unwrap();
+    let scaling_menu_guard = MenuGuard::new()?;
+    let scaling_menu = scaling_menu_guard.handle();
 
     // Add the Image, Video, Animated and Audio submenus: how large
     // a picture, a video, a frame that moves and a sound's card are
@@ -1529,12 +1447,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_MODEL_SCALE,
     );
 
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        scaling_menu.0 as usize,
-        w!("Scaling"),
-    );
+    let _ = scaling_menu_guard.append_to(menu, MF_STRING, w!("Scaling"));
 
     // Add the "Background" submenu: what a preview is drawn over, which is a question
     // a picture and a document answer differently — a picture's transparency is the
@@ -1567,7 +1480,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_DDS_BACKGROUND,
             DEFAULT_DESIGN_BACKGROUND,
         ));
-    let background_menu = CreatePopupMenu().unwrap();
+    let background_menu_guard = MenuGuard::new()?;
+    let background_menu = background_menu_guard.handle();
 
     // Each half is handed its own default, since the backdrops a half offers are not the same
     // ones everywhere: a picture, a drawing and a design document start at the squares, a
@@ -1624,12 +1538,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         DEFAULT_DESIGN_BACKGROUND,
     );
 
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        background_menu.0 as usize,
-        w!("Background"),
-    );
+    let _ = background_menu_guard.append_to(menu, MF_STRING, w!("Background"));
 
     // Add the "Volume" submenu, below `Background` and above `Performance`: what a film and a
     // sound are heard at, one half apiece, with each half's own two switches above its levels.
@@ -1637,19 +1546,15 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // because the level is the whole of what a film and a sound answer the same way, and the
     // other rows of those halves — the film's subtitles, the loop, the pin's own — are not that
     // question at all (see `volume_menu`).
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        volume_menu.0 as usize,
-        w!("Volume"),
-    );
+    let _ = volume_menu_guard.append_to(menu, MF_STRING, w!("Volume"));
 
     // Add the "Performance" submenu: what the app costs while it is working — what it holds on to
     // between hovers, on disk and in memory, and what one file may be answered for. It is the block
     // above `Engine`, where the engines themselves are named: what is here is what is spent while
     // they work. Its two largest children are `Disk Cache` and `Memory`, which is the one
     // distinction that decides which of them a setting belongs under.
-    let performance_menu = CreatePopupMenu().unwrap();
+    let performance_menu_guard = MenuGuard::new()?;
+    let performance_menu = performance_menu_guard.handle();
 
     // Add the "Disk Cache" submenu: what a preview's own *files* may cost between hovers — the
     // pages a document was drawn as, which are files under the temp folder; the pictures the
@@ -1675,50 +1580,53 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             DEFAULT_GENERAL_DISK_CACHE_MB,
         ));
 
-    let disk_cache_menu = CreatePopupMenu().unwrap();
+    let disk_cache_menu_guard = MenuGuard::new()?;
+    let disk_cache_menu = disk_cache_menu_guard.handle();
 
     // One sizes menu, built for whichever cache is asking: `AppendMenuW` is handed a pointer, so
     // the wide strings have to outlive the call that lists them, and each size's label says the
     // one thing that differs between the caches — the size its own cache starts at.
-    let sizes_menu = |base: u16, held: u32, default_mb: u32, choices: &[u32]| {
-        let menu = unsafe { CreatePopupMenu().unwrap() };
-        let labels: Vec<Vec<u16>> = choices
-            .iter()
-            .map(|megabytes| {
-                cache_size_label(*megabytes, default_mb)
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect()
-            })
-            .collect();
+    let sizes_menu =
+        |base: u16, held: u32, default_mb: u32, choices: &[u32]| -> Option<MenuGuard> {
+            let menu_guard = MenuGuard::new()?;
+            let menu = menu_guard.handle();
+            let labels: Vec<Vec<u16>> = choices
+                .iter()
+                .map(|megabytes| {
+                    cache_size_label(*megabytes, default_mb)
+                        .encode_utf16()
+                        .chain(std::iter::once(0))
+                        .collect()
+                })
+                .collect();
 
-        for (index, _) in choices.iter().enumerate() {
-            let _ = unsafe {
-                AppendMenuW(
-                    menu,
-                    MF_STRING,
-                    (base + index as u16) as usize,
-                    PCWSTR(labels[index].as_ptr()),
-                )
-            };
-        }
+            for (index, _) in choices.iter().enumerate() {
+                let _ = unsafe {
+                    AppendMenuW(
+                        menu,
+                        MF_STRING,
+                        (base + index as u16) as usize,
+                        PCWSTR(labels[index].as_ptr()),
+                    )
+                };
+            }
 
-        // A size the menu does not offer — one a hand-edited `config.ini` asked for — leaves every
-        // item unmarked rather than marking the nearest one.
-        if let Some(index) = choices.iter().position(|megabytes| *megabytes == held) {
-            let _ = unsafe {
-                CheckMenuRadioItem(
-                    menu,
-                    base as u32,
-                    (base + choices.len() as u16 - 1) as u32,
-                    (base + index as u16) as u32,
-                    MF_BYCOMMAND.0,
-                )
-            };
-        }
+            // A size the menu does not offer — one a hand-edited `config.ini` asked for — leaves every
+            // item unmarked rather than marking the nearest one.
+            if let Some(index) = choices.iter().position(|megabytes| *megabytes == held) {
+                let _ = unsafe {
+                    CheckMenuRadioItem(
+                        menu,
+                        base as u32,
+                        (base + choices.len() as u16 - 1) as u32,
+                        (base + index as u16) as u32,
+                        MF_BYCOMMAND.0,
+                    )
+                };
+            }
 
-        menu
-    };
+            Some(menu_guard)
+        };
 
     // The frames a decoded picture is shown as, which are held in RAM between hovers: the one
     // cache of the four that is not on disk, and the reason it is listed under `Memory` rather
@@ -1728,7 +1636,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         image_cache_mb,
         DEFAULT_IMAGE_CACHE_MB,
         &IMAGE_CACHE_SIZE_CHOICES_MB[..],
-    );
+    )?;
 
     for (name, base, held, default_mb, choices) in [
         (
@@ -1753,21 +1661,11 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
             &DISK_CACHE_SIZE_CHOICES_MB[..],
         ),
     ] {
-        let sizes = sizes_menu(base, held, default_mb, choices);
-        let _ = AppendMenuW(
-            disk_cache_menu,
-            MF_STRING | MF_POPUP,
-            sizes.0 as usize,
-            name,
-        );
+        let sizes = sizes_menu(base, held, default_mb, choices)?;
+        let _ = sizes.append_to(disk_cache_menu, MF_STRING, name);
     }
 
-    let _ = AppendMenuW(
-        performance_menu,
-        MF_STRING | MF_POPUP,
-        disk_cache_menu.0 as usize,
-        w!("Disk Cache"),
-    );
+    let _ = disk_cache_menu_guard.append_to(performance_menu, MF_STRING, w!("Disk Cache"));
 
     // Add the "Memory" submenu, which is everything here that is spent in RAM rather than on
     // disk: the frames a decoded image is shown as, which are held between hovers; the ceiling
@@ -1784,7 +1682,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     let (decode_budget_gb, animated_webp_budget_mb) =
         wrapped.unwrap_or((DEFAULT_DECODE_BUDGET_GB, DEFAULT_ANIMATED_WEBP_BUDGET_MB));
 
-    let budget_menu = CreatePopupMenu().unwrap();
+    let budget_menu_guard = MenuGuard::new()?;
+    let budget_menu = budget_menu_guard.handle();
 
     let budget_labels: Vec<Vec<u16>> = DECODE_BUDGET_CHOICES_GB
         .iter()
@@ -1823,7 +1722,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // And the room a pinned picture's run of frames is given, as a submenu of its own beside the
     // ceiling: it is what a drag of an animated picture spends, and what a machine with less
     // memory to spare turns down first.
-    let animated_webp_menu = CreatePopupMenu().unwrap();
+    let animated_webp_menu_guard = MenuGuard::new()?;
+    let animated_webp_menu = animated_webp_menu_guard.handle();
     let animated_webp_labels: Vec<Vec<u16>> = ANIMATED_WEBP_BUDGET_CHOICES_MB
         .iter()
         .map(|megabytes| {
@@ -1863,33 +1763,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // run a pinned picture's track reads (see `pin_index`). The ceiling is above the two because
     // it decides whether a file is answered at all, which is the question a hand with a machine
     // that struggles reaches for first.
-    let memory_menu = CreatePopupMenu().unwrap();
-    let _ = AppendMenuW(
-        memory_menu,
-        MF_STRING | MF_POPUP,
-        budget_menu.0 as usize,
-        w!("Decode Budget"),
-    );
+    let memory_menu_guard = MenuGuard::new()?;
+    let memory_menu = memory_menu_guard.handle();
+    let _ = budget_menu_guard.append_to(memory_menu, MF_STRING, w!("Decode Budget"));
     let _ = AppendMenuW(memory_menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(
-        memory_menu,
-        MF_STRING | MF_POPUP,
-        image_menu.0 as usize,
-        w!("Image"),
-    );
-    let _ = AppendMenuW(
-        memory_menu,
-        MF_STRING | MF_POPUP,
-        animated_webp_menu.0 as usize,
-        w!("Animated Image"),
-    );
+    let _ = image_menu.append_to(memory_menu, MF_STRING, w!("Image"));
+    let _ = animated_webp_menu_guard.append_to(memory_menu, MF_STRING, w!("Animated Image"));
 
-    let _ = AppendMenuW(
-        performance_menu,
-        MF_STRING | MF_POPUP,
-        memory_menu.0 as usize,
-        w!("Memory"),
-    );
+    let _ = memory_menu_guard.append_to(performance_menu, MF_STRING, w!("Memory"));
 
     // Add the "Explorer Poll" submenu: how often the loop looks at the
     // pointer's world while Explorer has focus. It is the app's own
@@ -1934,18 +1815,14 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         w!("Hardware Acceleration (MPV Only)"),
     );
 
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        performance_menu.0 as usize,
-        w!("Performance"),
-    );
+    let _ = performance_menu_guard.append_to(menu, MF_STRING, w!("Performance"));
 
     // Add the "Engine" submenu: which engine a preview is asked of, and how long each engine
     // this app starts is kept — the choice of engine where a kind of document has two of them,
     // and a TTL apiece for the applications this app leaves running between hovers. It is the
     // block below `Performance`, which is about what those engines cost while they are up.
-    let engine_menu = CreatePopupMenu().unwrap();
+    let engine_menu_guard = MenuGuard::new()?;
+    let engine_menu = engine_menu_guard.handle();
 
     // Add the "Video Engine" and "Office Engine" submenus: which
     // engine each kind of document is asked of, where there is a
@@ -2085,12 +1962,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         crate::formats::f3d_render::available(),
     );
 
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        engine_menu.0 as usize,
-        w!("Engine"),
-    );
+    let _ = engine_menu_guard.append_to(menu, MF_STRING, w!("Engine"));
 
     // Add the "Components" submenu: every engine and every codec extension a preview can lean
     // on, each marked with whether this machine has it. The list is what is installed
@@ -2135,7 +2007,8 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // answer rather than the configuration's), how it looks, and the
     // configuration's own file and resets. The version the build is of is the submenu's own
     // label, which is where a user looks to see which build is running.
-    let system_menu = CreatePopupMenu().unwrap();
+    let system_menu_guard = MenuGuard::new()?;
+    let system_menu = system_menu_guard.handle();
 
     // Whether the app asks GitHub for a newer release on its own: the switch the
     // passive checks above answer to — the start's, every opening's, and the tray
@@ -2204,12 +2077,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
     // It sits here because the two rows above are the app's own place in the machine and the
     // two below are its own file, and neither is about how anything is drawn — the look is
     // the app's own rather than a preview's, so it belongs with the rows about the app.
-    let _ = AppendMenuW(
-        system_menu,
-        MF_STRING | MF_POPUP,
-        theme_menu.0 as usize,
-        w!("Theme"),
-    );
+    let _ = theme_menu_guard.append_to(system_menu, MF_STRING, w!("Theme"));
 
     let _ = AppendMenuW(system_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
@@ -2264,12 +2132,7 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING | MF_POPUP,
-        system_menu.0 as usize,
-        PCWSTR(system_label_wide.as_ptr()),
-    );
+    let _ = system_menu_guard.append_to(menu, MF_STRING, PCWSTR(system_label_wide.as_ptr()));
 
     // Add Exit
     let _ = AppendMenuW(menu, MF_STRING, ID_TRAY_EXIT as usize, w!("Exit"));
@@ -2289,8 +2152,9 @@ pub(super) unsafe fn show_context_menu(hwnd: HWND) {
         None,
     )
     .ok();
-    updates::note_a_menu_is_open(false);
-    let _ = DestroyMenu(menu);
+    drop(open_guard);
+    drop(root_menu_guard);
+    Some(())
 }
 
 /// What the `Subtitles` row is called: `Subtitles (MPV)` where mpv is the engine that will play —

@@ -114,13 +114,7 @@ fn main() {
     // reap what earlier runs left behind, and put an icon in the tray.
     match app::detach::startup_mode() {
         app::detach::Startup::Tray => {}
-        // A hand-off this app cannot answer starts nothing at all rather than a second tray icon.
         app::detach::Startup::Refused => return,
-        app::detach::Startup::Detached(request) => {
-            app::detach::begin(request);
-            run_a_detached_window(&mut trace);
-            return;
-        }
         app::detach::Startup::Viewer(tray) => {
             run_a_viewer(&mut trace, tray);
             return;
@@ -267,6 +261,17 @@ fn main() {
     shell::wheel_input::request_stop();
     shell::key_input::request_stop();
 
+    // Ask viewers (serving + detached) to tear down engines/resident cleanly; bounded wait before
+    // KILL_ON_JOB_CLOSE reaps any stragglers at process exit.
+    if two_processes {
+        app::seam::request_shutdown();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let self_pid = std::process::id();
+        while Instant::now() < deadline && app::seam::any_live_viewer_other_than(self_pid) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     // The engine thread is joined only when it is idle: a COM call into Office
     // cannot be cancelled, and the app's exit must not wait on one.
     engines::office_render::shutdown();
@@ -343,73 +348,6 @@ fn sync_startup_setting(trace: &mut StartupTrace) {
     }
 }
 
-/// The run a detached window has: one preview thread, one configuration watch, and nothing that
-/// watches a listing.
-///
-/// It is deliberately not the tray app's start with pieces skipped at their own doors: the pieces
-/// that are missing here are the *whole* of what makes a hover possible — the Explorer hook, the
-/// two key watches, the sweep of what earlier runs left behind, the update check and the tray — and
-/// a detached window is a window no listing can reach (see `app::detach`).
-fn run_a_detached_window(trace: &mut StartupTrace) {
-    configure_dpi_awareness();
-    trace.step("dpi awareness");
-
-    // The apartment a page's own measurements are taken in before any file is read: a page is laid
-    // out by this thread, and a PDF page is rendered through Windows.Data.Pdf and a picture of a
-    // format this app has no decoder for is decoded by the codec Windows has (see
-    // `run_preview_window`).
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    }
-    trace.step("com");
-
-    let preview_handle = std::thread::spawn(|| {
-        ui::preview_window::run_preview_window();
-    });
-
-    // What the tray would have said out loud in its own process is said here off the same file (see
-    // `watch_the_configuration`).
-    let config_watch_handle = std::thread::spawn(watch_the_configuration);
-
-    // **The one watch a detached window keeps.** The wheel over a pinned picture, a pinned page and
-    // a sound's knob is the low-level hook's rather than the window's — a pin is nobody's keyboard
-    // until it is pressed, so Windows hands its notches to Explorer — and that hook is a process's
-    // own (see `shell::wheel_input`). The Explorer's hook and the two key watches are exactly what
-    // this window does not have.
-    // The pin key's chords, bound in this process as well: only the mouse half of the key is counted
-    // here, and a chord table nothing bound counts no press at all (see `shell::key_input::refresh`).
-    shell::key_input::refresh();
-    let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
-    trace.step("threads");
-
-    // And what ends it: the tray app going — which the job every hand-off joins answers on its own —
-    // and the process that began it, waited on a second time for the machine where a job could not be
-    // joined (see `app::detach::watch_the_parent`).
-    app::detach::watch_the_parent();
-
-    // The window draws itself on its own thread, and it ends itself the moment its pin does (see
-    // `ui::preview_window::detach_open`): what is left here is only the waiting.
-    while RUNNING.load(Ordering::Acquire) {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    shell::wheel_input::request_stop();
-
-    // The engines are this process's own and are ended with it the way the tray app's are ended
-    // with it: nothing of this app's should outlive the window it was begun for.
-    engines::office_render::shutdown();
-    engines::webview_preview::shutdown();
-    ui::preview_window::shut_down_the_resident();
-
-    let _ = preview_handle.join();
-    let _ = wheel_handle.join();
-    let _ = config_watch_handle.join();
-
-    unsafe {
-        CoUninitialize();
-    }
-}
-
 /// The run a viewer has: the preview loop, the one low-level hook a preview keeps, and nothing that
 /// watches a listing.
 ///
@@ -478,9 +416,11 @@ fn run_a_viewer(trace: &mut StartupTrace, tray: u32) {
     // `app::detach::watch_the_process`).
     app::detach::watch_the_process(tray);
 
-    while RUNNING.load(Ordering::Acquire) {
-        std::thread::sleep(Duration::from_millis(50));
+    while RUNNING.load(Ordering::Acquire) && !app::seam::shutdown_requested() {
+        std::thread::sleep(Duration::from_millis(25));
     }
+    RUNNING.store(false, Ordering::SeqCst);
+    app::seam::wake_preview_loop();
 
     shell::wheel_input::request_stop();
 

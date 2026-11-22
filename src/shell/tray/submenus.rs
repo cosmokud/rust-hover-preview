@@ -55,6 +55,46 @@ use windows::Win32::UI::WindowsAndMessaging::{
 ///
 /// The platform names the bit as an item-*type* one while `AppendMenuW` is handed the flags',
 /// which is the two the same number.
+/// RAII owner for an unattached Win32 `HMENU`; destroys on drop unless attached to a parent menu.
+pub(super) struct MenuGuard(Option<HMENU>);
+
+impl MenuGuard {
+    pub(super) fn new() -> Option<Self> {
+        unsafe { CreatePopupMenu().ok() }.map(|h| Self(Some(h)))
+    }
+
+    pub(super) fn handle(&self) -> HMENU {
+        self.0.unwrap_or_default()
+    }
+
+    pub(super) fn append_to(
+        mut self,
+        parent: HMENU,
+        flags: MENU_ITEM_FLAGS,
+        label: PCWSTR,
+    ) -> bool {
+        let Some(menu) = self.0 else {
+            return false;
+        };
+        if unsafe { AppendMenuW(parent, flags | MF_POPUP, menu.0 as usize, label).is_ok() } {
+            self.0 = None;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl Drop for MenuGuard {
+    fn drop(&mut self) {
+        if let Some(menu) = self.0.take() {
+            unsafe {
+                let _ = DestroyMenu(menu);
+            }
+        }
+    }
+}
+
 pub(super) const MF_RADIOCHECK: MENU_ITEM_FLAGS = MENU_ITEM_FLAGS(MFT_RADIOCHECK.0);
 
 /// One `Timing` submenu: an item per delay the setting offers, in the order the table
@@ -65,8 +105,13 @@ pub(super) const MF_RADIOCHECK: MENU_ITEM_FLAGS = MENU_ITEM_FLAGS(MFT_RADIOCHECK
 /// The three submenus differ only in what they select, so they are built here rather
 /// than one by one: they list the same delays, and a delay added to the table is one
 /// every one of them offers.
-pub(super) fn timing_delay_menu(base_id: u16, selected_ms: u64, default_ms: u64) -> HMENU {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+pub(super) fn timing_delay_menu(
+    base_id: u16,
+    selected_ms: u64,
+    default_ms: u64,
+) -> Option<MenuGuard> {
+    let menu_guard = MenuGuard::new()?;
+    let menu = menu_guard.handle();
 
     for (index, delay_ms) in TIMING_DELAY_CHOICES_MS.iter().enumerate() {
         let flags = MF_STRING
@@ -85,7 +130,7 @@ pub(super) fn timing_delay_menu(base_id: u16, selected_ms: u64, default_ms: u64)
         );
     }
 
-    menu
+    Some(menu_guard)
 }
 
 /// A label with the item the setting starts at marked as the default.
@@ -180,7 +225,10 @@ pub(super) fn animated_webp_budget_label(megabytes: u32) -> String {
 /// The `Avoid` submenu: how far a preview is kept off the item it is about, with the
 /// way the setting is on marked.
 pub(super) fn append_avoid_menu(parent: HMENU, label: PCWSTR, base: u16, avoid_mode: AvoidMode) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the backdrop labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -220,7 +268,7 @@ pub(super) fn append_avoid_menu(parent: HMENU, label: PCWSTR, base: u16, avoid_m
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+    let _ = menu_guard.append_to(parent, MF_STRING, label);
 }
 
 /// What a way of keeping a preview off an item is called in the menu: the words the
@@ -268,7 +316,10 @@ fn append_pin_nav_anchor(
     selected: PinNavFileTypes,
     default: PinNavFileTypes,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
     append_labeled_item(
         menu,
         MF_STRING
@@ -297,7 +348,7 @@ fn append_pin_nav_anchor(
             default == PinNavFileTypes::Category,
         ),
     );
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+    let _ = menu_guard.append_to(parent, MF_STRING, label);
 }
 
 /// The `Navigation` submenu: four anchors — Image, Video, Audio, Others, in menu order — each
@@ -310,7 +361,10 @@ pub(super) fn append_pin_nav_menu(
     audio: PinNavFileTypes,
     others: PinNavFileTypes,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
     append_pin_nav_anchor(
         menu,
         w!("Image"),
@@ -343,14 +397,7 @@ pub(super) fn append_pin_nav_menu(
         others,
         DEFAULT_PIN_NAV_OTHERS,
     );
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            w!("Navigation"),
-        )
-    };
+    let _ = menu_guard.append_to(parent, MF_STRING, w!("Navigation"));
 }
 
 /// What the two places a pinned window's minimize can put it are called, with the one the setting
@@ -426,7 +473,10 @@ fn append_seek_menu(
     label: fn(AudioSeek) -> String,
     seek: AudioSeek,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     // The labels are kept for as long as the menu is being filled out, for the same reason the
     // `Avoid` labels are: `AppendMenuW` is handed a pointer, so the wide strings have to outlive
@@ -466,7 +516,7 @@ fn append_seek_menu(
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, title) };
+    let _ = menu_guard.append_to(parent, MF_STRING, title);
 }
 
 /// What a way of starting a sound is called in a menu: the words the tray
@@ -547,7 +597,10 @@ pub(super) fn append_playlist_menu(
     follows_id: u16,
     follows: bool,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
     append_labeled_item(
         menu,
         MF_STRING
@@ -571,14 +624,7 @@ pub(super) fn append_playlist_menu(
             DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
         ),
     );
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            w!("Playlist"),
-        )
-    };
+    let _ = menu_guard.append_to(parent, MF_STRING, w!("Playlist"));
 }
 
 /// The `Video → Pin Mode → Shuffle`, `Audio → Pin Mode → Shuffle` and
@@ -614,7 +660,10 @@ pub(super) fn append_end_of_file_menu(
     end_of_file: PinEndOfFile,
     default: PinEndOfFile,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     let labels: Vec<Vec<u16>> = PIN_END_OF_FILE_CHOICES
         .iter()
@@ -650,14 +699,7 @@ pub(super) fn append_end_of_file_menu(
         };
     }
 
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            w!("End of File"),
-        )
-    };
+    let _ = menu_guard.append_to(parent, MF_STRING, w!("End of File"));
 }
 
 /// The `Video → Pin Mode` / `Audio → Pin Mode` submenu: the rows that are a
@@ -680,20 +722,15 @@ pub(super) fn append_pin_mode_menu(
     end_of_file_base: u16,
     end_of_file: PinEndOfFile,
     end_of_file_default: PinEndOfFile,
-) -> HMENU {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+) -> Option<HMENU> {
+    let menu_guard = MenuGuard::new()?;
+    let menu = menu_guard.handle();
     append_pause_minimized_item(menu, pause_id, pause);
     append_shuffle_item(menu, shuffle_id, shuffle, shuffle_default);
     append_end_of_file_menu(menu, end_of_file_base, end_of_file, end_of_file_default);
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            w!("Pin Mode"),
-        )
-    };
-    menu
+    menu_guard
+        .append_to(parent, MF_STRING, w!("Pin Mode"))
+        .then_some(menu)
 }
 
 /// What an end of file is called in the menu: the words the tray lists it under, with the way
@@ -718,7 +755,10 @@ pub(super) fn end_of_file_at(index: u16) -> Option<PinEndOfFile> {
 /// app looks at the pointer's world while Explorer has focus, with the
 /// tick it is at marked.
 pub(super) fn append_tick_menu(parent: HMENU, label: PCWSTR, base: u16, tick_ms: u64) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the `Avoid` labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -758,7 +798,7 @@ pub(super) fn append_tick_menu(parent: HMENU, label: PCWSTR, base: u16, tick_ms:
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+    let _ = menu_guard.append_to(parent, MF_STRING, label);
 }
 
 /// What a tick is called in the menu: the wait it stands for, in milliseconds, with the
@@ -780,7 +820,10 @@ pub(super) fn append_background_menu(
     background: TransparentBackground,
     default: TransparentBackground,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -812,7 +855,7 @@ pub(super) fn append_background_menu(
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+    let _ = menu_guard.append_to(parent, MF_STRING, label);
 }
 
 /// What a backdrop is called in the menu: the spelling `config.ini` uses, capitalized, with
@@ -878,7 +921,10 @@ pub(super) fn append_document_scale_menu(
     scale: PreviewScale,
     default: PreviewScale,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     append_by_screen_info_row(menu);
 
@@ -912,7 +958,7 @@ pub(super) fn append_document_scale_menu(
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+    let _ = menu_guard.append_to(parent, MF_STRING, label);
 }
 
 /// The `By Screen` row a display-share submenu opens with, with a separator
@@ -965,7 +1011,10 @@ pub(super) fn append_bitmap_scale_menu(
     scale: PreviewScale,
     default: PreviewScale,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     append_by_screen_info_row(menu);
 
@@ -1024,7 +1073,7 @@ pub(super) fn append_bitmap_scale_menu(
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+    let _ = menu_guard.append_to(parent, MF_STRING, label);
 }
 
 /// The `Audio` submenu under `Scaling`: the shares of the display a sound's card is
@@ -1042,7 +1091,10 @@ pub(super) fn append_audio_scale_menu(
     scale: PreviewScale,
     default: PreviewScale,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     append_by_screen_info_row(menu);
 
@@ -1076,7 +1128,7 @@ pub(super) fn append_audio_scale_menu(
         };
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, label) };
+    let _ = menu_guard.append_to(parent, MF_STRING, label);
 }
 
 /// What a share a bitmap is drawn at is called in the menu: the
@@ -1133,7 +1185,10 @@ pub(super) fn append_video_engine_menu(parent: HMENU) {
         .map(|config| (config.video_engine, config.video_engine_fallback))
         .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
 
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     append_labeled_item(
         menu,
@@ -1169,14 +1224,7 @@ pub(super) fn append_video_engine_menu(parent: HMENU) {
         };
     }
 
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            w!("Video Engine"),
-        )
-    };
+    let _ = menu_guard.append_to(parent, MF_STRING, w!("Video Engine"));
 }
 
 /// What an engine row is called: the engine's name, with the one the app starts at marked.
@@ -1206,7 +1254,10 @@ pub(super) fn append_office_engine_menu(parent: HMENU) {
         .map(|config| config.office_engine)
         .unwrap_or(DEFAULT_OFFICE_ENGINE);
 
-    let office_menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(office_menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let office_menu = office_menu_guard.handle();
 
     let microsoft_office = default_label(
         "Microsoft Office",
@@ -1248,14 +1299,7 @@ pub(super) fn append_office_engine_menu(parent: HMENU) {
         )
     };
 
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            office_menu.0 as usize,
-            w!("Office Engine"),
-        )
-    };
+    let _ = office_menu_guard.append_to(parent, MF_STRING, w!("Office Engine"));
 }
 
 /// The `Away Timer` submenu: how long Explorer may be out of reach before an
@@ -1275,7 +1319,10 @@ pub(super) fn append_afk_timer_menu(parent: HMENU) {
         .map(|config| config.afk_timer_seconds)
         .unwrap_or(DEFAULT_AFK_TIMER_SECS);
 
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     // The labels are kept for as long as the menu is being filled out, for the reason the
     // idle times' are: `AppendMenuW` is handed a pointer, so the wide strings have to
@@ -1316,14 +1363,7 @@ pub(super) fn append_afk_timer_menu(parent: HMENU) {
         };
     }
 
-    let _ = unsafe {
-        AppendMenuW(
-            parent,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            w!("Away Timer"),
-        )
-    };
+    let _ = menu_guard.append_to(parent, MF_STRING, w!("Away Timer"));
 }
 
 /// One `… Engine TTL` submenu: the idle times every engine is offered, with the time the
@@ -1345,7 +1385,10 @@ pub(super) fn append_engine_idle_menu(
     idle: EngineIdle,
     enabled: bool,
 ) {
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     // The labels are kept for as long as the menu is being filled out, for the same
     // reason the cache labels are: `AppendMenuW` is handed a pointer, so the wide
@@ -1387,12 +1430,12 @@ pub(super) fn append_engine_idle_menu(
     }
 
     let flags = if enabled {
-        MF_STRING | MF_POPUP
+        MF_STRING
     } else {
-        MF_STRING | MF_POPUP | MF_GRAYED
+        MF_STRING | MF_GRAYED
     };
 
-    let _ = unsafe { AppendMenuW(parent, flags, menu.0 as usize, label) };
+    let _ = menu_guard.append_to(parent, flags, label);
 }
 
 /// The `Components` submenu: what this machine has of everything a preview leans on, grouped
@@ -1414,7 +1457,10 @@ pub(super) fn append_engine_idle_menu(
 /// mark they carry is a glyph rather than the checkmark column a menu item can draw —
 /// those are the same trade the other way round (see `codec_row_label`).
 pub(super) fn append_codecs_menu(menu: HMENU) {
-    let codecs_menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(codecs_menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let codecs_menu = codecs_menu_guard.handle();
 
     let video = codecs::video();
     let images = codecs::images();
@@ -1438,14 +1484,7 @@ pub(super) fn append_codecs_menu(menu: HMENU) {
         append_install_menu(codecs_menu);
     }
 
-    let _ = unsafe {
-        AppendMenuW(
-            menu,
-            MF_STRING | MF_POPUP,
-            codecs_menu.0 as usize,
-            w!("Components"),
-        )
-    };
+    let _ = codecs_menu_guard.append_to(menu, MF_STRING, w!("Components"));
 }
 
 /// The `Components → Install` submenu: one row per engine this app can install with `winget`, listing
@@ -1458,7 +1497,10 @@ pub(super) fn append_codecs_menu(menu: HMENU) {
 /// has every engine here gets no submenu at all, since it has nothing to install.
 fn append_install_menu(parent: HMENU) {
     let in_flight = winget::in_flight();
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
     let mut listed = 0;
 
     for (index, row) in codecs::installable().iter().enumerate() {
@@ -1490,11 +1532,10 @@ fn append_install_menu(parent: HMENU) {
     }
 
     if listed == 0 {
-        let _ = unsafe { DestroyMenu(menu) };
         return;
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, menu.0 as usize, w!("Install")) };
+    let _ = menu_guard.append_to(parent, MF_STRING, w!("Install"));
 }
 
 /// What one row of the `Components → Install` submenu reads as, and whether it can be picked: the
@@ -1540,7 +1581,10 @@ pub(super) fn install_engine(index: u16) {
 /// `base` is where this group's commands begin in the numbering above. The row named `MPV` is
 /// the one that can open a submenu of its own (see `is_mpv_row` and `append_mpv_row`).
 fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>, base: u16) {
-    let group = unsafe { CreatePopupMenu().unwrap() };
+    let Some(group_guard) = MenuGuard::new() else {
+        return;
+    };
+    let group = group_guard.handle();
 
     for (index, row) in rows.iter().enumerate() {
         if is_mpv_row(row) {
@@ -1550,7 +1594,7 @@ fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>, base: u16) {
         }
     }
 
-    let _ = unsafe { AppendMenuW(parent, MF_STRING | MF_POPUP, group.0 as usize, label) };
+    let _ = group_guard.append_to(parent, MF_STRING, label);
 }
 
 /// One row of a codec group: a row the machine has is inert, and so is a row it is missing that
@@ -1604,7 +1648,10 @@ fn append_mpv_row(group: HMENU, row: &Row, index: u16, base: u16) {
         &installs,
     );
 
-    let menu = unsafe { CreatePopupMenu().unwrap() };
+    let Some(menu_guard) = MenuGuard::new() else {
+        return;
+    };
+    let menu = menu_guard.handle();
 
     let items = mpv_menu_items(&installs, in_use.as_deref());
 
@@ -1633,14 +1680,7 @@ fn append_mpv_row(group: HMENU, row: &Row, index: u16, base: u16) {
         .chain(std::iter::once(0))
         .collect();
 
-    let _ = unsafe {
-        AppendMenuW(
-            group,
-            MF_STRING | MF_POPUP,
-            menu.0 as usize,
-            PCWSTR(label.as_ptr()),
-        )
-    };
+    let _ = menu_guard.append_to(group, MF_STRING, PCWSTR(label.as_ptr()));
 }
 
 /// What the `MPV` row's submenu lists: one item per install, in the order they were found, with

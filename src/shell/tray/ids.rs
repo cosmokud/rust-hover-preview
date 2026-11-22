@@ -18,7 +18,6 @@ use crate::config::config::{
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::WM_USER;
 
 pub(super) const WM_TRAYICON: u32 = WM_USER + 1;
@@ -809,8 +808,10 @@ pub(super) const MAX_TRAY_CUSTOM_THEMES: usize = 200;
 
 pub(super) const TRAY_CLASS: PCWSTR = w!("RustHoverPreviewTrayClass");
 
-pub(super) static mut TRAY_HWND: HWND = HWND(std::ptr::null_mut());
-pub(super) static mut TASKBAR_CREATED: u32 = 0;
+pub(super) static TRAY_HWND: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+pub(super) static TASKBAR_CREATED: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
 
 /// The custom themes the `Theme` submenu last listed, in the order it
 /// listed them: a command ID carries a position, and this is what it was a
