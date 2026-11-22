@@ -496,6 +496,25 @@ fn the_minimize_rows_say_where_a_pin_goes() {
     assert_eq!(pin_minimize_label(PinMinimizeTo::Taskbar), "To Taskbar");
 }
 
+#[test]
+fn the_pin_scaling_rows_have_expected_labels_default_and_ids() {
+    let defaults = crate::config::config::AppConfig::default();
+    assert_eq!(defaults.pin_scaling_mode, DEFAULT_PIN_SCALING_MODE);
+    assert_eq!(defaults.pin_scaling_mode, PinScalingMode::UntilResized);
+    assert_eq!(
+        pin_scaling_label(PinScalingMode::UntilResized),
+        "Until Resized (Default)"
+    );
+    assert_eq!(
+        pin_scaling_label(PinScalingMode::UseScalingSettings),
+        "Use Scaling Settings"
+    );
+    assert_ne!(
+        ID_TRAY_PIN_SCALING_UNTIL_RESIZED,
+        ID_TRAY_PIN_SCALING_USE_SETTINGS
+    );
+}
+
 /// The trigger key's second row is a switch of its own beside the one that watches the key,
 /// and it starts off: a pin is a window the user put there, and the key that stops hovers is
 /// not what takes it down until it is asked for.

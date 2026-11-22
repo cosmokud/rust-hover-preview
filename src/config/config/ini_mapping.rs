@@ -23,8 +23,8 @@ use super::migrate;
 use super::setting_types::{
     sanitize_afk_timer_secs, sanitize_dds_background, sanitize_html_background,
     sanitize_zoom_background, AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine,
-    PinEndOfFile, PinMinimizeTo, PinNavFileTypes, PreviewScale, TextTheme, TransparentBackground,
-    TriggerKeyMode, VideoEngine,
+    PinEndOfFile, PinMinimizeTo, PinNavFileTypes, PinScalingMode, PreviewScale, TextTheme,
+    TransparentBackground, TriggerKeyMode, VideoEngine,
 };
 
 impl AppConfig {
@@ -135,6 +135,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "pin_minimize_to",
             Some(self.pin_minimize_to.as_str().to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "pin_scaling_mode",
+            Some(self.pin_scaling_mode.as_str().to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -772,6 +777,11 @@ impl AppConfig {
         if let Some(value) = ini.get(CONFIG_SECTION, "pin_minimize_to") {
             if let Some(target) = PinMinimizeTo::from_str(&value) {
                 self.pin_minimize_to = target;
+            }
+        }
+        if let Some(value) = ini.get(CONFIG_SECTION, "pin_scaling_mode") {
+            if let Some(mode) = PinScalingMode::from_str(&value) {
+                self.pin_scaling_mode = mode;
             }
         }
         // Whether a double-click on a pin puts its window in the middle of the screen it is on.

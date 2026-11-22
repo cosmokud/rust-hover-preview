@@ -1326,7 +1326,11 @@ pub(super) fn take_up_pinned_window_with_facts(
 
     // The bound the files after this one are fitted into, read once: a line writes it beside the one
     // the window had before this take-up (see `pin_bound_after`).
-    let bound_before = carried.and_then(|(.., bound)| bound);
+    // UseScalingSettings drops carried bound so pin.bound resets to the newly scaled content box.
+    let bound_before = match current_pin_scaling_mode() {
+        PinScalingMode::UntilResized => carried.and_then(|(.., bound)| bound),
+        PinScalingMode::UseScalingSettings => None,
+    };
     let bound = pin_bound_after(bound_before, keeps_its_box, content);
 
     note_pin_trace!(

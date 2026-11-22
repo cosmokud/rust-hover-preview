@@ -30,11 +30,12 @@ use super::ids::{
     ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
     ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
     ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
-    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP,
-    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
-    ID_TRAY_Q_DIR_PREVIEWS, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
-    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_SCALING_UNTIL_RESIZED, ID_TRAY_PIN_SCALING_USE_SETTINGS,
+    ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
+    ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
+    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
+    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
+    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -55,17 +56,17 @@ use super::submenus::{
     append_pin_seek_menu_renamed, append_playlist_menu, append_seek_menu_renamed,
     append_shuffle_item, append_tick_menu, append_video_engine_menu, cache_size_label,
     decode_budget_label, default_label, enable_preview_label, pin_key_label, pin_minimize_label,
-    pin_update_label, remember_volume_label, system_menu_label, timing_delay_menu,
-    update_available_label, MenuGuard, MF_RADIOCHECK,
+    pin_scaling_label, pin_update_label, remember_volume_label, system_menu_label,
+    timing_delay_menu, update_available_label, MenuGuard, MF_RADIOCHECK,
 };
 
 use crate::app::seam::{send_preview, PreviewMessage};
 use crate::app::updates;
 use crate::config::config::{
     sanitize_animated_webp_budget_mb, sanitize_decode_budget_gb, sanitize_text_font_scale_percent,
-    MarkdownMode, PinMinimizeTo, PreviewType, TextTheme, TriggerKeyMode, VideoEngine,
-    DEFAULT_ANIMATED_SCALE, DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_VOLUME,
-    DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
+    MarkdownMode, PinMinimizeTo, PinScalingMode, PreviewType, TextTheme, TriggerKeyMode,
+    VideoEngine, DEFAULT_ANIMATED_SCALE, DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE,
+    DEFAULT_AUDIO_VOLUME, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
     DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
@@ -201,6 +202,7 @@ pub(super) unsafe fn populate_context_menu(
     let pin_always_on_top = snap.pin_always_on_top;
     let pin_key = snap.pin_key.as_str();
     let pin_minimize_to = snap.pin_minimize_to;
+    let pin_scaling_mode = snap.pin_scaling_mode;
     let pin_update = snap.pin_update_enabled;
     let pin_update_on_hover = snap.pin_update_on_hover;
     let pin_update_move_to_top = snap.pin_update_move_to_top;
@@ -326,6 +328,30 @@ pub(super) unsafe fn populate_context_menu(
         &pin_minimize_label(PinMinimizeTo::Taskbar),
     );
     let _ = minimize_menu_guard.append_to(pin_menu, MF_STRING, w!("Minimize"));
+
+    let scaling_menu_guard = MenuGuard::new()?;
+    let scaling_menu = scaling_menu_guard.handle();
+    let scaling_flag = |candidate: PinScalingMode| {
+        MF_STRING
+            | if pin_scaling_mode == candidate {
+                MF_CHECKED | MF_RADIOCHECK
+            } else {
+                MF_UNCHECKED
+            }
+    };
+    append_labeled_item(
+        scaling_menu,
+        scaling_flag(PinScalingMode::UntilResized),
+        ID_TRAY_PIN_SCALING_UNTIL_RESIZED,
+        &pin_scaling_label(PinScalingMode::UntilResized),
+    );
+    append_labeled_item(
+        scaling_menu,
+        scaling_flag(PinScalingMode::UseScalingSettings),
+        ID_TRAY_PIN_SCALING_USE_SETTINGS,
+        &pin_scaling_label(PinScalingMode::UseScalingSettings),
+    );
+    let _ = scaling_menu_guard.append_to(pin_menu, MF_STRING, w!("Scaling"));
 
     // The `Navigation` submenu: four anchors — Image, Video, Audio, Others, in menu
     // order — each with its own All/Same Category pair. The walk is anchored on the first
