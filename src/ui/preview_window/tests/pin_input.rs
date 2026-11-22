@@ -274,6 +274,18 @@ impl PinWindow for CapturingWindow {
         self.inner.hide_pin_bubble()
     }
 
+    fn show_pin_bubble(&self, anchor: ScreenRegion) {
+        self.inner.show_pin_bubble(anchor)
+    }
+
+    fn destroy_pin_bubble(&self) {
+        self.inner.destroy_pin_bubble()
+    }
+
+    fn install_pin_surface(&self, box_: ScreenRegion) {
+        self.inner.install_pin_surface(box_)
+    }
+
     fn repaint(&self) {
         self.inner.repaint()
     }

@@ -310,6 +310,18 @@ impl PinWindow for LookingWindow {
         self.inner.hide_pin_bubble();
     }
 
+    fn show_pin_bubble(&self, anchor: ScreenRegion) {
+        self.inner.show_pin_bubble(anchor);
+    }
+
+    fn destroy_pin_bubble(&self) {
+        self.inner.destroy_pin_bubble();
+    }
+
+    fn install_pin_surface(&self, box_: ScreenRegion) {
+        self.inner.install_pin_surface(box_);
+    }
+
     fn repaint(&self) {
         self.inner.repaint();
     }
@@ -1164,4 +1176,74 @@ fn a_handed_off_pin_s_end_is_published_as_a_hand_off() {
         !take_pin_handed_off(),
         "and a close is not a hand-off to another program"
     );
+}
+
+/// Headless contract test: bubble HWND creation & destruction maintain 1:1 parity through `PinWindow`.
+#[test]
+fn bubble_lifecycle_maintains_create_destroy_parity_through_pin_window() {
+    let window = RecordedPinWindow::new(0x1000);
+    let anchor = (100, 200, 148, 248);
+
+    // First show creates the bubble; second show reuses it rather than leaking a second HWND.
+    super::super::pin_bubble::present_pin_bubble_on(&window, anchor);
+    super::super::pin_bubble::present_pin_bubble_on(&window, (200, 200, 248, 248));
+    assert_eq!(window.bubble_lifecycle(), (1, 0, true));
+
+    // Teardown hides and destroys the bubble; double teardown is idempotent.
+    super::super::pin_bubble::teardown_pin_bubble_on(&window);
+    super::super::pin_bubble::teardown_pin_bubble_on(&window);
+    assert_eq!(window.bubble_lifecycle(), (1, 1, false));
+
+    assert_eq!(
+        window.calls(),
+        vec![
+            PinWindowCall::ShowPinBubble(anchor),
+            PinWindowCall::ShowPinBubble((200, 200, 248, 248)),
+            PinWindowCall::HidePinBubble,
+            PinWindowCall::DestroyPinBubble,
+            PinWindowCall::HidePinBubble,
+            PinWindowCall::DestroyPinBubble,
+        ]
+    );
+}
+
+/// Headless contract test: pin install/swap surface placement and film host lifecycle
+/// run cleanly through `RecordedPinWindow` and `RecordedFilmSurface` without desktop windows.
+#[test]
+fn pin_install_swap_and_film_surface_lifecycle_stay_headless_and_balanced() {
+    let _room = the_room_to_itself();
+    let window = RecordedPinWindow::new(0x2000);
+    let film = super::super::film_surface::RecordedFilmSurface::new();
+    let mut session = super::super::film_surface::FilmHostSession::new();
+
+    install(a_pin());
+    let first_box = (50, 50, 850, 500);
+    super::super::pin_install::install_pin_surface_on(&window, first_box);
+
+    let host = session.attach(&film, None, true).expect("host attached");
+    assert!(session.attach_source(&film, 0x9001, 101, (0, 0, 800, 450), None));
+
+    // Simulate a media swap: update surface box and swap film source.
+    let swap_box = (50, 50, 1010, 590);
+    super::super::pin_install::install_pin_surface_on(&window, swap_box);
+    assert!(session.resize(&film, swap_box, (0, 0, 960, 540), None));
+    assert!(session.swap_source(&film, 0x9002, 202, (0, 0, 960, 540), None));
+
+    // Collapse to bubble, then end pin + detach film + destroy bubble.
+    super::super::pin_bubble::present_pin_bubble_on(&window, (960, 50, 1010, 80));
+    session.detach(&film);
+    end_pin(Reason::Closed, &window);
+    super::super::pin_bubble::teardown_pin_bubble_on(&window);
+
+    assert_ne!(host, 0);
+    assert!(film.has_no_leaks());
+    assert_eq!(film.host_counts(), (1, 1));
+    assert_eq!(film.thumbnail_counts(), (2, 2));
+    assert_eq!(window.bubble_lifecycle(), (1, 1, false));
+    assert!(window
+        .calls()
+        .contains(&PinWindowCall::InstallPinSurface(first_box)));
+    assert!(window
+        .calls()
+        .contains(&PinWindowCall::InstallPinSurface(swap_box)));
 }
