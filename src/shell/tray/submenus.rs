@@ -29,18 +29,16 @@ use super::ids::{
 use crate::app::dialogs;
 use crate::app::winget;
 use crate::config::config::{
-    AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinEndOfFile, PinMinimizeTo, PinNavFileTypes,
-    PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS,
+    AppConfig, AudioSeek, AvoidMode, EngineIdle, OfficeEngine, PinEndOfFile, PinMinimizeTo,
+    PinNavFileTypes, PreviewScale, TransparentBackground, VideoEngine, DEFAULT_AFK_TIMER_SECS,
     DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
     DEFAULT_DECODE_BUDGET_GB, DEFAULT_OFFICE_ENGINE, DEFAULT_PIN_MINIMIZE_TO,
     DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS, DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
     DEFAULT_PIN_MODE_AUDIO_SEEK, DEFAULT_PIN_NAV_AUDIO, DEFAULT_PIN_NAV_IMAGE,
     DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_TICK_MS, DEFAULT_VIDEO_ENGINE,
-    DEFAULT_VIDEO_ENGINE_FALLBACK,
 };
 use crate::engines::libreoffice_render;
 use crate::formats::codecs::{self, Row};
-use crate::CONFIG;
 use std::path::{Path, PathBuf};
 use windows::core::{w, PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -1179,11 +1177,9 @@ pub(super) fn audio_scale_at(index: u16) -> Option<PreviewScale> {
 /// top, then the engines it decides between. An engine this machine
 /// does not have is greyed, since there is nothing there to choose;
 /// `Best` is the default and carries the mark.
-pub(super) fn append_video_engine_menu(parent: HMENU) {
-    let (selected, fallback) = CONFIG
-        .lock()
-        .map(|config| (config.video_engine, config.video_engine_fallback))
-        .unwrap_or((DEFAULT_VIDEO_ENGINE, DEFAULT_VIDEO_ENGINE_FALLBACK));
+pub(super) fn append_video_engine_menu(parent: HMENU, snap: &AppConfig) {
+    let selected = snap.video_engine;
+    let fallback = snap.video_engine_fallback;
 
     let Some(menu_guard) = MenuGuard::new() else {
         return;
@@ -1248,11 +1244,8 @@ pub(super) fn video_engine_label(engine: VideoEngine) -> String {
 /// is so — but the choice is the user's, it is remembered where it is made,
 /// and the day the engine is installed it is the one that draws
 /// (see `office_formats::page_engine`).
-pub(super) fn append_office_engine_menu(parent: HMENU) {
-    let selected = CONFIG
-        .lock()
-        .map(|config| config.office_engine)
-        .unwrap_or(DEFAULT_OFFICE_ENGINE);
+pub(super) fn append_office_engine_menu(parent: HMENU, snap: &AppConfig) {
+    let selected = snap.office_engine;
 
     let Some(office_menu_guard) = MenuGuard::new() else {
         return;
@@ -1313,11 +1306,8 @@ pub(super) fn append_office_engine_menu(parent: HMENU) {
 /// is listed longest first, like every other menu of times here, and it marks the time it is
 /// on: a value a hand-edited `config.ini` asks for that is not one of these is shown with
 /// nothing marked rather than rounded to the nearest.
-pub(super) fn append_afk_timer_menu(parent: HMENU) {
-    let seconds = CONFIG
-        .lock()
-        .map(|config| config.afk_timer_seconds)
-        .unwrap_or(DEFAULT_AFK_TIMER_SECS);
+pub(super) fn append_afk_timer_menu(parent: HMENU, snap: &AppConfig) {
+    let seconds = snap.afk_timer_seconds;
 
     let Some(menu_guard) = MenuGuard::new() else {
         return;
@@ -1456,7 +1446,7 @@ pub(super) fn append_engine_idle_menu(
 /// present are made inert by having no id at all rather than by being disabled, and the
 /// mark they carry is a glyph rather than the checkmark column a menu item can draw —
 /// those are the same trade the other way round (see `codec_row_label`).
-pub(super) fn append_codecs_menu(menu: HMENU) {
+pub(super) fn append_codecs_menu(menu: HMENU, snap: &AppConfig) {
     let Some(codecs_menu_guard) = MenuGuard::new() else {
         return;
     };
@@ -1473,10 +1463,23 @@ pub(super) fn append_codecs_menu(menu: HMENU) {
     let images_base = audio_base + audio.len() as u16;
     let engines_base = images_base + images.len() as u16;
 
-    append_codec_group(codecs_menu, w!("Videos"), video, ID_TRAY_CODEC_BASE);
-    append_codec_group(codecs_menu, w!("Audio"), audio, audio_base);
-    append_codec_group(codecs_menu, w!("Images"), images, images_base);
-    append_codec_group(codecs_menu, w!("Engines"), codecs::engines(), engines_base);
+    let mpv_path = snap.mpv_path.as_str();
+    append_codec_group(
+        codecs_menu,
+        w!("Videos"),
+        video,
+        ID_TRAY_CODEC_BASE,
+        mpv_path,
+    );
+    append_codec_group(codecs_menu, w!("Audio"), audio, audio_base, mpv_path);
+    append_codec_group(codecs_menu, w!("Images"), images, images_base, mpv_path);
+    append_codec_group(
+        codecs_menu,
+        w!("Engines"),
+        codecs::engines(),
+        engines_base,
+        mpv_path,
+    );
 
     // Offered only where there is a `winget` to install with: without one the submenu is absent
     // rather than empty, and every row above is the link it has always been.
@@ -1580,7 +1583,7 @@ pub(super) fn install_engine(index: u16) {
 ///
 /// `base` is where this group's commands begin in the numbering above. The row named `MPV` is
 /// the one that can open a submenu of its own (see `is_mpv_row` and `append_mpv_row`).
-fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>, base: u16) {
+fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>, base: u16, mpv_path: &str) {
     let Some(group_guard) = MenuGuard::new() else {
         return;
     };
@@ -1588,7 +1591,7 @@ fn append_codec_group(parent: HMENU, label: PCWSTR, rows: Vec<Row>, base: u16) {
 
     for (index, row) in rows.iter().enumerate() {
         if is_mpv_row(row) {
-            append_mpv_row(group, row, index as u16, base);
+            append_mpv_row(group, row, index as u16, base, mpv_path);
         } else {
             append_codec_row(group, row, index as u16, base);
         }
@@ -1631,7 +1634,7 @@ pub(super) fn is_mpv_row(row: &Row) -> bool {
 /// greyed popup cannot be opened — the row that offers a choice has to be pickable. The children
 /// carry the id range `ID_TRAY_MPV_BASE` hands out, and a click re-enumerates the installs in the
 /// same order rather than remembering the menu (see `set_mpv_path`).
-fn append_mpv_row(group: HMENU, row: &Row, index: u16, base: u16) {
+fn append_mpv_row(group: HMENU, row: &Row, index: u16, base: u16, chosen: &str) {
     let installs = codecs::mpv_installs();
 
     if installs.len() < 2 {
@@ -1639,12 +1642,8 @@ fn append_mpv_row(group: HMENU, row: &Row, index: u16, base: u16) {
         return;
     }
 
-    let chosen = CONFIG
-        .lock()
-        .map(|config| config.mpv_path.clone())
-        .unwrap_or_default();
     let in_use = codecs::resolve_mpv(
-        (!chosen.trim().is_empty()).then_some(Path::new(&chosen)),
+        (!chosen.trim().is_empty()).then_some(Path::new(chosen)),
         &installs,
     );
 

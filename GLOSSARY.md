@@ -51,3 +51,17 @@ _Avoid_: Clean close, soft kill
 **Idle Gate**:
 The condition that no Pin, Detached Window, active hover hold, embedded document page, dialog, or menu is open, permitting a silent auto-update to proceed without interrupting the user.
 _Avoid_: Quiet check, update lock
+
+### Configuration & Propagation
+
+**Configuration Publication**:
+The single ordered act of updating settings in memory, saving them to disk, advancing the shared revision counter, and announcing the change to Viewers before any dependent command is sent.
+_Avoid_: Config flush, settings sync, save-and-notify
+
+**Configuration Generation**:
+A monotonically increasing revision number published across the Seam whenever settings change, allowing both the Serving Viewer and Detached Windows to reload immediately rather than waiting for periodic disk polling.
+_Avoid_: Config epoch, settings version, mtime token
+
+**Configuration Snapshot**:
+A single point-in-time copy of all settings taken once when constructing the tray menu so every row and submenu reflects a consistent state.
+_Avoid_: Config clone, settings copy, menu cache

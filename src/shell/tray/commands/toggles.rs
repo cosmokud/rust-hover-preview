@@ -20,11 +20,11 @@
 
 use crate::app::seam::{
     refresh_pin, refresh_preview, refresh_preview_types, refresh_render_html, send_preview,
-    PreviewMessage,
+    the_rings_are_the_road, PreviewMessage,
 };
 use crate::app::startup;
 use crate::config::config::PreviewType;
-use crate::CONFIG;
+use crate::config::{commit_config, publish_config_change};
 
 pub(in super::super) fn toggle_startup() {
     // What is flipped is the registry, and what is read to decide which way to flip is the
@@ -40,17 +40,15 @@ pub(in super::super) fn toggle_startup() {
         startup::disable_startup();
     }
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.run_at_startup = enable;
-        config.save();
-    }
+    });
 }
 
 pub(crate) fn toggle_preview_enabled() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.preview_enabled = !config.preview_enabled;
-        config.save();
-    }
+    });
 }
 
 /// Whether the app asks GitHub for a newer release on its own: the `System → Check
@@ -60,13 +58,10 @@ pub(crate) fn toggle_preview_enabled() {
 /// off asks nothing further, and the row is gone while there is nothing already on
 /// offer to say.
 pub(in super::super) fn toggle_check_for_updates() {
-    let enabled = if let Ok(mut config) = CONFIG.lock() {
+    let enabled = commit_config(|config| {
         config.check_for_updates = !config.check_for_updates;
-        config.save();
         config.check_for_updates
-    } else {
-        return;
-    };
+    });
 
     if enabled {
         crate::app::updates::request_check();
@@ -81,13 +76,10 @@ pub(in super::super) fn toggle_check_for_updates() {
 /// Turning it off leaves an install already in flight alone, as a switch reading a file cannot
 /// take back a program that has been started, and drops one it was owed.
 pub(in super::super) fn toggle_silent_auto_update() {
-    let enabled = if let Ok(mut config) = CONFIG.lock() {
+    let enabled = commit_config(|config| {
         config.silent_auto_update = !config.silent_auto_update;
-        config.save();
         config.silent_auto_update
-    } else {
-        return;
-    };
+    });
 
     if enabled {
         crate::app::updates::install_silently_in_background();
@@ -99,20 +91,20 @@ pub(in super::super) fn toggle_silent_auto_update() {
 /// key reads a number rather than the configuration, and a preview that is pinned
 /// when the feature is switched off is a window nothing would ever take down again.
 pub(in super::super) fn toggle_pin_enabled() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_enabled = !config.pin_enabled;
-        config.save();
-    }
+    });
     crate::shell::key_input::refresh();
     refresh_pin();
 }
 
 pub fn toggle_pin_always_on_top() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.pin_always_on_top = !config.pin_always_on_top;
-        config.save();
-    }
-    refresh_pin();
+    publish_config_change(
+        |config| {
+            config.pin_always_on_top = !config.pin_always_on_top;
+        },
+        &[PreviewMessage::PinChanged],
+    );
 }
 
 /// Whether a preview is made where a **browse dialog** is showing is a setting rather than a view of
@@ -125,13 +117,10 @@ pub fn toggle_pin_always_on_top() {
 /// the pin owing a front to a listing the app no longer answers for until the next tick noticed
 /// (see `app::seam::BROWSE_DIALOG_PREVIEWS`).
 pub(in super::super) fn toggle_browse_dialog_preview() {
-    let enabled = if let Ok(mut config) = CONFIG.lock() {
+    let enabled = commit_config(|config| {
         config.browse_dialog_preview_enabled = !config.browse_dialog_preview_enabled;
-        config.save();
         config.browse_dialog_preview_enabled
-    } else {
-        return;
-    };
+    });
 
     crate::app::seam::publish_browse_dialog_previews(enabled);
     refresh_preview();
@@ -145,13 +134,10 @@ pub(in super::super) fn toggle_browse_dialog_preview() {
 /// placement may take no lock and answer for an Everything window they find before any tick has been
 /// read (see `app::seam::EVERYTHING_PREVIEWS`).
 pub(in super::super) fn toggle_everything_previews() {
-    let enabled = if let Ok(mut config) = CONFIG.lock() {
+    let enabled = commit_config(|config| {
         config.everything_previews = !config.everything_previews;
-        config.save();
         config.everything_previews
-    } else {
-        return;
-    };
+    });
 
     crate::app::seam::publish_everything_previews(enabled);
     refresh_preview();
@@ -164,13 +150,10 @@ pub(in super::super) fn toggle_everything_previews() {
 /// may take no lock and answer for a Q-Dir frame they find before any tick has been read (see
 /// `app::seam::Q_DIR_PREVIEWS`).
 pub(in super::super) fn toggle_q_dir_previews() {
-    let enabled = if let Ok(mut config) = CONFIG.lock() {
+    let enabled = commit_config(|config| {
         config.q_dir_previews = !config.q_dir_previews;
-        config.save();
         config.q_dir_previews
-    } else {
-        return;
-    };
+    });
 
     crate::app::seam::publish_q_dir_previews(enabled);
     refresh_preview();
@@ -181,29 +164,26 @@ pub(in super::super) fn toggle_q_dir_previews() {
 /// the pin keeps the file it is showing until the user picks another, and what the switch says
 /// is read by the Explorer hook on its next tick (see `pin_update_enabled`).
 pub(in super::super) fn toggle_pin_update_enabled() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_update_enabled = !config.pin_update_enabled;
-        config.save();
-    }
+    });
 }
 
 /// And whether the pointer's own hover is one of the ways it is told about one, which is read
 /// in the same place and changes nothing on screen either (see `pin_update_on_hover`).
 pub(in super::super) fn toggle_pin_update_on_hover() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_update_on_hover = !config.pin_update_on_hover;
-        config.save();
-    }
+    });
 }
 
 /// Whether an update also brings the pin in front of what it was behind, which is read by the
 /// preview loop at the next pick and so changes nothing that is already on screen (see
 /// `pin_update_move_to_top`).
 pub(in super::super) fn toggle_pin_update_move_to_top() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_update_move_to_top = !config.pin_update_move_to_top;
-        config.save();
-    }
+    });
 }
 
 /// Whether a pin collapsed into its bubble holds the video it is playing is a setting rather than
@@ -212,28 +192,25 @@ pub(in super::super) fn toggle_pin_update_move_to_top() {
 /// is already held is left where it is until the pin is put back up, because a player started
 /// beside a bubble would be a picture on screen next to it (see `settle_bubble_playback`).
 pub(in super::super) fn toggle_pin_pause_video() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_pause_video = !config.pin_pause_video;
-        config.save();
-    }
+    });
 }
 
 /// The sound's half of the pair above, read on the same tick and acting the same way.
 pub(in super::super) fn toggle_pin_pause_audio() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_pause_audio = !config.pin_pause_audio;
-        config.save();
-    }
+    });
 }
 
 /// Whether the key is watched is a setting rather than a view of one, so the preview
 /// on screen is rebuilt: switching the key off while it is held lets a preview
 /// through, and switching it back on while it is held takes one away.
 pub(in super::super) fn toggle_trigger_key_enabled() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.trigger_key_enabled = !config.trigger_key_enabled;
-        config.save();
-    }
+    });
     // The hook's own chord table carries whether the key is watched at all, so the switch is
     // handed to it here or a key turned off would keep its latch (see `key_input::refresh`).
     crate::shell::key_input::refresh();
@@ -245,10 +222,9 @@ pub(in super::super) fn toggle_trigger_key_enabled() {
 /// answered from the key's own state as that tick finds it — nothing of the pin belongs to this
 /// thread.
 pub(in super::super) fn toggle_trigger_key_affect_pin_mode() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.trigger_key_affect_pin_mode = !config.trigger_key_affect_pin_mode;
-        config.save();
-    }
+    });
 }
 
 /// Whether the keyboard driving Explorer holds a parked pointer back is a setting rather
@@ -256,10 +232,9 @@ pub(in super::super) fn toggle_trigger_key_affect_pin_mode() {
 /// is read by the hook on its next tick — so a preview that is up when it is thrown is left
 /// where it is.
 pub(in super::super) fn toggle_prioritize_keyboard() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.prioritize_keyboard = !config.prioritize_keyboard;
-        config.save();
-    }
+    });
 }
 
 /// Switching a kind of preview off drops the one on screen when it is of that
@@ -272,13 +247,13 @@ pub(in super::super) fn toggle_prioritize_keyboard() {
 /// previews of its own kind, and one kept warm for a kind nobody can be shown is a
 /// process — and a licence, and a few hundred megabytes — held for nothing.
 pub(in super::super) fn toggle_preview_type(kind: PreviewType) {
-    if let Ok(mut config) = CONFIG.lock() {
-        let enabled = kind.enabled_in(&config);
-        kind.set_enabled_in(&mut config, !enabled);
-        config.save();
-    }
+    let now_enabled = commit_config(|config| {
+        let enabled = kind.enabled_in(config);
+        kind.set_enabled_in(config, !enabled);
+        !enabled
+    });
 
-    if !kind.enabled() {
+    if !now_enabled {
         // An engine only one kind of preview is ever started for goes with that
         // kind's gate. The Office processes are asked for as a whole rather than
         // through the worker — a worker inside a call it cannot cut short would hold
@@ -314,10 +289,9 @@ pub(in super::super) fn toggle_preview_type(kind: PreviewType) {
 /// no `mpv.exe` reads it as off all the same, which is what keeps every config written before the
 /// row said so working (see `video_hw_accel_wanted`).
 pub(in super::super) fn toggle_video_hw_accel() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.video_hw_accel = !config.video_hw_accel;
-        config.save();
-    }
+    });
 }
 
 /// Whether an explicitly chosen video engine falls through to the others when it cannot play a
@@ -330,10 +304,9 @@ pub(in super::super) fn toggle_video_hw_accel() {
 /// the choice of the file, and what the geometry probe holds is given up where that choice is
 /// read rather than here (see `engines_in_effect`, `forget_video_geometry`).
 pub(in super::super) fn toggle_video_engine_fallback() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.video_engine_fallback = !config.video_engine_fallback;
-        config.save();
-    }
+    });
 }
 
 /// Whether a film's own subtitle tracks are probed for and copied out at all,
@@ -348,12 +321,15 @@ pub(in super::super) fn toggle_video_engine_fallback() {
 /// rather than left to read a film nobody will draw subtitles from (see
 /// `keep_extraction_for`).
 pub(in super::super) fn toggle_video_subtitles() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.video_subtitles = !config.video_subtitles;
-        config.save();
-    }
-    send_preview(PreviewMessage::ForgetVideoGeometry);
-    send_preview(PreviewMessage::KeepExtraction { path: None });
+    publish_config_change(
+        |config| {
+            config.video_subtitles = !config.video_subtitles;
+        },
+        &[
+            PreviewMessage::ForgetVideoGeometry,
+            PreviewMessage::KeepExtraction { path: None },
+        ],
+    );
 }
 
 /// Whether a page of HTML is drawn by the browser engine rather than shown as its markup.
@@ -366,12 +342,10 @@ pub(in super::super) fn toggle_video_subtitles() {
 /// that leaves the engine has its page taken down with the switch, though a pin's is left
 /// as it is (see `refresh_render_html` and `refresh_preview`).
 pub(in super::super) fn toggle_render_html() {
-    let mut turned_off = false;
-    if let Ok(mut config) = CONFIG.lock() {
+    let turned_off = commit_config(|config| {
         config.render_html = !config.render_html;
-        turned_off = !config.render_html;
-        config.save();
-    }
+        !config.render_html
+    });
 
     // The direction that leaves the engine is the one that has to say so: a preview
     // rebuilt from its hover is what a painted page owes (see `refresh_preview`), while
@@ -386,20 +360,22 @@ pub(in super::super) fn toggle_render_html() {
 
 /// Whether an extensionless file is opened as raw text.
 pub(in super::super) fn toggle_text_show_extensionless() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.text_show_extensionless = !config.text_show_extensionless;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.text_show_extensionless = !config.text_show_extensionless;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// Whether secret and sensitive files are refused for text preview.
 pub(in super::super) fn toggle_text_dont_preview_secrets() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.text_dont_preview_secrets = !config.text_dont_preview_secrets;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.text_dont_preview_secrets = !config.text_dont_preview_secrets;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// Whether a pinned document's viewer takes the caret as it is revealed — `Preview Settings → PDF →
@@ -412,11 +388,12 @@ pub(in super::super) fn toggle_text_dont_preview_secrets() {
 /// and brought back — is the first to answer the new value. A refresh would be a pin laid out again
 /// for a setting that changes nothing of what is on screen.
 pub(in super::super) fn toggle_pdf_autofocus() {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.pdf_autofocus = !config.pdf_autofocus;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.pdf_autofocus = !config.pdf_autofocus;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// Whether a pinned document is handed to Chromium's own viewer — `Preview Settings → PDF → Pin Mode →
@@ -431,20 +408,18 @@ pub(in super::super) fn toggle_pdf_autofocus() {
 /// The pin is not laid out again for it: a box, a size and a file are the same ones either way, and
 /// what changed is which window fills the band.
 pub(in super::super) fn toggle_pdf_full_mode() {
-    let full = match CONFIG.lock() {
-        Ok(mut config) => {
-            config.pdf_full_mode = !config.pdf_full_mode;
-            config.save();
-            config.pdf_full_mode
-        }
-        Err(_) => return,
-    };
+    let full = commit_config(|config| {
+        config.pdf_full_mode = !config.pdf_full_mode;
+        config.pdf_full_mode
+    });
 
     if !full {
-        // Let go of the document the pin is holding, whichever file it is on: a viewer left standing
-        // would be a browser in a band that is no longer its, over a raster this app has just gone
-        // back to drawing (see `engines::pdf_viewer::close_the_pin`).
-        crate::engines::pdf_viewer::close_the_pins();
+        // In-process mode closes local PDF pins immediately; two-process mode propagates across
+        // the seam (serving viewer receives ClosePdfPins; detached viewers observe config_generation).
+        if !the_rings_are_the_road() {
+            crate::engines::pdf_viewer::close_the_pins();
+        }
+        send_preview(PreviewMessage::ClosePdfPins);
     }
 
     refresh_preview();
@@ -458,20 +433,18 @@ pub(in super::super) fn toggle_pdf_full_mode() {
 /// on for while it was already known is measured off the tick, and what that measurement is for is
 /// the hover after the one that asked for it (see `spawn_gain_scan`).
 pub(in super::super) fn toggle_normalize_volume() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.normalize_volume = !config.normalize_volume;
-        config.save();
-    }
+    });
 }
 
 /// And the video's own switch, which is the same question asked about a film's soundtrack: read
 /// where its player is started, like the level beside it, and off where the app starts — a film is
 /// looked at, and a measurement of its audio is a decode of the film.
 pub(in super::super) fn toggle_normalize_video_volume() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.normalize_video_volume = !config.normalize_video_volume;
-        config.save();
-    }
+    });
 }
 
 /// The row under a sound's `Normalize`: whether a level turned on a pinned window's own knob is
@@ -480,17 +453,15 @@ pub(in super::super) fn toggle_normalize_video_volume() {
 /// Nothing on screen is rebuilt, and a sound already playing is left where it is: what the switch
 /// changes is where the *next* player starts, which is the same bargain the level beside it makes.
 pub(in super::super) fn toggle_remember_audio_volume() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.remember_audio_volume = !config.remember_audio_volume;
-        config.save();
-    }
+    });
 }
 
 /// And the video's own, which is the same switch asked about a soundtrack and off where the app
 /// starts, like the video's level it decides.
 pub(in super::super) fn toggle_remember_video_volume() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.remember_video_volume = !config.remember_video_volume;
-        config.save();
-    }
+    });
 }
