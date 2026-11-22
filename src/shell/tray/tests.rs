@@ -1,7 +1,8 @@
 use super::*;
 use crate::config::config::{DEFAULT_IMAGE_CACHE_MB, DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN};
 use crate::shell::tray::ids::{
-    ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS, ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
+    ID_TRAY_BYPASS_PLACEMENT, ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
+    ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
 };
 use std::path::PathBuf;
 
@@ -1445,6 +1446,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_VIDEO_ENGINE_FALLBACK,
             ID_TRAY_POSITION_FOLLOW,
             ID_TRAY_POSITION_BEST,
+            ID_TRAY_BYPASS_PLACEMENT,
             ID_TRAY_OPEN_CONFIG,
             ID_TRAY_THEME_LIGHT,
             ID_TRAY_THEME_DARK,

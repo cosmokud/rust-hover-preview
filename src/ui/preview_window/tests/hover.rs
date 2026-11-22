@@ -858,6 +858,7 @@ fn a_pending_preview_follows_the_pointer() {
         orig_dims: (800, 600),
         avoid: None,
         follow_cursor: false,
+        bypass_placement: false,
         preview_scale: PreviewScale::FitToScreen,
         at_the_pointer_corner: false,
     };
@@ -939,6 +940,7 @@ fn a_layout_reduces_a_page_by_the_configured_share() {
         orig_dims: (800, 600),
         avoid: None,
         follow_cursor: false,
+        bypass_placement: false,
         preview_scale,
         at_the_pointer_corner: false,
     };
@@ -984,6 +986,7 @@ fn places_the_waiting_spinner_at_the_pointers_own_corner() {
                 orig_dims: (side, side),
                 avoid: Some(AvoidRegion::text(name)),
                 follow_cursor: false,
+                bypass_placement: false,
                 preview_scale: PreviewScale::Percent(100),
                 at_the_pointer_corner: true,
             },
