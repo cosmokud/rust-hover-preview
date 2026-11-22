@@ -82,10 +82,10 @@ use super::ids::{
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
     ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
-    IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MPV_COMMANDS, PIN_END_OF_FILE_CHOICES,
-    TASKBAR_CREATED, TICK_CHOICES_MS, TIMER_CHECK, TIMER_DUE, TIMING_DELAY_CHOICES_MS, TRAY_CLASS,
-    TRAY_HWND, VIDEO_ENGINE_CHOICES, WM_TRAYICON, WM_TRAY_INSTALL_FINISHED,
-    WM_TRAY_UPDATE_INSTALLED, ZOOM_BACKGROUND_CHOICES,
+    IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MAX_TRAY_CUSTOM_THEMES, MPV_COMMANDS,
+    PIN_END_OF_FILE_CHOICES, TASKBAR_CREATED, TICK_CHOICES_MS, TIMER_CHECK, TIMER_DUE,
+    TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND, VIDEO_ENGINE_CHOICES, WM_TRAYICON,
+    WM_TRAY_INSTALL_FINISHED, WM_TRAY_UPDATE_INSTALLED, ZOOM_BACKGROUND_CHOICES,
 };
 use super::menus::show_context_menu;
 use super::submenus::{install_engine, open_codec_page};
@@ -541,7 +541,10 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_THEME_DARK => set_theme(TextTheme::Dark),
                     // The `theme` folder's items, by the position the submenu gave
                     // them rather than any position in the folder.
-                    cmd if (ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE).contains(&cmd) => {
+                    cmd if (ID_TRAY_THEME_CUSTOM_BASE
+                        ..ID_TRAY_THEME_CUSTOM_BASE + MAX_TRAY_CUSTOM_THEMES as u16)
+                        .contains(&cmd) =>
+                    {
                         set_theme_from_menu((cmd - ID_TRAY_THEME_CUSTOM_BASE) as usize)
                     }
                     ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),

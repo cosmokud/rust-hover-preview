@@ -5,7 +5,7 @@ use super::*;
 
 /// Every scale a hover is laid out by, read from the configuration together so that the
 /// measure of a file and the render that follows it cannot disagree about the size.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct HoverScales {
     /// The share of its own size a picture is drawn at, which is also the scale every
     /// format that is none of the others below keeps.

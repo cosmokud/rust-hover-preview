@@ -459,9 +459,33 @@ fn watch_the_configuration() {
         .as_ref()
         .and_then(|path| fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok());
+    let mut last_gen = app::seam::config_generation();
+    let mut mtime_ticks: u32 = 0;
 
     while RUNNING.load(Ordering::Acquire) {
-        std::thread::sleep(Duration::from_millis(1000));
+        // Fast 50ms check of atomic config_generation; fall back to 1s mtime poll for manual edits.
+        std::thread::sleep(Duration::from_millis(50));
+        if !RUNNING.load(Ordering::Acquire) {
+            break;
+        }
+
+        let current_gen = app::seam::config_generation();
+        if current_gen != last_gen {
+            last_gen = current_gen;
+            last_modified = config_path
+                .as_ref()
+                .and_then(|path| fs::metadata(path).ok())
+                .and_then(|meta| meta.modified().ok());
+            // Wake viewer loop (especially detached viewers that left preview_ring) and refresh hook bindings.
+            app::seam::wake_preview_loop();
+            shell::key_input::refresh();
+            continue;
+        }
+
+        mtime_ticks = mtime_ticks.wrapping_add(1);
+        if !mtime_ticks.is_multiple_of(20) {
+            continue;
+        }
 
         let modified = config_path
             .as_ref()
@@ -473,20 +497,25 @@ fn watch_the_configuration() {
         }
         last_modified = modified;
 
-        // The two values a detached window has to be *told* about rather than only read, taken
-        // before the reload: what changed is the difference between the two readings.
-        let before = CONFIG
-            .lock()
-            .map(|config| (config.text_font_scale_percent, config.pin_always_on_top))
-            .unwrap_or_default();
+        let before = {
+            let config = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                config.text_font_scale_percent,
+                config.pin_always_on_top,
+                config.pdf_full_mode,
+            )
+        };
 
-        // A level edited on disk reaches a live pin from here, or opening the menu is the first
-        // place its change is noticed (see `show_context_menu`). Unchanged halves — and a level this
-        // process wrote itself — publish nothing.
-        let changed = CONFIG
-            .lock()
-            .map(|mut config| config.reload_from_disk_keeping_our_own_levels())
-            .unwrap_or((false, false));
+        let changed = {
+            let mut config = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+            config.reload_from_disk_keeping_our_own_levels()
+        };
+
+        // External manual config.ini edit: notify viewers via generation + ConfigChanged.
+        if !app::detach::is_detached() {
+            last_gen = app::seam::bump_config_generation();
+            app::seam::send_preview(app::seam::PreviewMessage::ConfigChanged);
+        }
 
         // Lock released first: the message a publish sends locks `CONFIG` again.
         if changed.0 {
@@ -497,26 +526,25 @@ fn watch_the_configuration() {
         }
 
         if crate::app::detach::is_detached() {
-            let after = CONFIG
-                .lock()
-                .map(|config| (config.text_font_scale_percent, config.pin_always_on_top))
-                .unwrap_or_default();
+            let after = {
+                let config = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+                (
+                    config.text_font_scale_percent,
+                    config.pin_always_on_top,
+                    config.pdf_full_mode,
+                )
+            };
             if after.0 != before.0 {
                 ui::preview_window::publish_text_font_size(after.0);
             }
-            // The band, and only while pinning is switched on: the message is the same one the tray's
-            // own row sends, and its answer for a window with **Pin Mode → Enable** off is to end it —
-            // which is right for a pin the tray owns and wrong for a window of its own, because that
-            // switch is about taking pins from the listing and this window was taken long ago (see
-            // `PreviewMessage::PinChanged`).
             if after.1 != before.1 && crate::ui::preview_window::pin_mode_is_enabled() {
                 ui::preview_window::refresh_pin();
             }
+            if before.2 && !after.2 {
+                engines::pdf_viewer::close_the_pins();
+            }
         }
 
-        // The pin key is a number the keyboard hook reads rather than the configuration, so a
-        // spelling that changed on disk is handed to it here — off the hook's own path, which may
-        // not take a lock.
         shell::key_input::refresh();
     }
 }

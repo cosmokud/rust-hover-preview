@@ -40,6 +40,7 @@ use crate::config::config::{
     OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewScale, PreviewType, TextTheme,
     TriggerKeyMode, VideoEngine, VOLUME_CHOICES,
 };
+use crate::config::{commit_config, publish_config_change, snapshot};
 use crate::formats::codecs;
 use crate::{app::startup, CONFIG};
 use std::os::windows::ffi::OsStrExt;
@@ -52,11 +53,12 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 /// on screen is rebuilt: in disable mode a held key is what keeps previews away, and
 /// switching to enable mode while it is held should show one.
 pub(in super::super) fn set_trigger_key_mode(mode: TriggerKeyMode) {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.trigger_key_mode = mode;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.trigger_key_mode = mode;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// What a picture is drawn over — and every preview that is not a document: a page,
@@ -70,11 +72,12 @@ pub(in super::super) fn set_image_background(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.image_background = background;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.image_background = background;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// The band beside a picture the wheel has taken past its window, which is filled by a
@@ -87,11 +90,12 @@ pub(in super::super) fn set_zoom_background(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.zoom_background = background;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.zoom_background = background;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// And the same again for a font specimen, which is drawn on a page of its own: the page's
@@ -102,11 +106,12 @@ pub(in super::super) fn set_font_background(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.font_background = background;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.font_background = background;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// And for a page of HTML, which is drawn on a page the engine owns the way a specimen is:
@@ -117,11 +122,12 @@ pub(in super::super) fn set_html_background(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.html_background = background;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.html_background = background;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// And for a texture, which is a picture like any other on this side of the answer: its
@@ -131,11 +137,12 @@ pub(in super::super) fn set_dds_background(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.dds_background = background;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.dds_background = background;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// And for a design document, which is composited by this app the way a texture is: what
@@ -146,11 +153,12 @@ pub(in super::super) fn set_design_background(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.design_background = background;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.design_background = background;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// And for a vector drawing, which is drawn over a backdrop of its own: an SVG document is
@@ -162,21 +170,23 @@ pub(in super::super) fn set_vector_background(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.vector_background = background;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.vector_background = background;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// A text preview's colors and glyphs are painted into its frame, so the preview
 /// on screen is rebuilt rather than only composited again.
 pub(in super::super) fn set_theme(theme: TextTheme) {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.theme = theme;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.theme = theme;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// The theme a custom item named, by the position the submenu listed it at. A
@@ -203,24 +213,19 @@ pub(in super::super) fn set_theme_from_menu(index: usize) {
 /// The question comes first and names what would change, which is the same difference the
 /// row is offered on.
 pub(in super::super) fn reset_settings_from_tray() {
-    let changes = CONFIG
-        .lock()
-        .map(|config| config.settings_apart_from_recommended())
-        .unwrap_or_default();
+    let changes = snapshot().settings_apart_from_recommended();
 
     if !dialogs::confirm_reset_settings(&changes) {
         return;
     }
 
-    let run_at_startup = {
-        let Ok(mut config) = CONFIG.lock() else {
-            return;
-        };
-
+    let (run_at_startup, doc_enabled) = commit_config(|config| {
         config.reset_to_recommended();
-        config.save();
-        config.run_at_startup
-    };
+        (
+            config.run_at_startup,
+            PreviewType::Document.enabled_in(config),
+        )
+    });
 
     // The entry is the registry's and the configuration is the record of the choice, the
     // same way round as the toggle beside it: a reset that turns it back on writes the
@@ -236,11 +241,10 @@ pub(in super::super) fn reset_settings_from_tray() {
     // What a reset can turn off as easily as on, and the one setting whose engines are
     // asked to go when it does — the same ask its own toggle makes, in the process holding
     // them (see `PreviewMessage::StopEngines`).
-    if !PreviewType::Document.enabled() {
+    if !doc_enabled {
         send_preview(PreviewMessage::StopEngines);
     }
 
-    tell_the_viewer_the_configuration_moved();
     refresh_preview_types();
     refresh_preview();
 }
@@ -252,22 +256,18 @@ pub(in super::super) fn reset_settings_from_tray() {
 /// still measures — and nothing outside the file reads these, which is why this one has no
 /// registry to write and no engine to let go.
 pub(in super::super) fn reset_lists_from_tray() {
-    let sections = CONFIG
-        .lock()
-        .map(|config| config.lists_apart_from_built_in())
-        .unwrap_or_default();
+    let sections = snapshot().lists_apart_from_built_in();
 
     if !dialogs::confirm_reset_lists(&sections) {
         return;
     }
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.reset_extension_lists();
-        config.save();
-    }
-
-    refresh_preview_types();
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.reset_extension_lists();
+        },
+        &[PreviewMessage::RefreshTypes, PreviewMessage::Refresh],
+    );
 }
 
 /// How long the mpv a film is played by is kept between films, from `Engine → MPV TTL`.
@@ -279,10 +279,9 @@ pub(in super::super) fn set_mpv_engine_idle(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.video_engine_idle = idle;
-        config.save();
-    }
+    });
 }
 
 /// How long the Office engines are kept after their families' last pages, from
@@ -297,10 +296,9 @@ pub(in super::super) fn set_office_engine_idle(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.office_engine_idle = idle;
-        config.save();
-    }
+    });
 }
 
 /// Which engine Office documents are asked of, from `Engine → Office Engine`.
@@ -321,10 +319,9 @@ pub(in super::super) fn set_office_engine_idle(index: u16) {
 /// being asked for again (see `engines_in_effect`, `document_cache`). A user's own Word or
 /// Excel is not one of these and is never touched (see `office_render`).
 pub(in super::super) fn set_office_engine(engine: OfficeEngine) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.office_engine = engine;
-        config.save();
-    }
+    });
 
     if engine == OfficeEngine::LibreOffice {
         send_preview(PreviewMessage::StopEngines);
@@ -346,10 +343,9 @@ pub(in super::super) fn set_office_engine(engine: OfficeEngine) {
 /// rather than here, since the preview on screen is still placed by the geometry it was built
 /// under (see `forget_video_geometry`).
 pub(in super::super) fn set_video_engine(engine: VideoEngine) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.video_engine = engine;
-        config.save();
-    }
+    });
 }
 
 /// Which `mpv.exe` a launch runs, from `Components → Videos → MPV`, by the position its install was
@@ -369,10 +365,9 @@ pub(in super::super) fn set_mpv_path(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.mpv_path = install.to_string_lossy().into_owned();
-        config.save();
-    }
+    });
 }
 
 /// How long the browser engine is kept after the last document it drew, from
@@ -385,10 +380,9 @@ pub(in super::super) fn set_webview_idle(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.webview_idle = idle;
-        config.save();
-    }
+    });
 }
 
 /// How long the viewer a model was hovered by is kept after that hover ends, from
@@ -403,10 +397,9 @@ pub(in super::super) fn set_f3d_idle(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.f3d_idle = idle;
-        config.save();
-    }
+    });
 }
 
 /// How long the LibreOffice engine is kept after the last page it drew, from
@@ -423,10 +416,9 @@ pub(in super::super) fn set_libreoffice_idle(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.libreoffice_idle = idle;
-        config.save();
-    }
+    });
 }
 
 /// How long Explorer may be out of reach before an engine set to `Until away` is let go.
@@ -441,10 +433,9 @@ pub(in super::super) fn set_afk_timer(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.afk_timer_seconds = seconds;
-        config.save();
-    }
+    });
 }
 
 /// The size an item of the `Cache` submenu stands for, by the position it was
@@ -464,12 +455,12 @@ pub(in super::super) fn set_image_cache_mb(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.image_cache_mb = sanitize_image_cache_mb(megabytes);
-        config.save();
-    }
-
-    send_preview(PreviewMessage::TrimCaches);
+    publish_config_change(
+        |config| {
+            config.image_cache_mb = sanitize_image_cache_mb(megabytes);
+        },
+        &[PreviewMessage::TrimCaches],
+    );
 }
 
 /// How much of what an engine drew may be kept, between hovers.
@@ -482,12 +473,12 @@ pub(in super::super) fn set_document_cache_mb(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.document_cache_mb = sanitize_document_cache_mb(megabytes);
-        config.save();
-    }
-
-    send_preview(PreviewMessage::TrimCaches);
+    publish_config_change(
+        |config| {
+            config.document_cache_mb = sanitize_document_cache_mb(megabytes);
+        },
+        &[PreviewMessage::TrimCaches],
+    );
 }
 
 /// How much of what the image converter developed may be kept, between hovers.
@@ -501,12 +492,12 @@ pub(in super::super) fn set_image_disk_cache_mb(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.image_disk_cache_mb = sanitize_image_disk_cache_mb(megabytes);
-        config.save();
-    }
-
-    send_preview(PreviewMessage::TrimCaches);
+    publish_config_change(
+        |config| {
+            config.image_disk_cache_mb = sanitize_image_disk_cache_mb(megabytes);
+        },
+        &[PreviewMessage::TrimCaches],
+    );
 }
 
 /// How much of what a film's own subtitle tracks were copied into may be kept, between hovers.
@@ -521,10 +512,9 @@ pub(in super::super) fn set_general_disk_cache_mb(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.general_disk_cache_mb = sanitize_general_disk_cache_mb(megabytes);
-        config.save();
-    }
+    });
 
     trim_subtitle_cache();
 }
@@ -539,10 +529,9 @@ pub(in super::super) fn set_decode_budget_gb(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.decode_budget_gb = sanitize_decode_budget_gb(gigabytes);
-        config.save();
-    }
+    });
 }
 
 /// The room one pinned picture's held run of frames may take, in megabytes.
@@ -555,10 +544,9 @@ pub(in super::super) fn set_animated_webp_budget_mb(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.animated_webp_budget_mb = sanitize_animated_webp_budget_mb(megabytes);
-        config.save();
-    }
+    });
 }
 
 /// A text preview's own keys and pointer are the pin's business now: the row that used to
@@ -566,26 +554,24 @@ pub(in super::super) fn set_animated_webp_budget_mb(index: u16) {
 /// is what brings it up as something to work in (see `current_text_options`).
 pub(in super::super) fn set_text_font_scale(percent: u32) {
     let percent = sanitize_text_font_scale_percent(percent);
-    if let Ok(mut config) = CONFIG.lock() {
-        config.text_font_scale_percent = percent;
-        config.save();
-    }
-    // A pin already showing a page is drawn on the preview thread and at a size of its own, so
-    // the size this row names is said to that thread rather than only written here: the row is
-    // the one thing that puts a page already up to another size. A page a reader has wheeled, or
-    // a size hand-edited into the file, is left alone by everything but this row (see
-    // `publish_text_font_size`).
-    crate::app::seam::send_preview(crate::app::seam::PreviewMessage::TrayTextSize { percent });
-    tell_the_viewer_the_configuration_moved();
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.text_font_scale_percent = percent;
+        },
+        &[
+            PreviewMessage::TrayTextSize { percent },
+            PreviewMessage::Refresh,
+        ],
+    );
 }
 
 pub(in super::super) fn set_markdown_mode(mode: MarkdownMode) {
-    if let Ok(mut config) = CONFIG.lock() {
-        config.markdown_mode = mode;
-        config.save();
-    }
-    refresh_preview();
+    publish_config_change(
+        |config| {
+            config.markdown_mode = mode;
+        },
+        &[PreviewMessage::Refresh],
+    );
 }
 
 /// Which files the previous/next buttons on a pin's own caption step through: every file this
@@ -597,34 +583,30 @@ pub(in super::super) fn set_markdown_mode(mode: MarkdownMode) {
 /// and a pin with no folder of its own to walk is not a walk at all either way.
 /// Which files a walk anchored on a picture steps through (see `Navigation → Image`).
 pub(in super::super) fn set_pin_nav_image(mode: PinNavFileTypes) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_nav_image = mode;
-        config.save();
-    }
+    });
 }
 
 /// Which files a walk anchored on a video steps through (see `Navigation → Video`).
 pub(in super::super) fn set_pin_nav_video(mode: PinNavFileTypes) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_nav_video = mode;
-        config.save();
-    }
+    });
 }
 
 /// Which files a walk anchored on a sound steps through (see `Navigation → Audio`).
 pub(in super::super) fn set_pin_nav_audio(mode: PinNavFileTypes) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_nav_audio = mode;
-        config.save();
-    }
+    });
 }
 
 /// Which files a walk anchored on any other file steps through (see `Navigation → Others`).
 pub(in super::super) fn set_pin_nav_others(mode: PinNavFileTypes) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_nav_others = mode;
-        config.save();
-    }
+    });
 }
 
 /// Where a pinned window's minimize puts it: the round bubble on the desktop, or the app's own
@@ -634,10 +616,9 @@ pub(in super::super) fn set_pin_nav_others(mode: PinNavFileTypes) {
 /// button is pressed, so a change made while a pin is up is the next minimize's — a pin already
 /// away is left where it was put (see `collapse_pin`).
 pub(in super::super) fn set_pin_minimize_to(target: PinMinimizeTo) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_minimize_to = target;
-        config.save();
-    }
+    });
 }
 
 pub(in super::super) fn set_video_volume(index: u16) {
@@ -645,14 +626,12 @@ pub(in super::super) fn set_video_volume(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.video_volume = volume;
-        config.save();
-    }
-
-    // A film already playing in a pin is playing at a level of its own, so it is told this one
-    // now rather than at the next file it is shown (see `tray_volume_moved`).
-    crate::app::seam::send_preview(crate::app::seam::PreviewMessage::TrayVolume { audio: false });
+    publish_config_change(
+        |config| {
+            config.video_volume = volume;
+        },
+        &[PreviewMessage::TrayVolume { audio: false }],
+    );
 }
 
 /// A level of the `Volume → Audio` submenu, by the position it was listed at: the volume a
@@ -663,14 +642,12 @@ pub(in super::super) fn set_audio_volume(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
-        config.audio_volume = volume;
-        config.save();
-    }
-
-    // A sound already playing in a pin is playing at a level of its own, so it is told this one
-    // now rather than at the next file it is shown (see `tray_volume_moved`).
-    crate::app::seam::send_preview(crate::app::seam::PreviewMessage::TrayVolume { audio: true });
+    publish_config_change(
+        |config| {
+            config.audio_volume = volume;
+        },
+        &[PreviewMessage::TrayVolume { audio: true }],
+    );
 }
 
 /// A way of starting a sound, by the position it was listed at: where in a file a hover drops
@@ -684,10 +661,9 @@ pub(in super::super) fn set_audio_seek(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.audio_seek = seek;
-        config.save();
-    }
+    });
 }
 
 /// The way an item of the `Volume → Audio Seek` submenu stands for, by the position it was
@@ -709,10 +685,9 @@ pub(in super::super) fn set_pin_mode_audio_seek(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_mode_audio_seek = seek;
-        config.save();
-    }
+    });
 }
 
 /// What a pinned film or sound does at the end of its file, by the position it was
@@ -727,14 +702,13 @@ pub(in super::super) fn set_pin_end_of_file(index: u16, video: bool) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         if video {
             config.pin_mode_video_end_of_file = end_of_file;
         } else {
             config.pin_mode_audio_end_of_file = end_of_file;
         }
-        config.save();
-    }
+    });
 }
 
 /// Whether a hovered film or sound goes round at the end of it, which is what the
@@ -743,14 +717,13 @@ pub(in super::super) fn set_pin_end_of_file(index: u16, video: bool) {
 /// Nothing on screen is rebuilt: a file already playing is left where it is, and what a
 /// click here changes is what the *next* end does.
 pub(in super::super) fn toggle_loop(video: bool) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         if video {
             config.video_loop = !config.video_loop;
         } else {
             config.audio_loop = !config.audio_loop;
         }
-        config.save();
-    }
+    });
 }
 
 /// The kind of pinned walk a `Shuffle` row asks about: the three anchors that have a
@@ -772,14 +745,11 @@ pub(in super::super) enum PinShuffle {
 /// shuffle or no shuffle: the order a shuffle picks the *next* file in is the only thing it
 /// is (see `PinStep::step`).
 pub(in super::super) fn toggle_pin_shuffle(kind: PinShuffle) {
-    if let Ok(mut config) = CONFIG.lock() {
-        match kind {
-            PinShuffle::Video => config.pin_mode_video_shuffle = !config.pin_mode_video_shuffle,
-            PinShuffle::Audio => config.pin_mode_audio_shuffle = !config.pin_mode_audio_shuffle,
-            PinShuffle::Image => config.pin_mode_image_shuffle = !config.pin_mode_image_shuffle,
-        }
-        config.save();
-    }
+    commit_config(|config| match kind {
+        PinShuffle::Video => config.pin_mode_video_shuffle = !config.pin_mode_video_shuffle,
+        PinShuffle::Audio => config.pin_mode_audio_shuffle = !config.pin_mode_audio_shuffle,
+        PinShuffle::Image => config.pin_mode_image_shuffle = !config.pin_mode_image_shuffle,
+    });
 }
 
 /// Whether a pinned sound's playlist band puts its camera on the file its walk stepped onto — the
@@ -790,10 +760,9 @@ pub(in super::super) fn toggle_pin_shuffle(kind: PinShuffle) {
 /// rows are the same list of the same files and the pin the same walk; what is given up is the
 /// scroll that goes looking for the row the step landed on (see `pin_playlist`).
 pub(in super::super) fn toggle_pin_camera_follows() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_mode_audio_camera_follows = !config.pin_mode_audio_camera_follows;
-        config.save();
-    }
+    });
 }
 
 /// Whether a sound taken up pinned comes up with its playlist band open — the `Always Open
@@ -803,17 +772,15 @@ pub(in super::super) fn toggle_pin_camera_follows() {
 /// band that a pin is already carrying is the one the hand left (see `pin_playlist::open_for`).
 /// A band is only ever a pin's, so this is the one road that opens one with no press behind it.
 pub(in super::super) fn toggle_pin_playlist_always_open() {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.pin_mode_audio_playlist_always_open = !config.pin_mode_audio_playlist_always_open;
-        config.save();
-    }
+    });
 }
 
 pub(in super::super) fn set_follow_cursor(follow: bool) {
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.follow_cursor = follow;
-        config.save();
-    }
+    });
 }
 
 /// The way an item of the `Avoid` submenu stands for, by the position it was listed
@@ -833,10 +800,9 @@ pub(in super::super) fn set_avoid_mode(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.avoid_mode = mode;
-        config.save();
-    }
+    });
 }
 
 /// The tick an item of the `Tick` submenu stands for, by the position it was listed at.
@@ -857,21 +823,9 @@ pub(in super::super) fn set_tick_ms(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.tick_ms = sanitize_tick_ms(tick_ms);
-        config.save();
-    }
-}
-
-/// Tell the process that draws previews that a setting it reads when a hover begins has moved.
-///
-/// A `Scaling` row is not rebuilt for: the share is part of the placement a hover is opened
-/// with, and the next hover answers for itself — but only where the process drawing the hover
-/// is this one. With a viewer, the hover is drawn by a process whose copy of `config.ini` is
-/// reloaded by a watch that looks once a second, so the first hover after the row was picked
-/// was laid out at the share it replaced (see `PreviewMessage::ConfigChanged`).
-fn tell_the_viewer_the_configuration_moved() {
-    send_preview(PreviewMessage::ConfigChanged);
+    });
 }
 
 /// How large a picture is drawn, by the position the item was listed at.
@@ -884,12 +838,9 @@ pub(in super::super) fn set_preview_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.preview_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// The same for a video, at the share `video_scale` names: the frame that stands in for
@@ -901,12 +852,9 @@ pub(in super::super) fn set_video_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.video_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// And the same for an animated picture, at the share `animated_scale` names: the frames
@@ -919,12 +867,9 @@ pub(in super::super) fn set_animated_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.animated_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// How much of the display a PDF page — the `Ebook` kind — is drawn over, by the position
@@ -939,12 +884,9 @@ pub(in super::super) fn set_ebook_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.ebook_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// How much of the display a page of the `Document` kind is shown over, by the position the
@@ -955,12 +897,9 @@ pub(in super::super) fn set_document_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.document_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// How much of the display a sound's card is laid out over, by the position the
@@ -973,12 +912,9 @@ pub(in super::super) fn set_audio_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.audio_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// How much of the display a font specimen is drawn over, by the position the item was
@@ -988,12 +924,9 @@ pub(in super::super) fn set_font_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.font_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// How much of the display a design document is drawn over, by the position the item was
@@ -1006,12 +939,9 @@ pub(in super::super) fn set_design_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.design_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// How much of the display a vector drawing is replayed over, by the position the item was
@@ -1022,12 +952,9 @@ pub(in super::super) fn set_vector_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.vector_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// How much of the display a model is drawn over, by the position the item was listed at.
@@ -1040,12 +967,9 @@ pub(in super::super) fn set_model_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.model_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// How much of the display a page of text is measured in, by the position the item was listed
@@ -1057,12 +981,9 @@ pub(in super::super) fn set_text_scale(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.text_scale = scale;
-        config.save();
-    }
-
-    tell_the_viewer_the_configuration_moved();
+    });
 }
 
 /// The share an item of the `Image`, `Video` or `Animated`
@@ -1089,10 +1010,9 @@ pub(in super::super) fn set_hover_delay(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.hover_delay_ms = delay_ms;
-        config.save();
-    }
+    });
 }
 
 /// How long the same file waits before a preview of it is put up again, by the position
@@ -1102,10 +1022,9 @@ pub(in super::super) fn set_same_file_rehover_delay(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.same_file_rehover_delay_ms = delay_ms;
-        config.save();
-    }
+    });
 }
 
 /// How long the pointer must be still before a preview may open for anything, by the
@@ -1115,10 +1034,9 @@ pub(in super::super) fn set_settling_delay(index: u16) {
         return;
     };
 
-    if let Ok(mut config) = CONFIG.lock() {
+    commit_config(|config| {
         config.settling_delay_ms = delay_ms;
-        config.save();
-    }
+    });
 }
 
 /// A page, opened in the browser the user already has: the same call the release page is

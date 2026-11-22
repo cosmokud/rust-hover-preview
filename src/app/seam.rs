@@ -1130,6 +1130,8 @@ pub(crate) enum PreviewMessage {
     /// Nothing on screen is rebuilt — a preview already up keeps the placement it was opened with, as
     /// the rows' own docs say.
     ConfigChanged,
+    /// `pdf_full_mode` was switched off: close any standing Chromium PDF pin viewers in the viewer process.
+    ClosePdfPins,
     /// Every probed geometry is given up: the engine choice moved, and a geometry read by FFprobe is
     /// not the geometry a media-engine preview wants, so the next hover probes again. Given up on the
     /// loop because the cache is that side's, and a row moved in the tray is not one that reaches a
@@ -2282,6 +2284,7 @@ impl SeamMessage {
     const PIN_RESTORE: u8 = 31;
     const PIN_COLD: u8 = 32;
     const CONFIG_CHANGED: u8 = 33;
+    const CLOSE_PDF_PINS: u8 = 34;
 
     /// A message tagged `tag` carrying `numbers` in that order, and no text yet.
     fn of(tag: u8, numbers: &[i64]) -> Self {
@@ -2417,6 +2420,7 @@ impl SeamMessage {
                 Some(Self::of(Self::TRAY_TEXT_SIZE, &[*percent as i64]))
             }
             PreviewMessage::ConfigChanged => Some(Self::of(Self::CONFIG_CHANGED, &[])),
+            PreviewMessage::ClosePdfPins => Some(Self::of(Self::CLOSE_PDF_PINS, &[])),
             PreviewMessage::ForgetVideoGeometry => Some(Self::of(Self::FORGET_VIDEO_GEOMETRY, &[])),
             PreviewMessage::KeepExtraction { path } => {
                 let numbers = [a_flag(path.is_some())];
@@ -2544,6 +2548,7 @@ impl SeamMessage {
                 percent: numbers[0] as u32,
             },
             Self::CONFIG_CHANGED => PreviewMessage::ConfigChanged,
+            Self::CLOSE_PDF_PINS => PreviewMessage::ClosePdfPins,
             Self::FORGET_VIDEO_GEOMETRY => PreviewMessage::ForgetVideoGeometry,
             Self::KEEP_EXTRACTION => PreviewMessage::KeepExtraction {
                 path: if numbers[0] == 0 {
@@ -3664,13 +3669,11 @@ fn is_a_window_of_its_own(pid: u32) -> bool {
 }
 
 /// Current live-config publication generation.
-#[allow(dead_code)] // Consumed in Wave 2 live-config publication.
 pub(crate) fn config_generation() -> u64 {
     the_run_facts().config_generation.load(Ordering::Acquire)
 }
 
 /// Bump live-config publication generation and return the new value.
-#[allow(dead_code)] // Consumed in Wave 2 live-config publication.
 pub(crate) fn bump_config_generation() -> u64 {
     the_run_facts()
         .config_generation
@@ -3816,6 +3819,7 @@ mod tests {
             PreviewMessage::TrayVolume { audio: true },
             PreviewMessage::TrayTextSize { percent: 175 },
             PreviewMessage::ConfigChanged,
+            PreviewMessage::ClosePdfPins,
             PreviewMessage::ForgetVideoGeometry,
             PreviewMessage::KeepExtraction {
                 path: Some(path.clone()),

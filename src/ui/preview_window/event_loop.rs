@@ -217,6 +217,7 @@ pub fn run_preview_window() {
         // one thing the loop itself cannot do (see `spawn_pin_watchdog`).
         spawn_pin_watchdog();
         let mut current_generation: u64 = 0;
+        let mut seen_config_gen: u64 = crate::app::seam::config_generation();
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
         let mut last_stream_overlay_repaint = Instant::now();
@@ -2708,6 +2709,21 @@ pub fn run_preview_window() {
             // layouts for files the cursor has already left.
             let mut latest_preview_msg: Option<PreviewMessage> = None;
             let mut refresh_requested = false;
+            // Fast atomic generation check so serving and detached viewers reload config.ini
+            // immediately without waiting for the 1s mtime poll.
+            let current_config_gen = crate::app::seam::config_generation();
+            if current_config_gen != seen_config_gen {
+                seen_config_gen = current_config_gen;
+                let diff = reload_config_for_event_loop();
+                apply_config_reload_diff(
+                    diff,
+                    hwnd,
+                    &mut latest_preview_msg,
+                    &current_show,
+                    &video_replay,
+                    &measure_replay,
+                );
+            }
             // The newest file the user has picked while a preview was pinned, if any arrived this
             // tick: what the loop answers by showing the pin that file instead of the one it has
             // (see `PinUpdate`).
@@ -2871,9 +2887,19 @@ pub fn run_preview_window() {
                     // first preview after a change was drawn at the old share and the second at the
                     // new one (see `PreviewMessage::ConfigChanged`). Nothing on screen is rebuilt.
                     PreviewMessage::ConfigChanged => {
-                        if let Ok(mut config) = CONFIG.lock() {
-                            config.reload_from_disk_keeping_our_own_levels();
-                        }
+                        seen_config_gen = crate::app::seam::config_generation();
+                        let diff = reload_config_for_event_loop();
+                        apply_config_reload_diff(
+                            diff,
+                            hwnd,
+                            &mut latest_preview_msg,
+                            &current_show,
+                            &video_replay,
+                            &measure_replay,
+                        );
+                    }
+                    PreviewMessage::ClosePdfPins => {
+                        crate::engines::pdf_viewer::close_the_pins();
                     }
                     // A budget made smaller is trimmed here for the same reason: what a trim may
                     // not give up is this process's, and none of the tray's (see `trim_caches`).
@@ -2889,51 +2915,13 @@ pub fn run_preview_window() {
                     // way its own close button takes it.
                     PreviewMessage::PinChanged => {
                         if pinned() {
-                            // A pin that is Always On Top owes the front to the setting, and one
-                            // whose row is off never owed it: the flag is what either setting
-                            // leaves behind otherwise, and it would be a pin holding a band its
-                            // own setting does not name.
                             if pin_always_on_top() || !pin_update_move_to_top() {
                                 PIN_FRONT_OWED.store(false, Ordering::SeqCst);
                             }
                             if !pin_enabled() {
                                 pin_request = Some(end_pin_state(Reason::SwitchedOff));
                             } else {
-                                // **The band the setting now names, on the windows that are in it**:
-                                // a pin that is a window of its own is not this window and neither is
-                                // the host that owns its chrome, and the row used to be answered by
-                                // placing the preview — a window the pin has put down — in the band.
-                                // What that left was a pin taken up with the setting off and then
-                                // told it was Always On Top, still ordinary and so behind the listing
-                                // it was asked for from (see `place_the_pin_where_the_setting_names`).
-                                place_the_pin_where_the_setting_names();
-                                // **And the button goes with it.** A pair whose button is the host's
-                                // is not the stand-in below, and a row that only answered the stand-in
-                                // left a pin with `Always On Top` on wearing the button it had
-                                // (see `the_button_follows_the_setting`).
-                                pin_film_host::the_button_follows_the_setting();
-                                if pin_always_on_top() {
-                                    if !pin_is_collapsed() {
-                                        hide_pin_taskbar();
-                                    }
-                                } else {
-                                    show_pin_taskbar();
-                                }
-                                place_pinned_siblings();
-                                // And the player is told the same thing where it is mpv's: a film
-                                // that held the topmost band for the pin's sake has to give it up
-                                // when the setting says so, or it is a topmost window over a pin
-                                // that is not (see `settle_pinned_mpv_ontop`).
-                                settle_pinned_mpv_ontop();
-                                AUDIO_CARD_DIRTY.store(true, Ordering::Release);
-                                render_layered_preview(hwnd);
-                                // **And the pin's place is settled last, because the button road above
-                                // is one that moves the caret.** Reading the Shell's bit back costs a
-                                // visible window a hide and a re-show, and a hidden window hands the
-                                // caret to the window next in the z-order — the listing raised over a
-                                // pin that has just left the topmost band (see
-                                // `settle_the_pin_after_the_setting_moved`).
-                                settle_the_pin_after_the_setting_moved();
+                                apply_pin_topmost_change(hwnd);
                             }
                         }
                     }
@@ -4563,6 +4551,7 @@ pub fn run_preview_window() {
                     | PreviewMessage::HideHtmlPage
                     | PreviewMessage::TrimCaches
                     | PreviewMessage::ConfigChanged
+                    | PreviewMessage::ClosePdfPins
                     | PreviewMessage::KillStrayPlayer => {}
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the
@@ -5720,5 +5709,152 @@ fn step_the_marquee(scroll: &mut Option<audio_preview::NameScroll>, cadence: Dur
             scroll.offset()
         }
         None => 0,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConfigReloadDiff {
+    video_volume_changed: bool,
+    audio_volume_changed: bool,
+    text_font_scale_changed: Option<u32>,
+    pin_always_on_top_changed: bool,
+    pdf_full_mode_turned_off: bool,
+    scales_changed: bool,
+}
+
+/// Reload `CONFIG` from disk (recovering from a poisoned lock instead of dropping reload)
+/// and report live-applicable setting diffs.
+fn reload_config_for_event_loop() -> ConfigReloadDiff {
+    let mut config = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+    let before_text_font = config.text_font_scale_percent;
+    let before_topmost = config.pin_always_on_top;
+    let before_pdf_full = config.pdf_full_mode;
+    let before_scales = (
+        HoverScales::of(&config),
+        config.text_scale,
+        config.audio_scale,
+    );
+
+    let (video_volume_changed, audio_volume_changed) =
+        config.reload_from_disk_keeping_our_own_levels();
+
+    let after_text_font = config.text_font_scale_percent;
+    let after_topmost = config.pin_always_on_top;
+    let after_pdf_full = config.pdf_full_mode;
+    let after_scales = (
+        HoverScales::of(&config),
+        config.text_scale,
+        config.audio_scale,
+    );
+
+    ConfigReloadDiff {
+        video_volume_changed,
+        audio_volume_changed,
+        text_font_scale_changed: (after_text_font != before_text_font).then_some(after_text_font),
+        pin_always_on_top_changed: after_topmost != before_topmost,
+        pdf_full_mode_turned_off: before_pdf_full && !after_pdf_full,
+        scales_changed: after_scales != before_scales,
+    }
+}
+
+unsafe fn apply_pin_topmost_change(hwnd: HWND) {
+    place_the_pin_where_the_setting_names();
+    pin_film_host::the_button_follows_the_setting();
+    if pin_always_on_top() {
+        if !pin_is_collapsed() {
+            hide_pin_taskbar();
+        }
+    } else {
+        show_pin_taskbar();
+    }
+    place_pinned_siblings();
+    settle_pinned_mpv_ontop();
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+    render_layered_preview(hwnd);
+    settle_the_pin_after_the_setting_moved();
+}
+
+unsafe fn apply_config_reload_diff(
+    diff: ConfigReloadDiff,
+    hwnd: HWND,
+    latest_preview_msg: &mut Option<PreviewMessage>,
+    current_show: &Option<PreviewMessage>,
+    video_replay: &Option<PathBuf>,
+    measure_replay: &Option<PathBuf>,
+) {
+    if diff.video_volume_changed {
+        tray_volume_moved(false);
+    }
+    if diff.audio_volume_changed {
+        tray_volume_moved(true);
+    }
+    if let Some(percent) = diff.text_font_scale_changed {
+        redraw_pinned_page(hwnd, Some(percent));
+    }
+    if diff.pin_always_on_top_changed && pinned() {
+        if pin_always_on_top() || !pin_update_move_to_top() {
+            PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+        }
+        apply_pin_topmost_change(hwnd);
+    }
+    if diff.pdf_full_mode_turned_off {
+        crate::engines::pdf_viewer::close_the_pins();
+    }
+    if diff.scales_changed
+        && !pinned()
+        && latest_preview_msg.is_none()
+        && (video_replay.is_some() || measure_replay.is_some())
+    {
+        *latest_preview_msg = current_show.clone();
+    }
+}
+
+#[cfg(test)]
+mod config_reload_tests {
+    use super::*;
+    use crate::config::config::{ConfigFolderOfItsOwn, PreviewScale};
+
+    #[test]
+    fn reload_config_detects_live_diffs_and_recovers_from_poisoned_lock() {
+        let _folder = ConfigFolderOfItsOwn::take();
+
+        // Seed initial state on disk and in CONFIG.
+        {
+            let mut cfg = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+            cfg.text_font_scale_percent = 100;
+            cfg.pin_always_on_top = true;
+            cfg.pdf_full_mode = true;
+            cfg.preview_scale = PreviewScale::Percent(100);
+            cfg.save();
+        }
+
+        // Write updated values to disk without updating in-memory CONFIG (simulating another process).
+        let mut disk_cfg = crate::config::snapshot();
+        disk_cfg.text_font_scale_percent = 150;
+        disk_cfg.pin_always_on_top = false;
+        disk_cfg.pdf_full_mode = false;
+        disk_cfg.preview_scale = PreviewScale::Percent(50);
+        disk_cfg.save();
+
+        // Intentionally poison CONFIG mutex to verify recovery instead of silent drop.
+        let _ = std::thread::spawn(|| {
+            let _guard = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+            panic!("intentional poison for reload recovery test");
+        })
+        .join();
+        assert!(CONFIG.is_poisoned(), "CONFIG mutex should be poisoned");
+
+        let diff = reload_config_for_event_loop();
+        assert_eq!(diff.text_font_scale_changed, Some(150));
+        assert!(diff.pin_always_on_top_changed);
+        assert!(diff.pdf_full_mode_turned_off);
+        assert!(diff.scales_changed);
+
+        // Verify CONFIG holds the reloaded values.
+        let reloaded = crate::config::snapshot();
+        assert_eq!(reloaded.text_font_scale_percent, 150);
+        assert!(!reloaded.pin_always_on_top);
+        assert!(!reloaded.pdf_full_mode);
+        assert_eq!(reloaded.preview_scale, PreviewScale::Percent(50));
     }
 }
