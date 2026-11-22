@@ -3,19 +3,14 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment, ICoreWebView2_3,
-};
-use webview2_com::{NavigationCompletedEventHandler, TrySuspendCompletedHandler};
+use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2Environment, ICoreWebView2_3};
+use webview2_com::TrySuspendCompletedHandler;
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
-use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW, GetWindowLongPtrW, KillTimer,
-    SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    TranslateMessage, GWL_EXSTYLE, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, LWA_ALPHA, MSG,
-    SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNOACTIVATE,
+    GetClientRect, GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowLongPtrW, GWL_EXSTYLE,
+    HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, LWA_ALPHA, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
 };
 
 use super::api::{
@@ -33,58 +28,23 @@ use super::pages::{font_page, frame_page, html_page};
 
 use crate::app::engine_processes;
 use crate::config::config::TransparentBackground;
+use crate::engines::webview_host::{
+    new_browser_pids, pump_until, register_navigation_completed, snapshot_browser_pids,
+    PlacementSync, Unanswered, WebView2Host,
+};
 use crate::formats::font_formats;
 use crate::formats::text_formats;
 use crate::readers::font_preview;
 
-/// Everything one engine is: the window it draws in, the environment, and the
-/// controller over it.
+/// Everything one engine is: the shared host surface, the environment, and domain state.
 pub(super) struct Host {
-    hwnd: HWND,
+    surface: WebView2Host,
     environment: ICoreWebView2Environment,
-    controller: ICoreWebView2Controller,
-    webview: ICoreWebView2,
-    /// The file the engine is holding, the backdrop its page was written for, and — for a font —
-    /// the face of a collection it was read at, so a second hover on the same file is a window
-    /// that is put back up rather than a navigation. A change of backdrop or of face is a page to
-    /// write again, since three of the four backdrops are partly the page's own (the
-    /// checkerboard's squares, a specimen's ink) and the page is what the browser caches, and a
-    /// specimen of another face is another page and another font in it. The face is the index the
-    /// page was written for, and `0` for a file that is not a collection.
     current: Option<(PathBuf, TransparentBackground, usize)>,
-    /// The width and height the controller was last told to lay the page out at, and the
-    /// window's own last box, so that a box which merely moved is not also re-laid-out.
-    ///
-    /// This is what makes a carried window cost one `SetWindowPos` rather than a bounds change
-    /// as well: a page is laid out at the size of the window it is drawn in, so `SetBounds` is
-    /// owed only by a box that changed *size*, and a drag that changes only where the window
-    /// is has no reason to ask the browser to lay the document out again (see `place`).
-    last_area: Option<(i32, i32)>,
-    /// Whether this window has been placed as a pin's *source* already: a page the pin draws through
-    /// the Shell's thumbnail of this window is placed once at the band it is the picture in, and only
-    /// moved after that, because the picture it is sampled for is its client area (see `put_window`).
+    placement: PlacementSync,
     a_source: bool,
-    /// The browser process this engine started, when it could be told which one it
-    /// was. The runtime owns the browser, but the process is this app's own child —
-    /// started by the loader in this process — and it is what is ended if it is
-    /// somehow still there when the engine goes.
     browser_pid: u32,
-    /// Whether the browser has stopped answering a navigation for longer than any document
-    /// takes. Such an engine is let go of by the thread that holds it rather than handed
-    /// the next document: what it would answer with is the file before this one, and what
-    /// its thread would do is wait on a page that is never coming (see `NAVIGATION_TIMEOUT`).
     hung: bool,
-    /// Whether the browser has been asked to suspend and is to be resumed before the next
-    /// document is drawn. It is kept here rather than read back from the browser because
-    /// both questions are about this host's own last word: a runtime older than
-    /// suspension is a host that never suspends, and a resume of a WebView that is not
-    /// suspended is harmless (see `suspend`, `wake`).
-    ///
-    /// It is also the record of the invariant `hide` keeps: after a hide returns, the
-    /// browser has been asked to stop, whatever was on screen and whatever was. Nothing
-    /// is read to decide whether the ask is owed, so a hide that has already been had
-    /// does not ask again, and a browser that is stopped is a browser `wake` knows to put
-    /// back to work before it navigates.
     suspended: bool,
 }
 
@@ -96,10 +56,7 @@ impl Host {
         // starts can be told from one an earlier engine of this same run left
         // closing: both are children of this process, and only the one that was not
         // there a moment ago is this engine's.
-        let before = engine_processes::processes_named_by_parent(
-            engine_processes::BROWSER_IMAGE,
-            std::process::id(),
-        );
+        let before = snapshot_browser_pids();
 
         let folder = user_data_folder();
         std::fs::create_dir_all(&folder).ok()?;
@@ -166,13 +123,7 @@ impl Host {
         // is put in the job and written down for is the same thing the Office engines
         // are — a process that must not outlive the app that started it, however the
         // app ends.
-        let browser_pid = engine_processes::processes_named_by_parent(
-            engine_processes::BROWSER_IMAGE,
-            std::process::id(),
-        )
-        .into_iter()
-        .find(|pid| !before.contains(pid))
-        .unwrap_or(0);
+        let browser_pid = new_browser_pids(&before).into_iter().next().unwrap_or(0);
 
         if browser_pid != 0 {
             engine_processes::record(engine_processes::BROWSER_IMAGE, browser_pid);
@@ -185,12 +136,15 @@ impl Host {
         }
 
         let host = Self {
-            hwnd,
+            surface: WebView2Host::new(hwnd, controller, webview),
             environment,
-            controller,
-            webview,
             current: None,
-            last_area: None,
+            placement: PlacementSync::new(Area {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            }),
             a_source: false,
             browser_pid,
             hung: false,
@@ -258,7 +212,8 @@ impl Host {
             // The background is a setting of the controller rather than of the page,
             // and it belongs to the interface that added it.
             if let Ok(controller) = self
-                .controller
+                .surface
+                .controller()
                 .cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller2>()
             {
                 let _ = controller.SetDefaultBackgroundColor(background_color(background));
@@ -339,7 +294,7 @@ impl Host {
 
         // The bounds this window was given are recorded, so that a box which only moves from
         // here is not also re-laid-out (see `place`).
-        self.last_area = Some((area.width, area.height));
+        self.placement.record(area);
 
         // The client the window really has, read rather than taken from the record above: what a
         // source window's client is the surface the pin's band samples, and the record is the box
@@ -348,33 +303,26 @@ impl Host {
         // smaller one before it, and the swap that follows would skip the resize that is the whole
         // of what puts the band right (see `the_window_takes_the_area`).
         let mut client = RECT::default();
-        let client = unsafe { GetClientRect(self.hwnd, &mut client) }
+        let client = unsafe { GetClientRect(self.surface.hwnd(), &mut client) }
             .ok()
             .map(|()| (client.right - client.left, client.bottom - client.top));
 
         unsafe {
             self.put_the_page_style();
 
-            let _ = self.controller.SetIsVisible(true);
+            self.surface.set_visible(true);
 
             // A source window's client is the surface the pin's band samples, so a document
             // arriving at a size the window's client is not is the *window's* box to take,
             // and it is taken before the browser is told the box to lay the page out at: the
             // client is one box, and the page is laid out at the same one.
             if self.the_page_is_a_source() && the_window_takes_the_area(client, area) {
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    HWND::default(),
-                    area.x,
-                    area.y,
-                    area.width,
-                    area.height,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
+                self.surface
+                    .move_window(area, HWND::default(), SWP_NOZORDER | SWP_NOACTIVATE);
             }
 
             self.set_bounds(area);
-            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            self.surface.show_window(true);
             self.put_window(area);
         }
 
@@ -416,15 +364,20 @@ impl Host {
         let source = self.the_page_is_a_source();
 
         unsafe {
-            let current = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            let current = GetWindowLongPtrW(self.surface.hwnd(), GWL_EXSTYLE);
             let style = ex_style_for(current, page_runs(path), source);
             if style != current {
-                let _ = SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, style);
+                let _ = SetWindowLongPtrW(self.surface.hwnd(), GWL_EXSTYLE, style);
             }
             if source {
                 // Safety: the alpha is this app's own to give a window of its own, and the style above
                 // is what makes it one that is composited at all (see `SOURCE_ALPHA`).
-                let _ = SetLayeredWindowAttributes(self.hwnd, COLORREF(0), SOURCE_ALPHA, LWA_ALPHA);
+                let _ = SetLayeredWindowAttributes(
+                    self.surface.hwnd(),
+                    COLORREF(0),
+                    SOURCE_ALPHA,
+                    LWA_ALPHA,
+                );
             }
         }
     }
@@ -464,19 +417,10 @@ impl Host {
             } else {
                 (HWND_BOTTOM, SWP_NOACTIVATE | SWP_SHOWWINDOW)
             };
+            self.surface.move_window(area, after, flags);
             unsafe {
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    after,
-                    area.x,
-                    area.y,
-                    area.width,
-                    area.height,
-                    flags,
-                );
-
                 let mut client = RECT::default();
-                let _ = GetClientRect(self.hwnd, &mut client);
+                let _ = GetClientRect(self.surface.hwnd(), &mut client);
                 trace(&format!(
                     "put_window source placed={placed} area {}x{}+{}+{} client {}x{}",
                     area.width,
@@ -495,18 +439,9 @@ impl Host {
             crate::ui::preview_window::pinned(),
             crate::ui::preview_window::pin_holds_the_front(),
         );
-        unsafe {
-            for raise in raises.into_iter().flatten() {
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    raise.insert_after,
-                    area.x,
-                    area.y,
-                    area.width,
-                    area.height,
-                    raise.flags,
-                );
-            }
+        for raise in raises.into_iter().flatten() {
+            self.surface
+                .move_window(area, raise.insert_after, raise.flags);
         }
     }
 
@@ -514,14 +449,7 @@ impl Host {
     /// page out at: a page is drawn at the size of the window it is drawn in, so this is owed
     /// by a box that changed *size* and by nothing else (see `place`).
     pub(super) fn set_bounds(&self, area: Area) {
-        unsafe {
-            let _ = self.controller.SetBounds(RECT {
-                left: 0,
-                top: 0,
-                right: area.width,
-                bottom: area.height,
-            });
-        }
+        self.surface.set_bounds(area);
     }
 
     /// Whether the document this host is holding is `path`, which is what a placement is
@@ -570,9 +498,7 @@ impl Host {
     /// drag needs — the pin is raised on every move and would otherwise cover the drawing it
     /// is carrying.
     pub(super) fn place(&mut self, placement: &Placement) {
-        let size = (placement.area.width, placement.area.height);
-        let resized = self.last_area != Some(size);
-        self.last_area = Some(size);
+        let resized = self.placement.record(placement.area);
 
         // The pin may have been taken up over this very page, which is a style to put on and not a
         // navigation: a document already on screen is never shown again for it (see `put_the_page_style`).
@@ -614,17 +540,8 @@ impl Host {
     /// ever come along and do it. What not guarding costs is two Win32 calls and the one
     /// `Interface::cast` in `suspend`.
     pub(super) fn hide(&mut self) {
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-            // `TrySuspend` states a precondition rather than a preference: the controller's
-            // `IsVisible` must already be false when it is called, and otherwise the call
-            // fails outright with `HRESULT_FROM_WIN32(ERROR_INVALID_STATE)` rather than
-            // answering no. So the controller is hidden first, and this half of the hide is
-            // never made conditional on a runtime that can be asked to suspend — it is the
-            // half that stops the frames whether or not the ask is ever answered, including
-            // on a runtime too old to be asked at all (see `suspend`).
-            let _ = self.controller.SetIsVisible(false);
-        }
+        self.surface.show_window(false);
+        self.surface.set_visible(false);
 
         // These are what the preview loop reads as the preview still being there — through
         // `is_showing`, `showing_path` and `screen_rect` — so they are published before the
@@ -666,7 +583,7 @@ impl Host {
             return;
         }
 
-        let Ok(webview) = self.webview.cast::<ICoreWebView2_3>() else {
+        let Ok(webview) = self.surface.webview().cast::<ICoreWebView2_3>() else {
             trace("host: this runtime does not suspend; the controller is hidden and no more");
             return;
         };
@@ -732,28 +649,13 @@ impl Host {
         }
 
         self.suspended = false;
-
-        if let Ok(webview) = self.webview.cast::<ICoreWebView2_3>() {
-            unsafe {
-                let _ = webview.Resume();
-            }
-        }
+        self.surface.resume();
     }
 
     pub(super) fn close(&mut self) {
         self.hide();
         self.current = None;
 
-        // A browser that stopped answering is one whose close may never return: the call is
-        // a message to that browser, and a browser that has stopped taking messages is what
-        // a hung host is. So the process is ended first — by the id it was recorded under,
-        // which is the same verified end every other engine of this app gets — and the close
-        // that follows is the close of something that is already gone rather than a wait on
-        // it. A browser `hide` suspended is closed the same way as one that was not, and
-        // nothing here waits for it to be woken first: a suspend is a browser that has
-        // stopped drawing rather than one that has stopped answering, and either way the
-        // close is this engine's last word — what did not take the browser down is ended
-        // by `Drop`, which is the path a suspended browser is answered on as well.
         if self.hung && self.browser_pid != 0 {
             if engine_processes::is_running(self.browser_pid) {
                 engine_processes::terminate_owned(self.browser_pid);
@@ -761,10 +663,7 @@ impl Host {
             engine_processes::forget(self.browser_pid);
         }
 
-        unsafe {
-            let _ = self.controller.Close();
-            let _ = DestroyWindow(self.hwnd);
-        }
+        self.surface.close();
 
         // The window is gone, so nothing under the pointer is this engine's any more: a
         // hit test that still held the handle would be reading a window that was destroyed.
@@ -824,32 +723,25 @@ impl Host {
         // navigation rather than after it, because the document is read as it loads: a page
         // that draws itself would be a blank canvas by the time a setting asked for after
         // the fact could reach it (see `set_scripts`).
-        set_scripts(&self.webview, page_runs(path));
+        set_scripts(self.surface.webview(), page_runs(path));
+
+        let Some((_handler, token)) =
+            register_navigation_completed(self.surface.webview(), move |_| {
+                let _ = sender.send(());
+            })
+        else {
+            return Arrival::Failed;
+        };
 
         unsafe {
-            let handler =
-                NavigationCompletedEventHandler::create(Box::new(move |_sender, _args| {
-                    let _ = sender.send(());
-                    Ok(())
-                }));
-
-            let mut token = EventRegistrationToken::default();
-            if self
-                .webview
-                .add_NavigationCompleted(&handler, &mut token)
-                .is_err()
-            {
-                return Arrival::Failed;
-            }
-
-            let started = self.webview.Navigate(PCWSTR(url.as_ptr()));
+            let started = self.surface.webview().Navigate(PCWSTR(url.as_ptr()));
             let arrival = if started.is_err() {
                 Arrival::Failed
             } else {
                 wait_for_navigation(&receiver, generation)
             };
 
-            let _ = self.webview.remove_NavigationCompleted(token);
+            let _ = self.surface.webview().remove_NavigationCompleted(token);
 
             arrival
         }
@@ -912,73 +804,6 @@ const NAVIGATION_TIMEOUT: Duration = Duration::from_secs(15);
 /// answer is recorded as suspended anyway — the answer is what says it has stopped, not the
 /// asking — and a resume of a WebView that is not suspended is harmless (see `pump_until`).
 const SUSPEND_TIMEOUT: Duration = Duration::from_millis(250);
-
-/// Why a wait ended without an answer: the bound ran out, or the message queue is gone.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Unanswered {
-    /// The wait ran longer than the answer takes.
-    TimedOut,
-    /// There was no queue left to wait on.
-    Gone,
-}
-
-/// Pump this thread's messages until `probe` answers, `timeout` runs out, or the queue is
-/// gone — whichever comes first.
-///
-/// The messages have to be pumped rather than waited on: a controller is created on this
-/// thread and stops drawing when the thread stops retrieving messages, and both of the events
-/// this waits for arrive through that same queue — so the wait *is* a `GetMessage`, and an
-/// answer is noticed the moment it lands, with no interval between and nothing polled.
-///
-/// The timer is armed on the thread rather than on a window, and under an id of its own so
-/// that two waits cannot answer one another's timer: its whole job is to bring `GetMessage`
-/// back so that the elapsed check is read again. The bound is therefore read on every pass,
-/// which is what stops a browser that never answers from parking the engine's thread for the
-/// rest of the run.
-fn pump_until<T>(
-    timeout: Duration,
-    timer: usize,
-    mut probe: impl FnMut() -> Option<T>,
-) -> Result<T, Unanswered> {
-    let started = Instant::now();
-    let mut message = MSG::default();
-
-    unsafe {
-        let _ = SetTimer(HWND::default(), timer, timeout.as_millis() as u32, None);
-    }
-
-    let answer = loop {
-        if let Some(answer) = probe() {
-            break Ok(answer);
-        }
-
-        if started.elapsed() >= timeout {
-            break Err(Unanswered::TimedOut);
-        }
-
-        let mut answered = false;
-        unsafe {
-            let retrieved = GetMessageW(&mut message, HWND::default(), 0, 0);
-            if retrieved.0 > 0 {
-                let _ = TranslateMessage(&message);
-                DispatchMessageW(&message);
-                answered = true;
-            }
-        }
-
-        if !answered {
-            // `GetMessage` answered -1, an error, or 0, a quit: there is no queue left to
-            // wait on, and an answer that has not arrived by then is not coming.
-            break Err(Unanswered::Gone);
-        }
-    };
-
-    unsafe {
-        let _ = KillTimer(HWND::default(), timer);
-    }
-
-    answer
-}
 
 /// Wait for the page to arrive, pumping the thread's messages while it does, and ending on
 /// one of the three things that can end the wait.

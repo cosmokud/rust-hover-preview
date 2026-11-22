@@ -2,16 +2,14 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::WindowsAndMessaging::{PeekMessageW, MSG, PM_NOREMOVE, WM_APP};
 
 use super::api::{
     drop_placement, is_showing, note_engine_up, note_failure, renders_html, take_placement, wanted,
     ENGINE_THREAD, SHOWING,
 };
-use super::environment::pump_messages;
 use super::host::Host;
+use crate::engines::webview_host::{pump_messages, StaApartment};
 
 use crate::config::config::{EngineIdle, PreviewType};
 use crate::CONFIG;
@@ -86,19 +84,7 @@ pub(crate) fn trace(message: &str) {
 }
 
 fn engine_thread(commands: Receiver<Command>) {
-    // The engine's own apartment, and its own thread: WebView2 must be created on a
-    // thread that is pumping messages, and this is that thread.
-    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-
-    // The thread's message queue, made before anything can be posted to it: a wakeup posted
-    // to a thread that has none is dropped, and a want published while this thread is still
-    // bringing its browser up would be the first thing that had to be waited for.
-    {
-        let mut message = MSG::default();
-        unsafe {
-            let _ = PeekMessageW(&mut message, None, WM_APP, WM_APP, PM_NOREMOVE);
-        }
-    }
+    let _sta = StaApartment::enter();
     ENGINE_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Release);
 
     // No placement is owed by a thread that has only just begun: whatever was published before
@@ -253,10 +239,6 @@ fn engine_thread(commands: Receiver<Command>) {
     // The thread is going away, so nothing is posted to it any more: a want published after
     // this is one the next engine's thread takes up (see `ENGINE_THREAD`).
     ENGINE_THREAD.store(0, Ordering::Release);
-
-    unsafe {
-        windows::Win32::System::Com::CoUninitialize();
-    }
 }
 
 /// Carry out the placement the engine's thread has been asked for, if it still belongs to a

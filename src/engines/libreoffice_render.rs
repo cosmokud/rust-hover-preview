@@ -85,7 +85,7 @@ use crate::CONFIG;
 use directories::BaseDirs;
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -471,7 +471,7 @@ fn start_kept_engine(program: &Path) -> Option<u32> {
     // so that it means something when it comes back.
     std::fs::remove_file(lock_file(&holder)).ok();
 
-    let child = Command::new(program)
+    let child = supervisor::hidden_command(program)
         .arg("--headless")
         .arg("--norestore")
         .arg(format!("-env:UserInstallation={}", profile_url(&folder)))
@@ -697,7 +697,7 @@ fn convert(program: &Path, source: &Path) -> Option<Page> {
         wait_until_ready(pid);
     }
 
-    let mut child = Command::new(program)
+    let mut child = supervisor::hidden_command(program)
         .arg("--headless")
         .arg("--norestore")
         .arg(format!("-env:UserInstallation={profile_url}"))
@@ -743,13 +743,17 @@ fn convert(program: &Path, source: &Path) -> Option<Page> {
     // rather than replaced: a file called `drawing.v2.cdr` is written as
     // `drawing.v2.pdf`, not as `drawing.pdf`.
     let stem = source.file_stem()?;
-    let written = stage.join(format!("{}.pdf", stem.to_string_lossy()));
-    let page = std::fs::read(&written).ok()?;
+    let written =
+        supervisor::TempFileGuard::new(stage.join(format!("{}.pdf", stem.to_string_lossy())));
+    let page = supervisor::read_file_within_budget(
+        written.path(),
+        crate::config::config::decode_budget_bytes(),
+    )?;
     if !page.starts_with(b"%PDF-") {
         return None;
     }
 
-    std::fs::remove_file(&written).ok();
+    drop(written);
 
     document_cache::store(
         source,

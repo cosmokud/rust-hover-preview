@@ -103,3 +103,17 @@ _Avoid_: Video container, player wrapper, backdrop window
 **Pin Bubble**:
 The compact circular desktop stand-in left behind when a Pin is collapsed, with an explicit lifecycle from creation through teardown so no orphaned desktop surface survives exit.
 _Avoid_: Floating dot, mini pin, tray orb
+
+### External Engines & Embedded Browser Host
+
+**Engine Supervisor**:
+The shared control layer for out-of-process converters that enforces hidden process launch, newest-wins work slots, give-up termination, strict budget-bounded output capture, and automatic staged-file cleanup.
+_Avoid_: Process runner, CLI wrapper, converter helper
+
+**Strict Budget Capture**:
+A bounded read of converter output or staged files that fails explicitly when output exceeds the decode budget rather than silently returning truncated data.
+_Avoid_: Capped read, truncated stream, soft limit
+
+**WebView2 Host**:
+The shared single-threaded browser hosting foundation — apartment lifecycle, message pump, host window creation, bounds synchronization, and navigation reveal state — built upon by both hover pages and pinned PDF viewers.
+_Avoid_: Browser wrapper, WebView helper, Chromium shell
