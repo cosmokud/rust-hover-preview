@@ -76,6 +76,10 @@ _Avoid_: Preview flags, hover bookkeeping, replay slots
 The point-in-time assessment of a hovered file's kind, drawing path, and active scale preferences carried from initial hover layout into Pin promotion so both views agree on how the file is measured and sized.
 _Avoid_: Cached probe, file metadata copy, layout facts
 
+**Bypass Placement**:
+A hover-sizing mode that measures a preview against the whole work area and drops `Position` and `Avoid` from placement, landing in the largest pointer-free half of the display; pins and the pre-preview spinner are unaffected.
+_Avoid_: Free placement, ignore-avoid mode, full-screen sizing
+
 ### Explorer Sensing & Low-Latency Input
 
 **Hook Session**:

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.11] - 2026-11-23
+
+### Added
+
+- **`Scaling → Bypass Placement`** — a row for hover sizing and placement as one answer (off where the app starts, written `bypass_placement` in `config.ini`): a preview is sized against the whole work area rather than against the room the `Position` quadrant or the `Avoid` region left it, and lands in the largest half of the display that is clear of the pointer, so `By Screen 75%` is 75% of the screen rather than 75% of a quarter of it. A keyboard hover is centred in the work area at its full share, and the spinner before a preview is still placed at the pointer corner.
+
+### Fixed
+
+- **A multi-key trigger chord is held only with its companions held** — `ctrl+alt` latched on the `Alt` edge alone, so the trigger answered a hand that was never on the chord; a latched slot is now read as held only where its companions are down as well.
+- **`Space` in a focused media pin is no longer also a pin press** — the key hook counted the press before asking whether the caret's pin answers `Space` itself, so play/pause also took a pin up or brought it down; a pin command the focused pin owns is passed on without a press counted, and the count that does land now wakes the preview loop rather than waiting out its own tick.
+- **A path holding `[`, `]` or a leading `@` is handed to ImageMagick on stdin** — those characters are ImageMagick's own subimage, glob and list syntax, so the file was parsed as a filename pattern rather than opened and no picture came back. It is passed as `<ext>:-` down a pipe instead, so the path itself is never spelled into the command line.
+
 ## [0.5.10] - 2026-11-22
 
 ### Fixed

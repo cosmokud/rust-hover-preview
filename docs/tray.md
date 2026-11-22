@@ -155,6 +155,7 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - Keeps a preview off the item it is about.
     - Keyboard previews have no cursor, so **Nothing** acts like **Filename**.
 - **Scaling**
+  - **Bypass Placement** — off by default. On, a hover preview is sized against the whole work area and lands in the largest half of the screen clear of the pointer, ignoring **Position** and **Avoid** — so `By Screen 75%` is 75% of the screen rather than 75% of a quadrant of it. A keyboard hover is centred in the work area at its full share; a pin is untouched.
   - **Image** — **Fit to Screen**, a share of the display's fitted size (`75%`, `50%`, `25%`, `10%`), or a share of the image's own size (`400%`–`25%`). The two groups are listed under **By Screen** and **By Own Size**. Default `100%`.
   - **Video** — Same shares for a video, and every one of the **By Screen** shares is of the display's fitted room — **Fit to Screen** included, so a film smaller than the screen fills it, as a pinned window and a maximize already do. Default `100%`.
   - **Animated** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.

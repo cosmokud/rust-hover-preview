@@ -79,6 +79,7 @@ follow_cursor=false
 ; Scaling
 animated_scale=100
 audio_scale=10
+bypass_placement=false
 design_scale=fit
 document_scale=fit
 ebook_scale=fit
@@ -274,6 +275,7 @@ spinner_delay_ms=250
 - `preview_scale`: `fit`, a share of the display's fitted size (`screen 75`, `screen 50`, `screen 25` or `screen 10` — the display fitted to the media, reduced to that share of it), or a share of the picture's own size (`25`–`400`). Default `100`.
 - `video_scale`: same for video. Default `100`.
 - `audio_scale`: the share of the display a sound's card is laid out over — `25`, `20`, `15`, `10`, `7` or `5`. Default `10`. The whole card scales with the share (font, height, width), so it's the `10%` card uniformly smaller or larger, and `Text Size` no longer resizes it. A hand-edited value is sanitized rather than fatal: `100` or more reads as `100`, `0` reads as `10`, an unrecognized value is ignored.
+- `bypass_placement`: `true` sizes every hover preview against the whole work area and drops **Position** and **Avoid** from placement, so a share is of the screen rather than of the quadrant the preview would have landed in; the preview still keeps clear of the pointer, in the largest half of the display that allows. Default `false`.
 - `animated_scale`: same for animated GIF, WebP, or PNG — and for an animated JPEG XL, which is played as a picture rather than as a video. Default `100`. Still GIF/PNG follow `preview_scale`.
 - `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
 - `text_scale`: how much of the screen a text preview box may take when it opens, for plain text, code, and Markdown. Default `fit`; `100` or more reads as `fit`. `Text Size` still scales the text inside that box.
