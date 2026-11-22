@@ -783,6 +783,12 @@ pub(in super::super) fn set_follow_cursor(follow: bool) {
     });
 }
 
+pub(in super::super) fn toggle_bypass_placement() {
+    commit_config(|config| {
+        config.bypass_placement = !config.bypass_placement;
+    });
+}
+
 /// The way an item of the `Avoid` submenu stands for, by the position it was listed
 /// at. An id past the last way the menu offered is one that is not there.
 pub(in super::super) fn avoid_mode_at(index: u16) -> Option<AvoidMode> {

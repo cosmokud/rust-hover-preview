@@ -974,6 +974,9 @@ pub const DEFAULT_AVOID_MODE: AvoidMode = AvoidMode::Filename;
 /// wherever the pointer happens to be — and `Follow Cursor` is the other answer.
 pub const DEFAULT_FOLLOW_CURSOR: bool = false;
 
+/// Off by default; when on, hover sizing uses full work area and skips placement/Avoid cropping.
+pub const DEFAULT_BYPASS_PLACEMENT: bool = false;
+
 /// Whether the trigger key reaches a pinned preview unless the configuration says otherwise:
 /// off, which is where the app starts — a pin is a window the user put there, and the key that
 /// stops hovers is not read while one is up — and on, the key is what brings a pin down with the

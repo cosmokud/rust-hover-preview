@@ -1736,6 +1736,7 @@ pub(super) fn placed_pin_box(pin: &PinnedPreview, displays: &dyn Displays) -> Op
                 .lock()
                 .map(|config| config.follow_cursor)
                 .unwrap_or(true),
+            bypass_placement: false,
             preview_scale: PreviewScale::Percent(100),
             at_the_pointer_corner: false,
         },
