@@ -291,8 +291,8 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
 /// as its kind is measured, and fitted into the room the pin's own chrome leaves at the share a
 /// hover of the file is placed at — rather than one worked out from the box on screen, which is a
 /// box a hand has already had its way with. A window comes back to the size it was pinned at, which
-/// is what the pair is: that same placing asked for again (see `hover_preview_scale` and
-/// `pinned_media_box`).
+/// is what the pair is: that same placing asked for again (see `effective_preview_scale`
+/// and `pinned_media_box`).
 ///
 /// **The box road, where the centring it stands beside is a move** (see `centre_pinned_window`): a
 /// size is what a media is laid out at, so the box goes through the loop as its own message and the
@@ -355,7 +355,7 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
         Some(shape) => pinned_media_box(
             shape,
             room,
-            hover_preview_scale(&path, current_hover_scales()),
+            effective_preview_scale(&path, current_hover_scales()),
         ),
         // A file with no size to be read out of it — one whose measure has not come back, one
         // nothing can be read from at all, and a card, which is its own size already — has no size

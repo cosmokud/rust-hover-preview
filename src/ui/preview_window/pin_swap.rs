@@ -405,13 +405,14 @@ fn pin_update_content_measured(
     // whatever box it is handed, so a swap gives it the box a fresh take-up of the same file
     // gives it — the work area's own room at the share its kind names — and keeps that inside the
     // bound the pin was given, the way every file with a shape of its own is (see `pinned_media_box`,
-    // `hover_preview_scale` and `reset_pinned_size`). The share is the take-up's rather than the
-    // hover's, because the box this answers is the one the take-up installs the file in.
+    // `effective_preview_scale` and `reset_pinned_size`). The share is the take-up's, because the
+    // box this answers is the one the take-up installs the file in.
     //
     // Asked only of a pin that is up: a box handed to a file where no pin stands is the hover's
-    // own to decide (see `hover_preview_scale_of`).
+    // own to decide, which is the same share asked of a file rather than of a loaded one (see
+    // `effective_preview_scale_of`).
     if pinned() && webview_preview::draws(path) {
-        let share = hover_preview_scale(path, current_hover_scales());
+        let share = effective_preview_scale(path, current_hover_scales());
         let own = pinned_media_box(shape, bounds, share);
         let content = match space.bound {
             // No bound asked of this window yet, so the file is its own size in the middle of the

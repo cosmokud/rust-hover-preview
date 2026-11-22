@@ -1606,7 +1606,7 @@ fn a_cold_pin_is_the_load_the_wait_or_nothing_by_what_the_file_owes() {
 /// `Preview Enabled` off is a run with no hover to have measured a box, and the rule the take-up used to borrow
 /// was the hover's: the file fitted into the wedge of screen beside the pointer and, for a file nothing had
 /// measured yet, the spinner's own square. A pin stands in the whole of the display's room instead, under its
-/// own chrome, so what it is laid out by is `pin_update_box` at `hover_preview_scale` (see `a_cold_pins_box`).
+/// own chrome, so what it is laid out by is `pin_update_box` at `effective_preview_scale` (see `a_cold_pins_box`).
 #[test]
 fn a_cold_pins_box_is_the_files_own_size_under_the_scaling_row() {
     let _room = the_room_to_itself();
@@ -1688,7 +1688,7 @@ fn a_cold_pins_box_is_the_files_own_size_under_the_scaling_row() {
 ///
 /// The share reaches the cold pin by two roads, and both are the hover's own: a text page's share is the
 /// room its measure wraps it to (see `text_box_room`), and a PDF's is the reduction `fit_reduced` puts on
-/// the fit (see `a_cold_pins_box`, which fits what the measure answered at `hover_preview_scale`).
+/// the fit (see `a_cold_pins_box`, which fits what the measure answered at `effective_preview_scale`).
 #[test]
 fn a_cold_page_is_laid_out_at_the_scaling_share_of_the_room() {
     let _room = the_room_to_itself();

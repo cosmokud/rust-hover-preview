@@ -2357,7 +2357,7 @@ pub(super) fn a_cold_pins_shape(
 ///
 /// A pin has the whole display to stand in rather than the wedge beside the hand, and what it gives the file
 /// is the work area with its own chrome taken off it (see `pinned_room`) and the file fitted into that at the
-/// share its kind's `Scaling` row names (see `hover_preview_scale`, which is the share a fresh take-up is
+/// share its kind's `Scaling` row names (see `effective_preview_scale`, which is the share a fresh take-up is
 /// given). A kind that holds no shape of its own — a page of text, a listing, a sound's card — is laid out
 /// in that room and centred on it, exactly as the `keeps-its-box` arm of a swap does (see
 /// `pin_update_content`); every other file is fitted into the room by `pin_update_box`.
@@ -2381,7 +2381,7 @@ pub(super) fn a_cold_pins_box(
         pin_overlay_chrome(kind, page_runs),
         pinned_caption_height(dpi, kind),
     );
-    let scale = hover_preview_scale(path, current_hover_scales());
+    let scale = effective_preview_scale(path, current_hover_scales());
 
     let laid_out = pin_update_box(room.region(), shape, scale);
     if pin_keeps_its_box(path) {

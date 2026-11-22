@@ -10,7 +10,8 @@ pub(super) struct HoverScales {
     /// The share of its own size a picture is drawn at, which is also the scale every
     /// format that is none of the others below keeps.
     pub(super) picture: PreviewScale,
-    /// The share of its own size a video is drawn at.
+    /// The share of the display a video is drawn at: the room the player's window is given,
+    /// reduced to the share the menu names.
     pub(super) video: PreviewScale,
     /// The share of its own size an animated picture is drawn at.
     ///
@@ -117,12 +118,14 @@ impl HoverScales {
 /// free quality and a share of it is what the setting means — there is nothing to enlarge
 /// and nothing to lose by it. See `load_vector_preview`.
 ///
-/// A video keeps the share `video_scale` names, whatever that share is *of*: every engine
-/// that plays one draws it into a box rather than scaling a picture of its own into one, so a
-/// fit is the room the window is given and every other share is a share of the file's own size
-/// (see `hover_preview_scale_of`, which is where the two are told apart). It is a setting of its
-/// own because a size that suits a photograph is not always the size one wants to watch a file
-/// at. The one thing read beside it is whether the probe has answered yet (see `video_probe_due`).
+/// A video keeps the share `video_scale` names, written as it is written and read by every road
+/// alike: a `Fit to Screen` is the room the player's window is given, a `By Screen` share is that
+/// room reduced to the share (`fit_reduced`), and a `By Own Size` percentage is a share of the
+/// film's own pixels. Every engine that plays one draws it into a box rather than scaling a
+/// picture of its own into one, so the room is free quality there and the two bases are two sizes
+/// — which is what the menu's two rows say. The setting is the film's own because a size that
+/// suits a photograph is not always the size one wants to watch a film at, and the one thing read
+/// beside it is whether the probe has answered yet (see `video_probe_due`).
 ///
 /// An animated picture keeps the share of its own size `animated_scale` names, which is
 /// the picture's rule once more — its frames are bitmaps — with the file's own content
@@ -137,22 +140,6 @@ pub(super) fn effective_preview_scale(path: &Path, scales: HoverScales) -> Previ
     effective_preview_scale_of(&HoverFacts::read(path), scales)
 }
 
-/// The share a *hover* of this file is placed at — which is the share a fresh take-up of it is
-/// given, and so the size a pinned window is put back to when its size is worked out again rather
-/// than kept (see `reset_pinned_size`).
-///
-/// The path-taking half of `hover_preview_scale_of`, as `effective_preview_scale` is of
-/// `effective_preview_scale_of`, and read from the file the way that one is. The two are not
-/// interchangeable: a film is the one kind whose share the two roads read differently, and a
-/// reduced fit is where they part — half of the screen is half of the film to a take-up and half of
-/// the room to a pinned window's own swaps (see `hover_preview_scale_of`).
-///
-/// It is the take-up's the reset is owed, because the size a window comes back to is the size it
-/// was pinned at: a pair is that same placing asked for again.
-pub(super) fn hover_preview_scale(path: &Path, scales: HoverScales) -> PreviewScale {
-    hover_preview_scale_of(&HoverFacts::read(path), scales)
-}
-
 /// The share one file is placed at, asked of the answer that hover already has.
 ///
 /// Everything this asks is a field of `hover` or something `hover` holds: the file's kind, the
@@ -161,9 +148,11 @@ pub(super) fn hover_preview_scale(path: &Path, scales: HoverScales) -> PreviewSc
 /// the path is not beside it, and why the scale and the box a preview is laid out at cannot
 /// disagree: they are asked of one answer.
 ///
-/// A hover does not come here directly. It goes through `hover_preview_scale_of`, which is this
-/// answer with a video's fit read as the room its player is given — the one share a video and a
-/// picture do not read alike for a hover, a pinned window having read it that way all along.
+/// It is one answer for every road a file's share is asked by — a hover, a fresh take-up of a pin,
+/// the size a pinned window is put back to (see `reset_pinned_size`) and a pin's own swap — because
+/// a share read two ways is one file shown at two sizes: a film at `By Screen 50%` came up at half
+/// of its own pixels on a hover and half of the room once pinned, which is the fault this answer
+/// having no hover-only variant rules out.
 pub(super) fn effective_preview_scale_of(hover: &HoverFacts, scales: HoverScales) -> PreviewScale {
     // What the file's own bytes say it is comes first, as it does for the loader that draws
     // it and for the box the layout places it at: a picture under a video's name is laid out
@@ -201,54 +190,6 @@ pub(super) fn effective_preview_scale_of(hover: &HoverFacts, scales: HoverScales
         hover,
         scales,
     )
-}
-
-/// The share a *hover* of one file is placed at: the file's own share, with a video's fit read
-/// as the room it is watched in rather than as the file's own size.
-///
-/// A hover of a picture is a bitmap. What it puts on screen is a picture with pixels of its own,
-/// and a `Fit to Screen` read for a bitmap is that picture at the size it is rather than the
-/// whole of the display — the rule every other picture in this app is laid out by, and the one
-/// `bitmap_at_display_scale` exists to state. Enlarging a photograph to the display's whole work
-/// area is a bigger picture with no more in it, and every size that comes out of a fit is the
-/// frame the loader decodes into, so the fit an image is given is its own size.
-///
-/// A video is not a bitmap here, whatever engine plays it. What a video's preview is, once its
-/// player has a window up, is a box the film is drawn *into* — the media engine's frames landing
-/// in this app's own window, and FFmpeg's or mpv's player putting up a window of its own at the
-/// box the layout chose — so the box is the size the film is watched at, and a fit is a film
-/// drawn as large as the room it is given. It is the same fit a pinned window already takes, and
-/// what a maximize has always been (see `pinned_media_box`).
-///
-/// Every share below the fit is the file's own size for a video as it is for a picture, and both
-/// bases the menu offers are read there: a percentage above `100%` enlarges, which is the user
-/// asking for a size rather than a rule guessing at one, and a reduced fit — the menu's
-/// `By Screen 75%` — is that share of the film's own size rather than of the display's.
-///
-/// It is here, and not in `scale_of_kind`'s own video arm, because that table answers for a
-/// pinned window too — whose fit is the room already, and whose shares below it are the same
-/// ones this reads.
-///
-/// And not in `scale_in_room`, which is the narrowest function of all and is the wrong one: it
-/// is one function for the hover's box and the pin's box both, so a rule written in it is a rule
-/// about both, and it cannot tell a video from the document beside it.
-pub(super) fn hover_preview_scale_of(hover: &HoverFacts, scales: HoverScales) -> PreviewScale {
-    let share = effective_preview_scale_of(hover, scales);
-
-    // Asked of the answer rather than of the kind, so a video the bytes name under a name the
-    // video list does not carry is caught by the same predicate the loader plays it by.
-    if hover.is_video() {
-        match share {
-            // The room, which is what a video's fit is: the player draws the film at whatever
-            // size the box is, up as well as down.
-            PreviewScale::FitToScreen => share,
-            // And every other share is a share of the film's own size, which is what a bitmap
-            // would have been given and what the menu's two bases read as for a video.
-            of_its_own => bitmap_at_display_scale(of_its_own),
-        }
-    } else {
-        share
-    }
 }
 
 /// The share a preview of one kind is drawn at.
@@ -340,9 +281,11 @@ pub(super) fn scale_of_kind(
         PreviewType::Fonts => fit_reduced(scales.font),
 
         // A video that is still being probed is a wait rather than a video, and a wait is
-        // placed at the size it is; one that has been probed keeps the share `video_scale`
-        // names, which a hover reads as the room at a fit and as a share of the film's own
-        // size below one (see `hover_preview_scale_of`).
+        // placed at the size it is; one that has been probed keeps the share `video_scale` names,
+        // and the menu's two bases mean two different things there — `By Screen` shares are of the
+        // room the player's window is given (`fit_reduced`) and `By Own Size` shares are of the
+        // film's own pixels. That is the one kind whose share is read as it is written, because a
+        // player draws a film into whatever box it is handed.
         PreviewType::Videos => {
             if video_probe_due(hover) {
                 PreviewScale::Percent(100)
