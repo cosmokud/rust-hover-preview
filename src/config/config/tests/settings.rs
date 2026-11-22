@@ -882,3 +882,28 @@ fn the_check_interval_is_hours_the_file_names() {
         DEFAULT_UPDATE_CHECK_HOURS
     );
 }
+
+#[test]
+fn bypass_placement_defaults_false_and_round_trips_ini() {
+    let config = AppConfig::default();
+    assert_eq!(config.bypass_placement, DEFAULT_BYPASS_PLACEMENT);
+    assert!(!config.bypass_placement);
+
+    let mut cfg = AppConfig {
+        bypass_placement: true,
+        ..AppConfig::default()
+    };
+    let mut ini = cfg.to_ini();
+    assert_eq!(
+        ini.get(CONFIG_SECTION, "bypass_placement").as_deref(),
+        Some("true")
+    );
+    assert!(read_file(&mut ini).bypass_placement);
+
+    cfg.bypass_placement = false;
+    let mut ini = cfg.to_ini();
+    assert!(!read_file(&mut ini).bypass_placement);
+
+    let mut empty = Ini::new();
+    assert!(!read_file(&mut empty).bypass_placement);
+}

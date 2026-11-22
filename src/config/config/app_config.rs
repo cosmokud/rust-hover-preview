@@ -27,10 +27,10 @@ use super::setting_types::{
     AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile,
     PinMinimizeTo, PinNavFileTypes, PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode,
     VideoEngine, DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
-    DEFAULT_BEAT_HZ, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
-    DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_MODEL_SCALE,
-    DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_DOUBLE_CLICK_CENTER,
+    DEFAULT_BEAT_HZ, DEFAULT_BYPASS_PLACEMENT, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND,
+    DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
+    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
+    DEFAULT_MODEL_SCALE, DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_DOUBLE_CLICK_CENTER,
     DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE, DEFAULT_PIN_MINIMIZE_TO,
     DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, DEFAULT_PIN_MODE_AUDIO_SEEK,
@@ -168,6 +168,7 @@ pub struct AppConfig {
     /// What a walk anchored on any other file steps through (see `DEFAULT_PIN_NAV_OTHERS`).
     pub pin_nav_others: PinNavFileTypes,
     pub follow_cursor: bool,
+    pub bypass_placement: bool,
     /// How far a preview is placed clear of the item it is about, so the file the
     /// pointer is on or the keyboard is focused on stays readable while its preview is
     /// up. `Filename` by default, and it is the name that makes it so: the name of the
@@ -843,6 +844,7 @@ impl Default for AppConfig {
             pin_nav_audio: DEFAULT_PIN_NAV_AUDIO,
             pin_nav_others: DEFAULT_PIN_NAV_OTHERS,
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
+            bypass_placement: DEFAULT_BYPASS_PLACEMENT,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
             settling_delay_ms: DEFAULT_SETTLING_DELAY_MS,

@@ -162,6 +162,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "animated_scale",
             "audio_scale",
+            "bypass_placement",
             "design_scale",
             "document_scale",
             "ebook_scale",

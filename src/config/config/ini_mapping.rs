@@ -198,6 +198,11 @@ impl AppConfig {
         );
         ini.set(
             CONFIG_SECTION,
+            "bypass_placement",
+            Some(self.bypass_placement.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
             "avoid_mode",
             Some(self.avoid_mode.as_str().to_string()),
         );
@@ -835,6 +840,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "follow_cursor") {
             self.follow_cursor = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "bypass_placement") {
+            self.bypass_placement = value;
         }
         // How far a preview is kept off its item, by the name it is written under now. The yes
         // or no question this used to be is not read: an older name is a line the app does not
