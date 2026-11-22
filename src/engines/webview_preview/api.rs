@@ -85,13 +85,7 @@ type ScreenRect = (i32, i32, i32, i32);
 pub(super) static ENGINE: Lazy<Mutex<Option<Engine>>> = Lazy::new(|| Mutex::new(None));
 
 /// Where the engine is asked to put its window, in screen coordinates.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct Area {
-    pub(crate) x: i32,
-    pub(crate) y: i32,
-    pub(crate) width: i32,
-    pub(crate) height: i32,
-}
+pub(crate) use crate::engines::webview_host::Area;
 
 /// The document the preview loop wants drawn, as the one thing that is wanted: the file,
 /// the backdrop its page is written for, the box the wait has ended up in, and the

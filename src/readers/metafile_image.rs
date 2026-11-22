@@ -24,7 +24,7 @@
 //! what keeps a file from asking for a canvas of its own choosing: a drawing is drawn at
 //! the size of the preview and never at the size it names.
 
-use crate::config::config::{frame_bytes_within_budget, read_within_budget};
+use crate::config::config::read_within_budget;
 use std::path::Path;
 use std::ptr;
 use windows::Win32::Foundation::RECT;
@@ -100,11 +100,19 @@ pub fn draw_records(records: &[u8], width: u32, height: u32) -> Option<Vec<u8>> 
     if width == 0 || height == 0 {
         return None;
     }
-    frame_bytes_within_budget(width, height, 4)?;
+    metafile_frame_within_budget(width, height, crate::config::config::decode_budget_bytes())?;
 
     let drawing = Drawing::open(records)?;
 
     drawing.play(width, height)
+}
+
+/// Peak allocation for `play`: 2 DIB sections (dark + light) + 1 output BGRA `Vec<u8>` = 12 B/px.
+fn metafile_frame_within_budget(width: u32, height: u32, budget: u64) -> Option<usize> {
+    let bytes = u64::from(width)
+        .checked_mul(u64::from(height))?
+        .checked_mul(12)?;
+    (bytes <= budget).then_some(usize::try_from(bytes).ok()?)
 }
 
 /// The size of the drawing those bytes hold: what its writer declared, where it declared
@@ -212,13 +220,12 @@ impl Drawing {
             return None;
         }
 
-        let width = header.rclBounds.right - header.rclBounds.left + 1;
-        let height = header.rclBounds.bottom - header.rclBounds.top + 1;
-        if width <= 0 || height <= 0 {
-            return None;
-        }
-
-        Some((width as u32, height as u32))
+        bounds_from_rect(
+            header.rclBounds.left,
+            header.rclBounds.top,
+            header.rclBounds.right,
+            header.rclBounds.bottom,
+        )
     }
 
     /// The drawing played twice, once over black and once over white, and the frames
@@ -400,6 +407,17 @@ impl Surface {
     }
 }
 
+/// Checked EMF bounds calculation in `i64` to prevent `i32` overflow on malformed headers.
+fn bounds_from_rect(left: i32, top: i32, right: i32, bottom: i32) -> Option<(u32, u32)> {
+    let width = i64::from(right) - i64::from(left) + 1;
+    let height = i64::from(bottom) - i64::from(top) + 1;
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+
+    Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?))
+}
+
 impl Drop for Surface {
     fn drop(&mut self) {
         unsafe {
@@ -407,5 +425,31 @@ impl Drop for Surface {
             let _ = DeleteObject(self.bitmap);
             let _ = DeleteDC(self.dc);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn emf_bounds_reject_i32_overflow_and_inverted_rects() {
+        assert_eq!(bounds_from_rect(0, 0, 99, 49), Some((100, 50)));
+        assert_eq!(bounds_from_rect(10, 10, 9, 20), None);
+        // i32::MAX - i32::MIN + 1 == 2^32, which exceeds u32::MAX and would overflow i32.
+        assert_eq!(bounds_from_rect(i32::MIN, 0, i32::MAX, 10), None);
+        assert_eq!(bounds_from_rect(0, i32::MIN, 10, i32::MAX), None);
+    }
+
+    #[test]
+    fn metafile_budget_accounts_for_3x_peak_allocation() {
+        // 10x10x12 = 1200 bytes (2 DIBs + 1 Vec<u8>)
+        assert_eq!(metafile_frame_within_budget(10, 10, 1200), Some(1200));
+        // 10x10x4 = 400 would pass 1x check, but must fail 3x peak budget of 1199
+        assert_eq!(metafile_frame_within_budget(10, 10, 1199), None);
+        assert_eq!(
+            metafile_frame_within_budget(u32::MAX, u32::MAX, u64::MAX),
+            None
+        );
     }
 }

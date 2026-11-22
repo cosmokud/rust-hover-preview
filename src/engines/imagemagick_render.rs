@@ -63,7 +63,6 @@ use crate::config::config::decode_budget_bytes;
 use crate::engines::document_cache::{self, PageKind};
 use crate::engines::supervisor::{self, Adapter, Worker};
 use once_cell::sync::Lazy;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{mpsc, Mutex};
@@ -651,6 +650,31 @@ fn develop(path: &Path, room: (u32, u32)) -> Option<Held> {
 ///
 /// The output is named as a PNG explicitly rather than by what a file extension would say:
 /// the coder is what is being asked for, and the format is this side's business.
+/// How `source` is handed to ImageMagick: directly as a path, or via stdin (`<ext>:-` / `-`) when
+/// the path contains ImageMagick syntax characters (`[`, `]`, leading `@`) that would otherwise be
+/// glob-expanded or misparsed as a subimage/list spec.
+#[derive(Debug, PartialEq, Eq)]
+enum MagickInput<'a> {
+    Path(&'a Path),
+    Stdin(String),
+}
+
+fn magick_input_for(source: &Path) -> MagickInput<'_> {
+    let text = source.to_string_lossy();
+    let needs_stdin = text.contains('[') || text.contains(']') || text.starts_with('@');
+    if !needs_stdin {
+        return MagickInput::Path(source);
+    }
+
+    let arg = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| !ext.is_empty() && ext.bytes().all(|b| b.is_ascii_alphanumeric()))
+        .map(|ext| format!("{}:-", ext.to_ascii_lowercase()))
+        .unwrap_or_else(|| "-".to_string());
+    MagickInput::Stdin(arg)
+}
+
 fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
     // A dump is samples with no container, so how large it is *and* how wide a sample in it is are
     // the two things the engine cannot work out for itself: what the file's own length settled is
@@ -670,14 +694,23 @@ fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
     };
 
     let geometry = format!("{}x{}>", room.0.max(1), room.1.max(1));
-    let mut child = crate::app::engine_processes::hidden_command(program);
+    let mut child = supervisor::hidden_command(program);
 
     if let Some(size) = dump.as_deref() {
         child.args(["-size", size, "-depth", "8"]);
     }
 
+    match magick_input_for(source) {
+        MagickInput::Path(path) => {
+            child.arg(path).stdin(Stdio::null());
+        }
+        MagickInput::Stdin(arg) => {
+            let file = std::fs::File::open(source).ok()?;
+            child.arg(arg).stdin(Stdio::from(file));
+        }
+    }
+
     let mut child = child
-        .arg(source)
         .arg("-delete")
         .arg("1--1")
         .arg("-auto-orient")
@@ -687,7 +720,6 @@ fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
         .arg("8")
         .arg("-strip")
         .arg("png:-")
-        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -708,9 +740,8 @@ fn convert(program: &Path, source: &Path, room: (u32, u32)) -> Option<Vec<u8>> {
     let output = child.stdout.take()?;
     let (written, written_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut png = Vec::new();
-        let read = output.take(decode_budget_bytes()).read_to_end(&mut png);
-        let _ = written.send(read.ok().map(|_| png));
+        let png = supervisor::read_stdout_within_budget(output, decode_budget_bytes());
+        let _ = written.send(png);
     });
 
     // What the engine is reading, published for the threads that may decide it has stopped

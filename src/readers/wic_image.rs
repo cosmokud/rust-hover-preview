@@ -309,8 +309,17 @@ fn is_bitmap_resource(path: &Path) -> bool {
 /// shortcut: the whole bitmap is read into memory, which is what a `.dib` on a hover is; a
 /// stream the codec could read in place is what to reach for if one ever turns up large.
 fn bitmap_resource_bytes(path: &Path) -> Option<Vec<u8>> {
-    let dib = std::fs::read(path).ok()?;
+    bitmap_resource_bytes_within(path, crate::config::config::decode_budget_bytes())
+}
 
+/// Peak memory for `.dib` -> BMP: raw `dib` + output `file` (`dib.len() + 14`) = `2 * len + 14`.
+fn bitmap_resource_bytes_within(path: &Path, budget: u64) -> Option<Vec<u8>> {
+    let max_dib = budget.checked_sub(14)? / 2;
+    let dib = crate::engines::supervisor::read_file_within_budget(path, max_dib)?;
+    build_bmp_from_dib(&dib)
+}
+
+fn build_bmp_from_dib(dib: &[u8]) -> Option<Vec<u8>> {
     let header = u32::from_le_bytes(dib.get(0..4)?.try_into().ok()?) as usize;
     let bits = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?);
     let compression = u32::from_le_bytes(dib.get(16..20)?.try_into().ok()?);
@@ -318,7 +327,7 @@ fn bitmap_resource_bytes(path: &Path) -> Option<Vec<u8>> {
 
     // A bitfield header carries its masks behind a 40-byte one, and names them inside a
     // longer one.
-    let masks = match compression {
+    let masks: usize = match compression {
         3 | 6 if header == 40 => {
             if compression == 3 {
                 12
@@ -337,12 +346,21 @@ fn bitmap_resource_bytes(path: &Path) -> Option<Vec<u8>> {
         0
     };
 
-    let mut file = Vec::with_capacity(14 + dib.len());
+    let file_size = 14usize.checked_add(dib.len())?;
+    let file_size_u32 = u32::try_from(file_size).ok()?;
+    let palette_bytes = palette.checked_mul(4)?;
+    let pixel_offset = 14usize
+        .checked_add(header)?
+        .checked_add(masks)?
+        .checked_add(palette_bytes)?;
+    let pixel_offset_u32 = u32::try_from(pixel_offset).ok()?;
+
+    let mut file = Vec::with_capacity(file_size);
     file.extend_from_slice(b"BM");
-    file.extend_from_slice(&((14 + dib.len()) as u32).to_le_bytes());
+    file.extend_from_slice(&file_size_u32.to_le_bytes());
     file.extend_from_slice(&[0u8; 4]);
-    file.extend_from_slice(&((14 + header + masks + palette * 4) as u32).to_le_bytes());
-    file.extend_from_slice(&dib);
+    file.extend_from_slice(&pixel_offset_u32.to_le_bytes());
+    file.extend_from_slice(dib);
 
     Some(file)
 }
@@ -957,5 +975,38 @@ mod tests {
         reader.ReadBytes(&mut bytes).ok()?;
 
         Some(bytes)
+    }
+
+    #[test]
+    fn dib_resource_rejects_budget_exceeded_and_header_overflow() {
+        let dir = std::env::temp_dir().join("rhp-wic-dib-guard-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("tiny.dib");
+
+        let mut valid_dib = bitmap_info_header(2, 2, 32);
+        valid_dib.extend_from_slice(&[0u8; 16]);
+        std::fs::write(&path, &valid_dib).expect("write dib");
+
+        let exact_peak = (valid_dib.len() as u64) * 2 + 14;
+        assert!(
+            bitmap_resource_bytes_within(&path, exact_peak).is_some(),
+            "exact 2x + 14 budget should succeed"
+        );
+        assert!(
+            bitmap_resource_bytes_within(&path, exact_peak - 1).is_none(),
+            "budget below 2x + 14 peak must reject before allocating"
+        );
+
+        // Overflowing header size (u32::MAX) must be rejected by checked arithmetic.
+        let mut overflow_header = valid_dib.clone();
+        overflow_header[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(build_bmp_from_dib(&overflow_header).is_none());
+
+        // Overflowing palette count (8-bit with u32::MAX colours -> palette * 4 overflows u32).
+        let mut overflow_palette = bitmap_info_header(2, 2, 8);
+        overflow_palette[32..36].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(build_bmp_from_dib(&overflow_palette).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

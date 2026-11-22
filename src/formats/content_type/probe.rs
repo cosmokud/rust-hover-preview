@@ -221,18 +221,12 @@ pub fn of(path: &Path, config: &AppConfig) -> Content {
 /// is what every caller that reads the lock itself already does (see `mod tests` below, which
 /// still holds).
 pub(crate) fn of_reaching_config(path: &Path) -> Content {
-    // The file's own entry, read before the lock: it is the one thing this needs from the disk,
-    // and reading it here rather than inside `of` is what keeps the guard off the file.
-    let facts = crate::formats::head::Facts::read(path);
-
-    let Ok(config) = crate::CONFIG.lock() else {
+    // Snapshot config under short lock so CONFIG is never held across disk I/O.
+    let Ok(config) = crate::CONFIG.lock().map(|config| config.clone()) else {
         return Content::Unknown;
     };
 
-    match &facts {
-        Some(facts) => of_with_facts(path, facts, &config),
-        None => of(path, &config),
-    }
+    of(path, &config)
 }
 
 /// The same question of a file whose own bytes have already been read into a [`Probe`].

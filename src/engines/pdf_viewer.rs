@@ -71,27 +71,25 @@ use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
-    ICoreWebView2NavigationCompletedEventHandler, ICoreWebView2_3,
-    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
+    ICoreWebView2, ICoreWebView2Environment, ICoreWebView2NavigationCompletedEventHandler,
+    ICoreWebView2_3, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
 };
-use webview2_com::NavigationCompletedEventHandler;
 use windows::core::{w, Interface, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
-use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::WinRT::EventRegistrationToken;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetAncestor, GetClassNameW,
-    GetClientRect, IsIconic, IsWindowVisible, PeekMessageW, PostMessageW, RegisterClassW,
-    SetWindowPos, ShowWindow, TranslateMessage, WindowFromPoint, GA_ROOT, MSG, PM_NOREMOVE,
-    PM_REMOVE, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WHEEL_DELTA,
-    WINDOW_EX_STYLE, WNDCLASSW, WS_POPUP,
+    DefWindowProcW, DestroyWindow, GetAncestor, GetClassNameW, IsIconic, IsWindowVisible,
+    PostMessageW, WindowFromPoint, GA_ROOT, SWP_NOACTIVATE, SWP_NOZORDER, WHEEL_DELTA,
+    WINDOW_EX_STYLE,
 };
 
 use crate::app::engine_processes;
-use crate::engines::webview_preview::{
-    create_controller, create_environment, file_url, trace, wide, Area,
+use crate::engines::webview_host::{
+    self, create_controller, create_environment, file_url, new_browser_pids, pump_messages,
+    register_navigation_completed, snapshot_browser_pids, wide, Area, PlacementSync,
+    RevealState as Life, RevealStep as Step, StaApartment, WebView2Host,
 };
+use crate::engines::webview_preview::trace;
 
 /// The window class every viewer window is made of. It is asked of the desktop by the wheel seam
 /// (see `the_window_under`), which may take no lock, so the answer is a class name rather than a
@@ -564,7 +562,7 @@ fn the_boxes_the_viewers_stand_at(hosts: &[Host]) -> Vec<(isize, Area)> {
     hosts
         .iter()
         .filter(|host| host.seat.life == Life::Shown)
-        .map(|host| (host.seat.owner, host.seat.area))
+        .map(|host| (host.seat.owner, host.seat.placement.area()))
         .collect()
 }
 
@@ -726,124 +724,13 @@ pub(crate) fn close_all() {
     }
 }
 
-/// The viewer's own lifecycle: the four states it can be in, and the call each transition owes.
-///
-/// It is a state machine rather than a handful of flags because its three questions are asked from
-/// different roads — a navigation that arrives, a pin that loses the foreground, a pin that goes
-/// away — and every one of them is a *transition* rather than a setting: a viewer is revealed once,
-/// suspended while it is not the window the user is in, resumed rather than begun again, and closed
-/// exactly once however many of those arrive behind it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Life {
-    /// Asked for, created hidden, navigated: nothing of it is on screen.
-    Arriving,
-    /// The document arrived and the window is up, which is the only state a notch or a click is
-    /// answered in.
-    Shown,
-    /// Up but put away (`SetIsVisible(false)` then `TrySuspend`): the window is hidden or minimized.
-    Suspended,
-    /// Closed, and nothing more is owed to it.
-    Closed,
-}
-
-/// What a transition of `Life` owes, which is the whole of what the viewer thread does about it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Step {
-    /// Put the window up: the document arrived.
-    Reveal,
-    /// Stop drawing: the document is not on the screen.
-    Suspend,
-    /// Draw again.
-    Resume,
-    /// Let go of it, which is also what a document that never arrived is owed: the pin's static
-    /// raster is what the user is left with (see the module docs).
-    Close,
-    /// Nothing at all.
-    Nothing,
-}
-
-impl Life {
-    /// A navigation that answered, and whether a box has arrived for this viewer since it was
-    /// created.
-    ///
-    /// **Only a document that arrived at a box of its pin's is revealed**, because the box a window
-    /// was created with is the band that stood before its pin was taken up on the file it is showing:
-    /// a viewer put up there is a second window standing beside the pin, and nothing but the next box
-    /// change — the user dragging the caption — moves it in. A document that arrived with no box yet
-    /// is still `Arriving`, which is a state the thread keeps publishing a box for (see
-    /// `is_arriving_for`).
-    fn navigated(&mut self, arrived: bool, placed: bool) -> Step {
-        if *self != Life::Arriving {
-            return Step::Nothing;
-        }
-
-        if !arrived {
-            *self = Life::Closed;
-            return Step::Close;
-        }
-
-        if !placed {
-            return Step::Nothing;
-        }
-
-        *self = Life::Shown;
-        Step::Reveal
-    }
-
-    /// What the document being on the screen decides, asked once a pass while it is up.
-    fn settle(&mut self, the_document_is_on_the_screen: bool) -> Step {
-        match (*self, the_document_is_on_the_screen) {
-            (Life::Shown, false) => {
-                *self = Life::Suspended;
-                Step::Suspend
-            }
-            (Life::Suspended, true) => {
-                *self = Life::Shown;
-                Step::Resume
-            }
-            _ => Step::Nothing,
-        }
-    }
-
-    /// Let go of: one close, and every state after it is the same state.
-    fn closed(&mut self) -> Step {
-        if *self == Life::Closed {
-            return Step::Nothing;
-        }
-
-        *self = Life::Closed;
-        Step::Close
-    }
-
-    fn is_arriving(self) -> bool {
-        self == Life::Arriving
-    }
-
-    fn is_closed(self) -> bool {
-        self == Life::Closed
-    }
-
-    fn is_up(self) -> bool {
-        matches!(self, Life::Shown | Life::Suspended)
-    }
-}
-
 /// What a viewer is apart from its window: the file it shows, the pin it stands in, the box that pin
 /// has published for it, and how far the document has got.
-///
-/// It is a value of its own because everything the thread decides about a viewer is decided about
-/// this, and none of it is a question about a window: a file asked for replaces the one its pin was
-/// showing, a box is kept until the document arrives, and the reveal waits for both (see `Life`).
-/// That is also what lets a walk of two documents be read as a list (see `a_walk_of_two_pdfs`).
 struct Seat {
     path: PathBuf,
     owner: isize,
     life: Life,
-    /// The newest box published for this viewer's pin.
-    area: Area,
-    /// Whether a `Place` has arrived **since this viewer was created**.
-    placed: bool,
-    /// What `NavigationCompleted` said, kept rather than re-read: it is one message (see `Host`).
+    placement: PlacementSync,
     arrived: bool,
 }
 
@@ -853,26 +740,15 @@ impl Seat {
             path: path.to_path_buf(),
             owner,
             life: Life::Arriving,
-            area,
-            placed: false,
+            placement: PlacementSync::new(area),
             arrived: false,
         }
     }
 
-    /// The newest box this pin has. A box that arrives before the document does is the box it arrives
-    /// in, which is the whole of what makes a reveal placement-atomic (see `Life::navigated`).
     fn place(&mut self, area: Area) {
-        self.area = area;
-        self.placed = true;
+        self.placement.record(area);
     }
 
-    /// Whether this seat is the one a file asked for in its pin **steps onto rather than replaces**:
-    /// the viewer standing in the band is a page's, and so is the file arriving (see
-    /// `a_walk_between_documents_keeps_the_viewer`).
-    ///
-    /// **Only a viewer that is on the screen is one a walk keeps.** One still arriving has no page
-    /// standing in the band for the next one to replace, and one suspended has its window off the
-    /// screen: those are the roads a document is begun again on (see `Command::Open`).
     fn a_walk_keeps_it(&self, path: &Path, owner: isize) -> bool {
         self.owner == owner
             && self.path != path
@@ -880,33 +756,21 @@ impl Seat {
             && a_walk_between_documents_keeps_the_viewer(&self.path, path)
     }
 
-    /// Whether this viewer is the one a file asked for in its pin replaces: **one pin holds one
-    /// document**, so the file a walk has just left is taken down before the one it steps onto is
-    /// made (see `Command::Open`).
     fn replaced_by(&self, path: &Path, owner: isize) -> bool {
         self.owner == owner && self.path != path
     }
 }
 
-/// One viewer: the seat above, its window, the controller over it, and where it has got to.
+/// One viewer: the seat above, its shared WebView2 host surface, and navigation state.
 struct Host {
     seat: Seat,
-    hwnd: HWND,
-    controller: ICoreWebView2Controller,
-    webview: ICoreWebView2,
+    surface: WebView2Host,
     deadline: Instant,
-    /// What `NavigationCompleted` said, sent by the handler on this same thread and taken by the
-    /// thread's own pass (see `settle`).
     answer: Receiver<bool>,
-    /// The registration of the handler that sends into `answer`, removed before the next one is added:
-    /// **a viewer steps onto a document per step of a walk**, and a handler left registered is one that
-    /// fires on every navigation the viewer makes from then on, sending into a channel nobody reads (see
-    /// `navigates_to`).
     navigation: Option<(
         ICoreWebView2NavigationCompletedEventHandler,
         EventRegistrationToken,
     )>,
-    /// Whether the browser has been asked to suspend, so the ask is made once (see `suspend`).
     suspended: bool,
 }
 
@@ -922,29 +786,14 @@ impl Host {
         let owner_window = HWND(owner as *mut _);
         let deadline = Instant::now() + NAVIGATION_TIMEOUT;
 
-        // The window is created hidden and revealed only by a document that arrived: a window put
-        // up first would be the pin's band gone white for as long as a browser takes to load a
-        // file, which is the one thing a preview may never do.
-        let hwnd = unsafe {
-            CreateWindowExW(
-                WINDOW_EX_STYLE(0),
-                VIEWER_CLASS,
-                w!("Rust Hover Preview"),
-                WS_POPUP,
-                area.x,
-                area.y,
-                area.width,
-                area.height,
-                owner_window,
-                None,
-                None,
-                None,
-            )
-        }
-        .ok()?;
+        let hwnd = webview_host::create_host_window(
+            WINDOW_EX_STYLE(0),
+            VIEWER_CLASS,
+            w!("Rust Hover Preview"),
+            area,
+            Some(owner_window),
+        )?;
 
-        // A viewer is closed on every road that gives up on it, and the window it was made with is
-        // the one it closes — so a failure below has one teardown rather than four.
         let Some(controller) = create_controller(environment.clone(), hwnd, deadline) else {
             trace("pdf: no controller");
             unsafe {
@@ -954,7 +803,6 @@ impl Host {
         };
 
         let webview = unsafe { controller.CoreWebView2().ok() };
-
         let Some(webview) = webview else {
             unsafe {
                 let _ = controller.Close();
@@ -964,59 +812,34 @@ impl Host {
         };
 
         configure(&webview);
+        let mut surface = WebView2Host::new(hwnd, controller, webview);
 
         let Some(url) = file_url(path) else {
-            unsafe {
-                let _ = controller.Close();
-                let _ = DestroyWindow(hwnd);
-            }
+            surface.close();
             return None;
         };
 
         let (sender, answer) = mpsc::channel::<bool>();
-
-        let navigation = unsafe {
-            let handler =
-                NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
-                    let mut arrived = windows::Win32::Foundation::BOOL(0);
-                    let _ = args.is_some_and(|args| args.IsSuccess(&mut arrived).is_ok());
-                    let arrived = arrived.as_bool();
-                    let _ = sender.send(arrived);
-                    Ok(())
-                }));
-
-            let mut token = EventRegistrationToken::default();
-
-            if webview
-                .add_NavigationCompleted(&handler, &mut token)
-                .is_err()
-            {
-                trace("pdf: no navigation handler");
-                let _ = controller.Close();
-                let _ = DestroyWindow(hwnd);
-                return None;
-            }
-
-            let url = wide(&url);
-            let started = webview.Navigate(PCWSTR(url.as_ptr()));
-
-            if started.is_err() {
-                trace("pdf: would not navigate");
-                let _ = controller.Close();
-                let _ = DestroyWindow(hwnd);
-                return None;
-            }
-
-            (handler, token)
+        let Some(navigation) = register_navigation_completed(surface.webview(), move |arrived| {
+            let _ = sender.send(arrived);
+        }) else {
+            trace("pdf: no navigation handler");
+            surface.close();
+            return None;
         };
+
+        let wide_url = wide(&url);
+        if unsafe { surface.webview().Navigate(PCWSTR(wide_url.as_ptr())) }.is_err() {
+            trace("pdf: would not navigate");
+            surface.close();
+            return None;
+        }
 
         trace(&format!("pdf: navigating to {}", path.display()));
 
         Some(Self {
             seat: Seat::create(path, owner, area),
-            hwnd,
-            controller,
-            webview,
+            surface,
             deadline,
             answer,
             navigation: Some(navigation),
@@ -1024,8 +847,6 @@ impl Host {
         })
     }
 
-    /// What this viewer is owed on this pass: the document that arrived at a box of its pin's, the
-    /// navigation that is not coming, and the suspension the pin's place on the screen decides.
     fn settle(&mut self) {
         if self.seat.life.is_arriving() {
             if !self.seat.arrived {
@@ -1040,8 +861,6 @@ impl Host {
                         self.close();
                         return;
                     }
-                    // A document still on its way is owed nothing yet: the box it is waiting for is
-                    // the pin's own to publish (see `is_arriving_for`).
                     Err(mpsc::TryRecvError::Empty) => return,
                     Err(mpsc::TryRecvError::Disconnected) => {
                         self.close();
@@ -1053,7 +872,7 @@ impl Host {
             match self
                 .seat
                 .life
-                .navigated(self.seat.arrived, self.seat.placed)
+                .navigated(self.seat.arrived, self.seat.placement.placed())
             {
                 Step::Reveal => self.reveal(),
                 Step::Close => {
@@ -1081,195 +900,99 @@ impl Host {
         }
     }
 
-    /// Put this standing viewer onto another document of the same pin: one browser, one window, one
-    /// box, and only the page in it replaced.
-    ///
-    /// **It is the whole of what a walk is.** The window is not taken down, no environment is asked
-    /// for and no controller is made, so nothing of this app's is drawn in the band between the two
-    /// documents: what stands there until Chromium paints the next page is the page before it, and a
-    /// step of a walk reads as one document replacing another rather than as a band emptied and
-    /// filled again (see `a_walk_between_documents_keeps_the_viewer`).
-    ///
-    /// **The answer is a new channel and a new registration**, because the one this viewer was begun
-    /// with was answered and closed by the document it was asked for — and a closed channel read as
-    /// "nothing arrived" is a viewer closed on the first pass of the file it has just stepped onto. The
-    /// handler that answered that one is taken off the browser first, so a viewer that steps through
-    /// a folder has one registration rather than one per file it has read (see `Host::navigation`).
-    /// The seat is put back to `Arriving` with the box its pin has already published, so the reveal is the
-    /// commit of the new document rather than a second placement (see `Life::navigated`).
-    ///
-    /// Nothing is hid on this road and the document before it is not told to stop: Chromium keeps
-    /// the page it is showing up until the one it is asked for commits.
     fn navigates_to(&mut self, path: &Path) -> bool {
         let Some(url) = file_url(path) else {
             return false;
         };
 
         let (sender, answer) = mpsc::channel::<bool>();
-        let handler = NavigationCompletedEventHandler::create(Box::new(move |_sender, args| {
-            let mut arrived = windows::Win32::Foundation::BOOL(0);
-            // SAFETY: the callback is Chromium's and the answer it carries is read rather than
-            // kept; nothing behind it is state of this thread's.
-            unsafe {
-                let _ = args.is_some_and(|args| args.IsSuccess(&mut arrived).is_ok());
-            }
-            let _ = sender.send(arrived.as_bool());
-            Ok(())
-        }));
-
-        let mut token = EventRegistrationToken::default();
         let wide_url = wide(&url);
 
-        unsafe {
-            if let Some((previous, previous_token)) = self.navigation.take() {
-                let _ = self.webview.remove_NavigationCompleted(previous_token);
-                drop(previous);
+        if let Some((previous, previous_token)) = self.navigation.take() {
+            unsafe {
+                let _ = self
+                    .surface
+                    .webview()
+                    .remove_NavigationCompleted(previous_token);
             }
-
-            if self
-                .webview
-                .add_NavigationCompleted(&handler, &mut token)
-                .is_err()
-            {
-                return false;
-            }
-
-            if self.webview.Navigate(PCWSTR(wide_url.as_ptr())).is_err() {
-                return false;
-            }
+            drop(previous);
         }
 
-        self.navigation = Some((handler, token));
+        let Some(navigation) =
+            register_navigation_completed(self.surface.webview(), move |arrived| {
+                let _ = sender.send(arrived);
+            })
+        else {
+            return false;
+        };
 
+        if unsafe { self.surface.webview().Navigate(PCWSTR(wide_url.as_ptr())) }.is_err() {
+            return false;
+        }
+
+        self.navigation = Some(navigation);
         self.answer = answer;
         self.deadline = Instant::now() + NAVIGATION_TIMEOUT;
         self.seat.path = path.to_path_buf();
         self.seat.arrived = false;
-        // **And the box it arrives at is one its pin published since this navigation began**, on the
-        // same rule a newborn viewer follows: the box the seat is carrying is the band the pin stood at
-        // for the file before this one, and a walk between two pages of different shapes lays the pin
-        // out at the new file's box. The ask for the viewer publishes that box in the same call that
-        // makes this one (see `pin_lifecycle::place_pinned_siblings`), and the navigation cannot have
-        // completed before the pass has taken it up — the browser's own messages are pumped after the
-        // boxes of the pass, never before them.
-        self.seat.placed = false;
+        self.seat.placement.reset_placed();
         self.seat.life = Life::Arriving;
 
+        let area = self.seat.placement.area();
         note(&format!(
             "navigate owner={} to {} at {}x{}+{}+{}",
             self.seat.owner,
             path.display(),
-            self.seat.area.width,
-            self.seat.area.height,
-            self.seat.area.x,
-            self.seat.area.y
+            area.width,
+            area.height,
+            area.x,
+            area.y
         ));
         trace(&format!("pdf: stepping to {}", path.display()));
 
         true
     }
 
-    /// Whether the document is on the screen at all, which is what decides between drawing and
-    /// being suspended.
-    ///
-    /// **A viewer that is merely behind another window is not suspended.** A suspended controller
-    /// stops drawing, and a document that is in front of the listing while the caret is in the
-    /// listing would be the one thing this road may not show: an empty band where a page was. So the
-    /// ask is whether the window is on the screen — a minimize, a taskbar visit, a pin collapsed to
-    /// its bubble, a pin put away for a swap all hide the window the viewer is owned by, and Windows
-    /// hides an owned window with its owner — rather than which window holds the keyboard. The
-    /// suspension is still the whole of what a pin that goes away pays: the document is kept, and a
-    /// pin that comes back is a resume rather than a browser begun again.
     fn the_document_is_on_the_screen(&self) -> bool {
-        // The pin's own window is asked as well as this one: a viewer hidden *by* us is hidden for
-        // the same reason an owner's hide would be, and asking both means the answer does not
-        // depend on whether the Shell hides an owned window with its owner.
         unsafe {
-            IsWindowVisible(self.hwnd).as_bool()
+            IsWindowVisible(self.surface.hwnd()).as_bool()
                 && IsWindowVisible(self.owner()).as_bool()
                 && !IsIconic(self.owner()).as_bool()
         }
     }
 
-    /// The pin this viewer stands in, as the window that owns it.
     fn owner(&self) -> HWND {
         HWND(self.seat.owner as *mut _)
     }
 
-    /// Put the window at the box its pin has published, which is the only box it is ever shown at.
     fn put_the_window(&self) {
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                HWND::default(),
-                self.seat.area.x,
-                self.seat.area.y,
-                self.seat.area.width,
-                self.seat.area.height,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-        }
+        self.surface.move_window(
+            self.seat.placement.area(),
+            HWND::default(),
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
     }
 
     fn reveal(&mut self) {
-        // **The box first and the controller's own after it.** The client is what a page is laid out
-        // at, so a controller told its bounds before the window moved is a page at the box before it,
-        // and the document would be laid out twice (see `set_bounds`).
         self.put_the_window();
+        self.surface.set_visible(true);
+        self.surface.show_window(true);
+        self.surface.set_bounds_to_client();
 
-        unsafe {
-            let _ = self.controller.SetIsVisible(true);
-            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
-        }
-
-        self.set_bounds();
-
-        // **And the band this window stands in is a paint owed the pin, before the caret is asked for.**
-        // A page that has just committed is a rectangle that was the pin's frame and is now the
-        // document's, and nothing on the pin's own tick asks for the frame to be drawn again about it.
-        // The debt is left here rather than painted here because the pin's frame is the preview
-        // loop's, which is another thread (see `the_band_owes_a_repaint`).
         the_band_owes_a_repaint();
-
-        // **And the caret goes into the document, which is what the wheel then belongs to.** A notch
-        // is delivered to the window the keyboard is in, and a viewer nobody has clicked into is not
-        // that window: the pin's chrome around it is, so a wheel turned over the page would scroll
-        // nothing while the counter it shares with a hover went on ticking — a listing re-resolved
-        // under a pin the user is reading in. Chromium is asked for the caret once the document is
-        // on the screen, and from then on the wheel is the document's (see `take_the_caret`).
         self.take_the_caret();
 
+        let area = self.seat.placement.area();
         trace(&format!(
             "pdf: shown {} at {}x{}+{}+{}",
             self.seat.path.display(),
-            self.seat.area.width,
-            self.seat.area.height,
-            self.seat.area.x,
-            self.seat.area.y
+            area.width,
+            area.height,
+            area.x,
+            area.y
         ));
     }
 
-    /// Ask Chromium for the caret, so that the document is the window the wheel and the keys are in.
-    ///
-    /// **The controller's focus is what Windows' own focus follows**, so this is the one call that
-    /// makes a page scrolled by a wheel turned over it: a mouse message goes to the window the pointer
-    /// is over, but Chromium's own page only takes it once its controller holds the focus. Asking for
-    /// it is what this app's chrome had otherwise taken on the press that raised the pin.
-    ///
-    /// **And it is the `PDF → Pin Mode → Autofocus on PDF` setting's, which is the whole of what the
-    /// row is for.** On — where it starts — the document is worked in: the caret goes into it and
-    /// every notch and arrow over it is the document's own. Off, the pin keeps the keyboard for the
-    /// walk, and the asks below leave it where it is: a viewer revealed into a pin whose caret is in
-    /// the listing must not take it, and the pin's own key table is what an arrow reaches (see
-    /// `pin_chrome_layout::pin_ask_keyboard_back`, which leaves the pin's caret where it stands beside
-    /// this).
-    ///
-    /// It is read here rather than handed in, because it is read exactly where it is acted on and the
-    /// thread that reveals a viewer has no configuration of its own: the row is the same file both
-    /// processes watch, and nothing is kept between a reveal and the next one.
-    ///
-    /// The foreground window is left to Windows: a viewer is owned by a pin and the pin is the window
-    /// the user put there, so raising the viewer over the desktop is not this road's to do.
     fn take_the_caret(&self) {
         if !pdf_autofocus() {
             return;
@@ -1277,27 +1000,9 @@ impl Host {
 
         unsafe {
             let _ = self
-                .controller
+                .surface
+                .controller()
                 .MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-        }
-    }
-
-    /// The controller's own box, which is the window's client: a page is laid out at the size it is
-    /// drawn in, so the browser is told the same box the window has.
-    fn set_bounds(&mut self) {
-        let mut client = RECT::default();
-
-        if unsafe { GetClientRect(self.hwnd, &mut client) }.is_err() {
-            return;
-        }
-
-        unsafe {
-            let _ = self.controller.SetBounds(RECT {
-                left: 0,
-                top: 0,
-                right: client.right.max(1),
-                bottom: client.bottom.max(1),
-            });
         }
     }
 
@@ -1309,7 +1014,6 @@ impl Host {
                 "take owner={} not up: the box is kept for the reveal",
                 self.seat.owner
             ));
-            // A box asked for before the document arrived is the one it arrives in (see `reveal`).
             return;
         }
 
@@ -1317,7 +1021,7 @@ impl Host {
         self.put_the_window();
         let moved = moving.elapsed();
         let bounds = Instant::now();
-        self.set_bounds();
+        self.surface.set_bounds_to_client();
 
         note(&format!(
             "take owner={} area={}x{}+{}+{} move={:.2}ms bounds={:.2}ms",
@@ -1331,21 +1035,14 @@ impl Host {
         ));
     }
 
-    /// Stop drawing, and keep the document: a suspended browser is one still there to be resumed,
-    /// which is what makes a pin the user works away from cheap rather than begun again.
     fn suspend(&mut self) {
         if self.suspended {
             return;
         }
 
-        unsafe {
-            let _ = self.controller.SetIsVisible(false);
-        }
+        self.surface.set_visible(false);
 
-        // `TrySuspend` states a precondition rather than a preference: the controller must already
-        // be hidden (see above), and a runtime older than suspension is answered by the hidden
-        // controller alone.
-        if let Ok(webview) = self.webview.cast::<ICoreWebView2_3>() {
+        if let Ok(webview) = self.surface.webview().cast::<ICoreWebView2_3>() {
             unsafe {
                 let _ = webview.TrySuspend(&webview2_com::TrySuspendCompletedHandler::create(
                     Box::new(|_code, _successful| Ok(())),
@@ -1353,16 +1050,7 @@ impl Host {
             }
         }
 
-        // The window goes off the screen with the controller, because a hidden document that a
-        // suspended controller no longer draws is a blank band: the pin's band is owed nothing of
-        // this app's while the pin is away (see `the_document_is_on_the_screen`).
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-        }
-
-        // The band is the pin's own again — it paints its raster there rather than showing the browser
-        // through it — so the frame around a document that has just left is a paint owed (see
-        // `the_band_owes_a_repaint`).
+        self.surface.show_window(false);
         the_band_owes_a_repaint();
 
         self.suspended = true;
@@ -1379,33 +1067,16 @@ impl Host {
         }
 
         self.suspended = false;
+        self.surface.resume();
+        self.surface.set_visible(true);
+        self.surface.show_window(true);
 
-        if let Ok(webview) = self.webview.cast::<ICoreWebView2_3>() {
-            unsafe {
-                let _ = webview.Resume();
-            }
-        }
-
-        unsafe {
-            let _ = self.controller.SetIsVisible(true);
-            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
-        }
-
-        // The caret goes back into the document with the document, for the same reason `reveal` asks
-        // for it: a resumed viewer whose focus was left in the pin's chrome is a page no wheel
-        // scrolls.
         self.take_the_caret();
-
-        // And the band is Chromium's again, which is the same paint a reveal owes it (see
-        // `the_band_owes_a_repaint`).
         the_band_owes_a_repaint();
+        let area = self.seat.placement.area();
         note(&format!(
             "resume owner={} at {}x{}+{}+{}",
-            self.seat.owner,
-            self.seat.area.width,
-            self.seat.area.height,
-            self.seat.area.x,
-            self.seat.area.y
+            self.seat.owner, area.width, area.height, area.x, area.y
         ));
 
         trace(&format!("pdf: resumed {}", self.seat.path.display()));
@@ -1416,11 +1087,7 @@ impl Host {
             return;
         }
 
-        unsafe {
-            let _ = self.controller.Close();
-            let _ = DestroyWindow(self.hwnd);
-        }
-
+        self.surface.close();
         trace(&format!("pdf: closed {}", self.seat.path.display()));
     }
 }
@@ -1589,20 +1256,7 @@ pub(crate) fn close_the_pin(owner: isize) {
 
 fn register_class() {
     static REGISTERED: AtomicBool = AtomicBool::new(false);
-
-    if REGISTERED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    let class = WNDCLASSW {
-        lpfnWndProc: Some(window_proc),
-        lpszClassName: VIEWER_CLASS,
-        ..Default::default()
-    };
-
-    unsafe {
-        let _ = RegisterClassW(&class);
-    }
+    webview_host::register_host_class(&REGISTERED, VIEWER_CLASS, Some(window_proc));
 }
 
 /// A viewer window answers nothing of its own: the pin that owns it is the window with the buttons,
@@ -1617,9 +1271,7 @@ extern "system" fn window_proc(
 }
 
 fn viewer_thread(commands: Receiver<Command>) {
-    // The browser's own apartment, and its own thread: WebView2 must be created on a thread that is
-    // pumping messages, and this is that thread for every viewer this app has open.
-    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let _sta = StaApartment::enter();
 
     // **No box is owed by a thread only just begun.** Whatever was published before this thread existed
     // aimed at windows it has never made, and a flag left set by a thread that has gone would stop the
@@ -1627,14 +1279,6 @@ fn viewer_thread(commands: Receiver<Command>) {
     PLACE_ASKED.store(false, Ordering::Release);
     if let Ok(mut boxes) = PLACED_BOXES.lock() {
         boxes.clear();
-    }
-
-    // The thread's message queue, made before anything can be posted to it.
-    {
-        let mut message = MSG::default();
-        unsafe {
-            let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
-        }
     }
 
     // A folder of its own for this thread, beside the hover engine's: one folder is one browser at a
@@ -1695,14 +1339,7 @@ fn viewer_thread(commands: Receiver<Command>) {
                     hosts.retain(|host| !host.seat.life.is_closed());
 
                     if environment.is_none() {
-                        // The browser the runtime starts is this app's child whatever engine asked for
-                        // it: one begun here is written down like the hover engine's, so a run that
-                        // ends badly leaves no browser of its own behind (see `app::engine_processes`).
-                        let before = engine_processes::processes_named_by_parent(
-                            engine_processes::BROWSER_IMAGE,
-                            std::process::id(),
-                        );
-
+                        let before = snapshot_browser_pids();
                         let deadline = Instant::now() + NAVIGATION_TIMEOUT;
                         environment = create_environment(&folder, deadline, BROWSER_ARGUMENTS);
 
@@ -1710,14 +1347,9 @@ fn viewer_thread(commands: Receiver<Command>) {
                             trace("pdf: no environment");
                         }
 
-                        for pid in engine_processes::processes_named_by_parent(
-                            engine_processes::BROWSER_IMAGE,
-                            std::process::id(),
-                        ) {
-                            if !before.contains(&pid) {
-                                trace(&format!("pdf: browser {pid}"));
-                                engine_processes::record(engine_processes::BROWSER_IMAGE, pid);
-                            }
+                        for pid in new_browser_pids(&before) {
+                            trace(&format!("pdf: browser {pid}"));
+                            engine_processes::record(engine_processes::BROWSER_IMAGE, pid);
                         }
                     }
 
@@ -1816,23 +1448,6 @@ fn viewer_thread(commands: Receiver<Command>) {
 
     publish_the_live_owners(Vec::new());
     publish_the_arriving_owners(Vec::new());
-
-    unsafe {
-        CoUninitialize();
-    }
-}
-
-/// Retrieve and dispatch whatever is waiting, without blocking: the thread a controller was made on
-/// is the thread its callbacks arrive on.
-fn pump_messages() {
-    let mut message = MSG::default();
-
-    unsafe {
-        while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-    }
 }
 
 /// The window a notch over a viewer is posted to: Chromium's own child of it, or the viewer window
@@ -2331,7 +1946,7 @@ mod tests {
         // What the pass answers once the document has arrived and the box has come with it.
         fn arrive(seat: &mut Seat) -> Step {
             seat.arrived = true;
-            seat.life.navigated(seat.arrived, seat.placed)
+            seat.life.navigated(seat.arrived, seat.placement.placed())
         }
 
         let mut seats = Vec::new();
@@ -2348,7 +1963,8 @@ mod tests {
         seats[0].place(the_inset_band);
         assert_eq!(arrive(&mut seats[0]), Step::Reveal);
         assert_eq!(
-            seats[0].area, the_inset_band,
+            seats[0].placement.area(),
+            the_inset_band,
             "the box it arrived at is its pin's"
         );
 
@@ -2366,7 +1982,8 @@ mod tests {
         seats[0].place(the_inset_band);
         assert_eq!(arrive(&mut seats[0]), Step::Reveal);
         assert_eq!(
-            seats[0].area, the_inset_band,
+            seats[0].placement.area(),
+            the_inset_band,
             "the viewer stands in the band the pin has now"
         );
         assert!(seats[0].life.is_up());
@@ -2397,6 +2014,7 @@ mod tests {
     /// were (see `a_documents_window`).
     #[test]
     fn a_viewer_window_and_its_chromium_child_are_the_documents() {
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, WS_POPUP};
         let _room = the_viewers_room();
         register_class();
 

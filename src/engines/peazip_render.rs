@@ -67,7 +67,6 @@
 use crate::engines::supervisor::{self, Adapter, Worker};
 use crate::formats::peazip_formats::Backend;
 use once_cell::sync::Lazy;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{mpsc, Mutex};
@@ -385,7 +384,7 @@ fn list(path: &Path) -> Option<crate::readers::archive_listing::Listing> {
 ///   own — a black rectangle over whatever the pointer was on, for as long as the launch lasted.
 ///   See `engine_processes` for the flag and for what it is said of.
 fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, ExitStatus)> {
-    let mut command = crate::app::engine_processes::hidden_command(program);
+    let mut command = supervisor::hidden_command(program);
 
     match backend {
         Backend::SevenZip => {
@@ -421,9 +420,8 @@ fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, 
     let output = child.stdout.take()?;
     let (written, written_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut report = Vec::new();
-        let read = output.take(decode_budget()).read_to_end(&mut report);
-        let _ = written.send(read.ok().map(|_| report));
+        let report = supervisor::read_stdout_within_budget(output, decode_budget());
+        let _ = written.send(report);
     });
 
     // What the engine is reading, published for the threads that may decide it has stopped
