@@ -5112,7 +5112,26 @@ pub fn run_preview_window() {
                     // is loaded, and is replaced when it lands. A hover replayed for a
                     // video's probe, or for a box measured off this thread, is the same thing
                     // reached another way: it is the wait it was already in, carried on.
-                    let upgrading = page_upgrade.as_deref() == Some(path.as_path())
+                    //
+                    // **And the file already on screen is that same wait, whoever asked for it
+                    // again.** A replay is normally named by one of the three flags above, but a
+                    // `Show` can reach this arm without one — a second message for the file the
+                    // hand is on, an answer that landed after its flag was taken, a display asked
+                    // for the hover again — and rebuilt as a new preview it takes the window down
+                    // before it puts it back: the video's frame, or the spinner a player is being
+                    // waited behind, is gone for a frame or two and the hover reads as a blink.
+                    // What is on screen for this file stays on screen; only the place it is laid
+                    // out at, and the frame that lands, are this call's.
+                    let showing_this_file = current_show
+                        .as_ref()
+                        .and_then(self::show_path)
+                        .is_some_and(|shown| shown == &path)
+                        && pending_load.as_ref().map_or_else(
+                            || current_media_type().is_some_and(|kind| !kind.is_loading()),
+                            |load| load.path == path,
+                        );
+                    let upgrading = showing_this_file
+                        || page_upgrade.as_deref() == Some(path.as_path())
                         || video_replay.as_deref() == Some(path.as_path())
                         || measure_replay.as_deref() == Some(path.as_path());
                     page_upgrade = None;
