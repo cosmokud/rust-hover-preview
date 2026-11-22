@@ -401,18 +401,12 @@ pub fn run_preview_window() {
         // static preview republishes at most twice a second plus on transitions.
         let mut last_hold_publish = Instant::now() - Duration::from_secs(10);
         let mut last_hold_key = (false, false, false, 0u64);
-        // **A window handed to this process by another one is opened here**, before the loop turns:
-        // the file is read on a thread of its own and put on the screen through the same message a
-        // pin key would have sent (see `detach_open`). A process that is not a detached window asks
-        // nothing and does nothing.
-        detach_open::begin();
-
         // **The tray app is waiting on this before it makes the rings the road** — the section is joined and
         // the loop is about to turn, which is the whole of what it asks before it publishes into the ring
         // this loop reads (see `app::viewer::begin_the_viewer`).
         crate::app::seam::note_the_preview_loop_is_up();
 
-        while RUNNING.load(Ordering::SeqCst) {
+        while RUNNING.load(Ordering::SeqCst) && !crate::app::seam::shutdown_requested() {
             // Every tick is noted, whether it does anything or not: what the note is
             // for is the Explorer hook telling a loop that is working from one that has
             // stopped, and a loop waiting on the channel is working (see
@@ -1803,13 +1797,6 @@ pub fn run_preview_window() {
                                     audio_paused,
                                 );
 
-                                // Where the sound on screen has got to, written down for the one
-                                // thing that has to carry it over a process boundary: the window
-                                // this one is handed to, which opens the file from nothing and
-                                // cannot ask a player it does not own (see
-                                // `pin_detach::note_the_sounds_position`).
-                                pin_detach::note_the_sounds_position(path, elapsed);
-
                                 // A start position that was a share of a length nothing had
                                 // read is asked for here, on the first tick a player says how
                                 // long the file is — the ask is one that can be made at any
@@ -2183,19 +2170,9 @@ pub fn run_preview_window() {
                                 let seek = current_audio_seek();
                                 let length = audio_track::playable(&result.path)
                                     .and_then(|track| track.duration);
-                                // A sound this window was handed over is taken up where the pin it
-                                // came from had got to rather than where the way a *hover* drops
-                                // one in would have it: what the hand-off becomes is the window
-                                // that was standing, and a sound that came up at the second its
-                                // own settings alone would name is the one thing about it that
-                                // moved (see `crate::app::detach::the_sound_starts_at`).
-                                let handed = crate::app::detach::the_sound_starts_at(&result.path);
-                                let start = handed.unwrap_or_else(|| {
-                                    audio_seek::start_position(&result.path, seek, length)
-                                });
+                                let start = audio_seek::start_position(&result.path, seek, length);
 
-                                audio_share_seek = (handed.is_none()
-                                    && start == 0.0
+                                audio_share_seek = (start == 0.0
                                     && matches!(seek, AudioSeek::Middle | AudioSeek::Random)
                                     && length.is_none())
                                 .then_some(seek);
@@ -5592,11 +5569,8 @@ pub fn run_preview_window() {
                 page_render_pending = None;
             }
 
-            // **A detached window's own two answers**, taken where the pin and its paints have just
-            // been looked at: whether the window it was handed is up — which is the moment the pin it
-            // came from may come down — and whether that window has ended, which is this process's
-            // own end (see `detach_open`). A process that is not a detached window answers at once.
-            detach_open::settle(current_show.as_ref(), pending_load.is_some());
+            // End a detached viewer process once its standalone pin closes.
+            detach_open::settle();
 
             // The preview has waited as long as it waits — a page that has not arrived by
             // now may still be coming, a very large document takes as long as it takes —

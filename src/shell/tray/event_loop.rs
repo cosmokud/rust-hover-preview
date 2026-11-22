@@ -144,8 +144,9 @@ unsafe extern "system" fn tray_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     catch_unwind(|| {
+        let taskbar_created = TASKBAR_CREATED.load(Ordering::Acquire);
         match msg {
-            _ if TASKBAR_CREATED != 0 && msg == TASKBAR_CREATED => {
+            _ if taskbar_created != 0 && msg == taskbar_created => {
                 // Explorer (taskbar) restarted; re-add tray icon
                 remove_tray_icon(hwnd);
                 let _ = add_tray_icon(hwnd);
@@ -817,7 +818,7 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
 /// thread the menu is built on, and the worker's job ends with the message. A tray window that is
 /// gone — the app on its way out — leaves the slot set, which nothing reads again.
 pub(crate) fn note_install_finished() {
-    let hwnd = unsafe { TRAY_HWND };
+    let hwnd = HWND(TRAY_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
 
     if !hwnd.is_invalid() {
         let _ = unsafe { PostMessageW(hwnd, WM_TRAY_INSTALL_FINISHED, WPARAM(0), LPARAM(0)) };
@@ -836,7 +837,7 @@ pub(crate) fn note_update_installed() {
     let deadline = Instant::now() + Duration::from_secs(20);
 
     loop {
-        let hwnd = unsafe { TRAY_HWND };
+        let hwnd = HWND(TRAY_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
 
         if !hwnd.is_invalid() {
             let _ = unsafe { PostMessageW(hwnd, WM_TRAY_UPDATE_INSTALLED, WPARAM(0), LPARAM(0)) };
@@ -861,7 +862,10 @@ pub(crate) fn note_update_installed() {
 /// the time this is called (see `main`).
 pub fn run_tray(trace: &mut StartupTrace) {
     unsafe {
-        let hinstance = GetModuleHandleW(None).unwrap();
+        let Ok(hinstance) = GetModuleHandleW(None) else {
+            eprintln!("Failed to get module handle for tray window.");
+            return;
+        };
 
         // Register window class
         let wc = WNDCLASSEXW {
@@ -876,7 +880,10 @@ pub fn run_tray(trace: &mut StartupTrace) {
         RegisterClassExW(&wc);
 
         // Register TaskbarCreated message to detect Explorer restarts
-        TASKBAR_CREATED = RegisterWindowMessageW(w!("TaskbarCreated"));
+        TASKBAR_CREATED.store(
+            RegisterWindowMessageW(w!("TaskbarCreated")),
+            Ordering::Release,
+        );
 
         // Create hidden window for tray messages
         let hwnd = CreateWindowExW(
@@ -902,7 +909,7 @@ pub fn run_tray(trace: &mut StartupTrace) {
             }
         };
 
-        TRAY_HWND = hwnd;
+        TRAY_HWND.store(hwnd.0 as isize, Ordering::Release);
         trace.step("tray window");
 
         // Add tray icon (retry briefly in case Explorer isn't ready yet)

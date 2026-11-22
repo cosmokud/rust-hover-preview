@@ -1950,31 +1950,61 @@ fn the_install_rows_name_the_one_in_flight_and_offer_nothing_while_it_is() {
 /// all, which is what tells a group of picks from a column of switches (see `MF_RADIOCHECK`).
 #[test]
 fn a_group_of_picks_marks_its_answer_with_the_disc() {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        DestroyMenu, GetMenuState, MF_BYCOMMAND, MF_CHECKED,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{GetMenuState, MF_BYCOMMAND, MF_CHECKED};
 
     let menu = timing_delay_menu(
         ID_TRAY_DELAY_BASE,
         TIMING_DELAY_CHOICES_MS[1],
         TIMING_DELAY_CHOICES_MS[0],
-    );
+    )
+    .expect("timing_delay_menu creates popup menu");
 
-    let marked = unsafe { GetMenuState(menu, (ID_TRAY_DELAY_BASE + 1) as u32, MF_BYCOMMAND) };
+    let marked =
+        unsafe { GetMenuState(menu.handle(), (ID_TRAY_DELAY_BASE + 1) as u32, MF_BYCOMMAND) };
     assert_eq!(
         marked & (MF_CHECKED.0 | MF_RADIOCHECK.0),
         MF_CHECKED.0 | MF_RADIOCHECK.0,
         "the delay the setting is on is checked, and it is marked with the disc"
     );
 
-    let unmarked = unsafe { GetMenuState(menu, ID_TRAY_DELAY_BASE as u32, MF_BYCOMMAND) };
+    let unmarked = unsafe { GetMenuState(menu.handle(), ID_TRAY_DELAY_BASE as u32, MF_BYCOMMAND) };
     assert_eq!(
         unmarked & (MF_CHECKED.0 | MF_RADIOCHECK.0),
         0,
         "and a delay the setting is not on carries no mark at all"
     );
 
-    let _ = unsafe { DestroyMenu(menu) };
+    drop(menu);
+}
+
+#[test]
+fn menu_guard_destroys_unowned_handle_and_transfers_on_append() {
+    use super::submenus::MenuGuard;
+    use windows::Win32::UI::WindowsAndMessaging::{GetMenuItemCount, IsMenu, MF_STRING};
+
+    let unowned = MenuGuard::new().expect("popup menu created");
+    let raw_unowned = unowned.handle();
+    assert!(unsafe { IsMenu(raw_unowned).as_bool() });
+    drop(unowned);
+    assert!(
+        !unsafe { IsMenu(raw_unowned).as_bool() },
+        "unattached MenuGuard must destroy HMENU on drop"
+    );
+
+    let parent = MenuGuard::new().expect("parent menu created");
+    let child = MenuGuard::new().expect("child menu created");
+    let raw_child = child.handle();
+    assert!(child.append_to(parent.handle(), MF_STRING, windows::core::w!("Sub")));
+    assert!(
+        unsafe { IsMenu(raw_child).as_bool() },
+        "attached child HMENU remains alive under parent ownership"
+    );
+    assert_eq!(unsafe { GetMenuItemCount(parent.handle()) }, 1);
+
+    let raw_parent = parent.handle();
+    drop(parent);
+    assert!(!unsafe { IsMenu(raw_parent).as_bool() });
+    assert!(!unsafe { IsMenu(raw_child).as_bool() });
 }
 
 /// Every command id this tray hands out is a value of its own, and the list of them is read out of

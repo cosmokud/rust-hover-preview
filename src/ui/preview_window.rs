@@ -462,7 +462,6 @@ pub(crate) fn note_a_playback_trace_line(line: &str) {
 }
 pub(crate) use pin_window::take_pin_handed_off;
 pub(crate) use requests::is_preview_window;
-pub(crate) use requests::note_the_pin_was_handed_off;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;
 pub(crate) use requests::notify_peazip_ready;
