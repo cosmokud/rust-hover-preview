@@ -904,6 +904,7 @@ pub(super) fn hover_is_shown(message: &PreviewMessage, pinned: bool) -> bool {
 
 /// Whether the preview of `path` is a text preview — the form a caller with no hover of its own
 /// asks, which is one entry read rather than the three this used to make.
+#[cfg(test)]
 pub(super) fn is_text_preview(path: &Path) -> bool {
     HoverFacts::read(path).is_text()
 }

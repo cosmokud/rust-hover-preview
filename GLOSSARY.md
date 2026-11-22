@@ -65,3 +65,13 @@ _Avoid_: Config epoch, settings version, mtime token
 **Configuration Snapshot**:
 A single point-in-time copy of all settings taken once when constructing the tray menu so every row and submenu reflects a consistent state.
 _Avoid_: Config clone, settings copy, menu cache
+
+### Hover & Pin Sessions
+
+**Hover Session**:
+The active lifecycle of a single hovered file in a Viewer, owning the displayed file, its pending replay or failure state, and its resolved file assessment until the file changes, hides, or is promoted into a Pin.
+_Avoid_: Preview flags, hover bookkeeping, replay slots
+
+**Hover Snapshot**:
+The point-in-time assessment of a hovered file's kind, drawing path, and active scale preferences carried from initial hover layout into Pin promotion so both views agree on how the file is measured and sized.
+_Avoid_: Cached probe, file metadata copy, layout facts

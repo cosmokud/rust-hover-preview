@@ -453,6 +453,9 @@ pub(super) struct PinnedPreview {
     /// again without asking the Explorer hook anything — and what a press answers from, so
     /// every step is taken from the file on screen rather than the one the pin came up on.
     pub(super) path: PathBuf,
+    /// Resolved `HoverFacts` inherited from the hover (or read on swap/cold pin) so pin geometry
+    /// and scale decisions cannot drift from the hover that produced the pin.
+    pub(super) hover_facts: Option<Arc<HoverFacts>>,
     /// The box the media occupies on screen. Everything the window draws besides the media is
     /// chrome over or around this box, which is why the box is what the pin remembers and what a
     /// restore puts back (see `PinnedPreview::window_box`).
@@ -639,6 +642,7 @@ impl PinnedPreview {
     pub(crate) fn for_test() -> PinnedPreview {
         Self {
             path: PathBuf::from("picture.png"),
+            hover_facts: None,
             bound: Some(100),
             content: (0, 0, 100, 100),
             zoom: Some(PinZoom::filling((0, 0, 100, 100))),

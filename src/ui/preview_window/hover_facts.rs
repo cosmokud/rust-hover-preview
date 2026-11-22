@@ -417,26 +417,6 @@ pub(super) struct HoverFacts {
     pub(super) follow_cursor: bool,
 }
 
-/// What a file's content says it is, with the configuration's lock not held across the file.
-///
-/// One question asked from the hook, the layout, the loader and the engines' own request sides,
-/// every one of them for the same file in the same hover, and every one of them taking the
-/// process-wide configuration lock across a `content_type::of` — which reads the file's first
-/// four kilobytes on a miss. A slow volume therefore froze every thread of the app, including
-/// the one pumping the preview window's own messages, which is the thread a pin's caption is
-/// dispatched on.
-///
-/// The fix is the order rather than a copy of the configuration: the file's own entry is read
-/// first, without the lock, and the lists are taken under it for the lookup that consults
-/// them. A file that cannot be read has no entry and takes the other form, which is the same
-/// answer for a file nothing can say anything about.
-///
-/// It is now the content field of [`HoverFacts`], which is the whole of what this was for: a
-/// caller that has a hover's answer in hand reads a field.
-pub(super) fn content_of(path: &Path) -> crate::formats::content_type::Content {
-    HoverFacts::read(path).route.content
-}
-
 /// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
 pub(super) fn content_names_another_kind(path: &Path, kind: PreviewType) -> bool {
     HoverFacts::read(path).names_another_kind(kind)
