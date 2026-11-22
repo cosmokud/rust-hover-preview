@@ -117,3 +117,21 @@ _Avoid_: Capped read, truncated stream, soft limit
 **WebView2 Host**:
 The shared single-threaded browser hosting foundation — apartment lifecycle, message pump, host window creation, bounds synchronization, and navigation reveal state — built upon by both hover pages and pinned PDF viewers.
 _Avoid_: Browser wrapper, WebView helper, Chromium shell
+
+### Caching & Chrome Measurement
+
+**Bounded Cache**:
+A fixed-capacity in-memory memo that evicts the least-recently-used entry when full rather than discarding all remembered answers at once.
+_Avoid_: Clearing map, cliff cache, ad-hoc memo
+
+**Deterministic Disk Key**:
+A stable digest derived from a file's identity and version so cached disk entries remain valid across application restarts and releases.
+_Avoid_: Runtime hash, unstable key, session hash
+
+**Display Scale**:
+A sanitized representation of a monitor's scaling factor that falls back to standard scale when a display reports no valid density, preventing zero-sized chrome layout.
+_Avoid_: Raw DPI ratio, unchecked scale, pixel divider
+
+**Text Measurement Seam**:
+The boundary through which chrome layout measures label widths and character runs independently of desktop drawing surfaces, allowing pooled measurement at runtime and deterministic headless testing.
+_Avoid_: Scratch surface, throwaway DC, inline GDI measure

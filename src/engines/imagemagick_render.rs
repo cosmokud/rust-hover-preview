@@ -376,8 +376,6 @@ static LAST: Lazy<Mutex<Option<Held>>> = Lazy::new(|| Mutex::new(None));
 
 /// A size the engine developed a file at, keyed the way the cache keys it: the file and the
 /// version of it the size belongs to.
-type DevelopedSize = (Key, (u32, u32));
-
 /// What each file's picture turned out to be, by file and version: the size a conversion
 /// developed it at.
 ///
@@ -385,14 +383,16 @@ type DevelopedSize = (Key, (u32, u32));
 /// the frame it builds by — and it is held for the run rather than on disk, since it is the
 /// engine's answer about a file rather than the file's picture: a file saved again is a file
 /// to develop again, and a run that has just started knows nothing about anything.
-static DEVELOPED_SIZE: Lazy<Mutex<Vec<DevelopedSize>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static DEVELOPED_SIZE: Lazy<Mutex<crate::cache::BoundedCache<Key, (u32, u32)>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(ANSWERS_MAX_ENTRIES)));
 
 /// The files the engine would not draw, by file and version.
 ///
 /// It is what keeps a name the list was wrong about — one whose format the engine reads
 /// through a delegate this machine has not been given, or a file that is not the picture it
 /// is called — from starting an engine on every hover to reach the same answer.
-static REFUSED: Lazy<Mutex<Vec<Key>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static REFUSED: Lazy<Mutex<crate::cache::BoundedCache<Key, ()>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(ANSWERS_MAX_ENTRIES)));
 
 /// The size a picture the engine developed for this file turned out to be, if it has developed
 /// one — in this run, or in an earlier one whose page is still there to be measured.
@@ -404,8 +404,8 @@ static REFUSED: Lazy<Mutex<Vec<Key>>> = Lazy::new(|| Mutex::new(Vec::new()));
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     let key = key_of(path);
 
-    if let Ok(developed) = DEVELOPED_SIZE.lock() {
-        if let Some((_, size)) = developed.iter().find(|(known, _)| *known == key) {
+    if let Ok(mut developed) = DEVELOPED_SIZE.lock() {
+        if let Some(size) = developed.get(&key) {
             return Some(*size);
         }
     }
@@ -462,7 +462,7 @@ pub fn refused(path: &Path) -> bool {
 
     REFUSED
         .lock()
-        .map(|refused| refused.contains(&key))
+        .map(|refused| refused.contains_key(&key))
         .unwrap_or(false)
 }
 
@@ -794,12 +794,7 @@ fn remember(key: &Key, size: (u32, u32)) {
         return;
     };
 
-    if developed.len() >= ANSWERS_MAX_ENTRIES {
-        developed.clear();
-    }
-
-    developed.retain(|(known, _)| known != key);
-    developed.push((key.clone(), size));
+    developed.insert(key.clone(), size);
 }
 
 /// Hold the picture the engine developed, for the hover that asked to draw.
@@ -815,13 +810,7 @@ fn refuse(key: &Key) {
         return;
     };
 
-    if refused.len() >= ANSWERS_MAX_ENTRIES {
-        refused.clear();
-    }
-
-    if !refused.contains(key) {
-        refused.push(key.clone());
-    }
+    refused.insert(key.clone(), ());
 }
 
 #[cfg(test)]

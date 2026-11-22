@@ -38,7 +38,6 @@ use super::primitives::{
     stroke_round_rect, stroke_segment, surface_pixels, ChromePalette,
 };
 use crate::text::text_paint::{self, DibSurface};
-use std::cell::RefCell;
 use windows::Win32::Foundation::RECT;
 
 /// The card's size and the room its row is given, in the pixels a display's scale multiplies.
@@ -225,7 +224,7 @@ pub(crate) fn find_bar_layout(
     count: &str,
     scrollbar: bool,
 ) -> FindBar {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let margin = text_paint::scaled(FIND_BAR_MARGIN as i32, scale);
     let padding = text_paint::scaled(FIND_BAR_PADDING as i32, scale);
     let row = text_paint::scaled(FIND_BAR_ROW_HEIGHT, scale);
@@ -334,7 +333,7 @@ pub(crate) fn find_bar_layout(
 /// a find bar is written on keeps below the card, because the name is written there and carried across
 /// below the card (see `find_bar_surface_size` and `paint_tooltip`).
 fn tooltip_room(dpi: u32) -> i32 {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let (padding, gap, _, shadow) = tooltip_shape(scale);
     gap + padding + tooltip_cell(scale) + shadow
 }
@@ -407,15 +406,6 @@ fn inside(rect: RECT, x: i32, y: i32) -> bool {
     x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
 }
 
-thread_local! {
-    /// A one-pixel surface the query's own columns are measured on, kept for the life of the thread:
-    /// a press, every move of the drag after it and every blink of the caret ask the same question,
-    /// and a surface — with the font selected into it — made per message would be the field's cost
-    /// for the one thing it draws. It is not the card's own surface, because a press arrives before
-    /// any paint of the bar it is a press on.
-    static MEASURE_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
-}
-
 /// Where the query is drawn from, given how wide it is: the field's left edge where it fits, and its
 /// right edge less the run where it does not. A query too long for its row rests with its end — the
 /// end a reader is typing at — on the field, and its beginning is what is cut (see `query_run`, which
@@ -462,7 +452,9 @@ pub(super) fn query_run(bar: &FindBar, columns: Vec<i32>, caret: usize, dpi: u32
     }
 
     let caret_column = columns.get(caret).copied().unwrap_or(measured);
-    let margin = text_paint::scaled(FIND_BAR_CARET_MARGIN, dpi as f32 / 96.0).max(1);
+    let margin = super::primitives::DpiScale::from_dpi(dpi)
+        .scaled(FIND_BAR_CARET_MARGIN)
+        .max(1);
     let settled = rest + caret_column;
     let origin = if settled < bar.query.left + margin {
         bar.query.left + margin - caret_column
@@ -506,17 +498,8 @@ pub(crate) fn query_index_at(bar: &FindBar, query: &str, caret: usize, x: i32, d
 /// depend on the ink it is asked for, and the palette is not read here because a press can arrive
 /// while the theme is being reloaded and a place in a query is not worth waiting for one.
 fn query_columns(query: &str, dpi: u32) -> Vec<i32> {
-    MEASURE_SURFACE.with(|cell| {
-        let mut cell = cell.borrow_mut();
-        if cell.is_none() {
-            *cell = DibSurface::create(1, 1);
-        }
-
-        cell.as_ref().map_or_else(
-            || vec![0],
-            |surface| measure_run(surface, &caption_style([0, 0, 0]), query, dpi as f32 / 96.0),
-        )
-    })
+    use super::primitives::{DpiScale, GdiTextMeasurer, TextMeasurer};
+    GdiTextMeasurer.measure_run(&caption_style([0, 0, 0]), query, DpiScale::from_dpi(dpi))
 }
 
 /// The place in a run a column names: the boundary nearest the point, given the column the run is
@@ -564,7 +547,7 @@ pub(crate) fn paint_find_bar(
         return;
     }
 
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let radius = (FIND_BAR_RADIUS * scale).max(1.0);
     let shadow = text_paint::scaled(FIND_BAR_SHADOW as i32, scale);
     let stroke = (FIND_BAR_MARK_STROKE * scale).max(1.0);

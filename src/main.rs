@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod cache;
 mod config;
 mod engines;
 mod formats;

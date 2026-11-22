@@ -61,3 +61,64 @@ mod find_bar;
 mod menu;
 mod playlist;
 mod transport;
+
+#[test]
+fn dpi_scale_sanitizes_zero_and_non_finite_factors() {
+    let zero = DpiScale::from_dpi(0);
+    assert_eq!(zero.dpi(), 96);
+    assert_eq!(zero.factor(), 1.0);
+
+    let hi = DpiScale::from_dpi(144);
+    assert_eq!(hi.dpi(), 144);
+    assert!((hi.factor() - 1.5).abs() < 1e-6);
+
+    for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        let sanitized = DpiScale::from_factor(bad);
+        assert_eq!(sanitized.dpi(), 96);
+        assert_eq!(sanitized.factor(), 1.0);
+    }
+
+    // Zero DPI in caption/menu/transport/playlist never collapses to zero-size controls.
+    let buttons = button_boxes(400, 30, 0, true);
+    assert!(!buttons.is_empty());
+    assert!(playlist_row_height(0.0) > 0);
+}
+
+#[test]
+fn read_only_pill_and_chrome_layout_scale_with_fake_text_measurer() {
+    let fake = primitives::FixedWidthMeasurer::new(8.0);
+    let dpi_100 = DpiScale::from_dpi(96);
+    let dpi_150 = DpiScale::from_dpi(144);
+    let dpi_200 = DpiScale::from_dpi(192);
+
+    let w100 = page_marks::read_only_pill_width_with(&fake, dpi_100);
+    let w150 = page_marks::read_only_pill_width_with(&fake, dpi_150);
+    let w200 = page_marks::read_only_pill_width_with(&fake, dpi_200);
+    assert!(w100 > 0 && w150 > w100 && w200 > w150);
+
+    // Wider font (12px/char vs 8px/char) must reduce title room beside the Read-Only pill.
+    let wide_fake = primitives::FixedWidthMeasurer::new(12.0);
+    let room_narrow = super::caption::title_room_beside_pill_with(600, dpi_150, true, &fake);
+    let room_wide = super::caption::title_room_beside_pill_with(600, dpi_150, true, &wide_fake);
+    assert!(room_wide < room_narrow);
+
+    // Menu panel width and playlist name_travel both use TextMeasurer deterministically.
+    let rows = vec![
+        MenuRow {
+            label: "Short".into(),
+            mark: MenuMark::None,
+            disabled: false,
+        },
+        MenuRow {
+            label: "A much longer menu item label".into(),
+            mark: MenuMark::None,
+            disabled: false,
+        },
+    ];
+    let menu_100 = super::menu::menu_main_panel_width_with(&rows, dpi_100, 1000, &fake);
+    let menu_200 = super::menu::menu_main_panel_width_with(&rows, dpi_200, 1000, &fake);
+    assert!(menu_200 > menu_100);
+
+    assert!(super::playlist::name_travel_with("0123456789", 50, dpi_100, &fake).is_some());
+    assert!(super::playlist::name_travel_with("0123", 50, dpi_100, &fake).is_none());
+}

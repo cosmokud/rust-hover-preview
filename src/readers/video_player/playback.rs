@@ -6,7 +6,6 @@ use super::session::{Session, Take};
 use crate::formats::{codecs, head};
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -824,9 +823,6 @@ pub fn mark_unplayable(path: &Path) {
     let key = head::key(path);
 
     if let Ok(mut held) = PLAYABLE.lock() {
-        if held.len() >= PLAYABLE_MAX_ENTRIES {
-            held.clear();
-        }
         held.insert(key, false);
     }
 
@@ -976,7 +972,7 @@ pub fn plays(path: &Path) -> bool {
     if let Some(answer) = PLAYABLE
         .lock()
         .ok()
-        .and_then(|held| held.get(&key).copied())
+        .and_then(|mut held| held.get(&key).copied())
     {
         return answer;
     }
@@ -984,19 +980,15 @@ pub fn plays(path: &Path) -> bool {
     let answer = can_play(path);
 
     if let Ok(mut held) = PLAYABLE.lock() {
-        if held.len() >= PLAYABLE_MAX_ENTRIES {
-            held.clear();
-        }
         held.insert(key, answer);
     }
 
     answer
 }
 
-/// What the engine has been asked about, one answer per file and version. It is bounded the way
-/// the sound tracks are: a run that hovers a library of films does not grow a map forever, and
-/// what a clear costs is one probe per file rather than an unbounded map.
-static PLAYABLE: Lazy<Mutex<HashMap<head::Key, bool>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// What the engine has been asked about, one answer per file and version.
+static PLAYABLE: Lazy<Mutex<crate::cache::BoundedCache<head::Key, bool>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(PLAYABLE_MAX_ENTRIES)));
 const PLAYABLE_MAX_ENTRIES: usize = 512;
 
 /// Take the frame the engine has ready into `pixels`, answering with the size it was

@@ -103,54 +103,48 @@ pub(crate) struct TransportLayout {
 /// every bar and on every move of a drag.
 pub(crate) fn clock_width(seconds: Option<f64>, dpi: u32) -> i32 {
     let text = clock_text(seconds);
-    let scale = dpi as f32 / 96.0;
+    let dpi_scale = super::primitives::DpiScale::from_dpi(dpi);
+    let scale = dpi_scale.factor();
 
-    if let Some(held) =
-        CLOCK_WIDTHS.with(|widths| widths.borrow().get(&(text.clone(), dpi)).copied())
-    {
+    if let Some(held) = CLOCK_WIDTHS.with(|widths| {
+        widths
+            .borrow_mut()
+            .get(&(text.clone(), dpi_scale.dpi()))
+            .copied()
+    }) {
         return held;
     }
 
-    let measured = CLOCK_SURFACE.with(|cell| {
-        let mut cell = cell.borrow_mut();
-        if cell.is_none() {
-            *cell = DibSurface::create(1, 1);
-        }
-        let surface = cell.as_ref()?;
-        let style = caption_style([255, 255, 255]);
-        Some(measure_text(surface, &style, &text, scale))
-    });
+    let style = caption_style([255, 255, 255]);
+    let columns = super::primitives::TextMeasurer::measure_width(
+        &super::primitives::GdiTextMeasurer,
+        &style,
+        &text,
+        dpi_scale,
+    );
 
     // A digit is measured a whole run wide and given a pixel more than it takes: the run is
     // written with its last digit against the track, so a box a pixel short would clip the hours
     // off the front of a film rather than push the clock off the strip's own padding.
-    let width = match measured {
-        Some(columns) if columns > 0 => columns + text_paint::scaled(1, scale),
-        _ => estimated_clock_width(&text, scale),
+    let width = if columns > 0 {
+        columns + text_paint::scaled(1, scale)
+    } else {
+        estimated_clock_width(&text, scale)
     };
 
     CLOCK_WIDTHS.with(|widths| {
-        let mut widths = widths.borrow_mut();
-        if widths.len() >= CLOCK_WIDTHS_MAX_ENTRIES {
-            widths.clear();
-        }
-        widths.insert((text, dpi), width);
+        widths.borrow_mut().insert((text, dpi_scale.dpi()), width);
     });
 
     width
 }
 
-/// Where a measured clock is held, and how many answers are held at once: the map is one entry per
-/// string and scale a bar has been drawn at, and a strip that has run through a whole film's worth
-/// of seconds is a strip to start again rather than one to grow for ever.
+/// Where a measured clock is held, and how many answers are held at once.
 const CLOCK_WIDTHS_MAX_ENTRIES: usize = 128;
 
 thread_local! {
-    static CLOCK_WIDTHS: std::cell::RefCell<std::collections::HashMap<(String, u32), i32>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-    /// The surface a clock is measured on: one pixel of a strip, kept for the thread it is used on,
-    /// since a measure needs a device context and the answer is a number rather than a drawing.
-    static CLOCK_SURFACE: std::cell::RefCell<Option<DibSurface>> = const { std::cell::RefCell::new(None) };
+    static CLOCK_WIDTHS: std::cell::RefCell<crate::cache::BoundedCache<(String, u32), i32>> =
+        std::cell::RefCell::new(crate::cache::BoundedCache::new(CLOCK_WIDTHS_MAX_ENTRIES));
 }
 
 /// The room a clock takes, counted in the advances its characters have at the strip's own face and
@@ -225,7 +219,7 @@ pub(crate) fn transport_layout(shape: BarShape) -> TransportLayout {
     // One button's room, whichever button it is: a player's at the start of a film's bar, and this
     // app's hold at the start of a picture's.
     let button = interactive || controllable;
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let padding = text_paint::scaled(10, scale);
     let play_side = (height - text_paint::scaled(8, scale)).clamp(8, height.max(8));
     // A clock's own room, and never less than a mark or two: a strip whose clock box is nothing
@@ -332,7 +326,7 @@ pub(crate) fn transport_part_at(shape: BarShape, x: i32, y: i32) -> Option<Trans
     }
     // The bar is a thin line, so what is dragged is a band around it rather than the line: a
     // target four pixels high is one a hand cannot hold on to.
-    let reach = text_paint::scaled(10, dpi as f32 / 96.0).max(6);
+    let reach = super::primitives::DpiScale::from_dpi(dpi).scaled(10).max(6);
     if y >= layout.bar.top - reach
         && y < layout.bar.bottom + reach
         && x >= layout.bar.left
@@ -414,7 +408,7 @@ pub(crate) fn volume_popup_from_button(button: RECT, width: i32, dpi: u32) -> Vo
 /// It is placed from the button the same way and for the same reason - the panel a press is
 /// answered against is the panel that is drawn (see `paint_fps_popup`).
 pub(crate) fn fps_popup_from_button(button: RECT, width: i32, dpi: u32) -> VolumePopup {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let gap = text_paint::scaled(FPS_PANEL_TEXT_GAP, scale).max(1);
     let cell = text_paint::scaled(
         text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
@@ -443,7 +437,7 @@ fn popup_from_button(
     panel_width_in: i32,
     top_inset_extra: i32,
 ) -> VolumePopup {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
 
     let panel_width = text_paint::scaled(panel_width_in, scale).max(8);
     let panel_height = text_paint::scaled(VOLUME_PANEL_HEIGHT, scale).max(8);
@@ -636,7 +630,7 @@ pub(crate) fn paint_transport(
 ) {
     let width = surface.width as i32;
     let height = surface.height as i32;
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let layout = transport_layout(BarShape {
         width,
         height,
@@ -1578,7 +1572,7 @@ pub(crate) fn paint_fps_popup_text(
         return;
     }
 
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let style = caption_style(palette.blue);
     let text = fps.to_string();
     let measured = measure_text(surface, &style, &text, scale);
@@ -1641,7 +1635,7 @@ pub(crate) fn paint_fps_popup_text(
 /// figure is ink between two gaps rather than butted against either, with the groove's own place left
 /// exactly where `popup_from_button` put it.
 pub(crate) fn fps_popup_text_rect(popup: &VolumePopup, dpi: u32) -> RECT {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let cell = text_paint::scaled(
         text_paint::LEVEL_FONT_PIXELS[text_paint::BODY_LEVEL as usize],
         scale,

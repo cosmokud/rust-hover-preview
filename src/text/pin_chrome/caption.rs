@@ -19,7 +19,7 @@
 //! bar rather than on this (`CaptionStrip`). What a button says is not drawn here at all: a tooltip
 //! is a panel over the media below the strip, and the window owns where it goes (see `bubble`).
 
-use super::page_marks::{READ_ONLY_PILL_GAP_PIXELS, READ_ONLY_PILL_PIXELS};
+use super::page_marks::READ_ONLY_PILL_GAP_PIXELS;
 use super::primitives::{
     caption_style, draw_chevron, draw_cross, draw_detached_window, draw_open_with,
     draw_open_with_list, draw_pin_top, fill_box, measure_text, stroke_box, surface_pixels,
@@ -58,7 +58,12 @@ pub(crate) fn measure_caption_text(surface: &DibSurface, text: &str, dpi: u32) -
         return 0;
     }
 
-    measure_text(surface, &caption_style([0, 0, 0]), text, dpi as f32 / 96.0)
+    measure_text(
+        surface,
+        &caption_style([0, 0, 0]),
+        text,
+        super::primitives::DpiScale::from_dpi(dpi).factor(),
+    )
 }
 
 /// The buttons a caption carries, in the order they sit in: the two or three that are a
@@ -204,7 +209,9 @@ pub(crate) fn button_boxes(
     let kinds = caption_button_kinds(maximizable);
     // One size, measured once: the buttons a caption carries are all this width whatever else the
     // caption is doing (see the module documentation on the window's group keeping its places).
-    let button = text_paint::scaled(BUTTON_PIXELS as i32, dpi as f32 / 96.0).max(1);
+    let button = super::primitives::DpiScale::from_dpi(dpi)
+        .scaled(BUTTON_PIXELS as i32)
+        .max(1);
     let capacity = (width / button).max(0) as usize;
     if capacity == 0 {
         return Vec::new();
@@ -248,7 +255,9 @@ pub(super) fn buttons_fit(width: i32, dpi: u32, maximizable: bool) -> bool {
 /// a pin's caption as a press on the listing behind it unless it is told where the buttons are, and which
 /// cannot build this `Vec` inside its own callback (see `ui::preview_window::publish_pin_button_boxes`).
 pub(crate) fn button_strip(width: i32, height: i32, dpi: u32, maximizable: bool) -> Option<RECT> {
-    let button = text_paint::scaled(BUTTON_PIXELS as i32, dpi as f32 / 96.0).max(1);
+    let button = super::primitives::DpiScale::from_dpi(dpi)
+        .scaled(BUTTON_PIXELS as i32)
+        .max(1);
     let kept = ((width / button).max(0) as usize).min(caption_button_kinds(maximizable).len());
     if kept == 0 {
         return None;
@@ -305,29 +314,31 @@ pub(crate) fn title_room(width: i32, dpi: u32, maximizable: bool) -> i32 {
         .min()
         .unwrap_or(width);
 
-    right - 2 * text_paint::scaled(TITLE_PADDING_PIXELS as i32, dpi as f32 / 96.0)
+    right - 2 * super::primitives::DpiScale::from_dpi(dpi).scaled(TITLE_PADDING_PIXELS as i32)
 }
 
-/// The width the words of the **Read only** pill take at a display's scale, as a stand-in for the
-/// measurement the pill itself is drawn at: `read_only_pill_width` asks a font, and the room a name
-/// has is asked where no font may be made (see `title_room_beside_pill`).
-pub(super) const READ_ONLY_PILL_WORDS_PIXELS: f32 = 52.0;
+/// Title room beside the **Read only** pill using `measurer` at `dpi`.
+#[allow(dead_code)]
+pub(crate) fn title_room_beside_pill_with(
+    width: i32,
+    dpi: super::primitives::DpiScale,
+    maximizable: bool,
+    measurer: &impl super::primitives::TextMeasurer,
+) -> i32 {
+    let pill = super::page_marks::read_only_pill_width_with(measurer, dpi)
+        + 2 * dpi.scaled(READ_ONLY_PILL_GAP_PIXELS as i32);
 
-/// The same room for a caption that carries the **Read only** pill: the pill's own width and the gap
-/// it keeps off the name come out of what the name has left, because a name is cut before a pill is
-/// given up and a pill is never drawn under a name.
-///
-/// It is written in logical pixels for the reason `TITLE_MIN_PIXELS` is: this is asked on the road a
-/// press takes as well as on a paint, and a measurement here would be a font created for every
-/// pointer move across a caption. What it is for is a width the name may have, and no name that
-/// matters turns on this much.
+    title_room(width, dpi.dpi(), maximizable) - pill
+}
+
+/// The same room for a caption that carries the **Read only** pill: the pill's own measured width
+/// and the gaps it keeps off the name and buttons come out of what the name has left.
 pub(crate) fn title_room_beside_pill(width: i32, dpi: u32, maximizable: bool) -> i32 {
-    let scale = dpi as f32 / 96.0;
-    let pill = text_paint::scaled(READ_ONLY_PILL_PIXELS as i32, scale)
-        + 2 * text_paint::scaled(READ_ONLY_PILL_GAP_PIXELS as i32, scale)
-        + text_paint::scaled(READ_ONLY_PILL_WORDS_PIXELS as i32, scale);
+    let dpi = super::primitives::DpiScale::from_dpi(dpi);
+    let pill = super::page_marks::read_only_pill_width_cached(dpi)
+        + 2 * dpi.scaled(READ_ONLY_PILL_GAP_PIXELS as i32);
 
-    title_room(width, dpi, maximizable) - pill
+    title_room(width, dpi.dpi(), maximizable) - pill
 }
 
 /// Whether a caption of this width can be shown at all, which is a question asked of two roads at
@@ -353,7 +364,7 @@ pub(crate) fn caption_fits(width: i32, _dpi: u32, _maximizable: bool) -> bool {
 /// came back the moment there was room for it beside the buttons that were left would be a title bar
 /// whose buttons moved out from under a hand still reaching for one, every few pixels of a drag.
 pub(crate) fn title_fits(width: i32, dpi: u32, maximizable: bool) -> bool {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let least = text_paint::scaled(TITLE_MIN_PIXELS as i32, scale);
 
     buttons_fit(width, dpi, maximizable) && title_room(width, dpi, maximizable) >= least
@@ -365,7 +376,7 @@ pub(crate) fn title_fits(width: i32, dpi: u32, maximizable: bool) -> bool {
 /// nothing for the pill to be about. It follows the name it describes, so it is given up wherever the
 /// name is (see `title_fits`).
 pub(super) fn title_fits_beside_pill(width: i32, dpi: u32, maximizable: bool) -> bool {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let least = text_paint::scaled(TITLE_MIN_PIXELS as i32, scale);
 
     buttons_fit(width, dpi, maximizable) && title_room_beside_pill(width, dpi, maximizable) >= least
@@ -412,7 +423,7 @@ pub(crate) fn paint_caption(
 
     let width = surface.width as i32;
     let height = surface.height as i32;
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
 
     text_paint::fill_rect(
         surface,

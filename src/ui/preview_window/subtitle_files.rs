@@ -79,7 +79,7 @@
 //! hover gets before the first extraction has answered.
 
 use super::*;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 /// The folder inside a film's own key that the container's attached fonts are dumped into, and
 /// the folder the filter's `fontsdir` points at when it holds any (see `subtitle_filter`).
@@ -242,7 +242,7 @@ pub(crate) fn general_folder() -> PathBuf {
 /// film's subtitles are extracted by one program whatever plays the film afterwards, so there
 /// is no second answer for a name to tell apart.
 fn key(source: &Path) -> String {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = crate::cache::StableHasher::new();
     source.to_string_lossy().to_lowercase().hash(&mut hasher);
 
     let metadata = std::fs::metadata(source).ok();

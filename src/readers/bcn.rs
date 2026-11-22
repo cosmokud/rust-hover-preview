@@ -52,3 +52,69 @@ mod block_formats;
 pub(crate) use block_formats::{
     half_to_float, snorm16_to_level, snorm8_to_level, wide_colour, widen_5, Blocks, Texels,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn half_to_float_handles_zero_one_negative_and_specials() {
+        assert_eq!(half_to_float(0x0000), 0.0);
+        assert_eq!(half_to_float(0x3c00), 1.0);
+        assert_eq!(half_to_float(0xbc00), -1.0);
+        assert!((half_to_float(0x3800) - 0.5).abs() < 1e-6);
+        assert!(half_to_float(0x7c00).is_infinite());
+        assert!(half_to_float(0x7e00).is_nan());
+    }
+
+    #[test]
+    fn snorm_and_widen_conversions_cover_extremes() {
+        assert_eq!(snorm8_to_level(128), 0);
+        assert_eq!(snorm8_to_level(129), 0);
+        assert_eq!(snorm8_to_level(0), 128);
+        assert_eq!(snorm8_to_level(127), 255);
+
+        assert_eq!(snorm16_to_level(0x8000), 0);
+        assert_eq!(snorm16_to_level(0), 128);
+        assert_eq!(snorm16_to_level(0x7fff), 255);
+
+        assert_eq!(widen_5(0), 0);
+        assert_eq!(widen_5(31), 255);
+        assert_eq!(wide_colour(0), [0, 0, 0, 255]);
+        assert_eq!(wide_colour(u16::MAX), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn decode_block_sizes_and_solid_bc1_bc4_bc6h_bc7() {
+        assert_eq!(Blocks::Bc1.block_bytes(), 8);
+        assert_eq!(Blocks::Bc4.block_bytes(), 8);
+        assert_eq!(Blocks::Bc7.block_bytes(), 16);
+        assert_eq!(Blocks::Bc6h.block_bytes(), 16);
+
+        // Solid white BC1 block: c0 = 0xffff, c1 = 0x0000, all indices = 0 (picks c0).
+        let bc1_white = [0xff, 0xff, 0x00, 0x00, 0, 0, 0, 0];
+        let Texels::Levels(rgba) = Blocks::Bc1.decode(&bc1_white) else {
+            panic!("expected Levels");
+        };
+        for texel in rgba {
+            assert_eq!(texel, [255, 255, 255, 255]);
+        }
+
+        // Solid max BC4 unsigned block: e0 = 255, e1 = 0, all indices = 0 (picks e0).
+        let bc4_max = [255, 0, 0, 0, 0, 0, 0, 0];
+        let Texels::Levels(rgba) = Blocks::Bc4.decode(&bc4_max) else {
+            panic!("expected Levels");
+        };
+        for texel in rgba {
+            assert_eq!(texel, [255, 255, 255, 255]);
+        }
+
+        // Zeroed BC6H (unsigned + signed) and BC7 blocks decode cleanly without panicking.
+        assert!(matches!(Blocks::Bc6h.decode(&[0u8; 16]), Texels::Light(_)));
+        assert!(matches!(
+            Blocks::Bc6hSf16.decode(&[0u8; 16]),
+            Texels::Light(_)
+        ));
+        assert!(matches!(Blocks::Bc7.decode(&[0u8; 16]), Texels::Levels(_)));
+    }
+}

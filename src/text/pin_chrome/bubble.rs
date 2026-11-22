@@ -46,7 +46,7 @@ pub(crate) fn tooltip_layout(
     text_width: i32,
     dpi: u32,
 ) -> Option<RECT> {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     let padding = text_paint::scaled(TOOLTIP_PADDING_PIXELS as i32, scale);
     let gap = text_paint::scaled(TOOLTIP_GAP_PIXELS as i32, scale);
     let cell = text_paint::scaled(

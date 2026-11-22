@@ -256,9 +256,10 @@ pub(super) struct DocKey {
 /// Parsed documents, the most recently built last, keyed by the file and the
 /// options they were built from. Bounded: the whole cache is dropped when it
 /// fills, the way the PDF page and video geometry caches are.
-type DocumentCache = Vec<(DocKey, Arc<CachedDocument>)>;
+type DocumentCache = crate::cache::BoundedCache<DocKey, Arc<CachedDocument>>;
 
-static DOCUMENTS: Lazy<Mutex<DocumentCache>> = Lazy::new(|| Mutex::new(Vec::new()));
+static DOCUMENTS: Lazy<Mutex<DocumentCache>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(DOC_CACHE_MAX_ENTRIES)));
 
 /// Syntax definitions from syntect plus the ones it does not bundle, built once
 /// on the first text hover. Individual syntaxes are still parsed lazily.
@@ -306,8 +307,8 @@ pub(super) fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<C
         markdown_mode: options.markdown_mode,
     };
 
-    if let Ok(cache) = DOCUMENTS.lock() {
-        if let Some((_, document)) = cache.iter().find(|(cached, _)| *cached == key) {
+    if let Ok(mut cache) = DOCUMENTS.lock() {
+        if let Some(document) = cache.get(&key) {
             return Some(Arc::clone(document));
         }
     }
@@ -320,10 +321,7 @@ pub(super) fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<C
     });
 
     if let Ok(mut cache) = DOCUMENTS.lock() {
-        if cache.len() >= DOC_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
-        cache.push((key, Arc::clone(&document)));
+        cache.insert(key, Arc::clone(&document));
     }
 
     Some(document)
@@ -433,16 +431,16 @@ pub(super) fn document_held(
     };
 
     let cache = DOCUMENTS.lock().ok()?;
-    cache
-        .iter()
-        .rev()
+    let found = cache
+        .iter_mru()
         .find(|(key, _)| {
             key.path == path
                 && key.theme == options.theme
                 && key.theme_generation == theme_generation
                 && key.markdown_mode == options.markdown_mode
         })
-        .map(|(_, document)| Arc::clone(document))
+        .map(|(_, document)| Arc::clone(document));
+    found
 }
 
 /// Lines the page is drawn from, read of the document the page was drawn from rather than of the

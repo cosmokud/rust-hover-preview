@@ -161,3 +161,36 @@ pub fn refresh_custom() {
 pub fn generation() -> u64 {
     CUSTOM_GENERATION.load(Ordering::Relaxed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_themes_parse_and_resolve_scopes() {
+        let light = loaded(TextTheme::Light).expect("bundled light theme");
+        let dark = loaded(TextTheme::Dark).expect("bundled dark theme");
+        assert_ne!(light.background(), dark.background());
+
+        // Valid and invalid scopes both resolve without panicking.
+        let _ = light.style_for_scopes(&["source.rust", "keyword.control.rust"]);
+        let _ = dark.style_for_scopes(&["not a valid scope!!!"]);
+    }
+
+    #[test]
+    fn missing_custom_theme_falls_back_to_light_and_refresh_bumps_generation() {
+        let before = generation();
+        refresh_custom();
+        assert!(generation() > before);
+
+        let fallback = loaded(TextTheme::Custom("nonexistent-theme-for-unit-test"))
+            .expect("falls back to bundled light");
+        let light = loaded(TextTheme::Light).expect("bundled light");
+        assert_eq!(fallback.background(), light.background());
+    }
+
+    #[test]
+    fn parse_rejects_garbage_bytes() {
+        assert!(parse(b"not a plist").is_none());
+    }
+}
