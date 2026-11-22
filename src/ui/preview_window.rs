@@ -105,6 +105,7 @@ mod event_loop;
 mod f3d_load;
 mod f3d_player;
 mod ffplay_window;
+mod film_surface;
 mod hover_facts;
 mod hover_film_host;
 mod hover_session;

@@ -1304,6 +1304,21 @@ impl PinWindow for Win32PinWindow {
         unsafe { hide_pin_taskbar() };
     }
 
+    fn show_pin_bubble(&self, anchor: ScreenRegion) {
+        unsafe { show_pin_bubble(anchor) };
+    }
+
+    fn destroy_pin_bubble(&self) {
+        let _ = destroy_pin_bubble();
+    }
+
+    fn install_pin_surface(&self, _box_: ScreenRegion) {
+        let hwnd = HWND(self.hwnd() as *mut _);
+        if !hwnd.is_invalid() {
+            unsafe { show_pinned_window(hwnd) };
+        }
+    }
+
     fn repaint(&self) {
         // Safety: the handle is read from the slot this app's own preview window was created
         // into, and the paint is a layered-window blit of a surface this app drew for exactly

@@ -5630,6 +5630,9 @@ pub fn run_preview_window() {
             }
         }
 
+        // Tear down the bubble HWND before exiting the viewer loop so no popup HWND leaks.
+        let _ = destroy_pin_bubble();
+
         // Signal the dedicated loader worker to stop and wait for shutdown.
         if let Some(cancel) = pending_load_cancel.take() {
             cancel.store(true, Ordering::Release);

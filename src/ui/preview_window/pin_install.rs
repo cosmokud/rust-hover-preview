@@ -19,34 +19,55 @@ pub(super) static PIN_ARC: AtomicU64 = AtomicU64::new(0);
 /// fits in the `u64` an atomic can hold rather than in an `Instant` it cannot.
 pub(super) static PIN_ARC_BASE: Lazy<Instant> = Lazy::new(Instant::now);
 
-/// **The file the pin is being shown next**, while that question is still in flight: a load that has
-/// not answered, a box nothing has measured yet, or a swap held for the incoming film's picture.
-///
-/// `pinned_path()` is what the pin is showing *now* and does not move until the install writes it,
-/// so it is not the whole of "the file the user has already asked for". A second click on the file
-/// the pin is on its way to is not another file: it used to restart the swap — dropping the load,
-/// abandoning the hold and its player — which is a picture taken off the band and a film opened
-/// twice for one press (see `update_pinned_preview` and `PinUpdateWatch::offer`).
-static THE_FILE_IN_FLIGHT: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// Cohesive install/pick coordination state (file in flight, active pick road, cold-pin debounce).
+struct PinInstallState {
+    file_in_flight: Option<PathBuf>,
+    pick: (u64, PickRoad),
+    cold_pin_answered: Option<Instant>,
+}
 
-/// Note the file the pin is now on its way to, or `None` where nothing is in flight any more (see
-/// `THE_FILE_IN_FLIGHT`).
+static PIN_INSTALL_STATE: Mutex<PinInstallState> = Mutex::new(PinInstallState {
+    file_in_flight: None,
+    pick: (0, PickRoad::Update),
+    cold_pin_answered: None,
+});
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(super) fn reset_pin_install_state() {
+    if let Ok(mut state) = PIN_INSTALL_STATE.lock() {
+        state.file_in_flight = None;
+        state.pick = (0, PickRoad::Update);
+        state.cold_pin_answered = None;
+    }
+    crate::app::seam::publish_the_pin_file_in_flight(None);
+}
+
+/// Route pin install/swap surface presentation through the `PinWindow` seam.
+#[allow(dead_code)]
+pub(super) fn install_pin_surface_on(window: &dyn PinWindow, box_: ScreenRegion) {
+    window.install_pin_surface(box_);
+}
+
+/// Note the file the pin is now on its way to, or `None` where nothing is in flight any more.
 ///
 /// Published to the Explorer hook as well as held here: the hook is what offers a pick, and the file one
 /// is already on its way to is the one it must not offer again. What crosses is the file's fingerprint
 /// rather than the file, because the hook may not allocate (see `app::seam::PIN_FILE_IN_FLIGHT`).
 pub(super) fn note_the_pin_file_in_flight(path: Option<&Path>) {
-    if let Ok(mut held) = THE_FILE_IN_FLIGHT.lock() {
-        *held = path.map(Path::to_path_buf);
+    if let Ok(mut state) = PIN_INSTALL_STATE.lock() {
+        state.file_in_flight = path.map(Path::to_path_buf);
     }
 
     crate::app::seam::publish_the_pin_file_in_flight(path);
 }
 
-/// The file the pin has already been asked for and is not showing yet, if there is one (see
-/// `THE_FILE_IN_FLIGHT`).
+/// The file the pin has already been asked for and is not showing yet, if there is one.
 pub(super) fn pin_file_in_flight() -> Option<PathBuf> {
-    THE_FILE_IN_FLIGHT.lock().ok().and_then(|held| held.clone())
+    PIN_INSTALL_STATE
+        .lock()
+        .ok()
+        .and_then(|state| state.file_in_flight.clone())
 }
 
 /// Which road asked the pin for the file it is being shown: a pick in the listing behind it
@@ -77,14 +98,11 @@ impl PickRoad {
 /// lines can be read against the press that caused them (see `note_the_pick`).
 static PICK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// The pick the pin is being shown a file for: its number and the road it came by (see `PickRoad`).
-static THE_PICK: Mutex<(u64, PickRoad)> = Mutex::new((0, PickRoad::Update));
-
 /// Note the pick the pin is being shown a file for, and answer its number.
 pub(super) fn note_the_pick(road: PickRoad, path: &Path) -> u64 {
     let number = PICK_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
-    if let Ok(mut held) = THE_PICK.lock() {
-        *held = (number, road);
+    if let Ok(mut state) = PIN_INSTALL_STATE.lock() {
+        state.pick = (number, road);
     }
     note_pin_trace!(
         "pick {number} by {}: {} in flight",
@@ -96,9 +114,9 @@ pub(super) fn note_the_pick(road: PickRoad, path: &Path) -> u64 {
 
 /// The pick the pin is being shown a file for, as the last one taken up noted it.
 pub(super) fn the_pick() -> (u64, PickRoad) {
-    THE_PICK
+    PIN_INSTALL_STATE
         .lock()
-        .map(|held| *held)
+        .map(|state| state.pick)
         .unwrap_or((0, PickRoad::Update))
 }
 
@@ -2203,9 +2221,6 @@ fn merge_the_run(media: &mut MediaData, old: &[Arc<ImageFrame>]) {
     media.frames = frames;
 }
 
-/// The tick a cold pin was last taken up, and so the press it was answered for.
-static THE_COLD_PIN_WAS_ANSWERED: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
-
 /// How long one press is answered for.
 ///
 /// A press count the loop drains is a hook's, and a hook may write it twice for one hand — a key and the
@@ -2225,19 +2240,22 @@ const A_COLD_PIN_PRESS_IS_ANSWERED_FOR: Duration = Duration::from_millis(20);
 pub(super) fn take_the_cold_pins_file() -> Option<PathBuf> {
     let path = crate::app::seam::take_the_pointer_file()?;
 
-    let mut answered = THE_COLD_PIN_WAS_ANSWERED
+    let mut state = PIN_INSTALL_STATE
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let now = Instant::now();
-    if answered.is_some_and(|at| now.duration_since(at) < A_COLD_PIN_PRESS_IS_ANSWERED_FOR) {
+    if state
+        .cold_pin_answered
+        .is_some_and(|at| now.duration_since(at) < A_COLD_PIN_PRESS_IS_ANSWERED_FOR)
+    {
         note_pin_trace!(
             "cold pin: {} is already answered by this press",
             pin_trace::path_name(&path)
         );
         return None;
     }
-    *answered = Some(now);
-    drop(answered);
+    state.cold_pin_answered = Some(now);
+    drop(state);
 
     Some(path)
 }

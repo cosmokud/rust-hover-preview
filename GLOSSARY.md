@@ -89,3 +89,17 @@ _Avoid_: Double cursor read, fresh hit test, pointer re-poll
 **Trigger Chord Latch**:
 The keyboard hook's record of a trigger shortcut's main key combined with live verification that all companion modifier keys are also held, preventing a lone main key from falsely blocking or enabling previews.
 _Avoid_: Sticky trigger, key bit, modifier cache
+
+### Pin Surface & Film Presentation
+
+**Pin Surface**:
+The unified boundary through which a Pin's chrome, collapsed bubble, focus handover, and media installation are coordinated without coupling lifecycle decisions to desktop window handles.
+_Avoid_: Pin handle wrapper, window helper, UI bridge
+
+**Film Host**:
+The dedicated presentation surface that owns a pinned video's chrome, carries its taskbar identity, and composites the live video feed cleanly across resizes, swaps, and display changes.
+_Avoid_: Video container, player wrapper, backdrop window
+
+**Pin Bubble**:
+The compact circular desktop stand-in left behind when a Pin is collapsed, with an explicit lifecycle from creation through teardown so no orphaned desktop surface survives exit.
+_Avoid_: Floating dot, mini pin, tray orb

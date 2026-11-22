@@ -917,7 +917,7 @@ pub(super) fn collapse_pin_to_at(target: PinMinimizeTo, point: Option<(i32, i32)
             // the taskbar. So the two forms of it go down together with the pin, and the taskbar is
             // left as it was before it came up (see `pin_taskbar`).
             hide_pin_taskbar();
-            show_pin_bubble(anchor);
+            present_pin_bubble_on(&Win32PinWindow, anchor);
 
             // And the frame the bubble of a film is to show until its player is read: every player
             // a film here is drawn by is somebody else's process and holds no frame on this side, so
@@ -1842,6 +1842,47 @@ unsafe extern "system" fn hide_player_windows_callback(
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
     windows::Win32::Foundation::BOOL(1)
+}
+
+/// Destroy the round bubble HWND and clear all bubble state (menu, frame, drag).
+/// Closes the `CreateWindowExW` lifecycle asymmetry on teardown/shutdown.
+pub(super) fn destroy_pin_bubble() -> bool {
+    if let Ok(mut menu) = BUBBLE_MENU.lock() {
+        *menu = None;
+    }
+    if let Ok(mut frame) = BUBBLE_FRAME.lock() {
+        *frame = None;
+    }
+    BUBBLE_FRAME_READY.store(false, Ordering::Release);
+    PIN_BUBBLE_MOVED.store(false, Ordering::Release);
+    PIN_BUBBLE_CARRIED.store(false, Ordering::Release);
+    if let Ok(mut drag) = PIN_BUBBLE_DRAG.lock() {
+        *drag = None;
+    }
+    let hwnd = PIN_BUBBLE_HWND.swap(0, Ordering::SeqCst);
+    if hwnd == 0 {
+        return false;
+    }
+    match unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(HWND(hwnd as *mut _)) } {
+        Ok(()) => true,
+        Err(err) => {
+            super::pin_trace::note_pin_trace!("pin bubble DestroyWindow failed {hwnd:#x}: {err:?}");
+            false
+        }
+    }
+}
+
+/// Route bubble teardown through the `PinWindow` seam (testable without Win32 HWNDs).
+#[allow(dead_code)]
+pub(super) fn teardown_pin_bubble_on(window: &dyn PinWindow) {
+    window.hide_pin_bubble();
+    window.destroy_pin_bubble();
+}
+
+/// Route bubble collapse presentation through the `PinWindow` seam.
+#[allow(dead_code)]
+pub(super) fn present_pin_bubble_on(window: &dyn PinWindow, anchor: ScreenRegion) {
+    window.show_pin_bubble(anchor);
 }
 
 /// Take the round bubble down, if one is up.

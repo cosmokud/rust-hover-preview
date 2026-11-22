@@ -29,32 +29,52 @@ pub(super) static VIDEO_PID: AtomicU32 = AtomicU32::new(0);
 /// this app began before mpv existed: a machine with mpv plays videos through mpv, and an mpv id
 /// checked as `ffplay.exe` is a stray this app would never sweep and a player it would never
 /// retire. The audio route's player is FFmpeg's and keeps the name it has always had.
-static VIDEO_PROCESS_IMAGE: Lazy<Mutex<&'static str>> = Lazy::new(|| Mutex::new(FFPLAY_IMAGE_NAME));
+/// Cohesive state for the player monitor thread (active process image, eager show watch,
+/// warm-resident unlist watch, and suspended player tracking).
+struct PlayerMonitorState {
+    process_image: &'static str,
+    player_before_show: Option<(u32, Instant, bool)>,
+    window_to_unlist: Option<(u32, Instant)>,
+    suspended_players: Vec<(u32, usize)>,
+}
+
+static PLAYER_MONITOR: Lazy<Mutex<PlayerMonitorState>> = Lazy::new(|| {
+    Mutex::new(PlayerMonitorState {
+        process_image: FFPLAY_IMAGE_NAME,
+        player_before_show: None,
+        window_to_unlist: None,
+        suspended_players: Vec::new(),
+    })
+});
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(super) fn reset_player_monitor_state() {
+    VIDEO_HWND.store(0, Ordering::SeqCst);
+    VIDEO_PID.store(0, Ordering::SeqCst);
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state.process_image = FFPLAY_IMAGE_NAME;
+        state.player_before_show = None;
+        state.window_to_unlist = None;
+        state.suspended_players.clear();
+    }
+}
 
 /// Write down the player this app has just begun: its process, and the program that process runs.
-///
-/// The two are written together because they are one fact (see `VIDEO_PROCESS_IMAGE`), and this is
-/// the one place either is written for a player — the audio route writes its own ffplay id through
-/// here too, since a sound's player is swept by the same checks as a film's.
 pub(super) fn note_player_process(pid: u32, image: &'static str) {
     VIDEO_PID.store(pid, Ordering::SeqCst);
 
-    if let Ok(mut held) = VIDEO_PROCESS_IMAGE.lock() {
-        *held = image;
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state.process_image = image;
     }
 }
 
 /// The image name the id in `VIDEO_PID` may be verified as, which is the player this app last
 /// begun (see `note_player_process`).
-///
-/// It answers a second question as well — whether the window in a pinned band is mpv's, which is
-/// the one window that travels with the band rather than being left behind a strip of the pin's
-/// chrome (see `ensure_video_window_topmost`) — and it answers it here because a second record of
-/// which player is on screen would be a second thing to keep in step with this one.
 pub(super) fn video_process_image() -> &'static str {
-    VIDEO_PROCESS_IMAGE
+    PLAYER_MONITOR
         .lock()
-        .map(|held| *held)
+        .map(|state| state.process_image)
         .unwrap_or(FFPLAY_IMAGE_NAME)
 }
 
@@ -578,17 +598,15 @@ pub(super) fn the_monitor_wait(elapsed: Duration, launching: bool) -> u64 {
 /// lost the race — and it runs out on its own after `PLAYER_BEFORE_THE_SHOW_WAIT` either way, so a
 /// launch whose player never makes a window leaves the monitor on the cadence it already keeps (see
 /// `a_player_awaits_its_show` and `BeforeTheShow`).
-static PLAYER_BEFORE_THE_SHOW: Mutex<Option<(u32, Instant, bool)>> = Mutex::new(None);
-
 /// How long a player's window is waited for, counted from the launch: a player that has made no window
-/// in this long is one whose show the eager pass has missed anyway (see `PLAYER_BEFORE_THE_SHOW`).
+/// in this long is one whose show the eager pass has missed anyway.
 pub(super) const PLAYER_BEFORE_THE_SHOW_WAIT: Duration = Duration::from_millis(2000);
 
 /// Write down a player as one whose window is to be styled before it is shown, with the road that
-/// began it (see `PLAYER_BEFORE_THE_SHOW`).
+/// began it.
 pub(super) fn note_a_player_about_to_show(pid: u32, for_a_hover: bool) {
-    if let Ok(mut held) = PLAYER_BEFORE_THE_SHOW.lock() {
-        *held = Some((pid, Instant::now(), for_a_hover));
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state.player_before_show = Some((pid, Instant::now(), for_a_hover));
     }
 }
 
@@ -605,20 +623,18 @@ pub(super) fn a_player_awaits_its_show(
 /// The marker as it stands, or nothing where it has run out — and one that has run out is dropped
 /// here, so nothing goes on being asked about it.
 pub(super) fn the_player_awaiting_its_show(now: Instant) -> Option<(u32, bool)> {
-    let held = PLAYER_BEFORE_THE_SHOW.lock().ok().and_then(|held| *held);
-    let player = a_player_awaits_its_show(held, now);
+    let mut state = PLAYER_MONITOR.lock().ok()?;
+    let player = a_player_awaits_its_show(state.player_before_show, now);
     if player.is_none() {
-        if let Ok(mut held) = PLAYER_BEFORE_THE_SHOW.lock() {
-            *held = None;
-        }
+        state.player_before_show = None;
     }
     player
 }
 
 /// Forget the player whose window has been found, whether the pass caught it before the show or not.
 pub(super) fn forget_the_player_awaiting_its_show() {
-    if let Ok(mut held) = PLAYER_BEFORE_THE_SHOW.lock() {
-        *held = None;
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state.player_before_show = None;
     }
 }
 
@@ -654,8 +670,6 @@ pub(super) fn eager_ex_style(current: isize) -> isize {
 /// nothing in it and nobody looking at it (see `mpv_resident::PARKED_AT`) — so the bit can be written
 /// and the show that makes the Shell read it can be paid at any moment, and the earliest one is the
 /// window's first appearance.
-static A_WINDOW_TO_UNLIST: Mutex<Option<(u32, Instant)>> = Mutex::new(None);
-
 /// Ask for a player's film window to be taken out of the Shell's lists from its first appearance.
 ///
 /// The monitor is started and woken rather than left to its own clock: between players it waits on that
@@ -663,28 +677,27 @@ static A_WINDOW_TO_UNLIST: Mutex<Option<(u32, Instant)>> = Mutex::new(None);
 /// is the one player that can be begun with no film behind it, so the thread that would otherwise be
 /// started by a launch is started here as well (see `ensure_noactivate_monitor`).
 pub(super) fn note_a_window_to_unlist(pid: u32) {
-    if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
-        *held = Some((pid, Instant::now()));
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state.window_to_unlist = Some((pid, Instant::now()));
     }
     ensure_noactivate_monitor();
     wake_noactivate_monitor();
 }
 
-/// The process whose window is still to be taken out of the Shell's lists (see `A_WINDOW_TO_UNLIST`).
+/// The process whose window is still to be taken out of the Shell's lists.
 #[cfg(test)]
 pub(super) fn the_window_to_unlist() -> Option<u32> {
-    A_WINDOW_TO_UNLIST
+    PLAYER_MONITOR
         .lock()
         .ok()
-        .and_then(|held| held.map(|(pid, _)| pid))
+        .and_then(|state| state.window_to_unlist.map(|(pid, _)| pid))
 }
 
-/// Forget the window this run was waiting to take out of the Shell's lists (see
-/// `A_WINDOW_TO_UNLIST`).
+/// Forget the window this run was waiting to take out of the Shell's lists.
 #[cfg(test)]
 pub(super) fn forget_the_window_to_unlist() {
-    if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
-        *held = None;
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state.window_to_unlist = None;
     }
 }
 
@@ -694,22 +707,18 @@ pub(super) fn forget_the_window_to_unlist() {
 const A_WINDOW_COMING_MS: u64 = 5;
 
 /// Take the awaited player's film window out of the Shell's lists, and answer whether one is still being
-/// waited for (see `A_WINDOW_TO_UNLIST`).
-///
-/// The marker runs out the way a player's own wait for its window does: a process that made no window in
-/// that time is one this pass has missed anyway, and a monitor that kept looking would keep its start
-/// cadence for the rest of the run (see `PLAYER_BEFORE_THE_SHOW_WAIT`).
-///
-/// Safety: the window this asks about is a player's own window of another process, and the style and
-/// show calls are the one road this app styles a player's window on (see `try_apply_noactivate_style`
-/// and `mpv_resident`).
+/// waited for.
 unsafe fn unlist_the_awaited_window() -> bool {
-    let Some((pid, begun)) = A_WINDOW_TO_UNLIST.lock().ok().and_then(|held| *held) else {
+    let Some((pid, begun)) = PLAYER_MONITOR
+        .lock()
+        .ok()
+        .and_then(|state| state.window_to_unlist)
+    else {
         return false;
     };
     if begun.elapsed() >= PLAYER_BEFORE_THE_SHOW_WAIT {
-        if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
-            *held = None;
+        if let Ok(mut state) = PLAYER_MONITOR.lock() {
+            state.window_to_unlist = None;
         }
         return false;
     }
@@ -782,8 +791,8 @@ unsafe fn give_a_players_window_no_button(pid: u32) -> bool {
         return false;
     };
 
-    if let Ok(mut held) = A_WINDOW_TO_UNLIST.lock() {
-        *held = None;
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state.window_to_unlist = None;
     }
     let current = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
     let wanted = eager_ex_style(current);
@@ -1304,8 +1313,6 @@ pub(super) fn is_player_pid_alive(pid: u32) -> bool {
 /// suspends it — it is ended once its replacement has the picture — so what is written down is only
 /// what a kill the system refuses would otherwise leave standing frozen for ever (see
 /// `terminate_player_pid`).
-static SUSPENDED_PLAYERS: Lazy<Mutex<Vec<(u32, usize)>>> = Lazy::new(|| Mutex::new(Vec::new()));
-
 /// **Suspend every thread of the player being replaced, which is the hold for an engine with no
 /// command channel.** FFmpeg's player is told nothing once it runs, and the one thing it can be told —
 /// the pause key — is a toggle the pin's own transport uses. A player whose threads are suspended
@@ -1322,16 +1329,20 @@ pub(super) fn suspend_player_threads(pid: u32) -> usize {
         return 0;
     }
 
-    if let Ok(held) = SUSPENDED_PLAYERS.lock() {
-        if let Some((_, threads)) = held.iter().find(|(suspended, _)| *suspended == pid) {
+    if let Ok(state) = PLAYER_MONITOR.lock() {
+        if let Some((_, threads)) = state
+            .suspended_players
+            .iter()
+            .find(|(suspended, _)| *suspended == pid)
+        {
             return *threads;
         }
     }
 
     let threads = suspend_the_threads(pid);
     if threads > 0 {
-        if let Ok(mut held) = SUSPENDED_PLAYERS.lock() {
-            held.push((pid, threads));
+        if let Ok(mut state) = PLAYER_MONITOR.lock() {
+            state.suspended_players.push((pid, threads));
         }
     }
     threads
@@ -1345,13 +1356,17 @@ pub(super) fn suspend_player_threads(pid: u32) -> usize {
 /// road that can leave one behind lets it go instead.
 pub(super) fn resume_suspended_player(pid: u32) -> usize {
     let threads = {
-        let Ok(mut held) = SUSPENDED_PLAYERS.lock() else {
+        let Ok(mut state) = PLAYER_MONITOR.lock() else {
             return 0;
         };
-        let Some(at) = held.iter().position(|(suspended, _)| *suspended == pid) else {
+        let Some(at) = state
+            .suspended_players
+            .iter()
+            .position(|(suspended, _)| *suspended == pid)
+        else {
             return 0;
         };
-        held.remove(at).1
+        state.suspended_players.remove(at).1
     };
 
     #[cfg(test)]
@@ -1367,8 +1382,10 @@ pub(super) fn resume_suspended_player(pid: u32) -> usize {
 /// a claim about a live process, and the system hands a process id to another process (see
 /// `suspend_player_threads`).
 pub(super) fn forget_suspended_player(pid: u32) {
-    if let Ok(mut held) = SUSPENDED_PLAYERS.lock() {
-        held.retain(|(suspended, _)| *suspended != pid);
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state
+            .suspended_players
+            .retain(|(suspended, _)| *suspended != pid);
     }
 }
 
@@ -1377,17 +1394,23 @@ pub(super) fn forget_suspended_player(pid: u32) {
 /// `suspend_player_threads`).
 #[cfg(test)]
 pub(super) fn suspended_players() -> Vec<u32> {
-    SUSPENDED_PLAYERS
+    PLAYER_MONITOR
         .lock()
-        .map(|held| held.iter().map(|(pid, _)| *pid).collect())
+        .map(|state| {
+            state
+                .suspended_players
+                .iter()
+                .map(|(pid, _)| *pid)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 /// Forget every suspension a test stood in, so each test reads its own (see `suspended_players`).
 #[cfg(test)]
 pub(super) fn clear_suspended_players() {
-    if let Ok(mut held) = SUSPENDED_PLAYERS.lock() {
-        held.clear();
+    if let Ok(mut state) = PLAYER_MONITOR.lock() {
+        state.suspended_players.clear();
     }
 }
 
