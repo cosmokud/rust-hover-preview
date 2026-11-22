@@ -176,8 +176,13 @@ pub(crate) fn packed_held(packed: u64) -> bool {
 
 /// Whether every companion of a packed chord is currently held.
 pub(crate) fn packed_companions_held(packed: u64) -> bool {
+    packed_companions_held_with(packed, key_is_down)
+}
+
+/// Pure companion check against `is_down` for unit tests and hook resync.
+pub(crate) fn packed_companions_held_with(packed: u64, is_down: impl Fn(i32) -> bool) -> bool {
     let count = ((packed >> 8) & 0xF) as usize;
-    (0..count).all(|index| key_is_down(((packed >> (12 + index * 8)) & 0xFF) as i32))
+    (0..count).all(|index| is_down(((packed >> (12 + index * 8)) & 0xFF) as i32))
 }
 
 pub(crate) fn key_is_down(vk: i32) -> bool {

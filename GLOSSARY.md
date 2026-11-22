@@ -75,3 +75,17 @@ _Avoid_: Preview flags, hover bookkeeping, replay slots
 **Hover Snapshot**:
 The point-in-time assessment of a hovered file's kind, drawing path, and active scale preferences carried from initial hover layout into Pin promotion so both views agree on how the file is measured and sized.
 _Avoid_: Cached probe, file metadata copy, layout facts
+
+### Explorer Sensing & Low-Latency Input
+
+**Hook Session**:
+The owned sensing state of the Explorer hook loop — active mouse and keyboard hovers, hovered item bounds, folder-change suspension gate, scroll tracking, and page-drag state — whose transitions clear dependent fields atomically so stale state cannot survive a reset.
+_Avoid_: Loop locals, hook flags, polling state
+
+**Single-Tick Pointer Reading**:
+One consistent capture of cursor position, display scale, and window under the pointer taken once per tick and shared across both hover sensing and Pin follow-up logic.
+_Avoid_: Double cursor read, fresh hit test, pointer re-poll
+
+**Trigger Chord Latch**:
+The keyboard hook's record of a trigger shortcut's main key combined with live verification that all companion modifier keys are also held, preventing a lone main key from falsely blocking or enabling previews.
+_Avoid_: Sticky trigger, key bit, modifier cache
