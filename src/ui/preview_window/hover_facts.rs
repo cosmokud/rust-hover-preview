@@ -415,6 +415,7 @@ pub(super) struct HoverFacts {
     pub(super) native_job: Option<native_formats::NativeJob>,
     pub(super) scales: HoverScales,
     pub(super) follow_cursor: bool,
+    pub(super) bypass_placement: bool,
 }
 
 /// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
@@ -452,6 +453,7 @@ impl HoverFacts {
                 native_job: None,
                 scales: current_hover_scales(),
                 follow_cursor: true,
+                bypass_placement: false,
             };
         };
 
@@ -474,6 +476,7 @@ impl HoverFacts {
         let text_enabled = PreviewType::Text.enabled_in(&config);
         let scales = HoverScales::of(&config);
         let follow_cursor = config.follow_cursor;
+        let bypass_placement = config.bypass_placement;
         drop(config);
 
         // And last, with the guard gone: which of this app's own readers does the work. That is
@@ -504,6 +507,7 @@ impl HoverFacts {
             native_job,
             scales,
             follow_cursor,
+            bypass_placement,
         }
     }
 

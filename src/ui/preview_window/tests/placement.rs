@@ -634,6 +634,7 @@ fn places_every_hover_inside_its_display() {
                                 orig_dims: (orig_width, orig_height),
                                 avoid,
                                 follow_cursor,
+                                bypass_placement: false,
                                 preview_scale,
                                 // Only the waiting spinner is placed at the
                                 // pointer's own corner, and only it is ever that size.
@@ -734,6 +735,7 @@ fn places_every_keyboard_hover_inside_its_display() {
                                         columns,
                                         orig_dims: (orig_width, orig_height),
                                         follow_cursor,
+                                        bypass_placement: false,
                                         preview_scale,
                                     },
                                     bounds,

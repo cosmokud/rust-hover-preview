@@ -4231,6 +4231,7 @@ pub fn run_preview_window() {
                 // the file itself (see `measure_waiting`).
                 let mut show_measure_probe: bool = false;
                 let mut show_requested = false;
+                let mut show_bypass_placement = false;
                 let mut preview_scale = current_hover_scales().picture;
                 let mut show_dpi = 96u32;
                 // The room the display the hover is on has, which is what an engine that
@@ -4274,6 +4275,7 @@ pub fn run_preview_window() {
                         // `fs::metadata` calls per hover down to one (see `HoverFacts`).
                         let hover = Arc::new(HoverFacts::read(&path));
                         let follow_cursor = hover.follow_cursor;
+                        let bypass_placement = hover.bypass_placement;
                         preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         // A document with no page rendered for it yet has nothing to
@@ -4305,6 +4307,7 @@ pub fn run_preview_window() {
                                 orig_dims,
                                 avoid,
                                 follow_cursor,
+                                bypass_placement,
                                 preview_scale,
                                 at_the_pointer_corner: waiting_spinner || probing || measuring,
                             };
@@ -4346,6 +4349,8 @@ pub fn run_preview_window() {
                                 audio_card_dpi = dpi;
                                 show_layout = Some(layout);
                                 show_placement = Some(placement);
+                                show_bypass_placement =
+                                    bypass_placement && !placement.at_the_pointer_corner;
                                 // The wait for this hover is the spinner's own box at
                                 // the pointer, whatever the preview's own place came
                                 // out at (see `waiting_placement`).
@@ -4376,6 +4381,7 @@ pub fn run_preview_window() {
                         // this arm, as the pointer's arm above does (see `HoverFacts`).
                         let hover = Arc::new(HoverFacts::read(&path));
                         let follow_cursor = hover.follow_cursor;
+                        let bypass_placement = hover.bypass_placement;
                         preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
@@ -4387,6 +4393,7 @@ pub fn run_preview_window() {
                                 columns,
                                 orig_dims,
                                 follow_cursor,
+                                bypass_placement,
                                 preview_scale,
                             };
                             if let Some(layout) = compute_keyboard_layout(placement, bounds, dpi) {
@@ -4412,6 +4419,7 @@ pub fn run_preview_window() {
                                 show_measure_probe = measure_waiting(&path);
                                 audio_card_dpi = dpi;
                                 show_layout = Some(layout);
+                                show_bypass_placement = bypass_placement;
                                 // A keyboard hover has no pointer for a wait to be
                                 // placed at, so its spinner is the arc's own box
                                 // beside the item, the way its preview is.
@@ -4421,6 +4429,7 @@ pub fn run_preview_window() {
                                             office_preview::WAITING_BOX,
                                             office_preview::WAITING_BOX,
                                         ),
+                                        bypass_placement: false,
                                         preview_scale: PreviewScale::Percent(100),
                                         ..placement
                                     },
@@ -5063,11 +5072,8 @@ pub fn run_preview_window() {
                     // is sized to is the frame that comes back. Every other
                     // format is loaded against the free space it may be
                     // scaled within.
-                    let (load_width, load_height) = if painted {
-                        (preview_w, preview_h)
-                    } else {
-                        (max_width, max_height)
-                    };
+                    let (load_width, load_height, load_preview_scale) =
+                        hover_load_target(&layout, preview_scale, painted, show_bypass_placement);
 
                     // Which road a video takes is the route, and it is asked at the fork below
                     // rather than here: this branch is the wait for its probe, and the probe is
@@ -5184,7 +5190,7 @@ pub fn run_preview_window() {
                             &path,
                             load_width,
                             load_height,
-                            preview_scale,
+                            load_preview_scale,
                             show_dpi,
                             // A hover's own load: no page's reader has sized this one, so what it is
                             // drawn at is what the configuration says (see `load_media`).
@@ -5415,7 +5421,7 @@ pub fn run_preview_window() {
                                 path,
                                 max_width: load_width,
                                 max_height: load_height,
-                                preview_scale,
+                                preview_scale: load_preview_scale,
                                 dpi: show_dpi,
                                 cancel: Arc::clone(&load_cancel),
                             },

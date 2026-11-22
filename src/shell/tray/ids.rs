@@ -227,6 +227,7 @@ define_tray_ids! {
     ID_TRAY_PRIORITIZE_KEYBOARD : 1,
     ID_TRAY_POSITION_FOLLOW : 1,
     ID_TRAY_POSITION_BEST : 1,
+    ID_TRAY_BYPASS_PLACEMENT : 1,
 
     // General preview hosts
     ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED : 1,
