@@ -124,7 +124,8 @@ use std::time::{Duration, Instant};
 
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, BOOL, COLORREF, HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM,
+    CloseHandle, BOOL, COLORREF, FILETIME, HANDLE, HWND, LPARAM, LRESULT, RECT, WAIT_OBJECT_0,
+    WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
@@ -139,10 +140,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
-    CreateProcessW, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, WaitForInputIdle,
-    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTF_USEPOSITION,
-    STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
+    CreateProcessW, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
+    WaitForInputIdle, WaitForSingleObject, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
@@ -178,7 +179,7 @@ use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
 use crate::config::config::{
     custom_preset_for, CustomPreset, CustomScaling, CustomWindowMode, PreviewScale, PreviewType,
-    TransparentBackground, DEFAULT_AUDIO_SCALE,
+    DEFAULT_AUDIO_SCALE,
 };
 use crate::readers::{pdf_preview, svg_preview, video_player};
 use crate::CONFIG;
@@ -225,6 +226,16 @@ const KEEP_POLL: Duration = Duration::from_millis(40);
 /// later, and it is this long a moment. Long enough to cover it, short enough that a program the
 /// user has stopped hovering is not left running.
 const LINGER: Duration = Duration::from_secs(2);
+
+/// Neutral dark backdrop painted on the host where the target window does not fill the box.
+const HOST_BACKDROP: COLORREF = COLORREF(0x0020_2020);
+
+/// Grace period before allowing image-name fallback for brokered/packaged apps whose launcher
+/// process has not exited yet.
+const BROKER_FALLBACK_GRACE: Duration = Duration::from_millis(150);
+
+/// Clock slack (2s in 100ns FILETIME ticks) when validating brokered process creation time.
+const PROCESS_TIME_SLACK_100NS: u64 = 2 * 10_000_000;
 
 /// Fallback off-screen parking coordinate when positive off-screen X is clamped by the target app.
 /// Kept well inside i16 (-32768..32767) so WM_MOVE lParam never wraps.
@@ -295,6 +306,10 @@ struct Launch {
     /// Every process there was before the launch, so that one the program started is the only one
     /// this app may end (see `end_the_program`).
     processes_before: Vec<u32>,
+    /// System FILETIME (100ns ticks) captured immediately before `CreateProcessW`.
+    launch_filetime: u64,
+    /// Monotonic timestamp captured immediately before `CreateProcessW`.
+    launched_at: Instant,
     /// Which launch this is, so that a worker begun for an earlier one stands down.
     id: u64,
 }
@@ -316,8 +331,6 @@ static THUMBNAIL: Mutex<isize> = Mutex::new(0);
 static WANT: Mutex<Option<Want>> = Mutex::new(None);
 /// The program this app started for it, which outlives the hover by [`LINGER`].
 static PROGRAM: Mutex<Option<Program>> = Mutex::new(None);
-/// The colour the host paints where the program's window does not reach.
-static BACKGROUND: AtomicIsize = AtomicIsize::new(0);
 /// How many programs have been begun: a worker that was begun for an earlier one is one whose
 /// program has been ended, and it neither places nor shows anything.
 static LAUNCH: AtomicU64 = AtomicU64::new(0);
@@ -388,6 +401,8 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
     });
 
+    let launch_filetime = current_filetime_u64();
+    let launched_at = Instant::now();
     let Some((process, pid)) = launch(&exe, path, provisional) else {
         return false;
     };
@@ -397,7 +412,6 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         return false;
     };
 
-    BACKGROUND.store(color_of(preset.background).0 as isize, Ordering::SeqCst);
     let exe_file = Path::new(&exe)
         .file_name()
         .map(|name| name.to_string_lossy().to_lowercase())
@@ -433,6 +447,8 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         previous_foreground,
         windows_before,
         processes_before,
+        launch_filetime,
+        launched_at,
         id,
     };
     // The window is carried as a number: `HWND` is a pointer and a pointer is not `Send`, and
@@ -720,20 +736,6 @@ fn launch(
     Some((process, pi.dwProcessId))
 }
 
-/// The colour a backdrop names, as a host window fills it.
-fn color_of(background: TransparentBackground) -> COLORREF {
-    match background {
-        TransparentBackground::Black => COLORREF(0),
-        TransparentBackground::White => COLORREF(0x00FF_FFFF),
-        // A transparency is shown as the dark grey a checkered page's own squares are drawn
-        // over, because a host window cannot be transparent: the Shell draws the picture *over*
-        // it, and what is behind the picture is a window rather than the desktop.
-        TransparentBackground::Transparent | TransparentBackground::Checkerboard => {
-            COLORREF(0x0020_2020)
-        }
-    }
-}
-
 unsafe extern "system" fn host_proc(
     hwnd: HWND,
     msg: u32,
@@ -745,8 +747,7 @@ unsafe extern "system" fn host_proc(
             let hdc = windows::Win32::Graphics::Gdi::HDC(wparam.0 as *mut _);
             let mut client = RECT::default();
             let _ = unsafe { GetClientRect(hwnd, &mut client) };
-            let brush =
-                unsafe { CreateSolidBrush(COLORREF(BACKGROUND.load(Ordering::SeqCst) as u32)) };
+            let brush = unsafe { CreateSolidBrush(HOST_BACKDROP) };
             unsafe {
                 FillRect(hdc, &client, brush);
                 let _ = DeleteObject(HGDIOBJ(brush.0));
@@ -860,12 +861,10 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
     }
 
     let source_pid = pid_of(source);
+    let source_is_new = source_pid != 0 && !launch.processes_before.contains(&source_pid);
     SOURCE.store(source.0 as isize, Ordering::SeqCst);
     SOURCE_PID.store(source_pid, Ordering::SeqCst);
-    SOURCE_IS_NEW.store(
-        !launch.processes_before.contains(&source_pid),
-        Ordering::SeqCst,
-    );
+    SOURCE_IS_NEW.store(source_is_new, Ordering::SeqCst);
 
     // Read intrinsic shape once before any placement mutates `rcNormalPosition`.
     let own = launch.initial_own.unwrap_or_else(|| own_size(source));
@@ -876,10 +875,8 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         strip_the_frame(source);
     }
 
-    let mut processes = process_tree(launch.pid);
-    if source_pid != 0 && !processes.contains(&source_pid) {
-        processes.push(source_pid);
-    }
+    // Lock ownership strictly to our launched tree (+ adopted brokered tree if newly spawned).
+    let mut processes = owned_pids_for(launch.pid, source_pid, source_is_new);
 
     let mut placed_mode: Option<PlacementMode> = None;
     let mut placed_host_rect: Option<(i32, i32, i32, i32)> = None;
@@ -1030,6 +1027,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
 
     let mut tree_read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
 
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
@@ -1048,23 +1046,12 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             return;
         }
 
-        // Hide secondary splash/dialog windows after source is adopted, never source itself.
-        census(&launch, &processes, &mut images, source.0 as isize, true).take();
-        if tree_read.elapsed() >= Duration::from_secs(1) {
-            processes = process_tree(launch.pid);
-            if !processes.contains(&source_pid) {
-                processes.push(source_pid);
-            }
-            tree_read = Instant::now();
-        }
-
         let at = WANT
             .lock()
             .ok()
             .and_then(|want| want.as_ref().map(|want| want.at));
         let Some(at) = at else {
-            // Hover gone: push source off-screen immediately so it never sits visible during LINGER,
-            // and reset placement so re-hover brings it back behind host.
+            // Hover gone (LINGER): never run hide_others census so user-opened instances stay untouched.
             let since = *lingering.get_or_insert_with(Instant::now);
             placed_mode = None;
             placed_host_rect = None;
@@ -1080,6 +1067,22 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             continue;
         };
         lingering = None;
+
+        // Hide secondary splash/dialog windows belonging strictly to `processes` (never by exe name).
+        census(
+            &launch,
+            &processes,
+            &mut images,
+            &mut creation_times,
+            source.0 as isize,
+            true,
+            OwnershipMode::OwnedOnly,
+        )
+        .take();
+        if tree_read.elapsed() >= Duration::from_secs(1) {
+            processes = owned_pids_for(launch.pid, source_pid, source_is_new);
+            tree_read = Instant::now();
+        }
 
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
             placed_mode = None;
@@ -1819,20 +1822,72 @@ fn strip_the_frame(window: HWND) {
     };
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OwnershipMode {
+    /// Discovery phase: match `owned_pids` first; allow image-name fallback only for brokered apps.
+    Discover { allow_image_fallback: bool },
+    /// Post-adoption phase: match strictly `owned_pids`, never by image name.
+    OwnedOnly,
+}
+
+/// Pure ownership predicate deciding if `pid` belongs to the active preview.
+#[allow(clippy::too_many_arguments)]
+fn belongs_to_preview(
+    pid: u32,
+    owned_pids: &[u32],
+    mode: OwnershipMode,
+    launch_exe: &str,
+    launch_filetime: u64,
+    processes_before: &[u32],
+    image_name: Option<&str>,
+    process_creation_time: Option<u64>,
+) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    if owned_pids.contains(&pid) {
+        return true;
+    }
+    let OwnershipMode::Discover {
+        allow_image_fallback: true,
+    } = mode
+    else {
+        return false;
+    };
+    if launch_exe.is_empty() || image_name != Some(launch_exe) {
+        return false;
+    }
+    if processes_before.contains(&pid) {
+        return true;
+    }
+    let min_time = launch_filetime.saturating_sub(PROCESS_TIME_SLACK_100NS);
+    process_creation_time.is_some_and(|ct| ct >= min_time)
+}
+
+/// Owned PID set after adoption: launched tree union adopted brokered tree (only if newly spawned).
+fn owned_pids_for(launch_pid: u32, source_pid: u32, source_is_new: bool) -> Vec<u32> {
+    let mut owned = process_tree(launch_pid);
+    if source_is_new && source_pid != 0 {
+        for pid in process_tree(source_pid) {
+            if !owned.contains(&pid) {
+                owned.push(pid);
+            }
+        }
+    }
+    owned
+}
+
 /// One look at the desktop: every window the program has put up since it was begun.
-///
-/// **Each is hidden as it is found** — a program that shows its own window whatever its launch
-/// said is one whose window must be off the desktop within a frame of it being on it — and the
-/// ones that were showing are recorded, because the window a program actually shows is the one it
-/// draws its document in, and a window it keeps hidden is one it has not drawn yet.
 struct Census<'a> {
     launch: &'a Launch,
     processes: &'a [u32],
     images: &'a mut HashMap<u32, Option<String>>,
+    creation_times: &'a mut HashMap<u32, Option<u64>>,
     /// The window this app has already adopted, which is the picture and not to be hidden.
     keep: isize,
     /// Hide visible non-`keep` windows only after `source` is adopted (never during discovery).
     hide_others: bool,
+    mode: OwnershipMode,
     /// The program's document windows, by the desktop's order, with the area each one covers.
     found: Vec<(i64, HWND)>,
     /// The largest document window the program was showing, and how much of the display it
@@ -1845,8 +1900,10 @@ fn census<'a>(
     launch: &'a Launch,
     processes: &'a [u32],
     images: &'a mut HashMap<u32, Option<String>>,
+    creation_times: &'a mut HashMap<u32, Option<u64>>,
     keep: isize,
     hide_others: bool,
+    mode: OwnershipMode,
 ) -> Census<'a> {
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let census = unsafe { &mut *(lparam.0 as *mut Census<'_>) };
@@ -1858,8 +1915,10 @@ fn census<'a>(
         launch,
         processes,
         images,
+        creation_times,
         keep,
         hide_others,
+        mode,
         found: Vec::new(),
         shown: None,
     };
@@ -1919,14 +1978,34 @@ impl Census<'_> {
         }
     }
 
-    /// Whether a process is one the program's: in the tree it was begun in, or running the image
-    /// the preset names — which is how a packaged program's own window is found, the activator
-    /// having handed the file to a process this app never started.
     fn belongs(&mut self, pid: u32) -> bool {
         if self.processes.contains(&pid) {
             return true;
         }
-        image_name_of(pid, self.images).is_some_and(|name| name == self.launch.exe)
+        let OwnershipMode::Discover {
+            allow_image_fallback: true,
+        } = self.mode
+        else {
+            return false;
+        };
+        let image = image_name_of(pid, self.images);
+        let creation = if image.as_deref() == Some(self.launch.exe.as_str())
+            && !self.launch.processes_before.contains(&pid)
+        {
+            creation_time_of(pid, self.creation_times)
+        } else {
+            None
+        };
+        belongs_to_preview(
+            pid,
+            self.processes,
+            self.mode,
+            &self.launch.exe,
+            self.launch.launch_filetime,
+            &self.launch.processes_before,
+            image.as_deref(),
+            creation,
+        )
     }
 
     /// Nothing is read out of the census: what it did is the hiding, and what it found is what the
@@ -1984,6 +2063,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let mut processes = process_tree(launch.pid);
     let mut read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
 
     WINEVENT_HWNDS.with(|q| q.borrow_mut().clear());
     let hook = unsafe {
@@ -1999,39 +2079,111 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     };
     let _guard = WinEventGuard(hook);
 
-    let check_now =
-        |processes: &[u32], images: &mut HashMap<u32, Option<String>>| -> Option<HWND> {
-            let look = census(launch, processes, images, 0, false);
-            if let Some((_, window)) = look.shown {
+    let fallback_allowed = |launch: &Launch| -> bool {
+        process_has_exited(HANDLE(launch.process.as_raw_handle()))
+            || launch.launched_at.elapsed() >= BROKER_FALLBACK_GRACE
+    };
+
+    let check_now = |processes: &[u32],
+                     images: &mut HashMap<u32, Option<String>>,
+                     creation_times: &mut HashMap<u32, Option<u64>>|
+     -> Option<HWND> {
+        // Pass 1: ALWAYS check process_tree(launch.pid) first; never adopt sibling PIDs when tree has a window.
+        let tree_only = OwnershipMode::Discover {
+            allow_image_fallback: false,
+        };
+        let look = census(
+            launch,
+            processes,
+            images,
+            creation_times,
+            0,
+            false,
+            tree_only,
+        );
+        if let Some((_, window)) = look.shown {
+            return Some(window);
+        }
+        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+            wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 250);
+            if !is_current(launch.id) {
+                return None;
+            }
+            let look2 = census(
+                launch,
+                processes,
+                images,
+                creation_times,
+                0,
+                false,
+                tree_only,
+            );
+            if let Some((_, window)) = look2.shown {
                 return Some(window);
             }
-            if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
-                // App honored `SW_HIDE`: let `WinMain` finish file loading while invisible, then re-check.
-                wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 250);
-                if !is_current(launch.id) {
-                    return None;
-                }
-                let look2 = census(launch, processes, images, 0, false);
-                if let Some((_, window)) = look2.shown {
-                    return Some(window);
-                }
-                return look2
-                    .found
-                    .iter()
-                    .copied()
-                    .max_by_key(|(area, _)| *area)
-                    .map(|(_, window)| window)
-                    .or(Some(hidden));
-            }
-            None
+            return look2
+                .found
+                .iter()
+                .copied()
+                .max_by_key(|(area, _)| *area)
+                .map(|(_, window)| window)
+                .or(Some(hidden));
+        }
+
+        // Pass 2: Brokered/packaged app fallback ONLY when process_tree has no window AND
+        // launcher exited (broker stub) or grace elapsed.
+        if !fallback_allowed(launch) {
+            return None;
+        }
+        let with_fallback = OwnershipMode::Discover {
+            allow_image_fallback: true,
         };
+        let look = census(
+            launch,
+            processes,
+            images,
+            creation_times,
+            0,
+            false,
+            with_fallback,
+        );
+        if let Some((_, window)) = look.shown {
+            return Some(window);
+        }
+        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+            wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 250);
+            if !is_current(launch.id) {
+                return None;
+            }
+            let look2 = census(
+                launch,
+                processes,
+                images,
+                creation_times,
+                0,
+                false,
+                with_fallback,
+            );
+            if let Some((_, window)) = look2.shown {
+                return Some(window);
+            }
+            return look2
+                .found
+                .iter()
+                .copied()
+                .max_by_key(|(area, _)| *area)
+                .map(|(_, window)| window)
+                .or(Some(hidden));
+        }
+        None
+    };
 
     while Instant::now() < deadline {
         if !is_current(launch.id) {
             return None;
         }
 
-        if let Some(window) = check_now(&processes, &mut images) {
+        if let Some(window) = check_now(&processes, &mut images, &mut creation_times) {
             return Some(window);
         }
 
@@ -2055,6 +2207,10 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             let _ = unsafe { TranslateMessage(&msg) };
             unsafe { DispatchMessageW(&msg) };
 
+            let allow_fallback = fallback_allowed(launch);
+            let mode = OwnershipMode::Discover {
+                allow_image_fallback: allow_fallback,
+            };
             let mut matched = false;
             WINEVENT_HWNDS.with(|q| {
                 for raw in q.borrow_mut().drain(..) {
@@ -2065,22 +2221,85 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                     if pid == 0 {
                         continue;
                     }
-                    if processes.contains(&pid)
-                        || image_name_of(pid, &mut images).as_deref() == Some(launch.exe.as_str())
-                    {
+                    if processes.contains(&pid) {
                         matched = true;
                         break;
+                    }
+                    if allow_fallback {
+                        let image = image_name_of(pid, &mut images);
+                        let creation = if image.as_deref() == Some(launch.exe.as_str())
+                            && !launch.processes_before.contains(&pid)
+                        {
+                            creation_time_of(pid, &mut creation_times)
+                        } else {
+                            None
+                        };
+                        if belongs_to_preview(
+                            pid,
+                            &processes,
+                            mode,
+                            &launch.exe,
+                            launch.launch_filetime,
+                            &launch.processes_before,
+                            image.as_deref(),
+                            creation,
+                        ) {
+                            matched = true;
+                            break;
+                        }
                     }
                 }
             });
             if matched {
-                if let Some(window) = check_now(&processes, &mut images) {
+                if let Some(window) = check_now(&processes, &mut images, &mut creation_times) {
                     return Some(window);
                 }
             }
         }
     }
     None
+}
+
+fn filetime_to_u64(ft: FILETIME) -> u64 {
+    ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
+}
+
+fn current_filetime_u64() -> u64 {
+    // Windows FILETIME epoch (1601-01-01) to Unix epoch (1970-01-01) in 100ns ticks.
+    const WINDOWS_EPOCH_OFFSET_100NS: u64 = 116_444_736_000_000_000;
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| {
+            WINDOWS_EPOCH_OFFSET_100NS
+                .saturating_add(d.as_secs().saturating_mul(10_000_000))
+                .saturating_add(u64::from(d.subsec_nanos() / 100))
+        })
+        .unwrap_or(0)
+}
+
+fn process_has_exited(process: HANDLE) -> bool {
+    unsafe { WaitForSingleObject(process, 0) == WAIT_OBJECT_0 }
+}
+
+fn creation_time_of(pid: u32, cache: &mut HashMap<u32, Option<u64>>) -> Option<u64> {
+    if let Some(known) = cache.get(&pid) {
+        return *known;
+    }
+    let time = unsafe { process_creation_time(pid) };
+    cache.insert(pid, time);
+    time
+}
+
+unsafe fn process_creation_time(pid: u32) -> Option<u64> {
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let mut created = FILETIME::default();
+    let mut exited = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    let ok = unsafe { GetProcessTimes(process, &mut created, &mut exited, &mut kernel, &mut user) }
+        .is_ok();
+    let _ = unsafe { CloseHandle(process) };
+    ok.then(|| filetime_to_u64(created))
 }
 
 /// The process and everything it started, as deep as the machine's own parent links go.
@@ -2747,5 +2966,102 @@ mod tests {
                 bottom: 760,
             }
         );
+    }
+
+    #[test]
+    fn ownership_never_matches_manually_launched_sibling_exe_once_owned() {
+        let launch_ft = 100_000_000_000u64;
+        let owned = [1001u32, 1002];
+        let before = [500u32];
+
+        // Post-adoption (`OwnedOnly`): manually-launched sibling PID with same exe is NEVER matched.
+        assert!(belongs_to_preview(
+            1001,
+            &owned,
+            OwnershipMode::OwnedOnly,
+            "i_view64.exe",
+            launch_ft,
+            &before,
+            Some("i_view64.exe"),
+            Some(launch_ft + 5_000_000),
+        ));
+        assert!(!belongs_to_preview(
+            2005,
+            &owned,
+            OwnershipMode::OwnedOnly,
+            "i_view64.exe",
+            launch_ft,
+            &before,
+            Some("i_view64.exe"),
+            Some(launch_ft + 5_000_000),
+        ));
+
+        // Discovery pass 1 (`allow_image_fallback: false`): sibling PID is NEVER matched.
+        assert!(!belongs_to_preview(
+            2005,
+            &owned,
+            OwnershipMode::Discover {
+                allow_image_fallback: false,
+            },
+            "i_view64.exe",
+            launch_ft,
+            &before,
+            Some("i_view64.exe"),
+            Some(launch_ft + 5_000_000),
+        ));
+
+        // Discovery pass 2 (`allow_image_fallback: true` for brokered apps):
+        // - Newly spawned brokered process (>= launch_ft - 2s) matches.
+        assert!(belongs_to_preview(
+            3001,
+            &owned,
+            OwnershipMode::Discover {
+                allow_image_fallback: true,
+            },
+            "mspaint.exe",
+            launch_ft,
+            &before,
+            Some("mspaint.exe"),
+            Some(launch_ft - 5_000_000),
+        ));
+        // - Unrelated process started well before launch (> 2s earlier, not in processes_before) rejected.
+        assert!(!belongs_to_preview(
+            3002,
+            &owned,
+            OwnershipMode::Discover {
+                allow_image_fallback: true,
+            },
+            "mspaint.exe",
+            launch_ft,
+            &before,
+            Some("mspaint.exe"),
+            Some(launch_ft - PROCESS_TIME_SLACK_100NS - 1),
+        ));
+        // - Existing single-instance packaged host in `processes_before` matches (gated by windows_before).
+        assert!(belongs_to_preview(
+            500,
+            &owned,
+            OwnershipMode::Discover {
+                allow_image_fallback: true,
+            },
+            "mspaint.exe",
+            launch_ft,
+            &before,
+            Some("mspaint.exe"),
+            None,
+        ));
+        // - Wrong exe name rejected.
+        assert!(!belongs_to_preview(
+            3003,
+            &owned,
+            OwnershipMode::Discover {
+                allow_image_fallback: true,
+            },
+            "mspaint.exe",
+            launch_ft,
+            &before,
+            Some("notepad.exe"),
+            Some(launch_ft + 1000),
+        ));
     }
 }
