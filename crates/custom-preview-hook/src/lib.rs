@@ -29,7 +29,9 @@ const WM_NCCREATE: u32 = 0x0081;
 
 const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
+const GW_OWNER: u32 = 4;
 
+const WS_CAPTION: u32 = 0x00C0_0000;
 const WS_CHILD: u32 = 0x4000_0000;
 const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 
@@ -38,6 +40,7 @@ const SWP_NOSIZE: u32 = 0x0001;
 const SWP_NOMOVE: u32 = 0x0002;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
+const SWP_SHOWWINDOW: u32 = 0x0040;
 
 const DWMWA_CLOAK: u32 = 13;
 
@@ -121,6 +124,7 @@ extern "system" {
 extern "system" {
     fn CallNextHookEx(hhk: isize, n_code: i32, wparam: usize, lparam: isize) -> isize;
     fn GetParent(hwnd: isize) -> isize;
+    fn GetWindow(hwnd: isize, u_cmd: u32) -> isize;
     fn GetWindowLongPtrW(hwnd: isize, n_index: i32) -> isize;
 }
 
@@ -218,7 +222,7 @@ unsafe fn shared_state() -> Option<&'static HookSharedState> {
 
 #[inline]
 unsafe fn is_top_level_non_tool(hwnd: isize) -> bool {
-    if hwnd == 0 || unsafe { GetParent(hwnd) } != 0 {
+    if hwnd == 0 || unsafe { GetParent(hwnd) } != 0 || unsafe { GetWindow(hwnd, GW_OWNER) } != 0 {
         return false;
     }
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
@@ -292,8 +296,10 @@ pub unsafe extern "system" fn rhp_callwnd_proc(code: i32, wparam: usize, lparam:
                         let cmd = unsafe { (*cwp).wparam };
                         if cmd == CMD_UNCLOAK {
                             unsafe { set_cloak(hwnd, false) };
+                            state.hook_hits.fetch_add(1, Ordering::Relaxed);
                         } else if cmd == CMD_CLOAK {
                             unsafe { set_cloak(hwnd, true) };
+                            state.hook_hits.fetch_add(1, Ordering::Relaxed);
                         }
                     } else if matches!(
                         msg,
@@ -301,34 +307,46 @@ pub unsafe extern "system" fn rhp_callwnd_proc(code: i32, wparam: usize, lparam:
                     ) {
                         let is_captured = state.captured_hwnd.load(Ordering::Acquire) == hwnd;
                         if is_captured || unsafe { is_top_level_non_tool(hwnd) } {
+                            let wp = if msg == WM_WINDOWPOSCHANGING {
+                                (unsafe { (*cwp).lparam }) as *mut WindowPos
+                            } else {
+                                ptr::null_mut()
+                            };
                             if state.cloak_enabled.load(Ordering::Acquire) == 1 {
                                 unsafe { set_cloak(hwnd, true) };
-                                let _ = state.captured_hwnd.compare_exchange(
-                                    0,
-                                    hwnd,
-                                    Ordering::AcqRel,
-                                    Ordering::Acquire,
-                                );
+                                // Only latch main-window candidates; never 0x0 hidden helpers on WM_NCCREATE/WM_CREATE.
+                                let is_main_candidate = (msg == WM_SHOWWINDOW
+                                    && unsafe { (*cwp).wparam } != 0)
+                                    || (!wp.is_null()
+                                        && ((unsafe { (*wp).flags } & SWP_SHOWWINDOW) != 0
+                                            || (unsafe { (*wp).cx } >= 64
+                                                && unsafe { (*wp).cy } >= 64
+                                                && (unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) }
+                                                    as u32
+                                                    & WS_CAPTION)
+                                                    != 0)));
+                                if is_main_candidate {
+                                    let _ = state.captured_hwnd.compare_exchange(
+                                        0,
+                                        hwnd,
+                                        Ordering::AcqRel,
+                                        Ordering::Acquire,
+                                    );
+                                }
                                 state.hook_hits.fetch_add(1, Ordering::Relaxed);
                             }
-                            if msg == WM_WINDOWPOSCHANGING
-                                && state.rect_locked.load(Ordering::Acquire) == 1
-                            {
-                                let wp = unsafe { (*cwp).lparam } as *mut WindowPos;
-                                if !wp.is_null() {
-                                    unsafe {
-                                        (*wp).hwnd_insert_after = HWND_BOTTOM;
-                                        (*wp).flags =
-                                            ((*wp).flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
-                                        let w = state.w.load(Ordering::Acquire);
-                                        let h = state.h.load(Ordering::Acquire);
-                                        if w > 0 && h > 0 {
-                                            (*wp).x = state.x.load(Ordering::Acquire);
-                                            (*wp).y = state.y.load(Ordering::Acquire);
-                                            (*wp).cx = w;
-                                            (*wp).cy = h;
-                                            (*wp).flags &= !(SWP_NOMOVE | SWP_NOSIZE);
-                                        }
+                            if !wp.is_null() && state.rect_locked.load(Ordering::Acquire) == 1 {
+                                unsafe {
+                                    (*wp).hwnd_insert_after = HWND_BOTTOM;
+                                    (*wp).flags = ((*wp).flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
+                                    let w = state.w.load(Ordering::Acquire);
+                                    let h = state.h.load(Ordering::Acquire);
+                                    if w > 0 && h > 0 {
+                                        (*wp).x = state.x.load(Ordering::Acquire);
+                                        (*wp).y = state.y.load(Ordering::Acquire);
+                                        (*wp).cx = w;
+                                        (*wp).cy = h;
+                                        (*wp).flags &= !(SWP_NOMOVE | SWP_NOSIZE);
                                     }
                                 }
                             }
