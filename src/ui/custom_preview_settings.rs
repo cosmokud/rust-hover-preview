@@ -30,8 +30,7 @@ use windows::Win32::UI::Controls::Dialogs::{
 };
 use windows::Win32::UI::Controls::{
     GetComboBoxInfo, SetWindowTheme, COMBOBOXINFO, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL,
-    EM_SETLIMITTEXT, EM_SETMARGINS, EM_SETSEL, MARGINS, MEASUREITEMSTRUCT, ODS_DISABLED,
-    ODS_SELECTED,
+    EM_SETLIMITTEXT, EM_SETSEL, MARGINS, MEASUREITEMSTRUCT, ODS_DISABLED, ODS_SELECTED,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -48,22 +47,22 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
     SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
     CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE, CB_GETLBTEXT,
-    CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EC_LEFTMARGIN, EC_RIGHTMARGIN, EN_CHANGE,
-    ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
-    HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE,
-    LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING,
-    LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG,
-    NCCALCSIZE_PARAMS, SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE,
-    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT,
-    WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
-    WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA,
+    GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT,
+    HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS,
+    LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_GETTEXT,
+    LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS,
+    SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE,
+    SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CANCELMODE,
+    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND,
+    WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCDESTROY,
+    WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::config::config::{
@@ -97,6 +96,10 @@ const WM_TOGGLE_CHANGED: u32 = WM_APP + 24;
 const TITLEBAR_LOGICAL_H: i32 = 40;
 const TITLEBAR_BTN_W: i32 = 44;
 const RESIZE_BORDER_LOGICAL: i32 = 6;
+/// How far a combo's label is inset inside its item box. Measured so its first glyph lands on the
+/// column an `EDIT`'s text starts on: the EDIT's container pad (8) plus its own 1px, less the item
+/// box's own 3, less the 2px the combo's font keeps before the glyph.
+const COMBO_LABEL_INSET_LOGICAL: i32 = 4;
 const STEP_DELAY_MS: u32 = 380;
 const STEP_REPEAT_MS: u32 = 55;
 const STEP_TIMER_INITIAL: usize = 1;
@@ -1510,21 +1513,10 @@ unsafe fn build(hwnd: HWND) -> State {
         (ID_SCALING_PERCENT, 4),
         (ID_VOLUME_VALUE, 3),
     ];
-    let text_inset = edit_text_inset((unsafe { GetDpiForWindow(hwnd) } as i32).max(96));
     for (id, limit) in edit_limits {
         if let Ok(edit) = unsafe { GetDlgItem(hwnd, id) } {
             unsafe {
                 SendMessageW(edit, EM_SETLIMITTEXT, WPARAM(limit), LPARAM(0));
-                // Text starts where a combo's label starts, so every field in the column reads
-                // from the same line: the EDIT's own 1px default inset put it short of the combos.
-                if id != ID_SEARCH {
-                    SendMessageW(
-                        edit,
-                        EM_SETMARGINS,
-                        WPARAM((EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize),
-                        LPARAM((text_inset | (text_inset << 16)) as isize),
-                    );
-                }
                 install_edit_subclass(edit, hwnd, id);
             }
         }
@@ -3110,20 +3102,13 @@ fn combo_drop_height(dpi: i32) -> i32 {
 /// item's `WM_DRAWITEM` — because they swap in and out on mouse-over, and measuring one from the
 /// client rect (3px wider than the item box on each side) made the label jump on hover.
 fn combo_label_rect(item: RECT, dpi: i32) -> RECT {
-    let left = item.left + scale(10, dpi);
+    let left = item.left + scale(COMBO_LABEL_INSET_LOGICAL, dpi);
     RECT {
         left,
         top: item.top,
         right: (item.right - scale(26, dpi)).max(left),
         bottom: item.bottom,
     }
-}
-
-/// The left margin an `EDIT` needs so its text starts on the same line as a combo's label: the
-/// combo's inner margin (3) plus its label inset (10) less the `EDIT`'s own container inset (8),
-/// plus the 1px an `EDIT` keeps between its margin and its first glyph.
-fn edit_text_inset(dpi: i32) -> i32 {
-    scale(3, dpi) + scale(10, dpi) - scale(8, dpi) + 1
 }
 
 fn compute_layout_rects(width: i32, height: i32, dpi: i32) -> LayoutRects {
@@ -4329,15 +4314,6 @@ mod tests {
     }
 
     #[test]
-    fn an_edit_starts_its_text_where_a_combo_starts_its_label() {
-        // 3 (combo inner margin) + 10 (label inset) - 8 (edit container inset) + 1 (edit's own
-        // margin pixel). Measured on screen: both first glyphs land on the same column. Each term
-        // rounds on its own, so the doubled dpi lands 1px short of double the 96-dpi inset.
-        assert_eq!(edit_text_inset(96), 6);
-        assert_eq!(edit_text_inset(192), 11);
-    }
-
-    #[test]
     fn a_combo_label_is_measured_from_its_item_box() {
         // The combo's item box starts 3px inside its client rect; both label paints must place
         // the text from the item, or the label jumps 3px when they swap on mouse-over.
@@ -4348,10 +4324,33 @@ mod tests {
             bottom: 29,
         };
         let label = combo_label_rect(item, 96);
-        assert_eq!(label.left, 13);
+        assert_eq!(label.left, item.left + COMBO_LABEL_INSET_LOGICAL);
         assert_eq!(label.top, item.top);
         assert_eq!(label.bottom, item.bottom);
         assert_eq!(label.right, item.right - 26);
+    }
+
+    #[test]
+    fn a_combo_label_starts_where_an_edit_starts_its_text() {
+        // Same row of the editor, one box at the container's left edge (the combo) and one at its
+        // 8px pad (the EDIT). Both first glyphs landed on the same pixel on screen: the combo at
+        // item 3 + inset 4 + the 2px its font keeps before the glyph, the EDIT at pad 8 + 1.
+        let container = RECT {
+            left: 398,
+            top: 40,
+            right: 890,
+            bottom: 70,
+        };
+        let edit_glyph = centered_edit_rect(container, 18, scale(8, 96)).left + 1;
+        let combo_item = RECT {
+            left: container.left + scale(3, 96), // the item box's own Win32 margin
+            ..container
+        };
+        assert_eq!(
+            combo_label_rect(combo_item, 96).left + 2,
+            edit_glyph,
+            "a combo's label and an EDIT's text start on different columns"
+        );
     }
 
     #[test]
