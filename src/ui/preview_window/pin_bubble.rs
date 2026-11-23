@@ -1769,6 +1769,7 @@ pub(super) fn pin_bubble_centre() -> Option<(i32, i32)> {
 /// Take a pinned window and everything of somebody else's that stands in it off the screen:
 /// what a collapse leaves behind, and what a pin that ends leaves to the ordinary take-down.
 pub(super) unsafe fn hide_pinned_windows() {
+    pin_lifecycle::cancel_deferred_preview_hide();
     let hwnd = HWND(PREVIEW_HWND.load(Ordering::SeqCst) as *mut _);
     if !hwnd.is_invalid() {
         let _ = ShowWindow(hwnd, SW_HIDE);

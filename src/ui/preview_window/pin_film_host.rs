@@ -61,13 +61,14 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowW, GetClientRect,
-    GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
-    IsWindow, IsWindowVisible, RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE, GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST,
-    HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE, SC_MINIMIZE, SIZE_MINIMIZED, SWP_NOACTIVATE,
-    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE,
-    WA_CLICKACTIVE, WINDOW_EX_STYLE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE, WM_DPICHANGED,
+    BeginDeferWindowPos, CreateWindowExW, DefWindowProcW, DeferWindowPos, DestroyWindow,
+    EndDeferWindowPos, FindWindowW, GetClientRect, GetForegroundWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, RegisterClassExW,
+    SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWLP_HWNDPARENT, GWL_EXSTYLE,
+    GWL_STYLE, HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOPMOST, ICON_BIG, ICON_SMALL, SC_CLOSE,
+    SC_MINIMIZE, SIZE_MINIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WA_ACTIVE, WA_CLICKACTIVE,
+    WINDOW_EX_STYLE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CLOSE, WM_DPICHANGED,
     WM_DWMSENDICONICTHUMBNAIL, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT, WM_QUERYOPEN, WM_SETFOCUS,
     WM_SETICON, WM_SIZE, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WNDCLASSEXW, WS_CLIPCHILDREN,
     WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
@@ -1412,49 +1413,54 @@ pub(super) fn the_pin_window_that_holds_the_band(pin: HWND) -> HWND {
 /// hover had its own band written `HWND_NOTOPMOST` at the promotion and was never asked again.
 ///
 /// Both windows are this app's own: nothing here is a call into another process.
+/// Commit `window` (host) + `pin` (chrome) z-order atomically in one HDWP transaction so `pin`'s
+/// alpha=1 cutouts never render over the desktop without `host` behind them. Falls back to
+/// individual `SetWindowPos` calls if `BeginDeferWindowPos`/`DeferWindowPos`/`EndDeferWindowPos` fails.
+unsafe fn place_pair_in_band_atomic(window: HWND, pin: HWND, after: HWND) {
+    let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+    // Commit `window` (owner/host) and `pin` (owned/chrome) to `after` in one HDWP transaction
+    // (owner first so Win32's owned-above-owner rule never blocks moving `pin` behind a cover
+    // window), then ensure `window` sits directly behind `pin` within the committed band.
+    let committed = BeginDeferWindowPos(2)
+        .and_then(|hdwp| DeferWindowPos(hdwp, window, after, 0, 0, 0, 0, flags))
+        .and_then(|hdwp| DeferWindowPos(hdwp, pin, after, 0, 0, 0, 0, flags))
+        .and_then(|hdwp| EndDeferWindowPos(hdwp))
+        .is_ok();
+    if !committed {
+        let _ = SetWindowPos(window, after, 0, 0, 0, 0, flags);
+        let _ = SetWindowPos(pin, after, 0, 0, 0, 0, flags);
+        return;
+    }
+    let _ = SetWindowPos(window, pin, 0, 0, 0, 0, flags);
+}
+
 pub(super) unsafe fn place_the_pin_in_the_band(pin: HWND, after: HWND) {
     let window = the_pin_window_that_holds_the_band(pin);
 
-    let place = |window: HWND| {
-        let _ = SetWindowPos(
-            window,
-            after,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+    if window != pin && !pin.is_invalid() {
+        place_pair_in_band_atomic(window, pin, after);
         // One line per placement, so that a run — and a test holding the order of a road to what it
         // asked the desktop for — reads the band write rather than inferring it (see
         // `the_host_has_appeared`).
         note_pin_trace!("band {:?} asked of {:?}", after, window);
+        note_pin_trace!("band {:?} asked of {:?}", after, pin);
+
+        if after == HWND_TOPMOST
+            && (!pin_lifecycle::window_holds_the_topmost_band(window)
+                || !pin_lifecycle::window_holds_the_topmost_band(pin))
+        {
+            place_pair_in_band_atomic(window, pin, HWND_NOTOPMOST);
+            place_pair_in_band_atomic(window, pin, HWND_TOPMOST);
+        }
+    } else {
+        let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        let _ = SetWindowPos(window, after, 0, 0, 0, 0, flags);
+        note_pin_trace!("band {:?} asked of {:?}", after, window);
 
         if after == HWND_TOPMOST && !pin_lifecycle::window_holds_the_topmost_band(window) {
-            let _ = SetWindowPos(
-                window,
-                HWND_NOTOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-            let _ = SetWindowPos(
-                window,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
+            let _ = SetWindowPos(window, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+            let _ = SetWindowPos(window, HWND_TOPMOST, 0, 0, 0, 0, flags);
         }
-    };
-
-    place(window);
-    if window != pin && !pin.is_invalid() {
-        place(pin);
     }
 
     // **Where the placement left the pair, beside the window that had the foreground when it was
@@ -1638,17 +1644,21 @@ unsafe fn own_the_pin_window(owned: bool) {
     // then never topmost however the setting read, which is the pin that appears behind Explorer with
     // `Always On Top` on.
     let band = band_place();
-    let _ = unsafe {
-        SetWindowPos(
-            pin,
-            band,
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        )
-    };
+    if let Some(host) = owned.then(film_host).flatten() {
+        unsafe { place_pair_in_band_atomic(host, pin, band) };
+    } else {
+        let _ = unsafe {
+            SetWindowPos(
+                pin,
+                band,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        };
+    }
 }
 
 /// Whether the tick owes the player's window the front: a film a hover is following, or a pin's
@@ -1985,23 +1995,22 @@ unsafe fn promote_the_hover_film_host(host: HWND, content: ScreenRegion) {
     // intermittent (see `the_button_follows_the_screen`).
     let ex = unsafe { GetWindowLongPtrW(host, GWL_EXSTYLE) };
     let ex = ex
-        & !(WS_EX_TOPMOST.0 as isize)
         & !(WS_EX_TRANSPARENT.0 as isize)
         & !(WS_EX_TOOLWINDOW.0 as isize)
         & !(WS_EX_NOACTIVATE.0 as isize)
         & !(WS_EX_APPWINDOW.0 as isize);
     let _ = unsafe { SetWindowLongPtrW(host, GWL_EXSTYLE, ex) };
-    // A style written behind a window's back is not one it presents with until it is asked to read it,
-    // and the band it was in goes with the same call.
+    // Flush style bits without touching z-order: host stays in its band until ownership is set
+    // and `place_the_pin_in_the_band` moves host + pin atomically into the target band.
     let _ = unsafe {
         SetWindowPos(
             host,
-            HWND_NOTOPMOST,
+            HWND::default(),
             0,
             0,
             0,
             0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED,
         )
     };
     // **The hover's host was made disabled, and the pin's host is an ordinary window**: a disabled one

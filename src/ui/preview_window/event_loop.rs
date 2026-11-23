@@ -567,6 +567,7 @@ pub fn run_preview_window() {
             // Which of the three surfaces it is, as well as whether it is one: the hook dismisses a
             // preview the pointer arrives on, and a page that runs, a film and a picture are three
             // different answers to that (see `crate::app::seam::cursor_preview_hover`).
+            pin_lifecycle::poll_deferred_preview_hide(Instant::now());
             let preview_hover = cursor_preview_hover();
             crate::app::seam::publish_preview_under_the_pointer(preview_hover.any());
             crate::app::seam::publish_preview_cursor_hover(preview_hover);
@@ -1917,6 +1918,7 @@ pub fn run_preview_window() {
                     }
 
                     if !IsWindowVisible(hwnd).as_bool() {
+                        pin_lifecycle::cancel_deferred_preview_hide();
                         let _ = SetWindowPos(
                             hwnd,
                             HWND_TOPMOST,
@@ -2308,6 +2310,7 @@ pub fn run_preview_window() {
                                     }
 
                                     if let Some(pl) = pending {
+                                        pin_lifecycle::cancel_deferred_preview_hide();
                                         let _ = SetWindowPos(
                                             hwnd,
                                             HWND_TOPMOST,
@@ -5553,6 +5556,9 @@ pub fn run_preview_window() {
                 last_hold_key = hold_key;
             }
 
+            // Fire any 1-frame deferred hover-preview hide whose deadline has elapsed.
+            pin_lifecycle::poll_deferred_preview_hide(Instant::now());
+
             if !session.is_showing() && pending_load.is_none() {
                 // Nothing is on screen, which is where this thread used to spend
                 // its whole life waking sixty times a second to drain a queue that
@@ -5564,8 +5570,12 @@ pub fn run_preview_window() {
                 // resume, a display change — waits to be noticed. The wait wakes
                 // on window input at once, so a drag never queues behind it (see
                 // `wait_preview_channel`).
-                carried_preview_msg =
-                    wait_preview_channel(&rx, wait_before_the_next_tick(true, false, pinned()));
+                let mut wait_ms = wait_before_the_next_tick(true, false, pinned());
+                if let Some(rem) = pin_lifecycle::deferred_preview_hide_remaining_ms(Instant::now())
+                {
+                    wait_ms = wait_ms.min(rem);
+                }
+                carried_preview_msg = wait_preview_channel(&rx, wait_ms);
             } else {
                 // Something is on screen, and which band of the cadence it lands in is
                 // `wait_before_the_next_tick`'s question — a tick that has something to
@@ -5604,7 +5614,7 @@ pub fn run_preview_window() {
                 // its flush are only as smooth as the ticks they land on, and the pin's own wait is
                 // four times the frame's (see `pin_volume_is_moving`). A pace is the same thing one
                 // control along, and for the same reason (see `pin_fps_is_moving`).
-                let wait_ms = wait_before_the_next_tick(
+                let mut wait_ms = wait_before_the_next_tick(
                     false,
                     media_dynamic_hint
                         || tick_has_wait
@@ -5614,6 +5624,10 @@ pub fn run_preview_window() {
                         || pin_fps_is_moving(),
                     pinned(),
                 );
+                if let Some(rem) = pin_lifecycle::deferred_preview_hide_remaining_ms(Instant::now())
+                {
+                    wait_ms = wait_ms.min(rem);
+                }
                 // And a travel is paced by the compositor rather than by that wait, because what its
                 // frames are worth is the display's own period and not a timer's: a sleep of
                 // `FRAME_WAIT_MS` comes back in 27.8 ms — 36 frames a second — where a flush of the
@@ -5631,6 +5645,7 @@ pub fn run_preview_window() {
         }
 
         // Tear down the bubble HWND before exiting the viewer loop so no popup HWND leaks.
+        pin_lifecycle::flush_deferred_preview_hide();
         let _ = destroy_pin_bubble();
 
         // Signal the dedicated loader worker to stop and wait for shutdown.
