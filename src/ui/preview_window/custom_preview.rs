@@ -528,8 +528,13 @@ pub(super) fn hide() {
     let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|g| g.clone());
     if let Some(ctrl) = hook_ctrl {
         let source = SOURCE.load(Ordering::SeqCst);
-        if source != 0 {
-            ctrl.cloak_async(HWND(source as *mut _));
+        let cloaked = source != 0 && ctrl.cloak_sync(HWND(source as *mut _));
+        if !cloaked {
+            if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
+                keep_source_invisible(source);
+            } else {
+                park_source_offscreen_now();
+            }
         }
     } else if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
         keep_source_invisible(SOURCE.load(Ordering::SeqCst));
@@ -1457,7 +1462,16 @@ fn run_it(
             let since = *lingering.get_or_insert_with(Instant::now);
             placed_host_rect = None;
             if let Some(ref session) = hook_session {
-                session.view.cloak_async(source);
+                if !session.view.cloak_sync(source) {
+                    if invisible_layered {
+                        keep_source_invisible(source.0 as isize);
+                    } else {
+                        placed_mode = None;
+                        if !is_window_offscreen(source) {
+                            push_offscreen(source);
+                        }
+                    }
+                }
             } else if invisible_layered {
                 keep_source_invisible(source.0 as isize);
             } else {
@@ -3716,11 +3730,37 @@ impl HookSharedView {
         self.state().cloak_enabled.load(Ordering::Acquire) == 1
     }
 
-    fn cloak_async(&self, hwnd: HWND) {
+    fn hook_hits(&self) -> u32 {
+        self.state().hook_hits.load(Ordering::Acquire)
+    }
+
+    fn ensure_cloaked_and_locked(&self) {
+        let s = self.state();
+        s.cloak_enabled.store(1, Ordering::Release);
+        s.rect_locked.store(1, Ordering::Release);
+    }
+
+    /// Synchronously cloak via `SendMessageTimeoutW`; `WH_CALLWNDPROC` never sees `PostMessageW`.
+    /// Returns `true` only if `rhp_callwnd_proc` actually handled `CMD_CLOAK` on `hwnd`'s thread.
+    fn cloak_sync(&self, hwnd: HWND) -> bool {
         self.state().cloak_enabled.store(1, Ordering::Release);
-        if !hwnd.0.is_null() && unsafe { IsWindow(hwnd) }.as_bool() {
-            let _ = unsafe { PostMessageW(hwnd, self.uncloak_msg, WPARAM(CMD_CLOAK), LPARAM(0)) };
+        if hwnd.0.is_null() || !unsafe { IsWindow(hwnd) }.as_bool() {
+            return false;
         }
+        let hits_before = self.hook_hits();
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                self.uncloak_msg,
+                WPARAM(CMD_CLOAK),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                50,
+                None,
+            )
+        }
+        .0 != 0;
+        sent && self.hook_hits() > hits_before
     }
 
     fn uncloak_sync(&self, hwnd: HWND) {
@@ -3834,6 +3874,8 @@ fn try_attach_thread_hooks(
     }
 }
 
+const IN_PROCESS_HOOK_SHOW_CMD: u16 = SW_HIDE.0 as u16;
+
 /// Spawn target with `CREATE_SUSPENDED`, initialize per-PID shared memory, and attach `WH_CBT` +
 /// `WH_CALLWNDPROC` before/immediately after `ResumeThread`. Falls back to `None` session
 /// (caller degrades cleanly to `InvisibleLayered`) if DLL is missing or hook cannot attach.
@@ -3862,10 +3904,11 @@ fn launch_in_process_hook(
         .as_ref()
         .map_or(PCWSTR::null(), |buf| PCWSTR(buf.as_ptr()));
 
+    // SW_HIDE keeps native Win32 apps hidden until hooked+revealed; Avalonia/ImageGlass ignores it.
     let mut si = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
         dwFlags: STARTF_USESHOWWINDOW,
-        wShowWindow: SW_SHOWNOACTIVATE.0 as u16,
+        wShowWindow: IN_PROCESS_HOOK_SHOW_CMD,
         ..Default::default()
     };
     if let Some((x, y, w, h)) = provisional {
@@ -3905,7 +3948,8 @@ fn launch_in_process_hook(
     let view = HookSharedView::create(pid, provisional, uncloak_msg).map(Arc::new);
 
     // Attempt hook install before `ResumeThread`; if Win11 rejects a suspended thread before
-    // `W32THREAD` init (`ERROR_INVALID_THREAD_ID`), resume and retry in a tight ~1ms loop.
+    // `W32THREAD` init (`ERROR_INVALID_THREAD_ID`), spin-yield 30ms (sub-0.1ms attach; avoids
+    // 15.6ms timer-tick sleep) then sleep(1ms) up to 200ms.
     let mut hooks = if view.is_some() {
         try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, tid)
     } else {
@@ -3916,7 +3960,9 @@ fn launch_in_process_hook(
     let _ = unsafe { CloseHandle(pi.hThread) };
 
     if view.is_some() && hooks.is_none() {
-        let retry_deadline = Instant::now() + Duration::from_millis(200);
+        let retry_start = Instant::now();
+        let spin_deadline = retry_start + Duration::from_millis(30);
+        let retry_deadline = retry_start + Duration::from_millis(200);
         while Instant::now() < retry_deadline {
             if process_has_exited(HANDLE(process.as_raw_handle())) {
                 break;
@@ -3925,7 +3971,11 @@ fn launch_in_process_hook(
                 hooks = Some(pair);
                 break;
             }
-            std::thread::sleep(Duration::from_millis(1));
+            if Instant::now() < spin_deadline {
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
     }
 
@@ -3944,7 +3994,37 @@ fn launch_in_process_hook(
     Some((process, pid, session))
 }
 
-/// Fast discovery for `InProcessHook`: checks `session.captured_hwnd` first alongside `census`.
+/// Validate a `captured_hwnd` candidate: live, unowned, non-toolwindow, and titled or >= 64x64.
+fn validate_captured_hwnd(hwnd: HWND) -> Option<(i64, bool, HWND)> {
+    if !unsafe { IsWindow(hwnd) }.as_bool() {
+        return None;
+    }
+    if unsafe { GetWindow(hwnd, GW_OWNER) }
+        .ok()
+        .is_some_and(|owner| !owner.0.is_null())
+    {
+        return None;
+    }
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    if (ex_style & WS_EX_TOOLWINDOW.0) != 0 {
+        return None;
+    }
+    let mut rect = RECT::default();
+    let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+        (rect.right - rect.left).max(0) as i64 * (rect.bottom - rect.top).max(0) as i64
+    } else {
+        0
+    };
+    let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
+    if titled || area >= THE_SMALLEST_PICTURE {
+        Some((area, titled, hwnd))
+    } else {
+        None
+    }
+}
+
+/// Fast discovery for `InProcessHook`: validates `session.captured_hwnd` alongside `census` and
+/// prefers a larger titled main window in `processes` when one exists.
 fn wait_for_a_window_in_process_hook(
     launch: &Launch,
     session: &InProcessHookSession,
@@ -3960,21 +4040,10 @@ fn wait_for_a_window_in_process_hook(
         if !is_current(launch.id) {
             return None;
         }
-        if let Some(hwnd) = session.view.captured_hwnd() {
-            if unsafe { IsWindow(hwnd) }.as_bool() {
-                let mut rect = RECT::default();
-                let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
-                    (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64
-                } else {
-                    0
-                };
-                let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
-                if titled && area >= THE_SMALLEST_PICTURE {
-                    return Some(hwnd);
-                }
-                first_candidate.get_or_insert_with(|| (Instant::now(), hwnd));
-            }
-        }
+        let valid_captured = session
+            .view
+            .captured_hwnd()
+            .and_then(validate_captured_hwnd);
 
         let look = census(
             launch,
@@ -3987,15 +4056,34 @@ fn wait_for_a_window_in_process_hook(
                 allow_image_fallback: false,
             },
         );
-        if let Some((_, window)) = look.shown {
-            return Some(window);
+        if let Some((shown_area, shown_hwnd)) = look.shown {
+            if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+                if cap_area > shown_area {
+                    return Some(cap_hwnd);
+                }
+            }
+            return Some(shown_hwnd);
         }
-        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+
+        let best_hidden = look.found.iter().copied().max_by_key(|(area, _)| *area);
+        if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+            if let Some((hidden_area, hidden_hwnd)) = best_hidden {
+                if hidden_area > cap_area {
+                    return Some(hidden_hwnd);
+                }
+            }
+            if cap_area >= THE_SMALLEST_PICTURE {
+                return Some(cap_hwnd);
+            }
+        }
+        if let Some((_, hidden)) = best_hidden {
             let entry = first_candidate.get_or_insert_with(|| (Instant::now(), hidden));
             entry.1 = hidden;
             if entry.0.elapsed() >= Duration::from_millis(40) {
                 return Some(hidden);
             }
+        } else if let Some((_, _, cap_hwnd)) = valid_captured {
+            first_candidate.get_or_insert_with(|| (Instant::now(), cap_hwnd));
         }
 
         if read.elapsed() >= TREE_POLL {
@@ -4020,6 +4108,21 @@ fn reveal_in_process_hook(
     window_mode: CustomWindowMode,
     state: &mut OffscreenStagedState<'_>,
 ) {
+    // Late-hooked fallback (`hook_hits == 0`): source is not cloaked; use InvisibleLayered if active.
+    if session.view.hook_hits() == 0 && *state.invisible_layered {
+        session
+            .view
+            .state()
+            .cloak_enabled
+            .store(0, Ordering::Release);
+        place_invisible_layered(source, host_rect, window_mode, state.the_ask);
+        restore_foreground(launch.previous_foreground, processes);
+        *state.placed_mode = Some(PlacementMode::InvisibleLayered);
+        *state.placed_host_rect = Some(host_rect);
+        *state.expected_rect = window_rect(source);
+        return;
+    }
+
     let (hx, hy, hw, hh) = host_rect;
     let insets = if window_mode == CustomWindowMode::Normal {
         dwm_frame_insets(source)
@@ -4156,30 +4259,52 @@ fn run_in_process_hook_settle_and_reveal(
     current_target_rect: &dyn Fn() -> Option<(i32, i32, i32, i32)>,
     state: &mut OffscreenStagedState<'_>,
 ) -> bool {
+    let cloak_or_park = |invisible_layered: bool| {
+        if !session.view.cloak_sync(source) {
+            if invisible_layered {
+                keep_source_invisible(source.0 as isize);
+            } else if !is_window_offscreen(source) {
+                push_offscreen(source);
+            }
+        }
+    };
+
     if was_hidden {
-        if let Some(target_rect) = current_target_rect() {
-            let insets = if window_mode == CustomWindowMode::Normal {
-                dwm_frame_insets(source)
-            } else {
-                (0, 0, 0, 0)
-            };
-            let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
-            session.view.set_rect(wx, wy, ww, wh);
-            let placement = WINDOWPLACEMENT {
-                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                flags: WINDOWPLACEMENT_FLAGS(0),
-                showCmd: SW_SHOWNOACTIVATE.0 as u32,
-                rcNormalPosition: workspace_rect_for_screen(RECT {
-                    left: wx,
-                    top: wy,
-                    right: wx + ww,
-                    bottom: wy + wh,
-                }),
-                ..Default::default()
-            };
-            let _ = unsafe { SetWindowPlacement(source, &placement) };
+        let Some(target_rect) = current_target_rect() else {
+            // Hover already left while window is still hidden; never show it.
+            return true;
+        };
+        session.view.ensure_cloaked_and_locked();
+        let insets = if window_mode == CustomWindowMode::Normal {
+            dwm_frame_insets(source)
         } else {
-            let _ = unsafe { ShowWindow(source, SW_SHOWNOACTIVATE) };
+            (0, 0, 0, 0)
+        };
+        let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+        session.view.set_rect(wx, wy, ww, wh);
+        let placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            flags: WINDOWPLACEMENT_FLAGS(0),
+            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+            rcNormalPosition: workspace_rect_for_screen(RECT {
+                left: wx,
+                top: wy,
+                right: wx + ww,
+                bottom: wy + wh,
+            }),
+            ..Default::default()
+        };
+        let _ = unsafe { SetWindowPlacement(source, &placement) };
+    }
+
+    // Confirm hook actually ran on `source`'s thread; if late-hooked / secondary-thread UI,
+    // attempt one synchronous cloak, else degrade immediately to InvisibleLayered or OffScreen.
+    if session.view.hook_hits() == 0 && !session.view.cloak_sync(source) {
+        let ok = make_source_invisible(source.0 as isize);
+        *state.invisible_layered = ok;
+        SOURCE_INVISIBLE_LAYERED.store(ok, Ordering::SeqCst);
+        if !ok && !is_window_offscreen(source) {
+            push_offscreen(source);
         }
     }
 
@@ -4205,6 +4330,7 @@ fn run_in_process_hook_settle_and_reveal(
             return false;
         }
         let Some(target_rect) = current_target_rect() else {
+            cloak_or_park(*state.invisible_layered);
             return true;
         };
         let insets = if window_mode == CustomWindowMode::Normal {
@@ -4246,6 +4372,7 @@ fn run_in_process_hook_settle_and_reveal(
         return false;
     }
     let Some(host_rect) = current_target_rect() else {
+        cloak_or_park(*state.invisible_layered);
         return true;
     };
     reveal_in_process_hook(
@@ -5646,10 +5773,78 @@ mod tests {
             let _ = unsafe { UnhookWindowsHookEx(cwp) };
         }
 
-        // Also verify attaching to a running thread (current thread, guaranteed W32THREAD-ready).
+        // Also verify attaching to a running thread (current thread, guaranteed W32THREAD-ready),
+        // SW_HIDE launch default, cloak_sync delivery through WH_CALLWNDPROC, and captured_hwnd
+        // ignoring 0x0 hidden helper windows while latching a real titled/captioned window.
+        assert_eq!(IN_PROCESS_HOOK_SHOW_CMD, SW_HIDE.0 as u16);
+
         let current_tid = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
         let current_hooks = try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, current_tid)
             .expect("SetWindowsHookExW on active thread must succeed");
+
+        let helper_hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create 0x0 hidden helper window")
+        };
+        assert_eq!(
+            view.captured_hwnd(),
+            None,
+            "0x0 hidden helper window must not be latched into captured_hwnd"
+        );
+        assert!(
+            view.hook_hits() > 0,
+            "hook must still intercept and cloak hidden helper windows"
+        );
+
+        let hits_before_cloak = view.hook_hits();
+        assert!(
+            view.cloak_sync(helper_hwnd),
+            "cloak_sync must deliver CMD_CLOAK synchronously through WH_CALLWNDPROC"
+        );
+        assert!(
+            view.hook_hits() > hits_before_cloak,
+            "CMD_CLOAK must increment hook_hits inside rhp_callwnd_proc"
+        );
+
+        let main_hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("InProcessHook Main Candidate"),
+                WS_CAPTION,
+                120,
+                80,
+                320,
+                240,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create hidden main candidate window")
+        };
+        let _ = unsafe { SetWindowPos(main_hwnd, HWND_BOTTOM, 120, 80, 320, 240, SWP_NOACTIVATE) };
+        assert_eq!(
+            view.captured_hwnd(),
+            Some(main_hwnd),
+            "real captioned window >= 64x64 must be latched into captured_hwnd"
+        );
+
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(main_hwnd) };
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(helper_hwnd) };
         let _ = unsafe { UnhookWindowsHookEx(current_hooks.0) };
         let _ = unsafe { UnhookWindowsHookEx(current_hooks.1) };
 
