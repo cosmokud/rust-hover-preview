@@ -125,7 +125,7 @@ use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, BOOL, COLORREF, FILETIME, HANDLE, HWND, LPARAM, LRESULT, RECT, WAIT_OBJECT_0,
-    WPARAM,
+    WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
@@ -154,14 +154,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, IsZoomed, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
     RegisterClassExW, SendMessageTimeoutW, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage, CHILDID_SELF,
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM, MSG,
-    MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
-    WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    EVENT_OBJECT_CREATE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE,
+    GW_OWNER, HWND_BOTTOM, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT,
+    SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
+    WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::dimensions::{design_dimensions, picture_dimensions, vector_dimensions};
@@ -291,6 +292,10 @@ struct Launch {
     path: PathBuf,
     /// Intrinsic file dimensions pre-read before launch when known, avoiding a duplicate header read.
     initial_own: Option<(u32, u32)>,
+    /// Provisional target rect `(x, y, w, h)` known at launch, used for pre-positioning hidden windows.
+    provisional: Option<(i32, i32, i32, i32)>,
+    /// True when launched exe resides under a standard Windows `WindowsApps` MSIX/alias directory.
+    packaged_broker: bool,
     /// Retained handle to the spawned child process for `WaitForInputIdle`.
     process: Arc<OwnedHandle>,
     /// The process this app began.
@@ -416,6 +421,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         .file_name()
         .map(|name| name.to_string_lossy().to_lowercase())
         .unwrap_or_default();
+    let packaged_broker = is_packaged_broker_path(Path::new(&exe));
     if let Ok(mut held) = PROGRAM.lock() {
         *held = Some(Program {
             path: path.to_path_buf(),
@@ -441,6 +447,8 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let launch = Launch {
         path: path.to_path_buf(),
         initial_own,
+        provisional,
+        packaged_broker,
         process,
         pid,
         exe: exe_file,
@@ -894,7 +902,28 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
     };
 
-    if !unsafe { IsWindowVisible(source) }.as_bool() {
+    let mut tree_read = Instant::now();
+    let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
+
+    // Scoped WinEvent hook during settle: re-snaps `source` in <1ms on LOCATIONCHANGE and
+    // suppresses owned splash/companion windows on CREATE/SHOW without blocking on WaitForInputIdle.
+    WINEVENT_EVENTS.with(|q| q.borrow_mut().clear());
+    let settle_hook = unsafe {
+        SetWinEventHook(
+            EVENT_OBJECT_CREATE,
+            EVENT_OBJECT_LOCATIONCHANGE,
+            None,
+            Some(win_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+    };
+    let settle_guard = WinEventGuard(settle_hook);
+
+    let was_hidden = !unsafe { IsWindowVisible(source) }.as_bool();
+    if was_hidden {
         // App honored `SW_HIDE`: atomically position + reveal at target rect via `SetWindowPlacement`
         // so it never flashes at its old saved coordinates.
         if let Some(target_rect) = current_target_rect() {
@@ -929,23 +958,8 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             let _ =
                 unsafe { SetWindowPos(source, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE) };
             restore_foreground(launch.previous_foreground, &processes);
-
-            let _ = unsafe {
-                SendMessageTimeoutW(
-                    source,
-                    WM_NULL,
-                    WPARAM(0),
-                    LPARAM(0),
-                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
-                    250,
-                    None,
-                )
-            };
             let _ = unsafe { InvalidateRect(source, None, false) };
             let _ = unsafe { UpdateWindow(source) };
-            if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
-                return;
-            }
 
             let mode = if aligned_behind_host(source, target_rect) {
                 PlacementMode::BehindHost
@@ -961,77 +975,141 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             placed_mode = Some(mode);
             placed_host_rect = Some(target_rect);
         }
-    } else {
+    } else if let Some(target_rect) = current_target_rect() {
         // App ignored `SW_HIDE` (e.g. WinUI 3 / Electron): sink immediately before settle.
-        if let Some(target_rect) = current_target_rect() {
-            let mode = if place_behind_host(source, target_rect, window_mode) {
-                PlacementMode::BehindHost
-            } else {
-                let ask = the_ask_for(
-                    (target_rect.2, target_rect.3),
-                    source_size(source, window_mode),
-                );
-                the_ask = Some(ask);
-                park_offscreen(source, ask.0, ask.1);
-                PlacementMode::OffScreen
+        placed_mode = Some(snap_source(
+            source,
+            target_rect,
+            window_mode,
+            launch.previous_foreground,
+            &processes,
+            &mut the_ask,
+        ));
+        placed_host_rect = Some(target_rect);
+    }
+
+    // Immediately suppress any already-visible companion windows strictly in `processes`.
+    census(
+        &launch,
+        &processes,
+        &mut images,
+        &mut creation_times,
+        source.0 as isize,
+        true,
+        OwnershipMode::OwnedOnly,
+    )
+    .take();
+
+    let source_proc = (source_pid != 0 && source_pid != launch.pid)
+        .then(|| open_process_for_idle(source_pid))
+        .flatten();
+    let settle_start = Instant::now();
+    let settle_deadline = settle_start
+        + if was_hidden {
+            Duration::from_millis(250)
+        } else {
+            Duration::from_millis(500)
+        };
+
+    while Instant::now() < settle_deadline {
+        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+            return;
+        }
+        let Some(target_rect) = current_target_rect() else {
+            break;
+        };
+
+        let mut msg = MSG::default();
+        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+            let _ = unsafe { TranslateMessage(&msg) };
+            unsafe { DispatchMessageW(&msg) };
+        }
+
+        let mut source_moved = false;
+        WINEVENT_EVENTS.with(|q| {
+            for (event, raw) in q.borrow_mut().drain(..) {
+                if raw == source.0 as isize {
+                    if event == EVENT_OBJECT_LOCATIONCHANGE {
+                        source_moved = true;
+                    }
+                } else if (event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW)
+                    && !launch.windows_before.contains(&raw)
+                {
+                    let hwnd = HWND(raw as *mut _);
+                    if processes.contains(&pid_of(hwnd)) {
+                        suppress_companion_window(hwnd, source.0 as isize);
+                    }
+                }
+            }
+        });
+
+        let needs_resnap = source_moved
+            || placed_host_rect != Some(target_rect)
+            || match placed_mode {
+                Some(PlacementMode::BehindHost) => !aligned_behind_host(source, target_rect),
+                Some(PlacementMode::OffScreen) => !parked(source),
+                None => true,
             };
-            restore_foreground(launch.previous_foreground, &processes);
-            placed_mode = Some(mode);
+        if needs_resnap {
+            placed_mode = Some(snap_source(
+                source,
+                target_rect,
+                window_mode,
+                launch.previous_foreground,
+                &processes,
+                &mut the_ask,
+            ));
             placed_host_rect = Some(target_rect);
         }
 
-        // Wait for initial UI startup + file load/paint settle after immediate positioning.
-        wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 500);
-        if source_pid != 0 && source_pid != launch.pid {
-            wait_for_input_idle(source_pid, 250);
-        }
-        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
-            return;
-        }
+        let launch_idle = is_input_idle_now(HANDLE(launch.process.as_raw_handle()));
+        let source_idle = source_proc
+            .as_ref()
+            .is_none_or(|h| is_input_idle_now(HANDLE(h.as_raw_handle())));
+        let ready_to_probe = was_hidden
+            || (launch_idle && source_idle)
+            || settle_start.elapsed() >= Duration::from_millis(150);
 
-        // Re-apply if the app resized/recentered itself during startup before `WM_NULL` flush.
-        if let Some(target_rect) = current_target_rect() {
-            if placed_host_rect != Some(target_rect)
-                || (placed_mode == Some(PlacementMode::BehindHost)
-                    && !aligned_behind_host(source, target_rect))
-                || (placed_mode == Some(PlacementMode::OffScreen) && !parked(source))
-            {
-                if place_behind_host(source, target_rect, window_mode) {
-                    the_ask = None;
-                    placed_mode = Some(PlacementMode::BehindHost);
-                } else {
-                    let ask = the_ask_for(
-                        (target_rect.2, target_rect.3),
-                        source_size(source, window_mode),
-                    );
-                    the_ask = Some(ask);
-                    park_offscreen(source, ask.0, ask.1);
-                    placed_mode = Some(PlacementMode::OffScreen);
+        if ready_to_probe && !source_moved {
+            let answered = unsafe {
+                SendMessageTimeoutW(
+                    source,
+                    WM_NULL,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                    50,
+                    None,
+                )
+            }
+            .0 != 0;
+            if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+                return;
+            }
+            if answered {
+                let aligned = match placed_mode {
+                    Some(PlacementMode::BehindHost) => aligned_behind_host(source, target_rect),
+                    Some(PlacementMode::OffScreen) => parked(source),
+                    None => false,
+                };
+                if aligned {
+                    break;
                 }
-                placed_host_rect = Some(target_rect);
-                restore_foreground(launch.previous_foreground, &processes);
             }
         }
 
-        let _ = unsafe {
-            SendMessageTimeoutW(
-                source,
-                WM_NULL,
-                WPARAM(0),
-                LPARAM(0),
-                SMTO_ABORTIFHUNG | SMTO_NORMAL,
-                500,
-                None,
-            )
-        };
-        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
-            return;
+        let slice_ms = settle_deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(10) as u32;
+        if slice_ms > 0 {
+            let _ = unsafe {
+                MsgWaitForMultipleObjectsEx(None, slice_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+            };
         }
     }
-
-    let mut tree_read = Instant::now();
-    let mut images: HashMap<u32, Option<String>> = HashMap::new();
-    let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
+    drop(settle_guard);
+    drop(source_proc);
 
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
@@ -1758,22 +1836,52 @@ fn park_offscreen(window: HWND, width: i32, height: i32) {
     let _ = unsafe { UpdateWindow(window) };
 }
 
+/// Snap `source` behind `host` (or off-screen if min size exceeds `target_rect`) and restore focus.
+fn snap_source(
+    source: HWND,
+    target_rect: (i32, i32, i32, i32),
+    window_mode: CustomWindowMode,
+    previous_foreground: isize,
+    processes: &[u32],
+    the_ask: &mut Option<(i32, i32)>,
+) -> PlacementMode {
+    let mode = if place_behind_host(source, target_rect, window_mode) {
+        *the_ask = None;
+        PlacementMode::BehindHost
+    } else {
+        let ask = the_ask_for(
+            (target_rect.2, target_rect.3),
+            source_size(source, window_mode),
+        );
+        *the_ask = Some(ask);
+        park_offscreen(source, ask.0, ask.1);
+        PlacementMode::OffScreen
+    };
+    restore_foreground(previous_foreground, processes);
+    mode
+}
+
 fn wait_for_input_idle_handle(process: HANDLE, timeout_ms: u32) {
     let _ = unsafe { WaitForInputIdle(process, timeout_ms) };
 }
 
-fn wait_for_input_idle(pid: u32, timeout_ms: u32) {
-    let Ok(process) = (unsafe {
+fn is_input_idle_now(process: HANDLE) -> bool {
+    // `WAIT_TIMEOUT` means still starting; 0 (idle) or `WAIT_FAILED` (exited/no GUI) means done.
+    let status = unsafe { WaitForInputIdle(process, 0) };
+    status != WAIT_TIMEOUT.0
+}
+
+fn open_process_for_idle(pid: u32) -> Option<OwnedHandle> {
+    let process = unsafe {
         OpenProcess(
             PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
             false,
             pid,
         )
-    }) else {
-        return;
-    };
-    wait_for_input_idle_handle(process, timeout_ms);
-    let _ = unsafe { CloseHandle(process) };
+    }
+    .ok()?;
+    // SAFETY: `process` is uniquely owned and closed on `OwnedHandle` drop.
+    Some(unsafe { OwnedHandle::from_raw_handle(process.0) })
 }
 
 /// Restore previous foreground window (e.g. Explorer) if the spawned app stole focus.
@@ -1824,6 +1932,36 @@ fn strip_the_frame(window: HWND) {
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
         )
     };
+}
+
+/// True when `exe` lives under a standard Windows MSIX / AppExecutionAlias `WindowsApps` folder.
+fn is_packaged_broker_path(exe: &Path) -> bool {
+    exe.parent().is_some_and(|dir| {
+        dir.components().any(|c| match c {
+            std::path::Component::Normal(seg) => {
+                seg.to_string_lossy().eq_ignore_ascii_case("WindowsApps")
+            }
+            _ => false,
+        })
+    })
+}
+
+/// Suppress a visible secondary/companion window of `processes`; owned `#32770` dialogs get `WM_CLOSE`.
+fn suppress_companion_window(hwnd: HWND, keep: isize) {
+    if hwnd.0 as isize == keep || hwnd.0.is_null() {
+        return;
+    }
+    let owner_hwnd = unsafe { GetWindow(hwnd, GW_OWNER) }
+        .ok()
+        .filter(|o| !o.0.is_null());
+    // Never SW_HIDE an owned #32770 modal dialog: hiding leaves `source` WS_DISABLED
+    // (white/frozen + Windows ding). Dismiss via WM_CLOSE instead.
+    let owned_by_keep = owner_hwnd.is_some_and(|o| o.0 as isize == keep);
+    if owned_by_keep && is_dialog_class(hwnd) {
+        let _ = unsafe { PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    } else if !owned_by_keep && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1966,14 +2104,7 @@ impl Census<'_> {
                 self.shown = Some((area, hwnd));
             }
             if self.hide_others {
-                // Never SW_HIDE an owned #32770 modal dialog: hiding leaves `source` WS_DISABLED
-                // (white/frozen + Windows ding). Dismiss via WM_CLOSE instead.
-                let owned_by_keep = owner_hwnd.is_some_and(|o| o.0 as isize == self.keep);
-                if owned_by_keep && is_dialog_class(hwnd) {
-                    let _ = unsafe { PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) };
-                } else if !owned_by_keep {
-                    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-                }
+                suppress_companion_window(hwnd, self.keep);
             }
         }
 
@@ -2018,11 +2149,11 @@ impl Census<'_> {
 }
 
 thread_local! {
-    /// Top-level HWNDs reported by `EVENT_OBJECT_CREATE`/`EVENT_OBJECT_SHOW` on the worker thread.
-    static WINEVENT_HWNDS: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
+    /// Top-level `(event, HWND)` pairs reported by WinEvent hooks on the worker thread.
+    static WINEVENT_EVENTS: RefCell<Vec<(u32, isize)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// RAII guard ensuring `UnhookWinEvent` always runs when `wait_for_a_window` exits.
+/// RAII guard ensuring `UnhookWinEvent` always runs when a WinEvent hook scope exits.
 struct WinEventGuard(HWINEVENTHOOK);
 
 impl Drop for WinEventGuard {
@@ -2030,7 +2161,7 @@ impl Drop for WinEventGuard {
         if !self.0.is_invalid() {
             let _ = unsafe { UnhookWinEvent(self.0) };
         }
-        WINEVENT_HWNDS.with(|q| {
+        WINEVENT_EVENTS.with(|q| {
             if let Ok(mut list) = q.try_borrow_mut() {
                 list.clear();
             }
@@ -2047,17 +2178,49 @@ unsafe extern "system" fn win_event_proc(
     _event_thread: u32,
     _event_time: u32,
 ) {
-    if (event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW)
-        && id_object == OBJID_WINDOW.0
+    if matches!(
+        event,
+        EVENT_OBJECT_CREATE | EVENT_OBJECT_SHOW | EVENT_OBJECT_LOCATIONCHANGE
+    ) && id_object == OBJID_WINDOW.0
         && id_child == CHILDID_SELF as i32
         && !hwnd.0.is_null()
     {
-        WINEVENT_HWNDS.with(|q| {
+        WINEVENT_EVENTS.with(|q| {
             if let Ok(mut list) = q.try_borrow_mut() {
-                list.push(hwnd.0 as isize);
+                list.push((event, hwnd.0 as isize));
             }
         });
     }
+}
+
+/// Pre-position a newly created hidden top-level candidate at `provisional` while still hidden so
+/// apps that ignore `SW_HIDE` and call `ShowWindow(SW_SHOW)` appear directly at target rect.
+fn preposition_hidden_candidate(hwnd: HWND, provisional: (i32, i32, i32, i32)) {
+    if !unsafe { IsWindow(hwnd) }.as_bool() || unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        return;
+    }
+    let owned = unsafe { GetWindow(hwnd, GW_OWNER) }
+        .ok()
+        .is_some_and(|o| !o.0.is_null());
+    if owned {
+        return;
+    }
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+        return;
+    }
+    let (x, y, w, h) = provisional;
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_BOTTOM,
+            x,
+            y,
+            w,
+            h,
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
+    };
 }
 
 /// The program's window, waited for within [`WINDOW_WAIT`] via out-of-context WinEvent hook
@@ -2069,7 +2232,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
 
-    WINEVENT_HWNDS.with(|q| q.borrow_mut().clear());
+    WINEVENT_EVENTS.with(|q| q.borrow_mut().clear());
     let hook = unsafe {
         SetWinEventHook(
             EVENT_OBJECT_CREATE,
@@ -2083,9 +2246,14 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     };
     let _guard = WinEventGuard(hook);
 
+    let broker_grace = if launch.packaged_broker {
+        Duration::ZERO
+    } else {
+        BROKER_FALLBACK_GRACE
+    };
     let fallback_allowed = |launch: &Launch| -> bool {
         process_has_exited(HANDLE(launch.process.as_raw_handle()))
-            || launch.launched_at.elapsed() >= BROKER_FALLBACK_GRACE
+            || launch.launched_at.elapsed() >= broker_grace
     };
 
     let check_now = |processes: &[u32],
@@ -2216,20 +2384,19 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                 allow_image_fallback: allow_fallback,
             };
             let mut matched = false;
-            WINEVENT_HWNDS.with(|q| {
-                for raw in q.borrow_mut().drain(..) {
+            WINEVENT_EVENTS.with(|q| {
+                for (event, raw) in q.borrow_mut().drain(..) {
                     if launch.windows_before.contains(&raw) {
                         continue;
                     }
-                    let pid = pid_of(HWND(raw as *mut _));
+                    let hwnd = HWND(raw as *mut _);
+                    let pid = pid_of(hwnd);
                     if pid == 0 {
                         continue;
                     }
-                    if processes.contains(&pid) {
-                        matched = true;
-                        break;
-                    }
-                    if allow_fallback {
+                    let belongs = if processes.contains(&pid) {
+                        true
+                    } else if allow_fallback {
                         let image = image_name_of(pid, &mut images);
                         let creation = if image.as_deref() == Some(launch.exe.as_str())
                             && !launch.processes_before.contains(&pid)
@@ -2238,7 +2405,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                         } else {
                             None
                         };
-                        if belongs_to_preview(
+                        belongs_to_preview(
                             pid,
                             &processes,
                             mode,
@@ -2247,10 +2414,17 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                             &launch.processes_before,
                             image.as_deref(),
                             creation,
-                        ) {
-                            matched = true;
-                            break;
+                        )
+                    } else {
+                        false
+                    };
+                    if belongs {
+                        if event == EVENT_OBJECT_CREATE {
+                            if let Some(provisional) = launch.provisional {
+                                preposition_hidden_candidate(hwnd, provisional);
+                            }
                         }
+                        matched = true;
                     }
                 }
             });
@@ -3071,5 +3245,23 @@ mod tests {
             Some("notepad.exe"),
             Some(launch_ft + 1000),
         ));
+    }
+
+    #[test]
+    fn packaged_broker_path_matches_windowsapps_segments_only() {
+        assert!(is_packaged_broker_path(Path::new(
+            r"Program Files\WindowsApps\Vendor.App_1.0.0_x64__abc\app.exe"
+        )));
+        assert!(is_packaged_broker_path(Path::new(
+            r"AppData\Local\Microsoft\WindowsApps\viewer.exe"
+        )));
+        assert!(is_packaged_broker_path(Path::new(
+            r"AppData\Local\Microsoft\windowsapps\viewer.exe"
+        )));
+        assert!(!is_packaged_broker_path(Path::new(
+            r"Program Files\Viewer\viewer.exe"
+        )));
+        assert!(!is_packaged_broker_path(Path::new(r"tools\WindowsApps")));
+        assert!(!is_packaged_broker_path(Path::new("viewer.exe")));
     }
 }
