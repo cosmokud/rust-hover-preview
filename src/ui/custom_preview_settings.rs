@@ -149,6 +149,7 @@ const ID_SCALING_DOWN: i32 = 124;
 const ID_VOLUME_UP: i32 = 125;
 const ID_VOLUME_DOWN: i32 = 126;
 const ID_PROMOTION_TECHNIQUE: i32 = 127;
+const ID_VOLUME_ENABLED: i32 = 128;
 const ID_STATUS: i32 = 130;
 const ID_LABEL_BASE: i32 = 140;
 
@@ -659,6 +660,8 @@ struct SliderState {
 
 struct ToggleState {
     parent: HWND,
+    id: i32,
+    show_label: bool,
     checked: bool,
     hovered: bool,
     tracking: bool,
@@ -1147,7 +1150,12 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
         }
         WM_TOGGLE_CHANGED => {
             if let Some(state) = unsafe { state_of(hwnd) } {
-                unsafe { enabled_toggled(state, wparam.0 != 0) };
+                let enabled = wparam.0 != 0;
+                if lparam.0 as i32 == ID_VOLUME_ENABLED {
+                    unsafe { volume_enabled_toggled(state, enabled) };
+                } else {
+                    unsafe { enabled_toggled(state, enabled) };
+                }
             }
             LRESULT(0)
         }
@@ -1652,6 +1660,19 @@ unsafe fn paint_window(state: &mut State, hdc: HDC) {
                 field_radius,
                 field_radius,
             );
+            if id == ID_SEARCH {
+                let icon_sz = scale(14, dpi);
+                let icon_x = r.right - scale(7, dpi) - icon_sz;
+                let icon_y = (r.top + r.bottom - icon_sz) / 2;
+                let bg = if enabled { p.field } else { p.field_disabled };
+                let fg = if is_focused {
+                    p.muted
+                } else {
+                    mix(p.muted, p.field, 18)
+                };
+                let icon = render_search_icon(icon_sz, bg, fg);
+                icon.blit_to(hdc, icon_x, icon_y);
+            }
         }
 
         // Border & focus accent ring around LISTBOX (uses lay_out rect to stay locked during resize).
@@ -1890,7 +1911,7 @@ unsafe fn build(hwnd: HWND) -> State {
             )
         });
     }
-    controls.push(unsafe { create_themed_toggle(hwnd, ID_ENABLED) });
+    controls.push(unsafe { create_themed_toggle(hwnd, ID_ENABLED, true, true) });
     controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_NAME) });
     controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_EXTENSIONS) });
     controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_EXE) });
@@ -1959,6 +1980,7 @@ unsafe fn build(hwnd: HWND) -> State {
     let scaling_up = unsafe { stepper_button(hwnd, "▲", ID_SCALING_UP, ID_SCALING_PERCENT, 1) };
     let scaling_dn =
         unsafe { stepper_button(hwnd, "▼", ID_SCALING_DOWN, ID_SCALING_PERCENT, -1) };
+    controls.push(unsafe { create_themed_toggle(hwnd, ID_VOLUME_ENABLED, false, false) });
     controls.push(unsafe { create_themed_slider(hwnd, ID_VOLUME) });
     controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_VOLUME_VALUE) });
     let vol_up = unsafe { stepper_button(hwnd, "▲", ID_VOLUME_UP, ID_VOLUME_VALUE, 1) };
@@ -3039,6 +3061,17 @@ fn sd_circle(px: f32, py: f32, cx: f32, cy: f32, r: f32) -> f32 {
     (px - cx).hypot(py - cy) - r
 }
 
+/// Signed distance to line segment `(ax, ay) -> (bx, by)`.
+fn sd_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let pax = px - ax;
+    let pay = py - ay;
+    let bax = bx - ax;
+    let bay = by - ay;
+    let denom = (bax * bax + bay * bay).max(1e-6);
+    let h = ((pax * bax + pay * bay) / denom).clamp(0.0, 1.0);
+    (pax - bax * h).hypot(pay - bay * h)
+}
+
 /// Signed distance to axis-aligned rounded box centered at `(cx, cy)` with half-extents `(hw, hh)` and corner radius `r`.
 fn sd_rounded_box(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
     let r = r.min(hw).min(hh).max(0.0);
@@ -3583,6 +3616,29 @@ fn render_status_badge_pill(
     surface
 }
 
+/// Renders Lucide `search` icon (24x24 viewBox, stroke-width 2, round caps):
+/// ring at `(11, 11)` r=8 + handle `(16.65, 16.65) -> (21, 21)`.
+fn render_search_icon(size: i32, bg: COLORREF, fg: COLORREF) -> AaSurface {
+    let size = size.max(1);
+    let mut surface = AaSurface::new(size, size, bg);
+    let s = size as f32 / 24.0;
+    let half_stroke = s;
+    for y in 0..size {
+        let py = y as f32 + 0.5;
+        for x in 0..size {
+            let px = x as f32 + 0.5;
+            let d_ring = sd_circle(px, py, 11.0 * s, 11.0 * s, 8.0 * s).abs() - half_stroke;
+            let d_handle =
+                sd_segment(px, py, 16.65 * s, 16.65 * s, 21.0 * s, 21.0 * s) - half_stroke;
+            let cov = aa_coverage(d_ring.min(d_handle));
+            if cov > 0.0 {
+                surface.blend(x, y, fg, cov);
+            }
+        }
+    }
+    surface
+}
+
 /// Renders the atmospheric window backdrop: diagonal theme gradient, subtle radial accent glow,
 /// titlebar band + crisp divider, and SDF elevated rounded cards (no top neon bar or accent dot).
 #[cfg(test)]
@@ -3922,7 +3978,12 @@ unsafe extern "system" fn slider_proc(
     }
 }
 
-unsafe fn create_themed_toggle(parent: HWND, id: i32) -> HWND {
+unsafe fn create_themed_toggle(
+    parent: HWND,
+    id: i32,
+    show_label: bool,
+    initial_checked: bool,
+) -> HWND {
     TOGGLE_CLASS_REGISTERED.call_once(|| {
         let Ok(hinstance) = (unsafe { GetModuleHandleW(None) }) else {
             return;
@@ -3944,7 +4005,9 @@ unsafe fn create_themed_toggle(parent: HWND, id: i32) -> HWND {
     if !toggle.0.is_null() {
         let data = Box::into_raw(Box::new(ToggleState {
             parent,
-            checked: true,
+            id,
+            show_label,
+            checked: initial_checked,
             hovered: false,
             tracking: false,
         }));
@@ -3972,7 +4035,7 @@ unsafe extern "system" fn toggle_proc(
                 tg.parent,
                 WM_TOGGLE_CHANGED,
                 WPARAM(usize::from(tg.checked)),
-                LPARAM(0),
+                LPARAM(tg.id as isize),
             );
             // A switch has no half-typed state: the flip is the whole of what the user meant
             // (see `autosave`).
@@ -4078,37 +4141,39 @@ unsafe extern "system" fn toggle_proc(
                     );
                     surface.blit_to(hdc, rc.left, rc.top);
 
-                    // Status label ("Enabled" / "Disabled").
-                    let label = if checked { "Enabled" } else { "Disabled" };
-                    let mut label_w: Vec<u16> = label.encode_utf16().collect();
-                    let mut text_rc = RECT {
-                        left: rc.left + dib_w + scale(8, dpi),
-                        top: rc.top,
-                        right: rc.right,
-                        bottom: rc.bottom,
-                    };
-                    SetBkMode(hdc, TRANSPARENT);
-                    SetTextColor(
-                        hdc,
-                        if !enabled || !checked {
-                            p.muted
+                    if tg.show_label {
+                        // Status label ("Enabled" / "Disabled").
+                        let label = if checked { "Enabled" } else { "Disabled" };
+                        let mut label_w: Vec<u16> = label.encode_utf16().collect();
+                        let mut text_rc = RECT {
+                            left: rc.left + dib_w + scale(8, dpi),
+                            top: rc.top,
+                            right: rc.right,
+                            bottom: rc.bottom,
+                        };
+                        SetBkMode(hdc, TRANSPARENT);
+                        SetTextColor(
+                            hdc,
+                            if !enabled || !checked {
+                                p.muted
+                            } else {
+                                p.label
+                            },
+                        );
+                        let old_f = if !font.0.is_null() {
+                            Some(SelectObject(hdc, HGDIOBJ(font.0)))
                         } else {
-                            p.label
-                        },
-                    );
-                    let old_f = if !font.0.is_null() {
-                        Some(SelectObject(hdc, HGDIOBJ(font.0)))
-                    } else {
-                        None
-                    };
-                    DrawTextW(
-                        hdc,
-                        &mut label_w,
-                        &mut text_rc,
-                        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-                    );
-                    if let Some(of) = old_f {
-                        let _ = SelectObject(hdc, of);
+                            None
+                        };
+                        DrawTextW(
+                            hdc,
+                            &mut label_w,
+                            &mut text_rc,
+                            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+                        );
+                        if let Some(of) = old_f {
+                            let _ = SelectObject(hdc, of);
+                        }
                     }
                 });
             }
@@ -4332,7 +4397,12 @@ unsafe fn lay_out(state: &mut State) {
         if let Some(slot) = edit_boxes.iter_mut().find(|(eid, _)| *eid == id) {
             slot.1 = container;
         }
-        let inner_rc = centered_edit_rect(container, text_h, edit_pad_x);
+        let mut inner_rc = centered_edit_rect(container, text_h, edit_pad_x);
+        if id == ID_SEARCH {
+            // Reserve room on the right for the Lucide search icon so typed text never overlaps it.
+            let reserve = scale(18, dpi);
+            inner_rc.right = (inner_rc.right - reserve).max(inner_rc.left + scale(16, dpi));
+        }
         place(
             id,
             inner_rc.left,
@@ -4454,12 +4524,16 @@ unsafe fn lay_out(state: &mut State) {
     );
     y += row + gap;
 
-    // Volume slider + numeric edit + stacked ▲/▼ stepper buttons.
+    // Volume override toggle + slider + numeric edit + stacked ▲/▼ stepper buttons.
+    let vol_toggle_w = scale(42, dpi);
     let vol_edit_w = scale(54, dpi);
     let vol_group_w = vol_edit_w + scale(2, dpi) + stepper_w;
-    let vol_slider_w = (field_w - vol_group_w - scale(8, dpi)).max(scale(80, dpi));
+    let vol_slider_x = field_left + vol_toggle_w + scale(8, dpi);
+    let vol_slider_w =
+        (field_w - vol_toggle_w - scale(8, dpi) - vol_group_w - scale(8, dpi)).max(scale(60, dpi));
     let vol_x = field_left + field_w - vol_group_w;
-    place(ID_VOLUME, field_left, y, vol_slider_w, row);
+    place(ID_VOLUME_ENABLED, field_left, y, vol_toggle_w, row);
+    place(ID_VOLUME, vol_slider_x, y, vol_slider_w, row);
     place_edit(ID_VOLUME_VALUE, vol_x, y, vol_edit_w, row);
     place(
         ID_VOLUME_UP,
@@ -4632,6 +4706,15 @@ unsafe fn set_scaling_percent_enabled(hwnd: HWND, enabled: bool) {
     let _ = unsafe { InvalidateRect(hwnd, None, false) };
 }
 
+unsafe fn set_volume_controls_enabled(hwnd: HWND, enabled: bool) {
+    for id in [ID_VOLUME, ID_VOLUME_VALUE, ID_VOLUME_UP, ID_VOLUME_DOWN] {
+        if let Ok(ctrl) = unsafe { GetDlgItem(hwnd, id) } {
+            let _ = unsafe { EnableWindow(ctrl, enabled) };
+        }
+    }
+    let _ = unsafe { InvalidateRect(hwnd, None, false) };
+}
+
 unsafe fn fill_fields(state: &mut State) {
     let Some(preset) = state.selected.and_then(|index| state.presets.get(index)) else {
         state.loading = true;
@@ -4653,8 +4736,10 @@ unsafe fn fill_fields(state: &mut State) {
             let combo = unsafe { GetDlgItem(state.hwnd, id) }.unwrap_or_default();
             unsafe { SendMessageW(combo, CB_SETCURSEL, WPARAM(usize::MAX), LPARAM(0)) };
         }
-        if let Ok(toggle) = unsafe { GetDlgItem(state.hwnd, ID_ENABLED) } {
-            unsafe { SendMessageW(toggle, WM_TOGGLE_SET_VALUE, WPARAM(0), LPARAM(0)) };
+        for id in [ID_ENABLED, ID_VOLUME_ENABLED] {
+            if let Ok(toggle) = unsafe { GetDlgItem(state.hwnd, id) } {
+                unsafe { SendMessageW(toggle, WM_TOGGLE_SET_VALUE, WPARAM(0), LPARAM(0)) };
+            }
         }
         state.loading = false;
         unsafe { set_fields_enabled(state, false) };
@@ -4668,6 +4753,7 @@ unsafe fn fill_fields(state: &mut State) {
     let capture_technique = preset.capture_technique;
     let promotion_technique = preset.promotion_technique;
     let scaling = preset.scaling;
+    let volume_enabled = preset.volume_enabled;
     let volume = preset.volume;
 
     state.loading = true;
@@ -4677,6 +4763,14 @@ unsafe fn fill_fields(state: &mut State) {
                 toggle,
                 WM_TOGGLE_SET_VALUE,
                 WPARAM(usize::from(enabled)),
+                LPARAM(0),
+            );
+        }
+        if let Ok(toggle) = GetDlgItem(state.hwnd, ID_VOLUME_ENABLED) {
+            SendMessageW(
+                toggle,
+                WM_TOGGLE_SET_VALUE,
+                WPARAM(usize::from(volume_enabled)),
                 LPARAM(0),
             );
         }
@@ -4745,6 +4839,7 @@ unsafe fn fill_fields(state: &mut State) {
             LPARAM(0),
         );
         set_text(state.hwnd, ID_VOLUME_VALUE, &volume.to_string());
+        set_volume_controls_enabled(state.hwnd, volume_enabled);
     }
     state.loading = false;
     unsafe { set_fields_enabled(state, true) };
@@ -4761,10 +4856,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_CAPTURE_TECHNIQUE,
         ID_PROMOTION_TECHNIQUE,
         ID_SCALING,
-        ID_VOLUME,
-        ID_VOLUME_VALUE,
-        ID_VOLUME_UP,
-        ID_VOLUME_DOWN,
+        ID_VOLUME_ENABLED,
         ID_DELETE,
     ] {
         if let Ok(control) = unsafe { GetDlgItem(state.hwnd, id) } {
@@ -4773,6 +4865,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
     }
     if !enabled {
         unsafe { set_scaling_percent_enabled(state.hwnd, false) };
+        unsafe { set_volume_controls_enabled(state.hwnd, false) };
     } else {
         let _ = unsafe { InvalidateRect(state.hwnd, None, false) };
     }
@@ -5124,6 +5217,20 @@ unsafe fn row_pill_toggled(state: &mut State, row: usize) {
     if let Ok(list) = unsafe { GetDlgItem(state.hwnd, ID_LIST) } {
         unsafe { invalidate_list_row(list, row) };
     }
+}
+
+unsafe fn volume_enabled_toggled(state: &mut State, enabled: bool) {
+    if state.loading {
+        return;
+    }
+    let Some(index) = state.selected else {
+        return;
+    };
+    if let Some(preset) = state.presets.get_mut(index) {
+        preset.volume_enabled = enabled;
+    }
+    state.dirtied = true;
+    unsafe { set_volume_controls_enabled(state.hwnd, enabled) };
 }
 
 unsafe fn volume_moved(state: &mut State) {
@@ -5712,6 +5819,9 @@ mod tests {
                 ID_SCALING,
                 ID_SCALING_UP,
                 ID_SCALING_DOWN,
+                ID_VOLUME_ENABLED,
+                ID_VOLUME,
+                ID_VOLUME_VALUE,
                 ID_VOLUME_UP,
                 ID_VOLUME_DOWN,
                 ID_DELETE,
@@ -6374,6 +6484,77 @@ mod tests {
                     "{theme:?} Off pill contrast (hovered={hovered}) {off_ratio:.2} < 4.5"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn volume_override_toggle_defaults_off_and_gates_volume_controls() {
+        let _folder = crate::config::config::ConfigFolderOfItsOwn::take();
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let idx = {
+                let Some(state) = state_of(hwnd) else {
+                    panic!("the window kept no state");
+                };
+                add_preset(state);
+                let idx = state.selected.expect("added preset selected");
+                assert!(!state.presets[idx].volume_enabled);
+                idx
+            };
+
+            let vol_toggle = GetDlgItem(hwnd, ID_VOLUME_ENABLED).unwrap_or_default();
+            assert!(IsWindowEnabled(vol_toggle).as_bool());
+            assert_eq!(
+                SendMessageW(vol_toggle, WM_TOGGLE_GET_VALUE, WPARAM(0), LPARAM(0)).0,
+                0
+            );
+            for id in [ID_VOLUME, ID_VOLUME_VALUE, ID_VOLUME_UP, ID_VOLUME_DOWN] {
+                let ctrl = GetDlgItem(hwnd, id).unwrap_or_default();
+                assert!(
+                    !IsWindowEnabled(ctrl).as_bool(),
+                    "volume control {id} should be disabled while volume_enabled is false"
+                );
+            }
+
+            SendMessageW(
+                hwnd,
+                WM_TOGGLE_CHANGED,
+                WPARAM(1),
+                LPARAM(ID_VOLUME_ENABLED as isize),
+            );
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            assert!(state.presets[idx].volume_enabled);
+            for id in [ID_VOLUME, ID_VOLUME_VALUE, ID_VOLUME_UP, ID_VOLUME_DOWN] {
+                let ctrl = GetDlgItem(hwnd, id).unwrap_or_default();
+                assert!(
+                    IsWindowEnabled(ctrl).as_bool(),
+                    "volume control {id} should be enabled once volume_enabled is true"
+                );
+            }
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn lucide_search_icon_renders_ring_and_handle_with_clean_corners() {
+        for theme in [TextTheme::Dark, TextTheme::Light] {
+            let p = Palette::of(theme);
+            let bg = p.field;
+            let fg = mix(p.muted, p.field, 18);
+            let icon = render_search_icon(24, bg, fg);
+            let (br, bgc, bb) = colorref_rgb(bg);
+            let bg_px = pack_bgra(br, bgc, bb);
+            // Outer top-left corner and interior of circle ring stay background.
+            assert_eq!(icon.pixels[0], bg_px);
+            assert_eq!(icon.pixels[11 * 24 + 11], bg_px);
+            // Ring perimeter at (11, 3) and diagonal handle at (19, 19) are stroked.
+            assert_ne!(icon.pixels[3 * 24 + 11], bg_px);
+            assert_ne!(icon.pixels[19 * 24 + 19], bg_px);
         }
     }
 }

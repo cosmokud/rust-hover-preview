@@ -234,6 +234,8 @@ pub struct CustomPreset {
     /// How large the preview is drawn in the hover: following `Tray -> Scaling` by default, or an
     /// explicit per-preset share of the room.
     pub scaling: CustomScaling,
+    /// Whether to override per-process audio volume via WASAPI (`false` leaves app/Windows Volume Mixer in control).
+    pub volume_enabled: bool,
     /// The level a preview of it is played at, a percentage.
     pub volume: u32,
 }
@@ -249,6 +251,7 @@ impl Default for CustomPreset {
             capture_technique: CustomCaptureTechnique::default(),
             promotion_technique: CustomPromotionTechnique::default(),
             scaling: CustomScaling::default(),
+            volume_enabled: false,
             volume: DEFAULT_AUDIO_VOLUME,
         }
     }
@@ -404,6 +407,18 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
             Some(preset.promotion_technique.as_str().to_string()),
         );
         ini.set(&section, "scaling", Some(preset.scaling.as_str()));
+        ini.set(
+            &section,
+            "volume_enabled",
+            Some(
+                if preset.volume_enabled {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            ),
+        );
         ini.set(&section, "volume", Some(preset.volume.to_string()));
     }
 
@@ -488,6 +503,11 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
             }
         }
         // Legacy `background=` keys in existing config.ini files are silently ignored.
+        if let Some(ve) = ini.get(section, "volume_enabled") {
+            if let Some(val) = parse_enabled(&ve) {
+                preset.volume_enabled = val;
+            }
+        }
         if let Some(volume) = ini.get(section, "volume") {
             if let Ok(volume) = volume.trim().parse::<u32>() {
                 preset.volume = sanitize_volume(volume);
@@ -730,6 +750,55 @@ mod tests {
 
         let cfg_only_off = config_with(vec![off]);
         assert!(preset_for(&cfg_only_off, Path::new("art.psd")).is_none());
+    }
+
+    #[test]
+    fn volume_enabled_defaults_false_and_round_trips() {
+        assert!(!CustomPreset::default().volume_enabled);
+        assert!(!CustomPreset::named("Fresh").volume_enabled);
+
+        // Missing key in existing config.ini defaults to false.
+        let mut ini = Ini::new();
+        ini.set("custom:legacy", "name", Some("Legacy".into()));
+        ini.set("custom:legacy", "exe", Some("viewer.exe".into()));
+        ini.set("custom:legacy", "extensions", Some("mp4".into()));
+        ini.set("custom:legacy", "volume", Some("40".into()));
+        let mut cfg = AppConfig::default();
+        read_all(&ini, &mut cfg);
+        assert!(!cfg.custom_presets[0].volume_enabled);
+        assert_eq!(cfg.custom_presets[0].volume, 40);
+
+        // Explicit true and false round-trip through write_all / read_all.
+        let mut on = CustomPreset::named("Loud");
+        on.exe = "player.exe".into();
+        on.set_extensions_text("mp4");
+        on.volume_enabled = true;
+        on.volume = 65;
+
+        let mut off = CustomPreset::named("Default");
+        off.exe = "viewer.exe".into();
+        off.set_extensions_text("mkv");
+        off.volume_enabled = false;
+        off.volume = 25;
+
+        let mut out = Ini::new();
+        write_all(&config_with(vec![on, off]), &mut out);
+        assert_eq!(
+            out.get("custom:loud", "volume_enabled").as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            out.get("custom:default", "volume_enabled").as_deref(),
+            Some("false")
+        );
+
+        let mut read = AppConfig::default();
+        read_all(&out, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        assert!(read.custom_presets[0].volume_enabled);
+        assert_eq!(read.custom_presets[0].volume, 65);
+        assert!(!read.custom_presets[1].volume_enabled);
+        assert_eq!(read.custom_presets[1].volume, 25);
     }
 
     #[test]
