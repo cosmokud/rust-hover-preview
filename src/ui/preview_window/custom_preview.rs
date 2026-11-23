@@ -462,6 +462,29 @@ pub(super) fn is_showing() -> bool {
     WANT.lock().map(|want| want.is_some()).unwrap_or(false)
 }
 
+/// Active hovered custom preview path (`WANT` is `Some` and `PROGRAM` is held).
+pub(super) fn active_path() -> Option<PathBuf> {
+    let wanting = WANT.lock().ok().is_some_and(|want| want.is_some());
+    if !wanting {
+        return None;
+    }
+    PROGRAM
+        .lock()
+        .ok()
+        .and_then(|held| held.as_ref().map(|p| p.path.clone()))
+}
+
+/// Whether a hovered custom preview is currently active.
+#[allow(dead_code)]
+pub(super) fn is_active() -> bool {
+    active_path().is_some()
+}
+
+/// Pin message for an active hovered custom preview, routing through `PinCold` -> `open_fully`.
+pub(super) fn pin_request_if_active() -> Option<super::PreviewMessage> {
+    active_path().map(|path| super::PreviewMessage::PinCold { path })
+}
+
 /// Show `path` in the program its preset names, at the box that preset's scale and the tray's
 /// placement ask for.
 ///
@@ -667,6 +690,217 @@ pub(super) fn hide() {
 ///
 /// It answers whether a preset claimed the file, so that the caller knows the pin was answered
 /// here rather than by a window of this app's.
+/// Clamp promoted window `(x, y, w, h)` to monitor work area so it never lands half off-screen.
+fn clamp_rect_to_work_area(rect: (i32, i32, i32, i32), work: RECT) -> (i32, i32, i32, i32) {
+    let work_w = (work.right - work.left).max(1);
+    let work_h = (work.bottom - work.top).max(1);
+    let w = rect.2.max(1).min(work_w);
+    let h = rect.3.max(1).min(work_h);
+    let max_x = (work.right - w).max(work.left);
+    let max_y = (work.bottom - h).max(work.top);
+    let x = rect.0.clamp(work.left, max_x);
+    let y = rect.1.clamp(work.top, max_y);
+    (x, y, w, h)
+}
+
+fn monitor_work_area_for(rect: (i32, i32, i32, i32)) -> RECT {
+    let screen = RECT {
+        left: rect.0,
+        top: rect.1,
+        right: rect.0 + rect.2.max(1),
+        bottom: rect.1 + rect.3.max(1),
+    };
+    let hmon = unsafe { MonitorFromRect(&screen, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !hmon.is_invalid() && unsafe { GetMonitorInfoW(hmon, &mut info) }.as_bool() {
+        info.rcWork
+    } else {
+        let bounds = work_area_at(rect.0, rect.1);
+        RECT {
+            left: bounds.left,
+            top: bounds.top,
+            right: bounds.right,
+            bottom: bounds.bottom,
+        }
+    }
+}
+
+/// Detach & promote an active live custom preview for `path` in-place; returns `true` if detached.
+fn try_detach_active_preview(path: &Path) -> bool {
+    let matches_active = PROGRAM
+        .lock()
+        .ok()
+        .is_some_and(|held| held.as_ref().is_some_and(|p| p.path.as_path() == path));
+    let source_raw = SOURCE.load(Ordering::SeqCst);
+    if !matches_active || source_raw == 0 {
+        return false;
+    }
+    let source_hwnd = HWND(source_raw as *mut _);
+    if !unsafe { IsWindow(source_hwnd) }.as_bool() {
+        return false;
+    }
+
+    // Bump LAUNCH first so `run_it` stops touching `source` and drops `InProcessHookSession`.
+    LAUNCH.fetch_add(1, Ordering::SeqCst);
+    if let Ok(mut want) = WANT.lock() {
+        *want = None;
+    }
+    if let Some(mut program) = PROGRAM.lock().ok().and_then(|mut held| held.take()) {
+        if let Some(job) = program.job.take() {
+            let _ = job.detach();
+        }
+        engine_processes::forget(program.pid);
+    }
+
+    SOURCE.store(0, Ordering::SeqCst);
+    SOURCE_PID.store(0, Ordering::SeqCst);
+    SOURCE_IS_NEW.store(false, Ordering::SeqCst);
+    let was_invisible_layered = SOURCE_INVISIBLE_LAYERED.swap(false, Ordering::SeqCst);
+    if let Ok(mut r) = SOURCE_RESTORE_RECT.lock() {
+        *r = None;
+    }
+    let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|mut g| g.take());
+    let host_rect = LAST_HOST_RECT.lock().ok().and_then(|mut g| g.take());
+    let orig_style = SOURCE_ORIGINAL_STYLE.lock().ok().and_then(|mut g| g.take());
+    let orig_ex_style = SOURCE_ORIGINAL_EX_STYLE
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take());
+    let capture_technique = ACTIVE_CAPTURE_TECHNIQUE
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(CustomCaptureTechnique::InProcessHook);
+    let window_mode = ACTIVE_WINDOW_MODE
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(CustomWindowMode::Normal);
+
+    let thumbnail = THUMBNAIL
+        .lock()
+        .map(|mut held| std::mem::replace(&mut *held, 0))
+        .unwrap_or(0);
+    if thumbnail != 0 {
+        let _ = unsafe { DwmUnregisterThumbnail(thumbnail) };
+    }
+    hide_the_host();
+
+    // Detach hook subclass BEFORE SetWindowPos(HWND_NOTOPMOST) so rhp_subclass_proc never overrides Z-order.
+    if let Some(ctrl) = hook_ctrl {
+        let _ = ctrl.detach_sync(source_hwnd);
+    }
+    if window_mode == CustomWindowMode::Borderless {
+        if let Some(style) = orig_style {
+            let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_STYLE, style) };
+        }
+    }
+    if was_invisible_layered {
+        let _ = unsafe { SetLayeredWindowAttributes(source_hwnd, COLORREF(0), 255, LWA_ALPHA) };
+        let target_ex = orig_ex_style.unwrap_or_else(|| {
+            let cur = unsafe { GetWindowLongPtrW(source_hwnd, GWL_EXSTYLE) } as u32;
+            (cur & !INVISIBLE_EX_STYLE) as isize
+        });
+        let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_EXSTYLE, target_ex) };
+        let _ = unsafe {
+            SetWindowPos(
+                source_hwnd,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            )
+        };
+    } else if capture_technique == CustomCaptureTechnique::DirectWindow
+        || window_mode == CustomWindowMode::Borderless
+    {
+        let target_ex = orig_ex_style.unwrap_or_else(|| {
+            let cur = unsafe { GetWindowLongPtrW(source_hwnd, GWL_EXSTYLE) } as u32;
+            (cur & !DIRECT_EX_STYLE) as isize
+        });
+        let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_EXSTYLE, target_ex) };
+        let _ = unsafe {
+            SetWindowPos(
+                source_hwnd,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            )
+        };
+    }
+
+    if let Some(hr) = host_rect {
+        let work = monitor_work_area_for(hr);
+        let insets = dwm_frame_insets(source_hwnd);
+        let (ax, ay, aw, ah) = clamp_rect_to_work_area(behind_host_window_rect(hr, insets), work);
+        let _ =
+            unsafe { SetWindowPos(source_hwnd, HWND_NOTOPMOST, ax, ay, aw, ah, SWP_SHOWWINDOW) };
+        // Re-clamp top-left if app's WM_GETMINMAXINFO grew window past monitor edges.
+        if let Some(actual) = window_rect(source_hwnd) {
+            let actual_w = (actual.right - actual.left).max(1);
+            let actual_h = (actual.bottom - actual.top).max(1);
+            let (fx, fy, _, _) =
+                clamp_rect_to_work_area((actual.left, actual.top, actual_w, actual_h), work);
+            if fx != actual.left || fy != actual.top {
+                let _ = unsafe {
+                    SetWindowPos(
+                        source_hwnd,
+                        HWND::default(),
+                        fx,
+                        fy,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER,
+                    )
+                };
+            }
+        }
+    } else if is_window_offscreen(source_hwnd) {
+        let bounds = work_area_at(0, 0);
+        let work = RECT {
+            left: bounds.left,
+            top: bounds.top,
+            right: bounds.right,
+            bottom: bounds.bottom,
+        };
+        let (aw, ah) = window_rect(source_hwnd)
+            .map(|r| ((r.right - r.left).max(1), (r.bottom - r.top).max(1)))
+            .unwrap_or((800, 600));
+        let (fx, fy, _, _) = clamp_rect_to_work_area((work.left, work.top, aw, ah), work);
+        let _ = unsafe {
+            SetWindowPos(
+                source_hwnd,
+                HWND_NOTOPMOST,
+                fx,
+                fy,
+                0,
+                0,
+                SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
+        };
+    } else {
+        let _ = unsafe {
+            SetWindowPos(
+                source_hwnd,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
+        };
+    }
+    let _ = unsafe { SetForegroundWindow(source_hwnd) };
+    true
+}
+
 pub(super) fn open_fully(path: &Path) -> bool {
     let Some(preset) = preset_for(path) else {
         return false;
@@ -675,129 +909,8 @@ pub(super) fn open_fully(path: &Path) -> bool {
         return false;
     };
 
-    // If a live custom preview for `path` is active, detach & promote its window in-place.
-    let matches_active = PROGRAM
-        .lock()
-        .ok()
-        .is_some_and(|held| held.as_ref().is_some_and(|p| p.path.as_path() == path));
-    let source_raw = SOURCE.load(Ordering::SeqCst);
-    if matches_active && source_raw != 0 {
-        let source_hwnd = HWND(source_raw as *mut _);
-        if unsafe { IsWindow(source_hwnd) }.as_bool() {
-            // Bump LAUNCH first so `run_it` stops touching `source` and drops `InProcessHookSession`.
-            LAUNCH.fetch_add(1, Ordering::SeqCst);
-            if let Ok(mut want) = WANT.lock() {
-                *want = None;
-            }
-            if let Some(mut program) = PROGRAM.lock().ok().and_then(|mut held| held.take()) {
-                if let Some(job) = program.job.take() {
-                    let _ = job.detach();
-                }
-                engine_processes::forget(program.pid);
-            }
-
-            SOURCE.store(0, Ordering::SeqCst);
-            SOURCE_PID.store(0, Ordering::SeqCst);
-            SOURCE_IS_NEW.store(false, Ordering::SeqCst);
-            let was_invisible_layered = SOURCE_INVISIBLE_LAYERED.swap(false, Ordering::SeqCst);
-            if let Ok(mut r) = SOURCE_RESTORE_RECT.lock() {
-                *r = None;
-            }
-            let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|mut g| g.take());
-            let host_rect = LAST_HOST_RECT.lock().ok().and_then(|mut g| g.take());
-            let orig_style = SOURCE_ORIGINAL_STYLE.lock().ok().and_then(|mut g| g.take());
-            let orig_ex_style = SOURCE_ORIGINAL_EX_STYLE
-                .lock()
-                .ok()
-                .and_then(|mut g| g.take());
-            let capture_technique = ACTIVE_CAPTURE_TECHNIQUE
-                .lock()
-                .map(|g| *g)
-                .unwrap_or(CustomCaptureTechnique::InProcessHook);
-            let window_mode = ACTIVE_WINDOW_MODE
-                .lock()
-                .map(|g| *g)
-                .unwrap_or(CustomWindowMode::Normal);
-
-            let thumbnail = THUMBNAIL
-                .lock()
-                .map(|mut held| std::mem::replace(&mut *held, 0))
-                .unwrap_or(0);
-            if thumbnail != 0 {
-                let _ = unsafe { DwmUnregisterThumbnail(thumbnail) };
-            }
-            hide_the_host();
-
-            if let Some(ctrl) = hook_ctrl {
-                let _ = ctrl.detach_sync(source_hwnd);
-            }
-            if window_mode == CustomWindowMode::Borderless {
-                if let Some(style) = orig_style {
-                    let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_STYLE, style) };
-                }
-            }
-            if was_invisible_layered {
-                let _ =
-                    unsafe { SetLayeredWindowAttributes(source_hwnd, COLORREF(0), 255, LWA_ALPHA) };
-                let target_ex = orig_ex_style.unwrap_or_else(|| {
-                    let cur = unsafe { GetWindowLongPtrW(source_hwnd, GWL_EXSTYLE) } as u32;
-                    (cur & !INVISIBLE_EX_STYLE) as isize
-                });
-                let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_EXSTYLE, target_ex) };
-                let _ = unsafe {
-                    SetWindowPos(
-                        source_hwnd,
-                        HWND::default(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
-                    )
-                };
-            } else if capture_technique == CustomCaptureTechnique::DirectWindow
-                || window_mode == CustomWindowMode::Borderless
-            {
-                let target_ex = orig_ex_style.unwrap_or_else(|| {
-                    let cur = unsafe { GetWindowLongPtrW(source_hwnd, GWL_EXSTYLE) } as u32;
-                    (cur & !DIRECT_EX_STYLE) as isize
-                });
-                let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_EXSTYLE, target_ex) };
-                let _ = unsafe {
-                    SetWindowPos(
-                        source_hwnd,
-                        HWND::default(),
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
-                    )
-                };
-            }
-
-            if let Some(hr) = host_rect {
-                let insets = dwm_frame_insets(source_hwnd);
-                let (ax, ay, aw, ah) = behind_host_window_rect(hr, insets);
-                let _ = unsafe {
-                    SetWindowPos(source_hwnd, HWND_NOTOPMOST, ax, ay, aw, ah, SWP_SHOWWINDOW)
-                };
-            } else {
-                let _ = unsafe {
-                    SetWindowPos(
-                        source_hwnd,
-                        HWND_NOTOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
-                    )
-                };
-            }
-            let _ = unsafe { SetForegroundWindow(source_hwnd) };
-            return true;
-        }
+    if try_detach_active_preview(path) {
+        return true;
     }
 
     end_the_program();
@@ -1716,6 +1829,10 @@ fn run_it(
             .ok()
             .and_then(|want| want.as_ref().map(|want| want.at));
         let Some(at) = at else {
+            // Re-check after reading WANT: open_fully/end_the_program bump LAUNCH before clearing WANT.
+            if !is_current(launch.id) {
+                return;
+            }
             // Hover gone (LINGER): never run hide_others census so user-opened instances stay untouched.
             let since = *lingering.get_or_insert_with(Instant::now);
             placed_host_rect = None;
@@ -1778,6 +1895,9 @@ fn run_it(
         }
 
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
+            if !is_current(launch.id) {
+                return;
+            }
             placed_host_rect = None;
             if let Some(ref session) = hook_session {
                 session.view.stage_offscreen();
@@ -4683,6 +4803,9 @@ fn run_in_process_hook_settle_and_reveal(
             return false;
         }
         let Some(target_rect) = current_target_rect() else {
+            if !is_current(launch.id) {
+                return false;
+            }
             cloak_or_park(*state.invisible_layered);
             return true;
         };
@@ -6312,5 +6435,169 @@ mod tests {
         );
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    static TEST_STATE_LOCK: Mutex<()> = Mutex::new(());
+
+    fn dummy_program(path: PathBuf) -> Program {
+        let handle = unsafe {
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, std::process::id())
+                .expect("open current process query handle")
+        };
+        Program {
+            path,
+            exe: "test.exe".to_string(),
+            process: Arc::new(unsafe { OwnedHandle::from_raw_handle(handle.0) }),
+            pid: 0,
+            job: None,
+        }
+    }
+
+    #[test]
+    fn active_path_tracks_want_and_program_and_clears_on_hide() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = PathBuf::from("sample.custom");
+
+        if let Ok(mut w) = WANT.lock() {
+            *w = None;
+        }
+        if let Ok(mut p) = PROGRAM.lock() {
+            *p = None;
+        }
+        assert_eq!(active_path(), None);
+        assert!(!is_active());
+
+        if let Ok(mut p) = PROGRAM.lock() {
+            *p = Some(dummy_program(path.clone()));
+        }
+        // Program lingering without WANT must not report active.
+        assert_eq!(active_path(), None);
+        assert!(!is_active());
+
+        if let Ok(mut w) = WANT.lock() {
+            *w = Some(Want {
+                at: pointer((100, 100)),
+            });
+        }
+        assert_eq!(active_path().as_deref(), Some(path.as_path()));
+        assert!(is_active());
+
+        // Pin-press routing must emit PinCold for the active custom preview path.
+        assert!(matches!(
+            pin_request_if_active(),
+            Some(super::super::PreviewMessage::PinCold { path: routed }) if routed == path
+        ));
+
+        hide();
+        assert_eq!(active_path(), None);
+        assert!(!is_active());
+        assert!(pin_request_if_active().is_none());
+
+        if let Ok(mut p) = PROGRAM.lock() {
+            *p = None;
+        }
+    }
+
+    #[test]
+    fn clamp_rect_to_work_area_keeps_promoted_window_on_monitor() {
+        let work = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        // Off-screen staged coordinates clamp cleanly onto work area.
+        assert_eq!(
+            clamp_rect_to_work_area((STAGE_COORD, STAGE_COORD, 400, 300), work),
+            (0, 0, 400, 300)
+        );
+        // Right/bottom overflow slides back inside work area.
+        assert_eq!(
+            clamp_rect_to_work_area((1700, 900, 500, 400), work),
+            (1420, 640, 500, 400)
+        );
+        // Oversized dimensions clamp to work area bounds.
+        assert_eq!(
+            clamp_rect_to_work_area((100, 100, 3000, 2000), work),
+            (0, 0, 1920, 1040)
+        );
+    }
+
+    #[test]
+    fn open_fully_detach_clears_state_so_subsequent_hide_is_noop() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = PathBuf::from("promote.custom");
+        let bounds = work_area_at(0, 0);
+        let target_x = bounds.left + 120;
+        let target_y = bounds.top + 90;
+
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(INVISIBLE_EX_STYLE),
+                w!("STATIC"),
+                w!("Promote Test"),
+                WS_CAPTION,
+                STAGE_COORD,
+                STAGE_COORD,
+                320,
+                240,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create test window")
+        };
+        let _ = unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), 1, LWA_ALPHA) };
+
+        if let Ok(mut p) = PROGRAM.lock() {
+            *p = Some(dummy_program(path.clone()));
+        }
+        if let Ok(mut w) = WANT.lock() {
+            *w = Some(Want {
+                at: pointer((target_x, target_y)),
+            });
+        }
+        SOURCE.store(hwnd.0 as isize, Ordering::SeqCst);
+        SOURCE_INVISIBLE_LAYERED.store(true, Ordering::SeqCst);
+        if let Ok(mut r) = LAST_HOST_RECT.lock() {
+            *r = Some((target_x, target_y, 320, 240));
+        }
+        if let Ok(mut ex) = SOURCE_ORIGINAL_EX_STYLE.lock() {
+            *ex = Some(0);
+        }
+
+        let launch_before = LAUNCH.load(Ordering::SeqCst);
+        assert!(try_detach_active_preview(&path));
+        assert!(LAUNCH.load(Ordering::SeqCst) > launch_before);
+        assert!(WANT.lock().unwrap().is_none());
+        assert!(PROGRAM.lock().unwrap().is_none());
+        assert_eq!(SOURCE.load(Ordering::SeqCst), 0);
+        assert!(!SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst));
+        assert!(ACTIVE_HOOK_CONTROL.lock().unwrap().is_none());
+        assert!(LAST_HOST_RECT.lock().unwrap().is_none());
+        assert_eq!(active_path(), None);
+
+        let ex_after = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        assert_eq!(
+            ex_after & INVISIBLE_EX_STYLE,
+            0,
+            "promote must strip invisible/preview extended styles"
+        );
+        let promoted_rect = window_rect(hwnd).expect("promoted rect");
+        assert!(
+            !is_at_stage_coord(promoted_rect),
+            "promoted window must move off STAGE_COORD onto monitor, got {promoted_rect:?}"
+        );
+
+        // Subsequent hide() on hover-away must be a 100% no-op on the promoted window.
+        hide();
+        let after_hide_rect = window_rect(hwnd).expect("rect after hide");
+        assert_eq!(
+            after_hide_rect, promoted_rect,
+            "hide() after promote must not move or park the promoted window"
+        );
+
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
     }
 }

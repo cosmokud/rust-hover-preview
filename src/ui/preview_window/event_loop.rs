@@ -665,6 +665,10 @@ pub fn run_preview_window() {
                     // `f3d_player::the_press_over_a_model_is_the_engines`). The key still pins a
                     // model the preview is not showing in the engine's window, and a `Space` with
                     // the pointer away from it pins as it always did.
+                } else if let Some(request) = custom_preview::pin_request_if_active() {
+                    // Active custom preview bypasses `session.current_show`; route through `PinCold`
+                    // so `custom_preview::open_fully` promotes/opens it without entering built-in pin mode.
+                    pin_request = Some(request);
                 } else if let Some(request) =
                     pin_what_is_on_screen(session.current_show(), pending_load.as_ref())
                 {
