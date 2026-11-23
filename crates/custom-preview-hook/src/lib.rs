@@ -26,6 +26,9 @@ const WM_CREATE: u32 = 0x0001;
 const WM_SHOWWINDOW: u32 = 0x0018;
 const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 const WM_NCCREATE: u32 = 0x0081;
+const WM_NCDESTROY: u32 = 0x0082;
+
+const SUBCLASS_ID: usize = 0x5248_5048;
 
 const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
@@ -136,6 +139,20 @@ extern "system" {
         pv_attribute: *const c_void,
         cb_attribute: u32,
     ) -> i32;
+}
+
+type SubclassProc = unsafe extern "system" fn(isize, u32, usize, isize, usize, usize) -> isize;
+
+#[link(name = "comctl32")]
+extern "system" {
+    fn SetWindowSubclass(
+        hwnd: isize,
+        pfn_subclass: SubclassProc,
+        u_id_subclass: usize,
+        dw_ref_data: usize,
+    ) -> i32;
+    fn RemoveWindowSubclass(hwnd: isize, pfn_subclass: SubclassProc, u_id_subclass: usize) -> i32;
+    fn DefSubclassProc(hwnd: isize, u_msg: u32, wparam: usize, lparam: isize) -> isize;
 }
 
 // 0 = uninit, 1 = initializing, 2 = initialized
@@ -262,15 +279,15 @@ pub unsafe extern "system" fn rhp_cbt_proc(code: i32, wparam: usize, lparam: isi
                         {
                             let w = state.w.load(Ordering::Acquire);
                             let h = state.h.load(Ordering::Acquire);
-                            if w > 0 && h > 0 {
-                                unsafe {
-                                    (*lpcs).x = state.x.load(Ordering::Acquire);
-                                    (*lpcs).y = state.y.load(Ordering::Acquire);
+                            unsafe {
+                                (*lpcs).x = state.x.load(Ordering::Acquire);
+                                (*lpcs).y = state.y.load(Ordering::Acquire);
+                                if w > 0 && h > 0 {
                                     (*lpcs).cx = w;
                                     (*lpcs).cy = h;
                                 }
-                                state.hook_hits.fetch_add(1, Ordering::Relaxed);
                             }
+                            state.hook_hits.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                 }
@@ -280,6 +297,47 @@ pub unsafe extern "system" fn rhp_cbt_proc(code: i32, wparam: usize, lparam: isi
         }
     }
     unsafe { CallNextHookEx(0, code, wparam, lparam) }
+}
+
+/// In-process window subclass: `WH_CALLWNDPROC` cannot mutate `WM_WINDOWPOSCHANGING`'s `WINDOWPOS`
+/// on Windows, so we enforce rect-lock + cloak directly in the window's WndProc chain.
+unsafe extern "system" fn rhp_subclass_proc(
+    hwnd: isize,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+    u_id_subclass: usize,
+    _dw_ref_data: usize,
+) -> isize {
+    if msg == WM_NCDESTROY {
+        let _ = unsafe { RemoveWindowSubclass(hwnd, rhp_subclass_proc, u_id_subclass) };
+        return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+    }
+    if msg == WM_WINDOWPOSCHANGING {
+        if let Some(state) = unsafe { shared_state() } {
+            if state.cloak_enabled.load(Ordering::Acquire) == 1 {
+                unsafe { set_cloak(hwnd, true) };
+            }
+            let wp = lparam as *mut WindowPos;
+            if !wp.is_null() && state.rect_locked.load(Ordering::Acquire) == 1 {
+                unsafe {
+                    (*wp).hwnd_insert_after = HWND_BOTTOM;
+                    (*wp).flags = ((*wp).flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
+                    (*wp).x = state.x.load(Ordering::Acquire);
+                    (*wp).y = state.y.load(Ordering::Acquire);
+                    (*wp).flags &= !SWP_NOMOVE;
+                    let w = state.w.load(Ordering::Acquire);
+                    let h = state.h.load(Ordering::Acquire);
+                    if w > 0 && h > 0 {
+                        (*wp).cx = w;
+                        (*wp).cy = h;
+                        (*wp).flags &= !SWP_NOSIZE;
+                    }
+                }
+            }
+        }
+    }
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
 
 #[no_mangle]
@@ -335,18 +393,24 @@ pub unsafe extern "system" fn rhp_callwnd_proc(code: i32, wparam: usize, lparam:
                                 }
                                 state.hook_hits.fetch_add(1, Ordering::Relaxed);
                             }
+                            if state.rect_locked.load(Ordering::Acquire) == 1 {
+                                let _ = unsafe {
+                                    SetWindowSubclass(hwnd, rhp_subclass_proc, SUBCLASS_ID, 0)
+                                };
+                            }
                             if !wp.is_null() && state.rect_locked.load(Ordering::Acquire) == 1 {
                                 unsafe {
                                     (*wp).hwnd_insert_after = HWND_BOTTOM;
                                     (*wp).flags = ((*wp).flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
+                                    (*wp).x = state.x.load(Ordering::Acquire);
+                                    (*wp).y = state.y.load(Ordering::Acquire);
+                                    (*wp).flags &= !SWP_NOMOVE;
                                     let w = state.w.load(Ordering::Acquire);
                                     let h = state.h.load(Ordering::Acquire);
                                     if w > 0 && h > 0 {
-                                        (*wp).x = state.x.load(Ordering::Acquire);
-                                        (*wp).y = state.y.load(Ordering::Acquire);
                                         (*wp).cx = w;
                                         (*wp).cy = h;
-                                        (*wp).flags &= !(SWP_NOMOVE | SWP_NOSIZE);
+                                        (*wp).flags &= !SWP_NOSIZE;
                                     }
                                 }
                             }

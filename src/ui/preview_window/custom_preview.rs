@@ -128,7 +128,7 @@ use windows::Win32::Foundation::{
     INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
+    DwmFlush, DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
     DwmSetWindowAttribute, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
     DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED, DWM_THUMBNAIL_PROPERTIES,
     DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
@@ -528,12 +528,26 @@ pub(super) fn hide() {
     let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|g| g.clone());
     if let Some(ctrl) = hook_ctrl {
         let source = SOURCE.load(Ordering::SeqCst);
+        ctrl.stage_offscreen();
         let cloaked = source != 0 && ctrl.cloak_sync(HWND(source as *mut _));
         if !cloaked {
             if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
                 keep_source_invisible(source);
-            } else {
-                park_source_offscreen_now();
+            } else if source != 0 {
+                let hwnd = HWND(source as *mut _);
+                if unsafe { IsWindow(hwnd) }.as_bool() {
+                    let _ = unsafe {
+                        SetWindowPos(
+                            hwnd,
+                            HWND_BOTTOM,
+                            STAGE_COORD,
+                            STAGE_COORD,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOACTIVATE,
+                        )
+                    };
+                }
             }
         }
     } else if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
@@ -806,7 +820,10 @@ fn launch_startup_info_for(
     capture_technique: CustomCaptureTechnique,
     vscreen: RECT,
 ) -> STARTUPINFOW {
-    if capture_technique != CustomCaptureTechnique::OffscreenStaged {
+    if !matches!(
+        capture_technique,
+        CustomCaptureTechnique::OffscreenStaged | CustomCaptureTechnique::InProcessHook
+    ) {
         return launch_startup_info(provisional);
     }
     let (sx, sy) = offscreen_staged_startup_origin(vscreen);
@@ -1462,14 +1479,23 @@ fn run_it(
             let since = *lingering.get_or_insert_with(Instant::now);
             placed_host_rect = None;
             if let Some(ref session) = hook_session {
+                session.view.stage_offscreen();
                 if !session.view.cloak_sync(source) {
                     if invisible_layered {
                         keep_source_invisible(source.0 as isize);
                     } else {
                         placed_mode = None;
-                        if !is_window_offscreen(source) {
-                            push_offscreen(source);
-                        }
+                        let _ = unsafe {
+                            SetWindowPos(
+                                source,
+                                HWND_BOTTOM,
+                                STAGE_COORD,
+                                STAGE_COORD,
+                                0,
+                                0,
+                                SWP_NOSIZE | SWP_NOACTIVATE,
+                            )
+                        };
                     }
                 }
             } else if invisible_layered {
@@ -1508,7 +1534,27 @@ fn run_it(
 
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
             placed_host_rect = None;
-            if invisible_layered {
+            if let Some(ref session) = hook_session {
+                session.view.stage_offscreen();
+                if !session.view.cloak_sync(source) {
+                    if invisible_layered {
+                        keep_source_invisible(source.0 as isize);
+                    } else {
+                        placed_mode = None;
+                        let _ = unsafe {
+                            SetWindowPos(
+                                source,
+                                HWND_BOTTOM,
+                                STAGE_COORD,
+                                STAGE_COORD,
+                                0,
+                                0,
+                                SWP_NOSIZE | SWP_NOACTIVATE,
+                            )
+                        };
+                    }
+                }
+            } else if invisible_layered {
                 keep_source_invisible(source.0 as isize);
             } else {
                 placed_mode = None;
@@ -3678,7 +3724,7 @@ impl HookSharedView {
             return None;
         }
         let ptr = mapped.Value as *mut HookSharedState;
-        let (x, y, w, h) = provisional.unwrap_or((0, 0, 0, 0));
+        let (w, h) = provisional.map_or((0, 0), |(_, _, w, h)| (w.max(1), h.max(1)));
         unsafe {
             ptr.write(HookSharedState {
                 magic: HOOK_MAGIC,
@@ -3687,8 +3733,8 @@ impl HookSharedView {
                 uncloak_msg,
                 cloak_enabled: AtomicU32::new(1),
                 rect_locked: AtomicU32::new(1),
-                x: AtomicI32::new(x),
-                y: AtomicI32::new(y),
+                x: AtomicI32::new(STAGE_COORD),
+                y: AtomicI32::new(STAGE_COORD),
                 w: AtomicI32::new(w),
                 h: AtomicI32::new(h),
                 captured_hwnd: AtomicIsize::new(0),
@@ -3713,6 +3759,12 @@ impl HookSharedView {
         s.y.store(y, Ordering::Release);
         s.w.store(w, Ordering::Release);
         s.h.store(h, Ordering::Release);
+    }
+
+    fn stage_offscreen(&self) {
+        let s = self.state();
+        s.x.store(STAGE_COORD, Ordering::Release);
+        s.y.store(STAGE_COORD, Ordering::Release);
     }
 
     fn set_captured_hwnd(&self, hwnd: HWND) {
@@ -3904,20 +3956,13 @@ fn launch_in_process_hook(
         .as_ref()
         .map_or(PCWSTR::null(), |buf| PCWSTR(buf.as_ptr()));
 
-    // SW_HIDE keeps native Win32 apps hidden until hooked+revealed; Avalonia/ImageGlass ignores it.
-    let mut si = STARTUPINFOW {
-        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
-        dwFlags: STARTF_USESHOWWINDOW,
-        wShowWindow: IN_PROCESS_HOOK_SHOW_CMD,
-        ..Default::default()
-    };
-    if let Some((x, y, w, h)) = provisional {
-        si.dwFlags |= STARTF_USEPOSITION | STARTF_USESIZE;
-        si.dwX = x.max(0) as u32;
-        si.dwY = y.max(0) as u32;
-        si.dwXSize = w.max(1) as u32;
-        si.dwYSize = h.max(1) as u32;
-    }
+    // Off-screen positive STARTUPINFOW + SW_HIDE (u32-safe); hook locks real creation to STAGE_COORD.
+    let mut si = launch_startup_info_for(
+        provisional,
+        CustomCaptureTechnique::InProcessHook,
+        virtual_screen(),
+    );
+    si.wShowWindow = IN_PROCESS_HOOK_SHOW_CMD;
 
     let mut pi = PROCESS_INFORMATION::default();
     if unsafe {
@@ -4130,93 +4175,47 @@ fn reveal_in_process_hook(
         (0, 0, 0, 0)
     };
     let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
-    session.view.set_rect(wx, wy, ww, wh);
 
+    // Stage & size at `(STAGE_COORD, STAGE_COORD)` while cloaked before moving anything on-screen.
+    session.view.set_rect(STAGE_COORD, STAGE_COORD, ww, wh);
+    if !session.view.is_cloaked() {
+        let _ = session.view.cloak_sync(source);
+    }
     if unsafe { IsZoomed(source) }.as_bool() || unsafe { IsIconic(source) }.as_bool() {
         let placement = WINDOWPLACEMENT {
             length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
             flags: WINDOWPLACEMENT_FLAGS(0),
             showCmd: SW_SHOWNOACTIVATE.0 as u32,
-            rcNormalPosition: workspace_rect_for_screen(RECT {
-                left: wx,
-                top: wy,
-                right: wx + ww,
-                bottom: wy + wh,
-            }),
+            rcNormalPosition: stage_workspace_rect(ww, wh),
             ..Default::default()
         };
         let _ = unsafe { SetWindowPlacement(source, &placement) };
     }
-    let _ = unsafe { SetWindowPos(source, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+    let _ = unsafe {
+        SetWindowPos(
+            source,
+            HWND_BOTTOM,
+            STAGE_COORD,
+            STAGE_COORD,
+            ww,
+            wh,
+            SWP_NOACTIVATE,
+        )
+    };
     if !unsafe { IsWindowVisible(source) }.as_bool() {
         let _ = unsafe { ShowWindow(source, SW_SHOWNOACTIVATE) };
     }
 
-    let fits_host = aligned_behind_host(source, host_rect);
-    let mode = if fits_host {
-        // Size `host`, register thumbnail, and show opaque topmost `host` FIRST so `source`
-        // uncloaks behind an already-visible cover with zero flash.
-        if *state.box_of_the_host != Some(host_rect) {
-            let _ = unsafe {
-                SetWindowPos(
-                    host,
-                    HWND::default(),
-                    hx,
-                    hy,
-                    hw,
-                    hh,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                )
-            };
-            *state.box_of_the_host = Some(host_rect);
-        }
-        if *state.registered == 0 {
-            if let Ok(registration) = unsafe { DwmRegisterThumbnail(host, source) } {
-                *state.registered = registration;
-                if let Ok(mut held) = THUMBNAIL.lock() {
-                    *held = registration;
-                }
-            }
-        }
-        if *state.registered != 0 {
-            let mut client = RECT::default();
-            let _ = unsafe { GetClientRect(host, &mut client) };
-            let picture = if window_mode == CustomWindowMode::Normal {
-                unsafe { DwmQueryThumbnailSourceSize(*state.registered) }
-                    .ok()
-                    .filter(|s| s.cx > 0 && s.cy > 0)
-                    .map(|s| (s.cx, s.cy))
-                    .unwrap_or_else(|| {
-                        let (w, h) = source_size(source, window_mode);
-                        (w as i32, h as i32)
-                    })
-            } else {
-                let (w, h) = source_size(source, window_mode);
-                (w as i32, h as i32)
-            };
-            let properties =
-                thumbnail_properties(client.right, client.bottom, picture, window_mode);
-            if unsafe { DwmUpdateThumbnailProperties(*state.registered, &properties) }.is_ok() {
-                SHOWN.store(true, Ordering::SeqCst);
-                let _ = unsafe {
-                    SendMessageTimeoutW(
-                        host,
-                        WM_THE_PICTURE_IS_READY,
-                        WPARAM(0),
-                        LPARAM(0),
-                        SMTO_ABORTIFHUNG | SMTO_NORMAL,
-                        100,
-                        None,
-                    )
-                };
-            }
-        }
-        session.view.uncloak_sync(source);
-        let _ = unsafe { InvalidateRect(source, None, false) };
-        let _ = unsafe { UpdateWindow(source) };
-        PlacementMode::BehindHost
-    } else {
-        // Min-size exceeds `host_rect`: move off-screen BEFORE uncloaking so it never flashes.
+    // Check fit using off-screen dimensions so `source` never touches the monitor before `host`.
+    let fits_host = visible_frame_rect(source).is_some_and(|r| {
+        let aw = r.right - r.left;
+        let ah = r.bottom - r.top;
+        aw > 0 && ah > 0 && aw <= hw + ALIGN_TOLERANCE * 2 && ah <= hh + ALIGN_TOLERANCE * 2
+    }) && unsafe { IsWindowVisible(source) }.as_bool()
+        && !unsafe { IsZoomed(source) }.as_bool()
+        && !unsafe { IsIconic(source) }.as_bool();
+
+    if !fits_host {
         let ask = the_ask_for((hw, hh), source_size(source, window_mode));
         *state.the_ask = Some(ask);
         session
@@ -4233,6 +4232,75 @@ fn reveal_in_process_hook(
                 SWP_NOACTIVATE,
             )
         };
+    }
+
+    // Size `host`, register thumbnail, and show opaque topmost `host` FIRST.
+    if *state.box_of_the_host != Some(host_rect) {
+        let _ = unsafe {
+            SetWindowPos(
+                host,
+                HWND::default(),
+                hx,
+                hy,
+                hw,
+                hh,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        *state.box_of_the_host = Some(host_rect);
+    }
+    if *state.registered == 0 {
+        if let Ok(registration) = unsafe { DwmRegisterThumbnail(host, source) } {
+            *state.registered = registration;
+            if let Ok(mut held) = THUMBNAIL.lock() {
+                *held = registration;
+            }
+        }
+    }
+    if *state.registered != 0 {
+        let mut client = RECT::default();
+        let _ = unsafe { GetClientRect(host, &mut client) };
+        let picture = if window_mode == CustomWindowMode::Normal {
+            unsafe { DwmQueryThumbnailSourceSize(*state.registered) }
+                .ok()
+                .filter(|s| s.cx > 0 && s.cy > 0)
+                .map(|s| (s.cx, s.cy))
+                .unwrap_or_else(|| {
+                    let (w, h) = source_size(source, window_mode);
+                    (w as i32, h as i32)
+                })
+        } else {
+            let (w, h) = source_size(source, window_mode);
+            (w as i32, h as i32)
+        };
+        let properties = thumbnail_properties(client.right, client.bottom, picture, window_mode);
+        if unsafe { DwmUpdateThumbnailProperties(*state.registered, &properties) }.is_ok() {
+            SHOWN.store(true, Ordering::SeqCst);
+            let _ = unsafe {
+                SendMessageTimeoutW(
+                    host,
+                    WM_THE_PICTURE_IS_READY,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                    100,
+                    None,
+                )
+            };
+        }
+    }
+
+    // Wait for DWM to physically composite opaque `host` on screen before moving/uncloaking `source`.
+    let _ = unsafe { DwmFlush() };
+
+    let mode = if fits_host {
+        session.view.set_rect(wx, wy, ww, wh);
+        let _ = unsafe { SetWindowPos(source, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+        session.view.uncloak_sync(source);
+        let _ = unsafe { InvalidateRect(source, None, false) };
+        let _ = unsafe { UpdateWindow(source) };
+        PlacementMode::BehindHost
+    } else {
         session.view.uncloak_sync(source);
         let _ = unsafe { InvalidateRect(source, None, false) };
         let _ = unsafe { UpdateWindow(source) };
@@ -4260,11 +4328,22 @@ fn run_in_process_hook_settle_and_reveal(
     state: &mut OffscreenStagedState<'_>,
 ) -> bool {
     let cloak_or_park = |invisible_layered: bool| {
+        session.view.stage_offscreen();
         if !session.view.cloak_sync(source) {
             if invisible_layered {
                 keep_source_invisible(source.0 as isize);
-            } else if !is_window_offscreen(source) {
-                push_offscreen(source);
+            } else {
+                let _ = unsafe {
+                    SetWindowPos(
+                        source,
+                        HWND_BOTTOM,
+                        STAGE_COORD,
+                        STAGE_COORD,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                };
             }
         }
     };
@@ -4280,18 +4359,13 @@ fn run_in_process_hook_settle_and_reveal(
         } else {
             (0, 0, 0, 0)
         };
-        let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
-        session.view.set_rect(wx, wy, ww, wh);
+        let (_, _, ww, wh) = behind_host_window_rect(target_rect, insets);
+        session.view.set_rect(STAGE_COORD, STAGE_COORD, ww, wh);
         let placement = WINDOWPLACEMENT {
             length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
             flags: WINDOWPLACEMENT_FLAGS(0),
             showCmd: SW_SHOWNOACTIVATE.0 as u32,
-            rcNormalPosition: workspace_rect_for_screen(RECT {
-                left: wx,
-                top: wy,
-                right: wx + ww,
-                bottom: wy + wh,
-            }),
+            rcNormalPosition: stage_workspace_rect(ww, wh),
             ..Default::default()
         };
         let _ = unsafe { SetWindowPlacement(source, &placement) };
@@ -4319,7 +4393,7 @@ fn run_in_process_hook_settle_and_reveal(
     )
     .take();
 
-    // Settle while `source` is cloaked (`DWMWA_CLOAK = 1`) and rect-locked at `HWND_BOTTOM`.
+    // Settle while `source` is cloaked (`DWMWA_CLOAK = 1`) and rect-locked at `(STAGE_COORD, STAGE_COORD)`.
     let settle_start = Instant::now();
     let settle_deadline = settle_start + Duration::from_millis(500);
     let mut last_rect = window_rect(source);
@@ -4338,8 +4412,8 @@ fn run_in_process_hook_settle_and_reveal(
         } else {
             (0, 0, 0, 0)
         };
-        let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
-        session.view.set_rect(wx, wy, ww, wh);
+        let (_, _, ww, wh) = behind_host_window_rect(target_rect, insets);
+        session.view.set_rect(STAGE_COORD, STAGE_COORD, ww, wh);
 
         let cur = window_rect(source);
         if cur != last_rect {
@@ -5734,10 +5808,29 @@ mod tests {
         assert_eq!(view.state().version, HOOK_VERSION);
         assert_eq!(view.state().target_pid, pid);
         assert!(view.is_cloaked());
-        assert_eq!(view.state().x.load(Ordering::Acquire), 120);
-        assert_eq!(view.state().y.load(Ordering::Acquire), 80);
+        assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 1);
+        assert_eq!(view.state().x.load(Ordering::Acquire), STAGE_COORD);
+        assert_eq!(view.state().y.load(Ordering::Acquire), STAGE_COORD);
         assert_eq!(view.state().w.load(Ordering::Acquire), 640);
         assert_eq!(view.state().h.load(Ordering::Acquire), 480);
+
+        // Off-screen positive STARTUPINFOW for InProcessHook (u32-safe).
+        let vscreen = RECT {
+            left: -1920,
+            top: 0,
+            right: 3840,
+            bottom: 2160,
+        };
+        let hook_si = launch_startup_info_for(
+            Some((120, 80, 640, 480)),
+            CustomCaptureTechnique::InProcessHook,
+            vscreen,
+        );
+        assert_eq!(hook_si.wShowWindow, SW_HIDE.0 as u16);
+        assert_eq!(hook_si.dwX, (vscreen.right + 2000) as u32);
+        assert_eq!(hook_si.dwY, 0);
+        assert_eq!(hook_si.dwXSize, 640);
+        assert_eq!(hook_si.dwYSize, 480);
 
         // 3. Empirical Win11 check: spawn a benign suspended process (`cmd.exe /c exit 0`) and test
         //    whether `SetWindowsHookExW(WH_CBT | WH_CALLWNDPROC, ..., tid)` succeeds before vs after `ResumeThread`.
@@ -5837,11 +5930,29 @@ mod tests {
             .expect("create hidden main candidate window")
         };
         let _ = unsafe { SetWindowPos(main_hwnd, HWND_BOTTOM, 120, 80, 320, 240, SWP_NOACTIVATE) };
+        let staged_rect = window_rect(main_hwnd).expect("main_hwnd rect");
+        assert!(
+            is_at_stage_coord(staged_rect),
+            "hook must keep newly created window at STAGE_COORD before reveal, got {staged_rect:?}"
+        );
         assert_eq!(
             view.captured_hwnd(),
             Some(main_hwnd),
             "real captioned window >= 64x64 must be latched into captured_hwnd"
         );
+
+        // Reveal: update shared memory rect to target and move cleanly on-screen.
+        view.set_rect(120, 80, 320, 240);
+        let _ = unsafe { SetWindowPos(main_hwnd, HWND_BOTTOM, 120, 80, 320, 240, SWP_NOACTIVATE) };
+        let revealed_rect = window_rect(main_hwnd).expect("revealed main_hwnd rect");
+        assert_eq!(
+            (revealed_rect.left, revealed_rect.top),
+            (120, 80),
+            "reveal must move window cleanly to updated shared-memory rect"
+        );
+        view.stage_offscreen();
+        assert_eq!(view.state().x.load(Ordering::Acquire), STAGE_COORD);
+        assert_eq!(view.state().y.load(Ordering::Acquire), STAGE_COORD);
 
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(main_hwnd) };
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(helper_hwnd) };
