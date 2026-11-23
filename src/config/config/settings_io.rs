@@ -265,7 +265,10 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
     // routed by — the top preset wins an extension two of them name. The sections are a map's
     // order, alphabetical, so the list is a key of its own: nothing reads it into a field
     // (`KEYS_NOTHING_READS`), and the presets' own read is what puts them in that order.
-    ("Custom Preview", &["custom_preset_order"]),
+    (
+        "Custom Preview",
+        &["custom_preset_order", "custom_preview_enabled"],
+    ),
 ];
 
 /// One run of keys as the file writes them: the key, the value when it has one, and the

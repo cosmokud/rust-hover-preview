@@ -273,9 +273,8 @@ define_tray_ids! {
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS : 1,
     ID_TRAY_PDF_AUTOFOCUS : 1,
     ID_TRAY_PDF_FULL_MODE : 1,
-    // The one row of `Preview Settings` that opens a window rather than throwing a switch:
-    // the window a user's own previews are made in (see `config::config::custom_presets`).
-    ID_TRAY_CUSTOM_PREVIEW : 1,
+    ID_TRAY_CUSTOM_PREVIEW_ENABLE : 1,
+    ID_TRAY_CUSTOM_PREVIEW_EDIT : 1,
 
     // Text font sizes
     ID_TRAY_FONT_100 : 1,

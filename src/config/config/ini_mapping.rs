@@ -633,6 +633,11 @@ impl AppConfig {
             "pdf_full_mode",
             Some(self.pdf_full_mode.to_string()),
         );
+        ini.set(
+            CONFIG_SECTION,
+            "custom_preview_enabled",
+            Some(self.custom_preview_enabled.to_string()),
+        );
         // Every list the configuration holds is one row of the table to write (see
         // `formats::lists`), and every custom preview is a section of its own beside them
         // (see `custom_presets`).
@@ -1408,6 +1413,9 @@ impl AppConfig {
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "pdf_full_mode") {
             self.pdf_full_mode = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "custom_preview_enabled") {
+            self.custom_preview_enabled = value;
         }
         // Every list the configuration holds is read out of the file by the table, one row
         // each (see `formats::lists`).
