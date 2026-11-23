@@ -24,6 +24,7 @@ pin_nav_audio=category
 pin_nav_image=category
 pin_nav_others=all
 pin_nav_video=category
+pin_scaling_mode=until_resized
 pin_update_enabled=true
 pin_update_on_hover=false
 pin_update_move_to_top=true
@@ -79,6 +80,7 @@ follow_cursor=false
 ; Scaling
 animated_scale=100
 audio_scale=10
+bypass_placement=false
 design_scale=fit
 document_scale=fit
 ebook_scale=fit
@@ -265,6 +267,7 @@ spinner_delay_ms=250
   - A file holding only the old `pin_nav_file_types` seeds all four with it; a file written before any of them existed walks as the fresh defaults do.
 - `pin_zoom_bounce_ms` / `pin_zoom_bounce_gate` / `pin_zoom_bounce_speed_ms` / `pin_zoom_bounce_power`: the landing a wheel zoom out ends with — how long the image takes to swing back to its place (`100` default), whether the swing past its place is on (`true` default), how fast it snaps back (`0` default), and how far past it drifts as a share of the offset it is coming home from (`0.04` default). A hand-edited value past the ceiling is reduced to it.
 - `pin_minimize_to`: where a pin put away by the window's own **Minimize** button goes. `bubble` (default) leaves the round bubble on the desktop and keeps this app out of the taskbar; `taskbar` takes the window off the screen and shows this app's own taskbar button — named for the pinned file and wearing this app's icon, its hover holding the pin with **Previous**, **Play/Pause** and **Next** for a film or a sound — which brings the pin back where it stood when clicked and closes it on a right-click. Read when the button is pressed, so a change reaches the next minimize; a file written before this setting existed is read as `bubble`.
+- `pin_scaling_mode`: what a pin's window does with its size when it swaps files — a click, a keyboard pick or a **Previous**/**Next** step. `until_resized` (default) keeps the bound a hand gave the window, so a window pulled to a size stays that size however many files it walks; `use_scaling_settings` drops it, so every swap is laid out afresh at the size the file's kind's scaling setting names. A file written before this setting existed is read as `until_resized`.
 - `pin_pause_video` / `pin_pause_audio`: whether a pin put away into its bubble or the taskbar holds what it was playing where it stands, and starts it again at the second it stopped at when the window comes back up. Both default `true`. They are two switches because a video and a sound are two different things to want quiet.
 - `follow_cursor`: `true` = Follow Cursor; `false` = Best Position.
 - `avoid_mode`: `filename` default, `filename_column`, `details`, or `off` — what the preview avoids.
@@ -274,6 +277,7 @@ spinner_delay_ms=250
 - `preview_scale`: `fit`, a share of the display's fitted size (`screen 75`, `screen 50`, `screen 25` or `screen 10` — the display fitted to the media, reduced to that share of it), or a share of the picture's own size (`25`–`400`). Default `100`.
 - `video_scale`: same for video. Default `100`.
 - `audio_scale`: the share of the display a sound's card is laid out over — `25`, `20`, `15`, `10`, `7` or `5`. Default `10`. The whole card scales with the share (font, height, width), so it's the `10%` card uniformly smaller or larger, and `Text Size` no longer resizes it. A hand-edited value is sanitized rather than fatal: `100` or more reads as `100`, `0` reads as `10`, an unrecognized value is ignored.
+- `bypass_placement`: `true` sizes every hover preview against the whole work area and drops **Position** and **Avoid** from placement, so a share is of the screen rather than of the quadrant the preview would have landed in; the preview still keeps clear of the pointer, in the largest half of the display that allows. Default `false`.
 - `animated_scale`: same for animated GIF, WebP, or PNG — and for an animated JPEG XL, which is played as a picture rather than as a video. Default `100`. Still GIF/PNG follow `preview_scale`.
 - `vector_scale`: percentage or `fit`, based on the screen. Default `fit`; `100` or more reads as `fit`. Covers all Vector drawings. Old `svg_scale` is ignored and removed.
 - `text_scale`: how much of the screen a text preview box may take when it opens, for plain text, code, and Markdown. Default `fit`; `100` or more reads as `fit`. `Text Size` still scales the text inside that box.

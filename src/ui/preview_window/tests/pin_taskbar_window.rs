@@ -307,8 +307,8 @@ fn the_picture_of_a_pin_put_away_into_a_bubble_is_the_bubble() {
 
     assert_eq!(
         mirror_source(Some(MediaType::Video)),
-        Some(bubble),
-        "a put-away pin's picture is the bubble it left"
+        None,
+        "a pin collapsed into a bubble must never select the bubble HWND as its mirror source"
     );
 
     // And a pin that is *not* put away is pictured by the window it is standing in, not by the
@@ -1051,44 +1051,52 @@ fn a_pin_put_away_keeps_the_picture_its_collapse_took() {
     };
     VIDEO_HWND.store(player.0 as isize, Ordering::SeqCst);
 
-    // A pin put away into the taskbar, with the stand-in the button belongs to up.
+    // Show the player before collapsing so the stand-in adopts the preview's real 4:3 box.
+    unsafe {
+        let _ = ShowWindow(player, SW_SHOWNOACTIVATE);
+    }
+    let player_box = unsafe { the_client_box(player) };
+
     let mut pin = overlay_pin((100, 80, 420, 320), PinChrome::always());
-    pin.collapsed = true;
+    pin.collapsed = false;
     stand_pin(Some(pin));
     forget_the_stand_in();
     let stand_in = the_stand_in();
-    // Safety: the window is this app's own stand-in, asked only to be up — a hidden window has no
-    // taskbar button and no picture to hold (see `showing_taskbar_window`).
     unsafe {
         let _ = ShowWindow(stand_in, SW_SHOWNOACTIVATE);
     }
 
-    // The collapse's own taking: the picture is the bubble's, and the stand-in is given its box.
     sync_pin_mirror(Some(MediaType::Video));
     assert_eq!(
         unsafe { the_client_box(stand_in) },
-        bubble_box,
-        "the picture a collapse takes is the bubble and no other window, so the stand-in is the \
-         bubble's own box"
+        player_box,
+        "while the pin is up, the stand-in matches the preview's real aspect"
     );
 
-    // And the bubble goes with the collapse's next breath (see `bubble_to_taskbar`).
+    // Collapse into bubble: hide player, mark collapsed while bubble is visible.
+    unsafe {
+        let _ = ShowWindow(player, SW_HIDE);
+    }
+    if let Some(mut pin) = take_pin_for_a_test() {
+        pin.collapsed = true;
+        stand_pin(Some(pin));
+    }
+
+    // Even while the bubble is visible, mirror_source must not pick the square bubble HWND.
+    assert_eq!(mirror_source(Some(MediaType::Video)), None);
+    sync_pin_mirror(Some(MediaType::Video));
+    assert_eq!(
+        unsafe { the_client_box(stand_in) },
+        player_box,
+        "stand-in keeps the preview's box and never adopts the square bubble's box"
+    );
+    assert_ne!(player_box, bubble_box);
+
+    // And after the bubble goes away, the stand-in still keeps the preview's box.
     hide_pin_bubble();
-
-    // What the tick asks a moment later: nothing of the pin is on the screen any more, so there is
-    // no window left to take a picture of and the picture already taken is the one to hold.
-    assert_eq!(
-        mirror_source(Some(MediaType::Video)),
-        None,
-        "a pin put away has no window on the screen left to be pictured by"
-    );
+    assert_eq!(mirror_source(Some(MediaType::Video)), None);
     sync_pin_mirror(Some(MediaType::Video));
-    assert_eq!(
-        unsafe { the_client_box(stand_in) },
-        bubble_box,
-        "and the stand-in is left the box the frame the hover holds was taken in, rather than one \
-         re-made for a window the Shell composes nothing for"
-    );
+    assert_eq!(unsafe { the_client_box(stand_in) }, player_box);
 
     // Safety: the two windows are this test's own and the stand-in is the app's own; the handles the
     // app holds are put back as they were.
@@ -3832,4 +3840,225 @@ fn the_click_that_restored_the_pin_is_not_a_click_on_the_chromes_button() {
     if let Ok(mut config) = CONFIG.lock() {
         config.pin_always_on_top = before;
     }
+}
+
+#[test]
+fn bubble_to_taskbar_preserves_preview_aspect_and_never_adopts_bubble_rect() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_bubble = PIN_BUBBLE_HWND.load(Ordering::SeqCst);
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut m| m.take());
+
+    register_the_stand_in_class();
+    forget_the_stand_in();
+    forget_the_pin_picture();
+
+    // 16:9 image in CURRENT_MEDIA (320x180, solid blue BGRA).
+    let mut pixels = vec![0u8; 320 * 180 * 4];
+    for px in pixels.as_chunks_mut::<4>().0 {
+        px.copy_from_slice(&[220, 40, 10, 255]);
+    }
+    let media = static_image_media(
+        Arc::new(ImageFrame::new(pixels, 320, 180, 0)),
+        MediaType::StaticImage,
+    );
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(media);
+    }
+
+    let preview = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            (0, 0, 320, 180),
+        )
+    };
+    PREVIEW_HWND.store(preview.0 as isize, Ordering::SeqCst);
+
+    let mut pin = overlay_pin((100, 80, 420, 260), PinChrome::always());
+    pin.collapsed = false;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(false);
+
+    // Collapse to bubble first, then move to taskbar.
+    collapse_pin_to(PinMinimizeTo::Bubble);
+    let (_, w_before, h_before) =
+        the_pin_picture().expect("collapse to bubble captures the 16:9 preview picture");
+    assert_eq!((w_before, h_before), (320, 180));
+
+    bubble_to_taskbar();
+    let (_, w_after, h_after) =
+        the_pin_picture().expect("bubble_to_taskbar preserves the 16:9 preview picture");
+    assert_eq!((w_after, h_after), (320, 180));
+
+    let stand_in = showing_taskbar_window().expect("stand-in is showing in taskbar");
+    let mut placement = windows::Win32::UI::WindowsAndMessaging::WINDOWPLACEMENT {
+        length: std::mem::size_of::<windows::Win32::UI::WindowsAndMessaging::WINDOWPLACEMENT>()
+            as u32,
+        ..Default::default()
+    };
+    assert!(
+        unsafe {
+            windows::Win32::UI::WindowsAndMessaging::GetWindowPlacement(stand_in, &mut placement)
+        }
+        .is_ok(),
+        "stand-in window placement is readable"
+    );
+    let normal = placement.rcNormalPosition;
+    assert_eq!(
+        (normal.right - normal.left, normal.bottom - normal.top),
+        (320, 180),
+        "stand-in keeps 16:9 aspect ratio, never adopting the square bubble rect"
+    );
+
+    unsafe {
+        put_away_a_window_of_the_suite(preview);
+    }
+    hide_pin_bubble();
+    forget_the_stand_in();
+    forget_the_pin_picture();
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    PIN_BUBBLE_HWND.store(previous_bubble, Ordering::SeqCst);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+}
+
+#[test]
+fn swapping_file_while_collapsed_invalidates_and_refreshes_pin_picture() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_own = pin_is_its_own_window();
+    let previous_window = pin_real_window::real_pin_window();
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut m| m.take());
+
+    forget_the_pin_picture();
+
+    const NO_MANS_LAND: i32 = -20000;
+    let box_ = (
+        NO_MANS_LAND,
+        NO_MANS_LAND,
+        NO_MANS_LAND + 320,
+        NO_MANS_LAND + 180,
+    );
+    let mut pin = overlay_pin(box_, PinChrome::always());
+    pin.collapsed = true;
+    stand_pin(Some(pin));
+    pin_stands_in_its_own_window(true);
+    pin_real_window::stand_real_pin_window_for_a_test(None);
+    let pin_hwnd =
+        unsafe { pin_real_window::real_pin_window_at(box_) }.expect("the pin's own window");
+
+    // First file: landscape 320x180 green.
+    let mut landscape = vec![0u8; 320 * 180 * 4];
+    for px in landscape.as_chunks_mut::<4>().0 {
+        px.copy_from_slice(&[20, 200, 30, 255]);
+    }
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(static_image_media(
+            Arc::new(ImageFrame::new(landscape, 320, 180, 0)),
+            MediaType::StaticImage,
+        ));
+    }
+    pin_taskbar_mirror::take_the_picture_of(pin_hwnd);
+    let (_, w1, h1) = the_pin_picture().expect("initial landscape picture");
+    assert_eq!((w1, h1), (320, 180));
+
+    // Swap while collapsed to a portrait 120x240 red image.
+    let mut portrait = vec![0u8; 120 * 240 * 4];
+    for px in portrait.as_chunks_mut::<4>().0 {
+        px.copy_from_slice(&[10, 20, 230, 255]);
+    }
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(static_image_media(
+            Arc::new(ImageFrame::new(portrait, 120, 240, 0)),
+            MediaType::StaticImage,
+        ));
+    }
+    let invalidated_before = pin_taskbar_mirror::iconic_bitmaps_invalidated();
+    pin_taskbar_mirror::invalidate_or_refresh_pin_picture();
+
+    assert!(
+        pin_taskbar_mirror::iconic_bitmaps_invalidated() > invalidated_before,
+        "DwmInvalidateIconicBitmaps must be called when swapping files while collapsed"
+    );
+    let (pixels, w2, h2) = the_pin_picture().expect("refreshed portrait picture");
+    assert_eq!((w2, h2), (120, 240));
+    assert_eq!(&pixels[..4], &[10, 20, 230, 255]);
+
+    pin_real_window::stand_real_pin_window_for_a_test(previous_window);
+    unsafe {
+        let _ = DestroyWindow(pin_hwnd);
+    }
+    forget_the_pin_picture();
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+    pin_stands_in_its_own_window(previous_own);
+    stand_pin(previous_pin);
+}
+
+#[test]
+fn take_the_picture_of_captures_own_media_and_ignores_overlapping_window() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let previous_preview = PREVIEW_HWND.load(Ordering::SeqCst);
+    let previous_media = CURRENT_MEDIA.lock().ok().and_then(|mut m| m.take());
+
+    forget_the_pin_picture();
+
+    // Preview window placed offscreen (where desktop DC would have nothing or another window).
+    let preview = unsafe {
+        a_window_of_the_suite(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            WS_POPUP,
+            (0, 0, 80, 40),
+        )
+    };
+    PREVIEW_HWND.store(preview.0 as isize, Ordering::SeqCst);
+
+    // Put an overlapping topmost window directly over the preview rect.
+    let overlap =
+        unsafe { a_window_of_the_suite(WS_EX_TOPMOST, w!("STATIC"), WS_POPUP, (0, 0, 80, 40)) };
+
+    // Our own in-memory media is distinct magenta BGRA (200, 10, 240, 255).
+    let mut magenta = vec![0u8; 80 * 40 * 4];
+    for px in magenta.as_chunks_mut::<4>().0 {
+        px.copy_from_slice(&[200, 10, 240, 255]);
+    }
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = Some(static_image_media(
+            Arc::new(ImageFrame::new(magenta, 80, 40, 0)),
+            MediaType::StaticImage,
+        ));
+    }
+
+    pin_taskbar_mirror::take_the_picture_of(preview);
+    let (pixels, w, h) = the_pin_picture().expect("captured from own media without GetDC(NULL)");
+    assert_eq!((w, h), (80, 40));
+    assert_eq!(
+        &pixels[..4],
+        &[200, 10, 240, 255],
+        "captured pixels come from our own media buffer, never an overlapping window"
+    );
+
+    unsafe {
+        put_away_a_window_of_the_suite(overlap);
+        put_away_a_window_of_the_suite(preview);
+    }
+    forget_the_pin_picture();
+    PREVIEW_HWND.store(previous_preview, Ordering::SeqCst);
+    if let Ok(mut current) = CURRENT_MEDIA.lock() {
+        *current = previous_media;
+    }
+    stand_pin(previous_pin);
 }

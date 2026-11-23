@@ -26,6 +26,7 @@ fn playing_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
 fn banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
     PinnedPreview {
         path: PathBuf::from("ws-k-chrome-nav.mkv"),
+        hover_facts: None,
         content,
         bound: Some(400),
         zoom: None,

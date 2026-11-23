@@ -4,9 +4,9 @@
 //! every kind's list is a row of, and the one place a list is written down, the built-in
 //! entries and the older lists this app shipped and then changed included.
 
+use crate::cache::BoundedCache;
 use crate::formats::head;
 use once_cell::sync::Lazy;
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -22,11 +22,11 @@ use std::sync::Mutex;
 /// What is remembered lives for the run and is keyed by the file *and* the version of it that
 /// was read, so a file replaced by one that does hold a picture is asked about again — the
 /// same key `content_type` holds its own answers under (see `formats::head::Key`).
-static AUDIO_ONLY: Lazy<Mutex<HashSet<head::Key>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+static AUDIO_ONLY: Lazy<Mutex<BoundedCache<head::Key, ()>>> =
+    Lazy::new(|| Mutex::new(BoundedCache::new(AUDIO_ONLY_MAX_ENTRIES)));
 
 /// How many files are remembered as sounds. A pointer swept across a folder is a file at a
-/// time, so what this bounds is a session's worth of them, and what it costs when it is
-/// reached is everything held, the way every other cache of this app's shape answers that.
+/// time, so what this bounds is a session's worth of them.
 const AUDIO_ONLY_MAX_ENTRIES: usize = 512;
 
 /// Remember that a probe found a sound in `path` and no picture.
@@ -34,10 +34,7 @@ pub fn remember_audio_only(path: &Path) {
     let key = head::key(path);
 
     if let Ok(mut remembered) = AUDIO_ONLY.lock() {
-        if remembered.len() >= AUDIO_ONLY_MAX_ENTRIES {
-            remembered.clear();
-        }
-        remembered.insert(key);
+        remembered.insert(key, ());
     }
 }
 
@@ -47,7 +44,7 @@ pub fn probed_audio_only(path: &Path) -> bool {
 
     AUDIO_ONLY
         .lock()
-        .is_ok_and(|remembered| remembered.contains(&key))
+        .is_ok_and(|remembered| remembered.contains_key(&key))
 }
 
 /// Whether a probe has already found a sound in this version of `path` and no picture.
@@ -63,5 +60,32 @@ pub fn probed_audio_only(path: &Path) -> bool {
 pub fn probed_audio_only_in(key: &head::Key) -> bool {
     AUDIO_ONLY
         .lock()
-        .is_ok_and(|remembered| remembered.contains(key))
+        .is_ok_and(|remembered| remembered.contains_key(key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn remembers_audio_only_by_file_version() {
+        let dir = std::env::temp_dir().join("rhp-audio-formats-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("container.mp4");
+        std::fs::write(&path, b"v1").expect("write v1");
+
+        assert!(!probed_audio_only(&path));
+        remember_audio_only(&path);
+        assert!(probed_audio_only(&path));
+        assert!(probed_audio_only_in(&head::key(&path)));
+
+        // Rewriting with a different length invalidates the versioned key.
+        let mut f = std::fs::File::create(&path).expect("rewrite v2");
+        f.write_all(b"version-two-longer").expect("write v2");
+        drop(f);
+        assert!(!probed_audio_only(&path));
+
+        let _ = std::fs::remove_file(path);
+    }
 }

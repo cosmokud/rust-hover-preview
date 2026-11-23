@@ -29,7 +29,6 @@
 use crate::config::config::{decode_budget_bytes, frame_bytes_within_budget, image_decode_limits};
 use crate::readers::metafile_image;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -61,14 +60,15 @@ struct DimensionKey {
 /// A preview's size, keyed by the file and its version. `None` records a file with no
 /// preview in it, so a program that carries none is not looked through again on every
 /// hover.
-type DimensionCache = HashMap<DimensionKey, Option<(u32, u32)>>;
+type DimensionCache = crate::cache::BoundedCache<DimensionKey, Option<(u32, u32)>>;
 
-static DIMENSIONS: Lazy<Mutex<DimensionCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static DIMENSIONS: Lazy<Mutex<DimensionCache>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(DIMENSION_CACHE_MAX_ENTRIES)));
 
 /// The size of the picture `path` carries a preview of.
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     let key = dimension_key(path);
-    if let Ok(cache) = DIMENSIONS.lock() {
+    if let Ok(mut cache) = DIMENSIONS.lock() {
         if let Some(cached) = cache.get(&key) {
             return *cached;
         }
@@ -624,9 +624,61 @@ fn dimension_key(path: &Path) -> DimensionKey {
 /// through once is not looked through again for every hover.
 fn remember_dimensions(key: DimensionKey, dimensions: Option<(u32, u32)>) {
     if let Ok(mut cache) = DIMENSIONS.lock() {
-        if !cache.contains_key(&key) && cache.len() >= DIMENSION_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
         cache.insert(key, dimensions);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn temp_eps(name: &str, bytes: &[u8]) -> PathBuf {
+        let dir = std::env::temp_dir().join("rhp-eps-tests");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join(name);
+        let mut f = File::create(&path).expect("create temp eps");
+        f.write_all(bytes).expect("write temp eps");
+        path
+    }
+
+    #[test]
+    fn rejects_empty_garbage_and_out_of_bounds_container_offsets() {
+        let garbage = temp_eps("garbage.eps", b"not an eps file at all");
+        assert_eq!(dimensions(&garbage), None);
+        assert_eq!(decode(&garbage, 64, 64), None);
+        assert_eq!(decode(&garbage, 0, 64), None);
+
+        // DOS EPS header with TIFF offset/length pointing past EOF must be rejected cleanly.
+        let mut bad_container = vec![0u8; WINDOWS_HEADER];
+        bad_container[..4].copy_from_slice(&WINDOWS_SIGNATURE);
+        bad_container[20..24].copy_from_slice(&100u32.to_le_bytes()); // offset past EOF
+        bad_container[24..28].copy_from_slice(&64u32.to_le_bytes());
+        let bad_path = temp_eps("bad-offset.eps", &bad_container);
+        assert_eq!(dimensions(&bad_path), None);
+        assert_eq!(decode(&bad_path, 32, 32), None);
+
+        // Overflowing offset + size must not panic.
+        let mut overflow = vec![0u8; WINDOWS_HEADER];
+        overflow[..4].copy_from_slice(&WINDOWS_SIGNATURE);
+        overflow[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        overflow[24..28].copy_from_slice(&16u32.to_le_bytes());
+        let overflow_path = temp_eps("overflow.eps", &overflow);
+        assert_eq!(dimensions(&overflow_path), None);
+
+        let _ = fs::remove_file(garbage);
+        let _ = fs::remove_file(bad_path);
+        let _ = fs::remove_file(overflow_path);
+    }
+
+    #[test]
+    fn parses_hex_comment_preview_and_rejects_non_hex() {
+        // Minimal malformed comment preview with non-hex terminates cleanly with None.
+        let bad_comment = temp_eps(
+            "bad-comment.eps",
+            b"%!PS-Adobe-3.0 EPSF-3.0\n%%BeginPreview: 2 2 1 1\n%ZZZZ\n%%EndPreview\n",
+        );
+        assert_eq!(dimensions(&bad_comment), None);
+        let _ = fs::remove_file(bad_comment);
     }
 }

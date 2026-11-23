@@ -287,7 +287,8 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
     let pin_hwnd = pin_real_window::real_pin_window();
     let pin_visible = pin_hwnd.is_some_and(|hwnd| unsafe { IsWindowVisible(hwnd).as_bool() });
     let preview_visible = pin_visible
-        || (preview_hwnd != 0
+        || (!pin_lifecycle::is_deferred_preview_hide_pending()
+            && preview_hwnd != 0
             && unsafe { IsWindowVisible(HWND(preview_hwnd as *mut _)).as_bool() });
     if !preview_visible && video_hwnd == 0 && video_pid == 0 && engine_hwnd == 0 {
         return PreviewCursorHover::NONE;
@@ -415,26 +416,7 @@ pub(super) struct HoverFacts {
     pub(super) native_job: Option<native_formats::NativeJob>,
     pub(super) scales: HoverScales,
     pub(super) follow_cursor: bool,
-}
-
-/// What a file's content says it is, with the configuration's lock not held across the file.
-///
-/// One question asked from the hook, the layout, the loader and the engines' own request sides,
-/// every one of them for the same file in the same hover, and every one of them taking the
-/// process-wide configuration lock across a `content_type::of` — which reads the file's first
-/// four kilobytes on a miss. A slow volume therefore froze every thread of the app, including
-/// the one pumping the preview window's own messages, which is the thread a pin's caption is
-/// dispatched on.
-///
-/// The fix is the order rather than a copy of the configuration: the file's own entry is read
-/// first, without the lock, and the lists are taken under it for the lookup that consults
-/// them. A file that cannot be read has no entry and takes the other form, which is the same
-/// answer for a file nothing can say anything about.
-///
-/// It is now the content field of [`HoverFacts`], which is the whole of what this was for: a
-/// caller that has a hover's answer in hand reads a field.
-pub(super) fn content_of(path: &Path) -> crate::formats::content_type::Content {
-    HoverFacts::read(path).route.content
+    pub(super) bypass_placement: bool,
 }
 
 /// Whether the file's own bytes name one of this app's kinds *other* than `kind`.
@@ -472,6 +454,7 @@ impl HoverFacts {
                 native_job: None,
                 scales: current_hover_scales(),
                 follow_cursor: true,
+                bypass_placement: false,
             };
         };
 
@@ -494,6 +477,7 @@ impl HoverFacts {
         let text_enabled = PreviewType::Text.enabled_in(&config);
         let scales = HoverScales::of(&config);
         let follow_cursor = config.follow_cursor;
+        let bypass_placement = config.bypass_placement;
         drop(config);
 
         // And last, with the guard gone: which of this app's own readers does the work. That is
@@ -524,6 +508,7 @@ impl HoverFacts {
             native_job,
             scales,
             follow_cursor,
+            bypass_placement,
         }
     }
 

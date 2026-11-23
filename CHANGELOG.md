@@ -2,8 +2,27 @@
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-11-23
+
+### Added
+
+- **`Pin Mode → Scaling`** — a row for what a pin's window does with its size when it swaps files (until it is resized by hand, the default, or the Scaling settings afresh), written `pin_scaling_mode` in `config.ini`.
+- **`Scaling → Bypass Placement`** — a row for hover sizing and placement as one answer (off where the app starts, written `bypass_placement` in `config.ini`): a preview is sized against the whole work area rather than against the room the `Position` quadrant or the `Avoid` region left it, and lands in the largest half of the display that is clear of the pointer, so `By Screen 75%` is 75% of the screen rather than 75% of a quarter of it. A keyboard hover is centred in the work area at its full share, and the spinner before a preview is still placed at the pointer corner.
+
 ### Fixed
 
+- **A pinned window swapping files no longer shrinks itself twice** — under a `By Screen` share the bound the window already had was fed back in as the room and the share applied again, so each swap stepped the pin a share smaller; a swap constrained by a bound now fits to it once.
+- **A multi-key trigger chord is held only with its companions held** — `ctrl+alt` latched on the `Alt` edge alone, so the trigger answered a hand that was never on the chord; a latched slot is now read as held only where its companions are down as well.
+- **`Space` in a focused media pin is no longer also a pin press** — the key hook counted the press before asking whether the caret's pin answers `Space` itself, so play/pause also took a pin up or brought it down; a pin command the focused pin owns is passed on without a press counted, and the count that does land now wakes the preview loop rather than waiting out its own tick.
+- **A path holding `[`, `]` or a leading `@` is handed to ImageMagick on stdin** — those characters are ImageMagick's own subimage, glob and list syntax, so the file was parsed as a filename pattern rather than opened and no picture came back. It is passed as `<ext>:-` down a pipe instead, so the path itself is never spelled into the command line.
+
+## [0.5.10] - 2026-11-22
+
+### Fixed
+
+- **A hover is no longer blanked by an answer that arrives for the file already on screen** — a second `Show` for the file the hand is on (a replay, a box measured late) was built as a new preview: the video's frame or the spinner a player was being waited behind came down before the rebuilt one went up, which read as a blink of the desktop on a native video and could drop the wait on the player routes. A `Show` for the file already showing, or already waiting, is now carried on as the wait it is — only the place it is laid out at and the frame that lands are its own.
+- **`Scaling → Video → By Screen` is a share of the display again** — every video share but the plain fit was read as a share of the film's own pixels, so a 640x360 film at `By Screen 50%` on a 4K display was previewed at 320x180 rather than at half of the fitted room, and `By Screen 50%` and `By Own Size 50%` were the same size. A video's share is now read by one function (`effective_preview_scale`) on every road — a hover, a fresh take-up of a pin, a size a pinned window is put back to and a pin's own swap — so `By Screen` shares are the room the player's window is given, reduced, and only `By Own Size` percentages are of the film itself.
+- **A `Scaling` row picked in the tray reaches the very next hover** — a hover is drawn by the viewer process, whose own copy of `config.ini` is reloaded by a one-second watch, so the first preview after a share was picked was laid out at the share it replaced and only the second at the new one. The scaling rows now say so on the seam (`PreviewMessage::ConfigChanged`) and the viewer reloads the file before the hover is laid out. Nothing already on screen is rebuilt.
 - **A `.ico` or `.cur` preview is no longer blurred** — the codec numbers an icon's entries as frames of their own, smallest first, and the reader took frame `0`: the 16-pixel entry of a seven-size icon, upscaled forty-fold to fill the preview. The largest entry is now the one measured and decoded (`its_largest_frame`), so the preview is the 256-pixel picture the file carries rather than the blurred copy of its smallest one.
 
 ## [0.5.9] - 2026-11-17
@@ -568,7 +587,7 @@
 ### Fixed
 
 - **An mpv film opens at the preview box on a display drawn at another scale** — the window mpv put up was twice the box on a display at 200% (twice as wide and twice as tall: 200% of the screen for a fit) and stayed there until the preview tick put it right a second later, which is the huge window that snapped small on a second display and never happened on the primary. mpv creates its window on the primary display and Windows rescales it to the display it is moved to, keeping its _logical_ size, and mpv takes that rectangle as it stands, so the box is now named to mpv on the primary display's scale and Windows' own scaling lands the window on the box (measured on mpv 0.41.0: the box `2864x1611` came up as `5728x3222`, and asked for as `1432x806` it comes up as the box). FFmpeg's player and the media engine were never affected.
-- **`Scaling → Video → Fit to Screen` fills the display** — a video's fit was answered as the file's own size, so a film smaller than the screen was watched at the size it was shot at however large the screen was, while a pinned window and a maximize over the same screen enlarged it; a hovered film's fit is the room now, up as well as down, for every engine. The shares below the fit are unchanged: `By Own Size` percentages and `By Screen` shares are still shares of the film's own size.
+- **`Scaling → Video → Fit to Screen` fills the display** — a video's fit was answered as the file's own size, so a film smaller than the screen was watched at the size it was shot at however large the screen was, while a pinned window and a maximize over the same screen enlarged it; a hovered film's fit is the room now, up as well as down, for every engine. The shares below the fit are unchanged: `By Own Size` percentages and `By Screen` shares are shares of the film's own size.
 - **mpv no longer plays a film on the primary display whatever box it was asked for** — a preview box on a monitor left of or above the primary one has a negative coordinate, and the launch dropped the position for such a box, which is what made mpv centre the film on the primary display instead; the geometry names the box whenever it names a size, and `+-2160` is the negative coordinate mpv reads it as (measured against mpv 0.41.0 with a second display above the primary: the size alone opens at the centre of the primary, the position opens on the second display). FFmpeg's player and the media engine were never affected.
 - **`Background → Image` `White` and `Checkerboard`** — the two rows carried command ids the `Pin Mode → Navigation Files` rows had also taken, so a click on either backdrop was answered as a click on the navigation rows instead of setting the backdrop; the navigation rows now sit in the free ids above the pin's own rows.
 - **Pinned sound has no title bar** — The window is only the card: name at top, controls on its own row, no caption band or gap; Space, arrows and Escape still work from the pin's own window.

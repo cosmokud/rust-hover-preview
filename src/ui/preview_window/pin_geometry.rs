@@ -118,6 +118,7 @@ pub(super) fn replace_pinned_window() -> Option<PreviewMessage> {
     // thread that pumps the pinned window's own messages (see `pin_swap_space`).
     let PinBoxInputs {
         path,
+        hover_facts,
         frame,
         overlay,
         transport_bar,
@@ -138,7 +139,16 @@ pub(super) fn replace_pinned_window() -> Option<PreviewMessage> {
     // a hand left behind.
     let shape = restore
         .is_some()
-        .then(|| media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape)))
+        .then(|| {
+            let dims = match hover_facts
+                .as_deref()
+                .filter(|facts| facts.probe.path() == path.as_path())
+            {
+                Some(facts) => media_dimensions_of(facts, &path, bounds, dpi),
+                None => media_dimensions(&path, bounds, dpi),
+            };
+            dims.filter(|shape| !box_is_the_wait(*shape))
+        })
         .flatten();
     let content = clamp_pinned_box(
         pin_replaced_box(PinMaximize {
@@ -223,6 +233,7 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
     // the lock is a window that stops answering for as long as it takes (see `pin_swap_space`).
     let Some(PinBoxInputs {
         path,
+        hover_facts,
         dpi,
         frame,
         overlay,
@@ -238,7 +249,14 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
 
     let bounds = work_area_at(content.0, content.1);
     let room = pinned_room(bounds, dpi, transport_bar, overlay, caption);
-    let shape = media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape));
+    let shape = match hover_facts
+        .as_deref()
+        .filter(|facts| facts.probe.path() == path.as_path())
+    {
+        Some(facts) => media_dimensions_of(facts, &path, bounds, dpi),
+        None => media_dimensions(&path, bounds, dpi),
+    }
+    .filter(|shape| !box_is_the_wait(*shape));
 
     // The maximize as the pin stood when it was read, kept for the write below: the two are
     // the same question asked twice, and a walk that has landed elsewhere in between is a pin
@@ -291,8 +309,8 @@ pub(super) fn toggle_pin_maximized(request: &mut Option<PreviewMessage>) {
 /// as its kind is measured, and fitted into the room the pin's own chrome leaves at the share a
 /// hover of the file is placed at — rather than one worked out from the box on screen, which is a
 /// box a hand has already had its way with. A window comes back to the size it was pinned at, which
-/// is what the pair is: that same placing asked for again (see `hover_preview_scale` and
-/// `pinned_media_box`).
+/// is what the pair is: that same placing asked for again (see `effective_preview_scale`
+/// and `pinned_media_box`).
 ///
 /// **The box road, where the centring it stands beside is a move** (see `centre_pinned_window`): a
 /// size is what a media is laid out at, so the box goes through the loop as its own message and the
@@ -318,6 +336,7 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
     // pinned window's own messages (see `toggle_pin_maximized`).
     let Some(PinBoxInputs {
         path,
+        hover_facts,
         dpi,
         frame,
         overlay,
@@ -347,15 +366,20 @@ pub(super) fn reset_pinned_size(request: &mut Option<PreviewMessage>) {
         ..room
     };
 
+    let hover = hover_facts
+        .filter(|facts| facts.probe.path() == path.as_path())
+        .unwrap_or_else(|| Arc::new(HoverFacts::read(&path)));
     let shape = match frame {
         PinFrame::None => None,
-        _ => media_dimensions(&path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape)),
+        _ => {
+            media_dimensions_of(&hover, &path, bounds, dpi).filter(|shape| !box_is_the_wait(*shape))
+        }
     };
     let size = match shape {
         Some(shape) => pinned_media_box(
             shape,
             room,
-            hover_preview_scale(&path, current_hover_scales()),
+            effective_preview_scale_of(&hover, current_hover_scales()),
         ),
         // A file with no size to be read out of it — one whose measure has not come back, one
         // nothing can be read from at all, and a card, which is its own size already — has no size
@@ -486,6 +510,7 @@ pub(super) fn pin_maximize_decided(asked: PinMaximize) -> (ScreenRegion, Option<
 /// than having one each (see `toggle_pin_maximized` and `reset_pinned_size`).
 pub(super) struct PinBoxInputs {
     pub(super) path: PathBuf,
+    pub(super) hover_facts: Option<Arc<HoverFacts>>,
     pub(super) dpi: u32,
     pub(super) frame: PinFrame,
     pub(super) overlay: bool,
@@ -506,6 +531,7 @@ pub(super) fn pin_box_inputs() -> Option<PinBoxInputs> {
 
     Some(PinBoxInputs {
         path: pin.path.clone(),
+        hover_facts: pin.hover_facts.clone(),
         dpi: pin.dpi,
         frame: pin.frame,
         overlay: pin.overlay,
@@ -1419,6 +1445,7 @@ pub(super) unsafe fn carry_pinned_window_to_the_display_beside_with(
         content,
         restore,
         playlist,
+        ..
     }) = pin_box_inputs()
     else {
         return;

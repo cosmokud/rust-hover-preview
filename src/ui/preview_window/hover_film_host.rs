@@ -581,12 +581,11 @@ pub(super) unsafe fn take_down_the_hover_film_host() {
             ffplay_window::clear_video_process_state(warm.pid);
             note_pin_trace!("warm model let go with its host pid {}", warm.pid);
         }
-        let _ = DestroyWindow(host);
-        // A registration the Shell is drawing into this window goes with it, where this road ever
-        // had one: a host of a hover's is a thumbnail destination on no road this prototype takes,
-        // and a registration left behind a destroyed window is the Shell's resource leaking (see
-        // `pin_film_thumbnail`).
+        // Unregister DWM thumbnail before destroying its destination HWND so DWM never holds a dead handle.
         pin_film_thumbnail::forget_the_thumbnail_of(host);
+        if let Err(err) = DestroyWindow(host) {
+            note_pin_trace!("hover film host DestroyWindow failed {:?}: {err:?}", host);
+        }
     }
     HOVER_FILM_HOST.store(0, Ordering::SeqCst);
     HOVER_FILM_HOST_PLAYER.store(0, Ordering::SeqCst);

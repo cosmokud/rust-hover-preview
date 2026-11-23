@@ -42,7 +42,6 @@ use crate::config::config::image_decode_limits;
 use crate::readers::archive_listing;
 use image::GenericImageView;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
@@ -80,14 +79,15 @@ struct DimensionKey {
 
 /// A plate's size, keyed by the comic and its version. `None` records a container with no plate in
 /// it, so a file this reader has no answer for is not opened on every hover.
-type DimensionCache = HashMap<DimensionKey, Option<(u32, u32)>>;
+type DimensionCache = crate::cache::BoundedCache<DimensionKey, Option<(u32, u32)>>;
 
-static DIMENSIONS: Lazy<Mutex<DimensionCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static DIMENSIONS: Lazy<Mutex<DimensionCache>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(DIMENSION_CACHE_MAX_ENTRIES)));
 
 /// The size of the first plate of the comic `path` holds, in pixels.
 pub fn dimensions(path: &Path) -> Option<(u32, u32)> {
     let key = dimension_key(path);
-    if let Ok(cache) = DIMENSIONS.lock() {
+    if let Ok(mut cache) = DIMENSIONS.lock() {
         if let Some(cached) = cache.get(&key) {
             return *cached;
         }
@@ -272,9 +272,6 @@ fn dimension_key(path: &Path) -> DimensionKey {
 /// every hover of it.
 fn remember_dimensions(key: DimensionKey, dimensions: Option<(u32, u32)>) {
     if let Ok(mut cache) = DIMENSIONS.lock() {
-        if !cache.contains_key(&key) && cache.len() >= DIMENSION_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
         cache.insert(key, dimensions);
     }
 }

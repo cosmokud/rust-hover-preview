@@ -35,8 +35,13 @@ pub(super) enum ProbedGeometry {
     Unmeasurable,
 }
 
-pub(super) static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<VideoGeometryKey, ProbedGeometry>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+pub(super) static VIDEO_GEOMETRY_CACHE: Lazy<
+    Mutex<crate::cache::BoundedCache<VideoGeometryKey, ProbedGeometry>>,
+> = Lazy::new(|| {
+    Mutex::new(crate::cache::BoundedCache::new(
+        VIDEO_GEOMETRY_CACHE_MAX_ENTRIES,
+    ))
+});
 
 /// The geometry cache's own guard, a poisoned lock included.
 ///
@@ -47,7 +52,7 @@ pub(super) static VIDEO_GEOMETRY_CACHE: Lazy<Mutex<HashMap<VideoGeometryKey, Pro
 /// started, and waited on, for every file that is hovered (see `hidden_epoch` for the same
 /// reading of a lock that holds a fact).
 pub(super) fn video_geometry_cache(
-) -> MutexGuard<'static, HashMap<VideoGeometryKey, ProbedGeometry>> {
+) -> MutexGuard<'static, crate::cache::BoundedCache<VideoGeometryKey, ProbedGeometry>> {
     match VIDEO_GEOMETRY_CACHE.lock() {
         Ok(cache) => cache,
         Err(poisoned) => poisoned.into_inner(),

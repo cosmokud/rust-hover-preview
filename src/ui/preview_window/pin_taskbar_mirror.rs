@@ -53,9 +53,10 @@ use super::*;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DwmFlush, DwmInvalidateIconicBitmaps, DwmRegisterThumbnail, DwmSetIconicThumbnail,
-    DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES,
-    DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
+    DwmFlush, DwmInvalidateIconicBitmaps, DwmRegisterThumbnail, DwmSetIconicLivePreviewBitmap,
+    DwmSetIconicThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
+    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
+    DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{SetBrushOrgEx, SetStretchBltMode, StretchBlt, HALFTONE};
 use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow, IsWindowVisible};
@@ -196,6 +197,61 @@ pub(super) unsafe fn keep_the_pin_for_the_taskbar() {
     let _ = DwmFlush();
 }
 
+/// Capture the preview's picture before hiding windows on collapse into bubble,
+/// so a subsequent `bubble_to_taskbar()` preserves the preview's real aspect & content.
+pub(super) fn capture_pin_picture_before_collapse() {
+    take_the_pin_picture();
+}
+
+/// Fit the stand-in window to the previously captured `PIN_PICTURE`'s aspect ratio
+/// when transitioning bubble -> taskbar, never capturing or adopting the bubble HWND.
+pub(super) unsafe fn prepare_stand_in_for_taskbar_from_bubble() {
+    let size = PIN_PICTURE
+        .lock()
+        .ok()
+        .and_then(|p| p.as_ref().map(|pic| (pic.width as i32, pic.height as i32)));
+    let Some(hwnd) = pin_taskbar::pin_taskbar_window() else {
+        return;
+    };
+    if let Some(size) = size {
+        let client = mirror_size(size);
+        unsafe { fit_mirror_window(hwnd, client) };
+        if let Ok(mut mirror) = PIN_MIRROR.lock() {
+            mirror.client = client;
+        }
+    }
+    the_stills_are_out_of_date(hwnd);
+}
+
+/// Invalidate or refresh `PIN_PICTURE` and notify DWM when the pinned file or size changes
+/// (especially while collapsed in bubble or minimized to taskbar) so stale wrong-aspect stills
+/// from a previous file are never shown.
+pub(super) fn invalidate_or_refresh_pin_picture() {
+    let refreshed = if pin_is_collapsed() {
+        current_media_pixels().map(|(pixels, width, height)| PinPicture {
+            pixels,
+            width,
+            height,
+        })
+    } else {
+        None
+    };
+
+    if let Ok(mut picture) = PIN_PICTURE.lock() {
+        *picture = refreshed;
+    }
+
+    if let Some(hwnd) = pin_taskbar::showing_taskbar_window() {
+        the_stills_are_out_of_date(hwnd);
+    }
+    if let Some(host) = pin_film_host::film_host() {
+        the_stills_are_out_of_date(host);
+    }
+    if let Some(pin) = pin_real_window::real_pin_window() {
+        the_stills_are_out_of_date(pin);
+    }
+}
+
 /// The picture the button holds of a pin that is put away: what the Shell's still of that button is
 /// made of.
 ///
@@ -232,11 +288,13 @@ static PIN_PICTURE: Mutex<Option<PinPicture>> = Mutex::new(None);
 /// picture already taken is the one to hold, which is the rule the mirror itself keeps (see
 /// `sync_pin_mirror`).
 fn take_the_pin_picture() {
-    let Some(source) = mirror_source(current_media_type()) else {
+    if let Some(source) = mirror_source(current_media_type()) {
+        take_the_picture_of(source);
+    } else if let Some((pixels, width, height)) = current_media_pixels() {
+        store_pin_picture(pixels, width, height);
+    } else {
         return;
-    };
-
-    take_the_picture_of(source);
+    }
 
     // The Shell keeps the bitmap it was last handed, and it does not know that this one is of another
     // file: it is told that its stills are out of date, and it asks for this one the next time a button
@@ -248,28 +306,10 @@ fn take_the_pin_picture() {
     the_stills_are_out_of_date(hwnd);
 }
 
-/// Take the picture `source` is showing, to be handed to the Shell as the still of a taskbar button.
-///
-/// **The window is named by the caller, because there are two kinds of window a pin's button can be**
-/// and they are pictured of different things. The stand-in of a pin standing in the preview's window
-/// is pictured by that window or by the player's (see `mirror_source`); the **film host** that owns a
-/// pin's chrome is pictured by *itself*, because the film in it is a DWM thumbnail composed over the
-/// host's client and is no part of the host's own rows — the still the Shell would take of those rows
-/// is the black the host is erased to (see `pin_film_host::paint_the_host_behind_the_film`).
-///
-/// Safety: `source` is a window of this app's or one it is drawing, on the screen at this moment.
-pub(super) fn take_the_picture_of(source: HWND) {
-    // Safety: the window is one the caller has settled as a picture — a window this app is showing the
-    // pin in — and what is asked of it is where its client area stands on the screen: a question about
-    // the window rather than a change to it.
-    let Some(area) = (unsafe { client_area_on_the_screen(source) }) else {
+fn store_pin_picture(pixels: Vec<u8>, width: u32, height: u32) {
+    if width == 0 || height == 0 || pixels.len() < width as usize * height as usize * 4 {
         return;
-    };
-
-    let Some((pixels, width, height)) = screen_pixels(area) else {
-        return;
-    };
-
+    }
     if let Ok(mut picture) = PIN_PICTURE.lock() {
         *picture = Some(PinPicture {
             pixels,
@@ -279,12 +319,153 @@ pub(super) fn take_the_picture_of(source: HWND) {
     }
 }
 
+/// True if BGRA buffer has any non-black RGB pixel (guards against blank D3D/PrintWindow frames).
+fn pixels_are_non_black(pixels: &[u8]) -> bool {
+    pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|px| (px[0] | px[1] | px[2]) != 0)
+}
+
+/// Read BGRA pixels directly from `CURRENT_MEDIA` for in-process rendered media kinds.
+/// Never touches the desktop DC; works even when the preview window is hidden/collapsed.
+fn current_media_pixels() -> Option<(Vec<u8>, u32, u32)> {
+    let guard = CURRENT_MEDIA.lock().ok()?;
+    let media = guard.as_ref()?;
+    if matches!(
+        media.media_type,
+        MediaType::Video
+            | MediaType::EngineSvg
+            | MediaType::EngineFont
+            | MediaType::Model
+            | MediaType::Loading
+    ) {
+        return None;
+    }
+    if media.media_type == MediaType::Pdf && crate::engines::pdf_viewer::pdf_full_mode() {
+        return None;
+    }
+
+    let width = media.current_width();
+    let height = media.current_height();
+    let expected = width as usize * height as usize * 4;
+    let src = media.current_pixels();
+    if width == 0 || height == 0 || src.len() < expected {
+        return None;
+    }
+
+    let mut out = vec![0u8; expected];
+    let background = preview_background(media.media_type);
+    compose_preview_pixels_into(
+        &src[..expected],
+        width,
+        height,
+        background,
+        media.current_frame_is_opaque(),
+        &mut out,
+    );
+    for px in out.as_chunks_mut::<4>().0 {
+        px[3] = 255;
+    }
+    Some((out, width, height))
+}
+
+/// Capture `source` per-window / in-memory without ever calling `GetDC(NULL)`.
+fn capture_window_pixels(source: HWND) -> Option<(Vec<u8>, u32, u32)> {
+    // 1. Film host: capture the actual player/model HWND offscreen (not the black host backdrop).
+    if pin_film_host::film_host() == Some(source) {
+        if let Some(player) = pin_film_thumbnail::the_source_window() {
+            if let Some((pixels, w, h)) = surfaces::print_window_pixels(player) {
+                if pixels_are_non_black(&pixels) {
+                    return Some((pixels, w, h));
+                }
+            }
+        }
+        // Fallback: host itself (e.g. painted cover or solid fill in tests), still ignoring desktop.
+        if let Some((pixels, w, h)) = surfaces::print_window_pixels(source) {
+            if pixels_are_non_black(&pixels) {
+                return Some((pixels, w, h));
+            }
+        }
+        return current_media_pixels().filter(|(p, _, _)| pixels_are_non_black(p));
+    }
+
+    let is_own_preview = source.0 as isize == PREVIEW_HWND.load(Ordering::SeqCst)
+        || pin_real_window::real_pin_window() == Some(source);
+
+    // 2. Own preview/pin window: prefer our own in-memory surface / media buffer over PrintWindow.
+    if is_own_preview {
+        let kind = current_media_type();
+        let is_engine_or_full_pdf = kind.is_some_and(|k| {
+            k.is_engine() || (k == MediaType::Pdf && crate::engines::pdf_viewer::pdf_full_mode())
+        });
+        if is_engine_or_full_pdf {
+            let engine = HWND(webview_preview::showing_hwnd() as *mut _);
+            if let Some(engine) = on_the_screen(engine) {
+                if let Some((pixels, w, h)) = surfaces::print_window_pixels(engine) {
+                    if pixels_are_non_black(&pixels) {
+                        return Some((pixels, w, h));
+                    }
+                }
+            }
+            return surfaces::print_window_pixels(source)
+                .filter(|(p, _, _)| pixels_are_non_black(p));
+        }
+
+        if let Some((pixels, w, h)) = surfaces::layered_surface_pixels(source.0 as isize) {
+            if pixels_are_non_black(&pixels) {
+                return Some((pixels, w, h));
+            }
+        }
+        if let Some(media) = current_media_pixels() {
+            return Some(media);
+        }
+        if let Some((pixels, w, h)) = surfaces::print_window_pixels(source) {
+            let has_prior = PIN_PICTURE.lock().ok().is_some_and(|p| p.is_some());
+            if pixels_are_non_black(&pixels) || !has_prior {
+                return Some((pixels, w, h));
+            }
+        }
+        return None;
+    }
+
+    // 3. Standalone player / WebView2 / other HWND: offscreen PrintWindow only, reject blank frames.
+    let (pixels, w, h) = surfaces::print_window_pixels(source)?;
+    if pixels_are_non_black(&pixels) {
+        Some((pixels, w, h))
+    } else {
+        None
+    }
+}
+
+/// Take the picture `source` is showing, to be handed to the Shell as the still of a taskbar button.
+///
+/// Captures directly from our own in-memory surface/media or per-window `PrintWindow(PW_RENDERFULLCONTENT)`;
+/// never reads the composited desktop DC (`GetDC(NULL)`), so overlapping windows can never be captured.
+pub(super) fn take_the_picture_of(source: HWND) {
+    let Some((pixels, width, height)) = capture_window_pixels(source) else {
+        return;
+    };
+    store_pin_picture(pixels, width, height);
+}
+
+#[cfg(test)]
+static ICONIC_BITMAPS_INVALIDATED: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(test)]
+pub(super) fn iconic_bitmaps_invalidated() -> u32 {
+    ICONIC_BITMAPS_INVALIDATED.load(Ordering::SeqCst)
+}
+
 /// Tell the Shell that the stills of `button` are out of date, so that it asks for the picture this app
 /// holds the next time that button is looked at.
 ///
 /// Safety: `button` is a window of this app's that supplies its own stills (see
 /// `pin_taskbar::supply_the_stills_of_this_window`).
 pub(super) fn the_stills_are_out_of_date(button: HWND) {
+    #[cfg(test)]
+    ICONIC_BITMAPS_INVALIDATED.fetch_add(1, Ordering::SeqCst);
     // Safety: the window is this app's own, and what is asked of it is a renewal of its own stills
     // rather than a change to what it is showing.
     let _ = unsafe { DwmInvalidateIconicBitmaps(button) };
@@ -365,6 +546,30 @@ pub(super) unsafe fn answer_a_thumbnail_ask(hwnd: HWND, lparam: LPARAM) -> LRESU
     LRESULT(0)
 }
 
+/// Answer `WM_DWMSENDICONICLIVEPREVIEWBITMAP` (Aero Peek on iconic taskbar button)
+/// with the same aspect-preserving `PIN_PICTURE` so Explorer never stretches or shows stale content.
+pub(super) unsafe fn answer_a_live_preview_ask(hwnd: HWND) -> LRESULT {
+    let Ok(picture) = PIN_PICTURE.lock() else {
+        return LRESULT(0);
+    };
+    let Some(picture) = picture.as_ref() else {
+        return LRESULT(0);
+    };
+
+    let requested = unsafe { client_size(hwnd) }
+        .filter(|&(w, h)| w > 1 && h > 1)
+        .unwrap_or((picture.width as i32, picture.height as i32));
+    let Some((width, height)) = thumbnail_size(requested, (picture.width, picture.height)) else {
+        return LRESULT(0);
+    };
+    let Some(bitmap) = thumbnail_bitmap(picture, width, height) else {
+        return LRESULT(0);
+    };
+
+    let _ = unsafe { DwmSetIconicLivePreviewBitmap(hwnd, bitmap.bitmap(), None, 0) };
+    LRESULT(0)
+}
+
 /// What the button holds, for a test asking which picture a put-away pin's button is showing.
 #[cfg(test)]
 pub(super) fn the_pin_picture() -> Option<(Vec<u8>, u32, u32)> {
@@ -391,9 +596,10 @@ fn thumbnail_size(requested: (i32, i32), picture: (u32, u32)) -> Option<(u32, u3
         return Some((width, height));
     }
 
-    let share = (asked_width as f32 / width as f32).min(asked_height as f32 / height as f32);
-    let scaled = |side: u32| (side as f32 * share) as u32;
-    Some((scaled(width).max(1), scaled(height).max(1)))
+    let share = (asked_width as f64 / width as f64).min(asked_height as f64 / height as f64);
+    let out_w = ((width as f64 * share).round() as u32).clamp(1, asked_width);
+    let out_h = ((height as f64 * share).round() as u32).clamp(1, asked_height);
+    Some((out_w, out_h))
 }
 
 /// The bitmap a picture is handed over in: the picture scaled into `width` x `height`, opaque
@@ -490,6 +696,29 @@ pub(super) unsafe fn client_area_on_the_screen(hwnd: HWND) -> Option<RECT> {
 /// Every road out leaves the state saying what the stand-in was left showing, including the roads
 /// where the Shell refused: a registration that was not given is a hover with the desktop showing
 /// through it, and that is what it was before this module existed rather than a state to retry from.
+/// Compute an aspect-preserving destination rect inside `client_area` for `source_size`,
+/// centered when `client_area` has a different aspect (prevents DWM stretching into square/1x1 rects).
+fn mirror_destination_rect(client_area: RECT, source_size: (i32, i32)) -> Option<RECT> {
+    let avail_w = client_area.right - client_area.left;
+    let avail_h = client_area.bottom - client_area.top;
+    let (src_w, src_h) = source_size;
+    if avail_w <= 0 || avail_h <= 0 || src_w <= 0 || src_h <= 0 {
+        return None;
+    }
+
+    let scale = (avail_w as f64 / src_w as f64).min(avail_h as f64 / src_h as f64);
+    let dst_w = ((src_w as f64 * scale).round() as i32).clamp(1, avail_w);
+    let dst_h = ((src_h as f64 * scale).round() as i32).clamp(1, avail_h);
+    let left = client_area.left + (avail_w - dst_w) / 2;
+    let top = client_area.top + (avail_h - dst_h) / 2;
+    Some(RECT {
+        left,
+        top,
+        right: left + dst_w,
+        bottom: top + dst_h,
+    })
+}
+
 unsafe fn settle_mirror(
     hwnd: HWND,
     mirror: &mut PinMirror,
@@ -507,6 +736,14 @@ unsafe fn settle_mirror(
     // the picture would have been drawn in a size ago.
     fit_mirror_window(hwnd, client);
 
+    let mut area = RECT::default();
+    if GetClientRect(hwnd, &mut area).is_err() {
+        return;
+    }
+    let Some(destination) = mirror_destination_rect(area, client) else {
+        return;
+    };
+
     let Ok(thumbnail) = DwmRegisterThumbnail(hwnd, source) else {
         *mirror = PinMirror {
             source: 0,
@@ -517,17 +754,9 @@ unsafe fn settle_mirror(
         return;
     };
 
-    let mut area = RECT::default();
-    if GetClientRect(hwnd, &mut area).is_err() {
-        let _ = DwmUnregisterThumbnail(thumbnail);
-        return;
-    }
-
     let properties = DWM_THUMBNAIL_PROPERTIES {
         dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_VISIBLE,
-        // The whole of the stand-in's client area, which is why the window was sized to the source's
-        // own shape: what the Shell draws is the source stretched into this box.
-        rcDestination: area,
+        rcDestination: destination,
         rcSource: RECT::default(),
         opacity: 255,
         fVisible: true.into(),
@@ -581,34 +810,11 @@ unsafe fn fit_mirror_window(hwnd: HWND, client: (i32, i32)) {
 
 /// The window the pin's picture is in, or nothing where the pin has none to take.
 ///
-/// **Which window that is, is the kind's own answer first.** A film FFmpeg is playing and a document
-/// or a specimen the engine is drawing have windows of their own standing in the pin's band — it is
-/// those windows that hold the picture, and the band is a hole where they were — so a kind that
-/// draws in a window of its own is pictured by that window or by nothing at all, and never by the
-/// window the hole is in (see `MediaType::draws_in_a_window_of_its_own`). Everything else is drawn by
-/// the pin's own window: a picture, a page, a card, a listing, and a film the media engine decodes
-/// into this window's own frame. For those, a player or a browser still standing in the band is a
-/// better picture than the window behind them is, so they are asked first (see
-/// `place_pinned_siblings` and `render_layered_preview`).
-///
-/// **And a window that is not on the screen is no picture at all.** The Shell composes nothing for a
-/// window that is not there, so a registration taken of one is a mirror the Shell draws nothing
-/// into — and taking it is what takes down the registration the picture already standing in the
-/// stand-in was taken with (see `sync_pin_mirror`). A preview a display change has taken down, a
-/// player being relaunched and a handle this app has not cleared yet are all this case, and all of
-/// them are answered by nothing here so that the picture already standing is the one that stays.
-///
-/// **A pin put away into the *bubble* is answered by the bubble**, which is the only window of the
-/// pin's the collapse leaves on the screen, and is why the hover the bubble's own `To Taskbar`
-/// belongs to shows the pin rather than the desk behind it (see `pin_bubble::showing_bubble_window`).
-/// A pin put away into the *taskbar* has every window of its own off the screen by then, and the
-/// picture its button holds is the one the collapse took while they were still up (see
-/// `keep_the_pin_for_the_taskbar`).
+/// Never selects the collapse bubble HWND: a bubble is square (or taller with its menu),
+/// so selecting it would overwrite the preview's real aspect ratio and picture.
 pub(super) fn mirror_source(kind: Option<MediaType>) -> Option<HWND> {
-    if pin_is_collapsed() {
-        if let Some(bubble) = pin_bubble::showing_bubble_window() {
-            return Some(bubble);
-        }
+    if pin_is_collapsed() && pin_bubble::showing_bubble_window().is_some() {
+        return None;
     }
 
     let player = VIDEO_HWND.load(Ordering::SeqCst);
@@ -744,5 +950,79 @@ mod tests {
             !PinMirror::NOTHING.already_shows(0x1000, 40, (400, 300)),
             "a stand-in showing nothing is never already showing the pin"
         );
+    }
+
+    #[test]
+    fn thumbnail_size_preserves_exact_aspect_ratio_and_clamps() {
+        assert_eq!(thumbnail_size((0, 100), (320, 180)), None);
+        assert_eq!(thumbnail_size((100, -1), (320, 180)), None);
+        // Smaller than requested -> kept at own size.
+        assert_eq!(thumbnail_size((200, 150), (80, 60)), Some((80, 60)));
+        // Landscape 16:9 into 200x150 -> 200x113 (rounded, not truncated to 112).
+        assert_eq!(thumbnail_size((200, 150), (1920, 1080)), Some((200, 113)));
+        // Portrait 9:16 into 200x150 -> 84x150.
+        assert_eq!(thumbnail_size((200, 150), (1080, 1920)), Some((84, 150)));
+        // Square into landscape request -> 150x150.
+        assert_eq!(thumbnail_size((200, 150), (1000, 1000)), Some((150, 150)));
+        // Extreme aspect clamped to [1..=max].
+        assert_eq!(thumbnail_size((100, 100), (4000, 10)), Some((100, 1)));
+        assert_eq!(thumbnail_size((100, 100), (10, 4000)), Some((1, 100)));
+    }
+
+    #[test]
+    fn mirror_destination_rect_preserves_aspect_without_stretching() {
+        let empty = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 100,
+        };
+        assert_eq!(mirror_destination_rect(empty, (320, 180)), None);
+        assert_eq!(
+            mirror_destination_rect(
+                RECT {
+                    left: 0,
+                    top: 0,
+                    right: 200,
+                    bottom: 200,
+                },
+                (0, 180)
+            ),
+            None
+        );
+
+        // Matching 16:9 rect -> fills exactly.
+        let exact = RECT {
+            left: 0,
+            top: 0,
+            right: 320,
+            bottom: 180,
+        };
+        assert_eq!(mirror_destination_rect(exact, (320, 180)), Some(exact));
+
+        // 16:9 source in a 200x200 square client -> centered 200x113, never stretched to 200x200.
+        let square = RECT {
+            left: 0,
+            top: 0,
+            right: 200,
+            bottom: 200,
+        };
+        let dst = mirror_destination_rect(square, (1920, 1080)).unwrap();
+        assert_eq!((dst.right - dst.left, dst.bottom - dst.top), (200, 113));
+        assert_eq!(dst.top, 43);
+
+        // 9:16 portrait source in a 200x200 square client -> centered 113x200.
+        let dst_p = mirror_destination_rect(square, (1080, 1920)).unwrap();
+        assert_eq!(
+            (dst_p.right - dst_p.left, dst_p.bottom - dst_p.top),
+            (113, 200)
+        );
+        assert_eq!(dst_p.left, 43);
+    }
+
+    #[test]
+    fn pixels_are_non_black_rejects_blank_frames() {
+        assert!(!pixels_are_non_black(&[0, 0, 0, 255, 0, 0, 0, 0]));
+        assert!(pixels_are_non_black(&[0, 0, 0, 255, 1, 0, 0, 255]));
     }
 }

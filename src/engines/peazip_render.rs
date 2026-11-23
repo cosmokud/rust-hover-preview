@@ -67,7 +67,6 @@
 use crate::engines::supervisor::{self, Adapter, Worker};
 use crate::formats::peazip_formats::Backend;
 use once_cell::sync::Lazy;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{mpsc, Mutex};
@@ -242,7 +241,8 @@ impl Key {
 /// delegate this machine was not given, an archive whose table of contents is encrypted, a file
 /// that is not an archive at all — from starting an engine on every hover to reach the same
 /// answer.
-static REFUSED: Lazy<Mutex<Vec<Key>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static REFUSED: Lazy<Mutex<crate::cache::BoundedCache<Key, ()>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(ANSWERS_MAX_ENTRIES)));
 
 /// Whether the engine has already turned this file down, for this version of it.
 pub fn refused(path: &Path) -> bool {
@@ -250,7 +250,7 @@ pub fn refused(path: &Path) -> bool {
 
     REFUSED
         .lock()
-        .map(|refused| refused.contains(&key))
+        .map(|refused| refused.contains_key(&key))
         .unwrap_or(false)
 }
 
@@ -385,7 +385,7 @@ fn list(path: &Path) -> Option<crate::readers::archive_listing::Listing> {
 ///   own — a black rectangle over whatever the pointer was on, for as long as the launch lasted.
 ///   See `engine_processes` for the flag and for what it is said of.
 fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, ExitStatus)> {
-    let mut command = crate::app::engine_processes::hidden_command(program);
+    let mut command = supervisor::hidden_command(program);
 
     match backend {
         Backend::SevenZip => {
@@ -421,9 +421,8 @@ fn contents(backend: Backend, program: &Path, source: &Path) -> Option<(String, 
     let output = child.stdout.take()?;
     let (written, written_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut report = Vec::new();
-        let read = output.take(decode_budget()).read_to_end(&mut report);
-        let _ = written.send(read.ok().map(|_| report));
+        let report = supervisor::read_stdout_within_budget(output, decode_budget());
+        let _ = written.send(report);
     });
 
     // What the engine is reading, published for the threads that may decide it has stopped
@@ -455,13 +454,7 @@ fn refuse(key: &Key) {
         return;
     };
 
-    if refused.len() >= ANSWERS_MAX_ENTRIES {
-        refused.clear();
-    }
-
-    if !refused.contains(key) {
-        refused.push(key.clone());
-    }
+    refused.insert(key.clone(), ());
 }
 
 #[cfg(test)]

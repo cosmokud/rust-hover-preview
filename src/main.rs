@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod cache;
 mod config;
 mod engines;
 mod formats;
@@ -114,13 +115,7 @@ fn main() {
     // reap what earlier runs left behind, and put an icon in the tray.
     match app::detach::startup_mode() {
         app::detach::Startup::Tray => {}
-        // A hand-off this app cannot answer starts nothing at all rather than a second tray icon.
         app::detach::Startup::Refused => return,
-        app::detach::Startup::Detached(request) => {
-            app::detach::begin(request);
-            run_a_detached_window(&mut trace);
-            return;
-        }
         app::detach::Startup::Viewer(tray) => {
             run_a_viewer(&mut trace, tray);
             return;
@@ -267,6 +262,17 @@ fn main() {
     shell::wheel_input::request_stop();
     shell::key_input::request_stop();
 
+    // Ask viewers (serving + detached) to tear down engines/resident cleanly; bounded wait before
+    // KILL_ON_JOB_CLOSE reaps any stragglers at process exit.
+    if two_processes {
+        app::seam::request_shutdown();
+        let deadline = Instant::now() + Duration::from_millis(500);
+        let self_pid = std::process::id();
+        while Instant::now() < deadline && app::seam::any_live_viewer_other_than(self_pid) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     // The engine thread is joined only when it is idle: a COM call into Office
     // cannot be cancelled, and the app's exit must not wait on one.
     engines::office_render::shutdown();
@@ -343,73 +349,6 @@ fn sync_startup_setting(trace: &mut StartupTrace) {
     }
 }
 
-/// The run a detached window has: one preview thread, one configuration watch, and nothing that
-/// watches a listing.
-///
-/// It is deliberately not the tray app's start with pieces skipped at their own doors: the pieces
-/// that are missing here are the *whole* of what makes a hover possible — the Explorer hook, the
-/// two key watches, the sweep of what earlier runs left behind, the update check and the tray — and
-/// a detached window is a window no listing can reach (see `app::detach`).
-fn run_a_detached_window(trace: &mut StartupTrace) {
-    configure_dpi_awareness();
-    trace.step("dpi awareness");
-
-    // The apartment a page's own measurements are taken in before any file is read: a page is laid
-    // out by this thread, and a PDF page is rendered through Windows.Data.Pdf and a picture of a
-    // format this app has no decoder for is decoded by the codec Windows has (see
-    // `run_preview_window`).
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    }
-    trace.step("com");
-
-    let preview_handle = std::thread::spawn(|| {
-        ui::preview_window::run_preview_window();
-    });
-
-    // What the tray would have said out loud in its own process is said here off the same file (see
-    // `watch_the_configuration`).
-    let config_watch_handle = std::thread::spawn(watch_the_configuration);
-
-    // **The one watch a detached window keeps.** The wheel over a pinned picture, a pinned page and
-    // a sound's knob is the low-level hook's rather than the window's — a pin is nobody's keyboard
-    // until it is pressed, so Windows hands its notches to Explorer — and that hook is a process's
-    // own (see `shell::wheel_input`). The Explorer's hook and the two key watches are exactly what
-    // this window does not have.
-    // The pin key's chords, bound in this process as well: only the mouse half of the key is counted
-    // here, and a chord table nothing bound counts no press at all (see `shell::key_input::refresh`).
-    shell::key_input::refresh();
-    let wheel_handle = shell::wheel_input::spawn_wheel_watcher();
-    trace.step("threads");
-
-    // And what ends it: the tray app going — which the job every hand-off joins answers on its own —
-    // and the process that began it, waited on a second time for the machine where a job could not be
-    // joined (see `app::detach::watch_the_parent`).
-    app::detach::watch_the_parent();
-
-    // The window draws itself on its own thread, and it ends itself the moment its pin does (see
-    // `ui::preview_window::detach_open`): what is left here is only the waiting.
-    while RUNNING.load(Ordering::Acquire) {
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    shell::wheel_input::request_stop();
-
-    // The engines are this process's own and are ended with it the way the tray app's are ended
-    // with it: nothing of this app's should outlive the window it was begun for.
-    engines::office_render::shutdown();
-    engines::webview_preview::shutdown();
-    ui::preview_window::shut_down_the_resident();
-
-    let _ = preview_handle.join();
-    let _ = wheel_handle.join();
-    let _ = config_watch_handle.join();
-
-    unsafe {
-        CoUninitialize();
-    }
-}
-
 /// The run a viewer has: the preview loop, the one low-level hook a preview keeps, and nothing that
 /// watches a listing.
 ///
@@ -478,9 +417,11 @@ fn run_a_viewer(trace: &mut StartupTrace, tray: u32) {
     // `app::detach::watch_the_process`).
     app::detach::watch_the_process(tray);
 
-    while RUNNING.load(Ordering::Acquire) {
-        std::thread::sleep(Duration::from_millis(50));
+    while RUNNING.load(Ordering::Acquire) && !app::seam::shutdown_requested() {
+        std::thread::sleep(Duration::from_millis(25));
     }
+    RUNNING.store(false, Ordering::SeqCst);
+    app::seam::wake_preview_loop();
 
     shell::wheel_input::request_stop();
 
@@ -519,9 +460,33 @@ fn watch_the_configuration() {
         .as_ref()
         .and_then(|path| fs::metadata(path).ok())
         .and_then(|meta| meta.modified().ok());
+    let mut last_gen = app::seam::config_generation();
+    let mut mtime_ticks: u32 = 0;
 
     while RUNNING.load(Ordering::Acquire) {
-        std::thread::sleep(Duration::from_millis(1000));
+        // Fast 50ms check of atomic config_generation; fall back to 1s mtime poll for manual edits.
+        std::thread::sleep(Duration::from_millis(50));
+        if !RUNNING.load(Ordering::Acquire) {
+            break;
+        }
+
+        let current_gen = app::seam::config_generation();
+        if current_gen != last_gen {
+            last_gen = current_gen;
+            last_modified = config_path
+                .as_ref()
+                .and_then(|path| fs::metadata(path).ok())
+                .and_then(|meta| meta.modified().ok());
+            // Wake viewer loop (especially detached viewers that left preview_ring) and refresh hook bindings.
+            app::seam::wake_preview_loop();
+            shell::key_input::refresh();
+            continue;
+        }
+
+        mtime_ticks = mtime_ticks.wrapping_add(1);
+        if !mtime_ticks.is_multiple_of(20) {
+            continue;
+        }
 
         let modified = config_path
             .as_ref()
@@ -533,20 +498,25 @@ fn watch_the_configuration() {
         }
         last_modified = modified;
 
-        // The two values a detached window has to be *told* about rather than only read, taken
-        // before the reload: what changed is the difference between the two readings.
-        let before = CONFIG
-            .lock()
-            .map(|config| (config.text_font_scale_percent, config.pin_always_on_top))
-            .unwrap_or_default();
+        let before = {
+            let config = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                config.text_font_scale_percent,
+                config.pin_always_on_top,
+                config.pdf_full_mode,
+            )
+        };
 
-        // A level edited on disk reaches a live pin from here, or opening the menu is the first
-        // place its change is noticed (see `show_context_menu`). Unchanged halves — and a level this
-        // process wrote itself — publish nothing.
-        let changed = CONFIG
-            .lock()
-            .map(|mut config| config.reload_from_disk_keeping_our_own_levels())
-            .unwrap_or((false, false));
+        let changed = {
+            let mut config = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+            config.reload_from_disk_keeping_our_own_levels()
+        };
+
+        // External manual config.ini edit: notify viewers via generation + ConfigChanged.
+        if !app::detach::is_detached() {
+            last_gen = app::seam::bump_config_generation();
+            app::seam::send_preview(app::seam::PreviewMessage::ConfigChanged);
+        }
 
         // Lock released first: the message a publish sends locks `CONFIG` again.
         if changed.0 {
@@ -557,26 +527,25 @@ fn watch_the_configuration() {
         }
 
         if crate::app::detach::is_detached() {
-            let after = CONFIG
-                .lock()
-                .map(|config| (config.text_font_scale_percent, config.pin_always_on_top))
-                .unwrap_or_default();
+            let after = {
+                let config = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+                (
+                    config.text_font_scale_percent,
+                    config.pin_always_on_top,
+                    config.pdf_full_mode,
+                )
+            };
             if after.0 != before.0 {
                 ui::preview_window::publish_text_font_size(after.0);
             }
-            // The band, and only while pinning is switched on: the message is the same one the tray's
-            // own row sends, and its answer for a window with **Pin Mode → Enable** off is to end it —
-            // which is right for a pin the tray owns and wrong for a window of its own, because that
-            // switch is about taking pins from the listing and this window was taken long ago (see
-            // `PreviewMessage::PinChanged`).
             if after.1 != before.1 && crate::ui::preview_window::pin_mode_is_enabled() {
                 ui::preview_window::refresh_pin();
             }
+            if before.2 && !after.2 {
+                engines::pdf_viewer::close_the_pins();
+            }
         }
 
-        // The pin key is a number the keyboard hook reads rather than the configuration, so a
-        // spelling that changed on disk is handed to it here — off the hook's own path, which may
-        // not take a lock.
         shell::key_input::refresh();
     }
 }

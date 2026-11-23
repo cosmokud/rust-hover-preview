@@ -19,34 +19,55 @@ pub(super) static PIN_ARC: AtomicU64 = AtomicU64::new(0);
 /// fits in the `u64` an atomic can hold rather than in an `Instant` it cannot.
 pub(super) static PIN_ARC_BASE: Lazy<Instant> = Lazy::new(Instant::now);
 
-/// **The file the pin is being shown next**, while that question is still in flight: a load that has
-/// not answered, a box nothing has measured yet, or a swap held for the incoming film's picture.
-///
-/// `pinned_path()` is what the pin is showing *now* and does not move until the install writes it,
-/// so it is not the whole of "the file the user has already asked for". A second click on the file
-/// the pin is on its way to is not another file: it used to restart the swap — dropping the load,
-/// abandoning the hold and its player — which is a picture taken off the band and a film opened
-/// twice for one press (see `update_pinned_preview` and `PinUpdateWatch::offer`).
-static THE_FILE_IN_FLIGHT: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// Cohesive install/pick coordination state (file in flight, active pick road, cold-pin debounce).
+struct PinInstallState {
+    file_in_flight: Option<PathBuf>,
+    pick: (u64, PickRoad),
+    cold_pin_answered: Option<Instant>,
+}
 
-/// Note the file the pin is now on its way to, or `None` where nothing is in flight any more (see
-/// `THE_FILE_IN_FLIGHT`).
+static PIN_INSTALL_STATE: Mutex<PinInstallState> = Mutex::new(PinInstallState {
+    file_in_flight: None,
+    pick: (0, PickRoad::Update),
+    cold_pin_answered: None,
+});
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(super) fn reset_pin_install_state() {
+    if let Ok(mut state) = PIN_INSTALL_STATE.lock() {
+        state.file_in_flight = None;
+        state.pick = (0, PickRoad::Update);
+        state.cold_pin_answered = None;
+    }
+    crate::app::seam::publish_the_pin_file_in_flight(None);
+}
+
+/// Route pin install/swap surface presentation through the `PinWindow` seam.
+#[allow(dead_code)]
+pub(super) fn install_pin_surface_on(window: &dyn PinWindow, box_: ScreenRegion) {
+    window.install_pin_surface(box_);
+}
+
+/// Note the file the pin is now on its way to, or `None` where nothing is in flight any more.
 ///
 /// Published to the Explorer hook as well as held here: the hook is what offers a pick, and the file one
 /// is already on its way to is the one it must not offer again. What crosses is the file's fingerprint
 /// rather than the file, because the hook may not allocate (see `app::seam::PIN_FILE_IN_FLIGHT`).
 pub(super) fn note_the_pin_file_in_flight(path: Option<&Path>) {
-    if let Ok(mut held) = THE_FILE_IN_FLIGHT.lock() {
-        *held = path.map(Path::to_path_buf);
+    if let Ok(mut state) = PIN_INSTALL_STATE.lock() {
+        state.file_in_flight = path.map(Path::to_path_buf);
     }
 
     crate::app::seam::publish_the_pin_file_in_flight(path);
 }
 
-/// The file the pin has already been asked for and is not showing yet, if there is one (see
-/// `THE_FILE_IN_FLIGHT`).
+/// The file the pin has already been asked for and is not showing yet, if there is one.
 pub(super) fn pin_file_in_flight() -> Option<PathBuf> {
-    THE_FILE_IN_FLIGHT.lock().ok().and_then(|held| held.clone())
+    PIN_INSTALL_STATE
+        .lock()
+        .ok()
+        .and_then(|state| state.file_in_flight.clone())
 }
 
 /// Which road asked the pin for the file it is being shown: a pick in the listing behind it
@@ -77,14 +98,11 @@ impl PickRoad {
 /// lines can be read against the press that caused them (see `note_the_pick`).
 static PICK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// The pick the pin is being shown a file for: its number and the road it came by (see `PickRoad`).
-static THE_PICK: Mutex<(u64, PickRoad)> = Mutex::new((0, PickRoad::Update));
-
 /// Note the pick the pin is being shown a file for, and answer its number.
 pub(super) fn note_the_pick(road: PickRoad, path: &Path) -> u64 {
     let number = PICK_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
-    if let Ok(mut held) = THE_PICK.lock() {
-        *held = (number, road);
+    if let Ok(mut state) = PIN_INSTALL_STATE.lock() {
+        state.pick = (number, road);
     }
     note_pin_trace!(
         "pick {number} by {}: {} in flight",
@@ -96,9 +114,9 @@ pub(super) fn note_the_pick(road: PickRoad, path: &Path) -> u64 {
 
 /// The pick the pin is being shown a file for, as the last one taken up noted it.
 pub(super) fn the_pick() -> (u64, PickRoad) {
-    THE_PICK
+    PIN_INSTALL_STATE
         .lock()
-        .map(|held| *held)
+        .map(|state| state.pick)
         .unwrap_or((0, PickRoad::Update))
 }
 
@@ -819,6 +837,8 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(media);
     }
+    // Invalidate/refresh cached taskbar still so swaps while collapsed/minimized never keep stale aspect.
+    pin_taskbar_mirror::invalidate_or_refresh_pin_picture();
 
     // What the loop's own bookkeeping is about is the file on screen, and the pin is showing
     // another one now: the card a sound is drawn from, the render tier's own record, and the
@@ -1144,7 +1164,19 @@ pub(super) fn take_pin_load(pin_load: &mut Option<PinLoad>) -> Option<PinAnswer>
 /// `rect` is the media's own box: the hover's preview box for a first pin, and the box the swap
 /// laid the incoming file out in for the other road. Everything else is read off the machine and
 /// off the pin being replaced, and the caller publishes the result.
+#[cfg(test)]
 pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPreview {
+    take_up_pinned_window_with_facts(path, rect, None)
+}
+
+pub(super) fn take_up_pinned_window_with_facts(
+    path: &Path,
+    rect: ScreenRegion,
+    hover: Option<Arc<HoverFacts>>,
+) -> PinnedPreview {
+    let hover = hover
+        .filter(|facts| facts.probe.path() == path)
+        .unwrap_or_else(|| Arc::new(HoverFacts::read(path)));
     // The media's kind, and the share its sound's card frame was
     // painted at, read in one look: the take-up is the moment a
     // pin's card is first its own, and the pin remembers the share
@@ -1284,7 +1316,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
     // A take-up runs for every file a walk lands on rather than once per
     // pin, so it is the arrow keys, the two step buttons and a pick in the
     // listing alike that pay it.
-    let keeps_its_box = pin_keeps_its_box(path);
+    let keeps_its_box = pin_keeps_its_box_of(&hover);
 
     // The name the hand-off button says is asked of the planner rather
     // than here, for the same reason and by the same rule: it is a
@@ -1296,7 +1328,11 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
 
     // The bound the files after this one are fitted into, read once: a line writes it beside the one
     // the window had before this take-up (see `pin_bound_after`).
-    let bound_before = carried.and_then(|(.., bound)| bound);
+    // UseScalingSettings drops carried bound so pin.bound resets to the newly scaled content box.
+    let bound_before = match current_pin_scaling_mode() {
+        PinScalingMode::UntilResized => carried.and_then(|(.., bound)| bound),
+        PinScalingMode::UseScalingSettings => None,
+    };
     let bound = pin_bound_after(bound_before, keeps_its_box, content);
 
     note_pin_trace!(
@@ -1312,6 +1348,7 @@ pub(super) fn take_up_pinned_window(path: &Path, rect: ScreenRegion) -> PinnedPr
 
     PinnedPreview {
         path: path.to_path_buf(),
+        hover_facts: Some(hover),
         content,
         // A pin taken up over another one keeps the bound the window has:
         // what a swap is measured against is the size the window was given
@@ -2190,9 +2227,6 @@ fn merge_the_run(media: &mut MediaData, old: &[Arc<ImageFrame>]) {
     media.frames = frames;
 }
 
-/// The tick a cold pin was last taken up, and so the press it was answered for.
-static THE_COLD_PIN_WAS_ANSWERED: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
-
 /// How long one press is answered for.
 ///
 /// A press count the loop drains is a hook's, and a hook may write it twice for one hand — a key and the
@@ -2212,19 +2246,22 @@ const A_COLD_PIN_PRESS_IS_ANSWERED_FOR: Duration = Duration::from_millis(20);
 pub(super) fn take_the_cold_pins_file() -> Option<PathBuf> {
     let path = crate::app::seam::take_the_pointer_file()?;
 
-    let mut answered = THE_COLD_PIN_WAS_ANSWERED
+    let mut state = PIN_INSTALL_STATE
         .lock()
         .unwrap_or_else(|held| held.into_inner());
     let now = Instant::now();
-    if answered.is_some_and(|at| now.duration_since(at) < A_COLD_PIN_PRESS_IS_ANSWERED_FOR) {
+    if state
+        .cold_pin_answered
+        .is_some_and(|at| now.duration_since(at) < A_COLD_PIN_PRESS_IS_ANSWERED_FOR)
+    {
         note_pin_trace!(
             "cold pin: {} is already answered by this press",
             pin_trace::path_name(&path)
         );
         return None;
     }
-    *answered = Some(now);
-    drop(answered);
+    state.cold_pin_answered = Some(now);
+    drop(state);
 
     Some(path)
 }
@@ -2260,7 +2297,7 @@ pub(super) unsafe fn take_up_a_cold_pin(
     room: (u32, u32),
     waiting: &mut Option<PathBuf>,
 ) -> Option<()> {
-    let hover = HoverFacts::read(path);
+    let hover = Arc::new(HoverFacts::read(path));
     let bounds = work_area_at(at.0, at.1);
     let dpi = dpi_at(at.0, at.1);
 
@@ -2268,7 +2305,7 @@ pub(super) unsafe fn take_up_a_cold_pin(
 
     // What the file is owed, asked before anything is built: a box to wait for is no window at all, and
     // nothing here draws it is the press that answers nothing (see `a_cold_pins_file_is_owed`).
-    let owed = a_cold_pins_file_is_owed(path, generation, room, measured, waiting);
+    let owed = a_cold_pins_file_is_owed_of(&hover, generation, room, measured, waiting);
 
     note_pin_trace!(
         "cold pin: {} is owed {:?} at {},{} w/ box {}",
@@ -2284,14 +2321,15 @@ pub(super) unsafe fn take_up_a_cold_pin(
     // A file still owed its box, and a file nothing here draws, are both the press that raises no window.
     let shape = a_cold_pins_shape(measured, owed)?;
 
-    let content = a_cold_pins_box(path, shape, bounds, dpi);
+    let content = a_cold_pins_box_of(&hover, shape, bounds, dpi);
+    let anticipated_kind = a_cold_pins_kind_of(&hover);
     note_pin_trace!(
         "cold pin: {} at {} on {},{} kind {:?} shape {}x{}",
         pin_trace::path_name(path),
         pin_trace::a_box(content),
         at.0,
         at.1,
-        a_cold_pins_kind(path),
+        anticipated_kind,
         shape.0,
         shape.1
     );
@@ -2310,14 +2348,14 @@ pub(super) unsafe fn take_up_a_cold_pin(
         None => create_loading_media_of_kind(
             (content.2 - content.0).max(1) as u32,
             (content.3 - content.1).max(1) as u32,
-            a_cold_pins_kind(path),
+            anticipated_kind,
         ),
     };
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(stand_in);
     }
 
-    let pin = take_up_pinned_window(path, content);
+    let pin = take_up_pinned_window_with_facts(path, content, Some(hover));
     let kind = current_media_type();
     pin_stands_in_its_own_window(pin_should_stand_in_its_own_window(kind, path));
     install(pin);
@@ -2357,7 +2395,7 @@ pub(super) fn a_cold_pins_shape(
 ///
 /// A pin has the whole display to stand in rather than the wedge beside the hand, and what it gives the file
 /// is the work area with its own chrome taken off it (see `pinned_room`) and the file fitted into that at the
-/// share its kind's `Scaling` row names (see `hover_preview_scale`, which is the share a fresh take-up is
+/// share its kind's `Scaling` row names (see `effective_preview_scale`, which is the share a fresh take-up is
 /// given). A kind that holds no shape of its own — a page of text, a listing, a sound's card — is laid out
 /// in that room and centred on it, exactly as the `keeps-its-box` arm of a swap does (see
 /// `pin_update_content`); every other file is fitted into the room by `pin_update_box`.
@@ -2365,13 +2403,24 @@ pub(super) fn a_cold_pins_shape(
 /// The chrome is asked of the file's own kind (see `a_cold_pins_kind`), which is the whole of what makes a
 /// film's box a band short and a picture's not: a take-up's own chrome is read off `CURRENT_MEDIA`, which is
 /// the stand-in this box is measured for.
+#[cfg(test)]
 pub(super) fn a_cold_pins_box(
     path: &Path,
     shape: (u32, u32),
     bounds: ScreenBounds,
     dpi: u32,
 ) -> ScreenRegion {
-    let kind = a_cold_pins_kind(path);
+    a_cold_pins_box_of(&HoverFacts::read(path), shape, bounds, dpi)
+}
+
+pub(super) fn a_cold_pins_box_of(
+    hover: &HoverFacts,
+    shape: (u32, u32),
+    bounds: ScreenBounds,
+    dpi: u32,
+) -> ScreenRegion {
+    let path = hover.probe.path();
+    let kind = a_cold_pins_kind_of(hover);
     let page_runs = matches!(kind, Some(MediaType::EngineSvg | MediaType::EngineFont))
         && webview_preview::page_runs(path);
     let room = pinned_room(
@@ -2381,10 +2430,10 @@ pub(super) fn a_cold_pins_box(
         pin_overlay_chrome(kind, page_runs),
         pinned_caption_height(dpi, kind),
     );
-    let scale = hover_preview_scale(path, current_hover_scales());
+    let scale = effective_preview_scale_of(hover, hover.scales);
 
     let laid_out = pin_update_box(room.region(), shape, scale);
-    if pin_keeps_its_box(path) {
+    if pin_keeps_its_box_of(hover) {
         return centred_at(
             (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1),
             ((room.left + room.right) / 2, (room.top + room.bottom) / 2),
@@ -2403,12 +2452,12 @@ pub(super) fn a_cold_pins_box(
 /// transport bar, and a film's box is measured a bar's rows too tall for it. The kind named here is the
 /// stand-in's, and the ordinary `install_pinned_media` renews the pin with the media the loader really
 /// answered — so a wrong anticipation costs one take-up's chrome and is put right a tick later.
-pub(super) fn a_cold_pins_kind(path: &Path) -> Option<MediaType> {
+pub(super) fn a_cold_pins_kind_of(hover: &HoverFacts) -> Option<MediaType> {
+    let path = hover.probe.path();
     if pinned_engine_media(path).is_some() {
         return None;
     }
 
-    let hover = HoverFacts::read(path);
     let routed = hover.routed_kind()?;
 
     // A picture that plays is the one kind a name cannot settle, and the goods are only worth the read when
@@ -2483,6 +2532,21 @@ pub(super) fn a_cold_pins_file_is_owed(
     measured: Option<(u32, u32)>,
     waiting: &mut Option<PathBuf>,
 ) -> ColdPinOwed {
+    if measured.is_none() {
+        *waiting = None;
+        return ColdPinOwed::Nothing;
+    }
+    a_cold_pins_file_is_owed_of(&HoverFacts::read(path), generation, room, measured, waiting)
+}
+
+pub(super) fn a_cold_pins_file_is_owed_of(
+    hover: &HoverFacts,
+    generation: u64,
+    room: (u32, u32),
+    measured: Option<(u32, u32)>,
+    waiting: &mut Option<PathBuf>,
+) -> ColdPinOwed {
+    let path = hover.probe.path();
     // **No box is no window**, whatever the file is: a measure is what lays a preview out to stand a window
     // in, and a file it measured nothing of — a name no list claims, a kind switched off, a reader with no
     // box for the file — is the press on something nothing can show (see `take_up_a_cold_pin`).
@@ -2491,8 +2555,7 @@ pub(super) fn a_cold_pins_file_is_owed(
         return ColdPinOwed::Nothing;
     }
 
-    let hover = HoverFacts::read(path);
-    let unprobed = video_probe_due(&hover);
+    let unprobed = video_probe_due(hover);
     let paging = page_is_on_the_way(path);
     let reading = measure_waiting(path);
 

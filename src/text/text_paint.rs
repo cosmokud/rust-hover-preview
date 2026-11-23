@@ -14,7 +14,6 @@
 
 use crate::config::config::sanitize_text_font_scale_percent;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
 use std::sync::Mutex;
 use syntect::highlighting::{Color, FontStyle, Style};
 use windows::core::PCWSTR;
@@ -152,8 +151,8 @@ struct LevelMetrics {
     ink_bottom: [i32; SIZE_LEVELS],
 }
 
-static LEVEL_METRICS: Lazy<Mutex<HashMap<(u32, u32), LevelMetrics>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static LEVEL_METRICS: Lazy<Mutex<crate::cache::BoundedCache<(u32, u32), LevelMetrics>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(LEVEL_METRICS_MAX_ENTRIES)));
 
 /// Font metrics for one display scale and font scale, taken from GDI once per
 /// scale and font size. The ink rows are the rows of a line box the level's
@@ -213,7 +212,7 @@ impl TextMetrics {
 /// The five levels at `scale`, from the cache when this display scale and font
 /// size have been measured before.
 fn level_metrics(dc: HDC, key: (u32, u32), scale: f32) -> Option<LevelMetrics> {
-    if let Ok(cache) = LEVEL_METRICS.lock() {
+    if let Ok(mut cache) = LEVEL_METRICS.lock() {
         if let Some(cached) = cache.get(&key) {
             return Some(*cached);
         }
@@ -222,9 +221,6 @@ fn level_metrics(dc: HDC, key: (u32, u32), scale: f32) -> Option<LevelMetrics> {
     let measured = measure_levels(dc, scale)?;
 
     if let Ok(mut cache) = LEVEL_METRICS.lock() {
-        if !cache.contains_key(&key) && cache.len() >= LEVEL_METRICS_MAX_ENTRIES {
-            cache.clear();
-        }
         cache.insert(key, measured);
     }
 
@@ -693,5 +689,47 @@ pub(crate) fn fill_rect(surface: &DibSurface, rect: RECT, color: [u8; 3]) {
     for y in top..bottom {
         let row = &mut words[y as usize * width as usize..(y as usize + 1) * width as usize];
         row[left as usize..right as usize].fill(pixel);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_helpers_blend_luminance_and_readable_contrast() {
+        assert!((luminance([0, 0, 0]) - 0.0).abs() < 1e-6);
+        assert!((luminance([255, 255, 255]) - 1.0).abs() < 1e-6);
+        assert_eq!(blend([0, 100, 200], [100, 200, 0], 0.5), [50, 150, 100]);
+
+        // Low-contrast text on light/dark backgrounds is pulled to readable contrast.
+        let on_light = readable([240, 240, 240], [255, 255, 255]);
+        assert!((luminance(on_light) - luminance([255, 255, 255])).abs() >= 0.45);
+
+        let on_dark = readable([20, 20, 20], [10, 10, 10]);
+        assert!((luminance(on_dark) - luminance([10, 10, 10])).abs() >= 0.45);
+    }
+
+    #[test]
+    fn scaled_and_dib_surface_fill_rect_clip_safely() {
+        assert_eq!(scaled(10, 1.0), 10);
+        assert_eq!(scaled(10, 1.5), 15);
+        assert_eq!(scaled(0, 2.0), 1); // scaled clamps minimum to 1
+
+        let surface = DibSurface::create(4, 4).expect("4x4 dib");
+        fill_rect(
+            &surface,
+            RECT {
+                left: -2,
+                top: -2,
+                right: 2,
+                bottom: 2,
+            },
+            [0x11, 0x22, 0x33],
+        );
+        let px = surface.pixels();
+        // Top-left (0,0) is filled BGRA = [0x33, 0x22, 0x11, 0xff]; bottom-right (3,3) stays black (opaque readback).
+        assert_eq!(&px[0..4], &[0x33, 0x22, 0x11, 0xff]);
+        assert_eq!(&px[px.len() - 4..], &[0, 0, 0, 255]);
     }
 }

@@ -105,6 +105,30 @@ fn reads_the_size_a_png_says_it_is() {
     assert_eq!(png_dimensions(&smaller), Some((800, 600)));
 }
 
+#[test]
+fn bracketed_and_at_paths_use_stdin_literal_input_while_normal_paths_stay_direct() {
+    assert_eq!(
+        magick_input_for(Path::new(r"C:\photos\shot.nef")),
+        MagickInput::Path(Path::new(r"C:\photos\shot.nef"))
+    );
+    assert_eq!(
+        magick_input_for(Path::new(r"C:\photos\shot[1].png")),
+        MagickInput::Stdin("png:-".to_string())
+    );
+    assert_eq!(
+        magick_input_for(Path::new(r"C:\photos\shot[1].NEF")),
+        MagickInput::Stdin("nef:-".to_string())
+    );
+    assert_eq!(
+        magick_input_for(Path::new(r"C:\photos\shot.png[1]")),
+        MagickInput::Stdin("-".to_string())
+    );
+    assert_eq!(
+        magick_input_for(Path::new("@list.png")),
+        MagickInput::Stdin("png:-".to_string())
+    );
+}
+
 /// What the engine developed is held for the hover that asked and handed over once: it
 /// is a picture waiting to be drawn, not a cache, and the second caller — a hover that
 /// was replayed twice — is answered with nothing rather than with the same picture again.

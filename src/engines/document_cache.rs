@@ -43,7 +43,6 @@ use crate::config::config::{
 use crate::readers::pdf_preview;
 use crate::CONFIG;
 use once_cell::sync::Lazy;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::hash::{Hash, Hasher};
@@ -232,7 +231,8 @@ fn with_index<T>(folder: &Path, ask: impl FnOnce(&mut FolderIndex) -> T) -> Opti
 }
 
 /// A page's own size, remembered by the document it was drawn from.
-static SIZES: Lazy<Mutex<HashMap<String, (u32, u32)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static SIZES: Lazy<Mutex<crate::cache::BoundedCache<String, (u32, u32)>>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(SIZE_MEMO_MAX_ENTRIES)));
 
 /// The page a hover is waiting for: the one stored a moment ago and not drawn yet, and the one
 /// page a trim never gives up (see `prune`). It is held with the document it was drawn from, which
@@ -321,7 +321,7 @@ fn image_limit_bytes() -> u64 {
 /// kind: a name is what goes into the key, and two engines that draw the same document draw
 /// different pages.
 fn key(source: &Path, engine: &str) -> String {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = crate::cache::StableHasher::new();
     source.to_string_lossy().to_lowercase().hash(&mut hasher);
     engine.hash(&mut hasher);
 
@@ -651,7 +651,7 @@ pub(crate) fn size_image(source: &Path, engine: &str) -> Option<(u32, u32)> {
 fn size_in(folder: &Path, source: &Path, engine: &str) -> Option<(u32, u32)> {
     let key = key(source, engine);
 
-    if let Ok(sizes) = SIZES.lock() {
+    if let Ok(mut sizes) = SIZES.lock() {
         if let Some(size) = sizes.get(&key) {
             return Some(*size);
         }
@@ -659,9 +659,6 @@ fn size_in(folder: &Path, source: &Path, engine: &str) -> Option<(u32, u32)> {
 
     let size = read_size(&page_in(folder, source, engine)?)?;
     if let Ok(mut sizes) = SIZES.lock() {
-        if sizes.len() >= SIZE_MEMO_MAX_ENTRIES {
-            sizes.clear();
-        }
         sizes.insert(key, size);
     }
 

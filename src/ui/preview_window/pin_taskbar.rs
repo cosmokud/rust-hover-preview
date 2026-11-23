@@ -26,8 +26,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, IsIconic, IsWindow, SendMessageW, SetWindowTextW, ICON_BIG, ICON_SMALL,
     SC_CLOSE, SC_MINIMIZE, SC_RESTORE, SHOW_WINDOW_CMD, SW_MINIMIZE, SW_SHOWMINNOACTIVE,
     SW_SHOWNOACTIVATE, WA_ACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND,
-    WM_DWMSENDICONICTHUMBNAIL, WM_QUERYOPEN, WM_SETICON, WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP,
-    WS_SYSMENU,
+    WM_DWMSENDICONICLIVEPREVIEWBITMAP, WM_DWMSENDICONICTHUMBNAIL, WM_QUERYOPEN, WM_SETICON,
+    WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 /// The class the taskbar stand-in is created from.
 pub(super) const PIN_TASKBAR_CLASS: PCWSTR = w!("RustHoverPreviewPinTaskbar");
@@ -597,6 +597,7 @@ pub(super) unsafe extern "system" fn pin_taskbar_proc(
         // falls back on otherwise is the window's icon — answered with the pin's own picture (see
         // `pin_taskbar_mirror`'s `answer_a_thumbnail_ask`).
         WM_DWMSENDICONICTHUMBNAIL => pin_taskbar_mirror::answer_a_thumbnail_ask(hwnd, lparam),
+        WM_DWMSENDICONICLIVEPREVIEWBITMAP => pin_taskbar_mirror::answer_a_live_preview_ask(hwnd),
         // The Shell asks an iconized window whether it may be opened before it opens it; this one
         // never may, because what it stands in for is not on the screen: the ask is answered by
         // putting the pin back and taking the stand-in away, and the button is never brought up.

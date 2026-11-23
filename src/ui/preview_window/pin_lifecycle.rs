@@ -4,8 +4,6 @@
 use super::pin_trace::{self, note_pin_trace};
 use super::*;
 
-use windows::Win32::Graphics::Dwm::DwmFlush;
-
 /// A pin was asked to come down, by the Explorer hook (previews were turned off, or the</path>
 /// trigger key is holding them back), by the tray, or by the resumption of the machine
 /// from sleep. What a pin *is* — a window and the media under it — belongs to the
@@ -22,6 +20,93 @@ pub(super) use crate::app::seam::PIN_END_REQUESTED;
 /// the pin itself is left standing, and the loop takes the ask on its next tick. It lives in
 /// `app::seam` for the reason `PIN_END_REQUESTED` does.
 pub(super) use crate::app::seam::PIN_MENU_DISMISS_REQUESTED;
+
+/// 1-frame non-blocking delay before hiding PREVIEW_HWND on hover->pin handoff so DWM commits
+/// REAL_PIN_HWND + WS_CLIPCHILDREN strips before the backing surface disappears.
+pub(super) const DEFERRED_PREVIEW_HIDE_DELAY: Duration = Duration::from_millis(FRAME_WAIT_MS);
+
+#[derive(Clone, Copy)]
+struct DeferredPreviewHide {
+    hwnd: isize,
+    deadline: Instant,
+}
+
+static DEFERRED_PREVIEW_HIDE: Mutex<Option<DeferredPreviewHide>> = Mutex::new(None);
+
+pub(super) fn is_deferred_preview_hide_pending() -> bool {
+    DEFERRED_PREVIEW_HIDE
+        .lock()
+        .ok()
+        .is_some_and(|slot| slot.is_some())
+}
+
+pub(super) fn cancel_deferred_preview_hide() {
+    if let Ok(mut slot) = DEFERRED_PREVIEW_HIDE.lock() {
+        *slot = None;
+    }
+}
+
+pub(super) fn flush_deferred_preview_hide() {
+    let pending = DEFERRED_PREVIEW_HIDE
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    if let Some(pending) = pending {
+        if pending.hwnd != 0 {
+            let _ = unsafe { ShowWindow(HWND(pending.hwnd as *mut _), SW_HIDE) };
+        }
+    }
+}
+
+pub(super) fn poll_deferred_preview_hide(now: Instant) -> bool {
+    let due = DEFERRED_PREVIEW_HIDE
+        .lock()
+        .ok()
+        .and_then(|mut slot| match *slot {
+            Some(pending) if now >= pending.deadline => slot.take(),
+            _ => None,
+        });
+    if let Some(pending) = due {
+        if pending.hwnd != 0 {
+            let _ = unsafe { ShowWindow(HWND(pending.hwnd as *mut _), SW_HIDE) };
+        }
+        return true;
+    }
+    false
+}
+
+pub(super) fn deferred_preview_hide_remaining_ms(now: Instant) -> Option<u64> {
+    let slot = DEFERRED_PREVIEW_HIDE.lock().ok()?;
+    let pending = (*slot)?;
+    let rem = pending.deadline.saturating_duration_since(now).as_millis();
+    Some(rem.clamp(1, FRAME_WAIT_MS as u128) as u64)
+}
+
+/// Place PREVIEW_HWND directly behind `below` (dropping topmost if `below` is non-topmost)
+/// and defer SW_HIDE by 1 frame (~16ms) with zero UI-thread blocking.
+pub(super) unsafe fn schedule_deferred_preview_hide_at(preview: HWND, below: HWND, now: Instant) {
+    if !below.is_invalid() && below != preview {
+        let _ = SetWindowPos(
+            preview,
+            below,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+    if let Ok(mut slot) = DEFERRED_PREVIEW_HIDE.lock() {
+        *slot = Some(DeferredPreviewHide {
+            hwnd: preview.0 as isize,
+            deadline: now + DEFERRED_PREVIEW_HIDE_DELAY,
+        });
+    }
+}
+
+pub(super) unsafe fn schedule_deferred_preview_hide(preview: HWND, below: HWND) {
+    schedule_deferred_preview_hide_at(preview, below, Instant::now());
+}
 
 /// Whether a `Hide` that would take the preview's window down belongs to a hover at all: a pin
 /// standing in a window of its own is the window the user is looking at, and its own end is the
@@ -57,6 +142,7 @@ pub(super) unsafe fn take_the_hover_down(
 
     // The hover's own window, its held pointer and the document the engine is playing all go with
     // it. A document's window is its own, so nothing else here takes it down.
+    cancel_deferred_preview_hide();
     let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
     if !pin_owns_the_window {
         unsafe { pin_real_window::hide_real_pin_window() };
@@ -1304,6 +1390,21 @@ impl PinWindow for Win32PinWindow {
         unsafe { hide_pin_taskbar() };
     }
 
+    fn show_pin_bubble(&self, anchor: ScreenRegion) {
+        unsafe { show_pin_bubble(anchor) };
+    }
+
+    fn destroy_pin_bubble(&self) {
+        let _ = destroy_pin_bubble();
+    }
+
+    fn install_pin_surface(&self, _box_: ScreenRegion) {
+        let hwnd = HWND(self.hwnd() as *mut _);
+        if !hwnd.is_invalid() {
+            unsafe { show_pinned_window(hwnd) };
+        }
+    }
+
     fn repaint(&self) {
         // Safety: the handle is read from the slot this app's own preview window was created
         // into, and the paint is a layered-window blit of a surface this app drew for exactly
@@ -1371,6 +1472,9 @@ pub(super) fn end_pin_beside_the_state() {
     // `pin_scrub`).
     pin_scrub::forget();
     pin_index::forget();
+
+    // Flush any deferred hover-preview hide immediately so unpin never leaves PREVIEW_HWND up.
+    flush_deferred_preview_hide();
 
     // And the window a pinned mpv film was drawn in — the host, a child of the pin's on the child
     // road and a window of the desktop's that owns the pin's chrome on the default one — with the
@@ -2029,6 +2133,12 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
 
+    // Promote live hover host BEFORE painting the pin window so film_host() is already live/visible
+    // and the single render paints a transparent hit-testable band over it without black or still cover.
+    if let Some(host) = the_hover_host {
+        adopt_the_hovered_film_in_the_host(host);
+    }
+
     // **A window this show made and could not paint is not shown**: there is no earlier frame of
     // its own to stand in for the surface, so the pin stays down and the tick's own restore asks
     // again rather than standing an empty frame where the hover was (see `the_pin_owes_a_show`).
@@ -2036,49 +2146,6 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     // one the hand sees, and hiding it would be the blink the whole road is for.
     if !render_pinned_preview_at(hwnd, window.0, window.1) && created_now {
         return;
-    }
-
-    // **A hover's host is the pin's host before the pin is shown, not after it.** The band is a
-    // hole over the Shell's picture, and while the host is still the hover's the pin's window is a
-    // hole over whatever the compositor has under it — the desktop — until the promotion lands a
-    // tick later. Made the pin's here, where the window it is owned by is still down, the picture is
-    // already the band's before the first composed frame (see
-    // `pin_film_host::promote_the_hover_film_host`).
-    //
-    // **And the band is held by the frame the film had on the screen a moment ago.** The paint above
-    // was the paint of a pin with no host: it left the band this app's black (or a hole with the
-    // listing behind it), and the promotion puts the host at the pin's box with its client dropped, so
-    // the frames the compositor makes of that host before the registration lands are whatever stands
-    // behind it rather than the film — the artifact read as the pin being shown before it was ready.
-    // A frame taken of the player's own device context is the film the user was already watching,
-    // so the band shows it and the live picture takes it over invisibly (see
-    // `pin_film_host::BandStill` and `pin_film_thumbnail::a_frame_of_the_players_picture`).
-    let a_hover_host_was_taken_up = if let Some(host) = the_hover_host {
-        let pid = hover_film_host::hover_film_host_player().unwrap_or(0);
-        if let Some((size, pixels)) = pin_film_thumbnail::a_frame_of_the_players_picture(pid) {
-            pin_film_host::keep_the_band_still(pid, size, pixels);
-            render_pinned_preview_at(hwnd, window.0, window.1);
-        }
-        adopt_the_hovered_film_in_the_host(host);
-        true
-    } else {
-        false
-    };
-
-    // **Everything the show is about to compose is composed before it is shown.** The paint above is
-    // a compositor round trip, and a promotion restyles the host through the one road that puts it
-    // down and up again for its taskbar bit (see `pin_film_host::promote_the_hover_film_host` and
-    // `pin_real_window::set_the_pin_window_appwindow`). A show that reaches the compositor first is
-    // therefore a pin whose band — a near-transparent hole over the film — is composed over a host
-    // that has not presented since: the listing or the desktop the pin was taken up over, showing
-    // through a picture that has not landed. That is what the user reads as the pin being shown
-    // before it was ready, and it is gone in the milliseconds it takes the host to present on its
-    // own — which is why it is an artifact rather than a broken pin.
-    //
-    // **Only for an appearance**, which a show of a window that is already on the screen is not: a
-    // resize step's road would pay a compositor round trip per frame for nothing.
-    if created_now || !on_the_screen || a_hover_host_was_taken_up {
-        let _ = unsafe { DwmFlush() };
     }
 
     // **A page is a window of its own, and the window the show is about to close over it is not
@@ -2180,10 +2247,6 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
         }
     }
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    // **The taken frame's clock starts at the pin's own show**, because the moment the pair is on the
-    // screen is the moment the compositor can be asked to make a frame of it: the still is handed back
-    // to the host's picture only after that (see `pin_film_host::BandStill`).
-    pin_film_host::the_band_still_is_on_the_screen();
     note_pin_trace!(
         "show hwnd {:?} handover {} visible {} rect {:?}",
         hwnd,
@@ -2244,7 +2307,18 @@ pub(super) unsafe fn show_pinned_window(hwnd: HWND) {
     let preview = PREVIEW_HWND.load(Ordering::SeqCst);
     let preview_up = unsafe { preview != 0 && IsWindowVisible(HWND(preview as *mut _)).as_bool() };
     if pin_is_its_own_window() && preview != 0 && preview != hwnd.0 as isize {
-        let _ = ShowWindow(HWND(preview as *mut _), SW_HIDE);
+        if preview_up {
+            // Defer SW_HIDE by 1 frame (~16ms) behind the pin/host so DWM commits the layered
+            // pin + WS_CLIPCHILDREN strips before the hover surface disappears.
+            let below = pin_film_host::film_host()
+                .filter(|host| unsafe { IsWindowVisible(*host).as_bool() })
+                .unwrap_or(hwnd);
+            schedule_deferred_preview_hide(HWND(preview as *mut _), below);
+        } else {
+            cancel_deferred_preview_hide();
+        }
+    } else if preview == hwnd.0 as isize {
+        cancel_deferred_preview_hide();
     }
 
     if !pin_always_on_top() {

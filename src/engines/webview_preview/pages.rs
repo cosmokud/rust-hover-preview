@@ -151,10 +151,9 @@ pub(super) fn html_page(
 /// pages rather than one page rewritten under the browser that has already seen the first.
 /// The version is what distinguishes one file from itself, not two files from each other.
 fn path_identity(path: &Path) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = crate::cache::StableHasher::new();
     path.hash(&mut hasher);
     hasher.finish()
 }

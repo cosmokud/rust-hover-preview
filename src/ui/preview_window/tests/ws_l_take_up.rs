@@ -17,6 +17,7 @@ use super::pin_input::take_relayout_request;
 fn wide_banded_video_pin(content: ScreenRegion, from: f64) -> PinnedPreview {
     PinnedPreview {
         path: PathBuf::from("ws-l-take-up.mkv"),
+        hover_facts: None,
         content,
         bound: Some(400),
         zoom: None,

@@ -68,3 +68,25 @@ fn declared_package(mime: &str) -> Vec<u8> {
 
 mod answers;
 mod table;
+
+/// `of_reaching_config` snapshots `CONFIG` under a short lock before performing disk I/O.
+/// Verify it classifies a real file on disk cleanly and leaves `CONFIG` unlocked afterwards.
+#[test]
+fn of_reaching_config_snapshots_config_and_classifies_without_holding_lock() {
+    let dir = std::env::temp_dir().join("rhp-probe-config-snapshot-test");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("fake_doc.docx");
+    // PNG signature inside a `.docx` name -> content_type overrides to Images.
+    std::fs::write(&path, b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR").expect("write png");
+
+    assert_eq!(
+        of_reaching_config(&path),
+        Content::Kind(PreviewType::Images)
+    );
+    assert!(
+        crate::CONFIG.try_lock().is_ok(),
+        "CONFIG lock must be released after of_reaching_config"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

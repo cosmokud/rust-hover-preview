@@ -25,21 +25,22 @@ use super::defaults::{
 };
 use super::setting_types::{
     AudioSeek, AvoidMode, BeatHz, EngineIdle, MarkdownMode, OfficeEngine, PinEndOfFile,
-    PinMinimizeTo, PinNavFileTypes, PreviewScale, TextTheme, TransparentBackground, TriggerKeyMode,
-    VideoEngine, DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK, DEFAULT_AVOID_MODE,
-    DEFAULT_BEAT_HZ, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND,
-    DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND, DEFAULT_MODEL_SCALE,
-    DEFAULT_PIN_ALWAYS_ON_TOP, DEFAULT_PIN_DOUBLE_CLICK_CENTER,
-    DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE, DEFAULT_PIN_MINIMIZE_TO,
+    PinMinimizeTo, PinNavFileTypes, PinScalingMode, PreviewScale, TextTheme, TransparentBackground,
+    TriggerKeyMode, VideoEngine, DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SEEK,
+    DEFAULT_AVOID_MODE, DEFAULT_BEAT_HZ, DEFAULT_BYPASS_PLACEMENT, DEFAULT_DDS_BACKGROUND,
+    DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
+    DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_HTML_BACKGROUND,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_MODEL_SCALE, DEFAULT_PIN_ALWAYS_ON_TOP,
+    DEFAULT_PIN_DOUBLE_CLICK_CENTER, DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE, DEFAULT_PIN_MINIMIZE_TO,
     DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, DEFAULT_PIN_MODE_AUDIO_SEEK,
     DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
     DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PIN_NAV_AUDIO,
     DEFAULT_PIN_NAV_IMAGE, DEFAULT_PIN_NAV_OTHERS, DEFAULT_PIN_NAV_VIDEO, DEFAULT_PIN_PAUSE_AUDIO,
-    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
-    DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE, DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE,
-    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP, DEFAULT_ZOOM_BACKGROUND,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_SCALING_MODE, DEFAULT_PIN_UPDATE_ENABLED,
+    DEFAULT_PIN_UPDATE_MOVE_TO_TOP, DEFAULT_PIN_UPDATE_ON_HOVER, DEFAULT_TEXT_SCALE,
+    DEFAULT_TRIGGER_KEY_AFFECT_PIN_MODE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_LOOP, DEFAULT_ZOOM_BACKGROUND,
 };
 
 #[derive(Debug, Clone)]
@@ -117,6 +118,8 @@ pub struct AppConfig {
     /// window goes rather than what it is, which is why it sits beside the pin's key rather than
     /// in the walk (see `PinMinimizeTo`).
     pub pin_minimize_to: PinMinimizeTo,
+    /// Whether pin swaps keep the window's current bound or recompute size from scaling settings.
+    pub pin_scaling_mode: PinScalingMode,
     /// Whether a double-click on a pin puts the window in the middle of the screen it stands on,
     /// its size untouched: a window that has been carried off to a corner is put back where a
     /// window is looked at rather than dragged back by hand. A window already in the middle is
@@ -168,6 +171,7 @@ pub struct AppConfig {
     /// What a walk anchored on any other file steps through (see `DEFAULT_PIN_NAV_OTHERS`).
     pub pin_nav_others: PinNavFileTypes,
     pub follow_cursor: bool,
+    pub bypass_placement: bool,
     /// How far a preview is placed clear of the item it is about, so the file the
     /// pointer is on or the keyboard is focused on stays readable while its preview is
     /// up. `Filename` by default, and it is the name that makes it so: the name of the
@@ -836,6 +840,7 @@ impl Default for AppConfig {
             pin_always_on_top: DEFAULT_PIN_ALWAYS_ON_TOP,
             pin_key: "mouse3,space".to_string(),
             pin_minimize_to: DEFAULT_PIN_MINIMIZE_TO,
+            pin_scaling_mode: DEFAULT_PIN_SCALING_MODE,
             pin_double_click_center: DEFAULT_PIN_DOUBLE_CLICK_CENTER,
             pin_double_click_reset_size: DEFAULT_PIN_DOUBLE_CLICK_RESET_SIZE,
             pin_pause_video: DEFAULT_PIN_PAUSE_VIDEO,
@@ -848,6 +853,7 @@ impl Default for AppConfig {
             pin_nav_audio: DEFAULT_PIN_NAV_AUDIO,
             pin_nav_others: DEFAULT_PIN_NAV_OTHERS,
             follow_cursor: DEFAULT_FOLLOW_CURSOR,
+            bypass_placement: DEFAULT_BYPASS_PLACEMENT,
             avoid_mode: DEFAULT_AVOID_MODE,
             same_file_rehover_delay_ms: DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
             settling_delay_ms: DEFAULT_SETTLING_DELAY_MS,

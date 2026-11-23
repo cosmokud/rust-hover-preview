@@ -484,16 +484,16 @@ fn a_video_follows_its_own_scale() {
 /// A video is not a bitmap for this question, whatever engine plays it: what its preview is, once
 /// its player has a window up, is a box the film is drawn into — the media engine's frames landing
 /// in this app's own window, FFmpeg's or mpv's player putting up a window of its own at the same
-/// box — so a fit is the size the film is watched at, up as well as down. It is the fit a pinned
-/// window has always taken, and the assertion below that the two roads agree is the whole of what
-/// changed: a film smaller than the display used to sit at its own size on a hover while a pin
-/// maximized over the same display enlarged it.
+/// box — so a fit is the size the film is watched at, up as well as down, and a `By Screen` share
+/// is that room reduced rather than half of the film's own pixels.
 ///
-/// The shares below the fit are the file's own size for a video as they are for a picture, which is
-/// the half of this that did not change: `By Own Size 150%` enlarges because a user asked for it,
-/// and `By Screen 50%` is half of the film rather than half of the room.
+/// That last half is the fault this test was rewritten for: a hover answered every video share but
+/// the plain fit as a share of the film, so `By Screen 50%` of a 640x360 file on a 4K display was
+/// 320x180 on the hover and half of the room (1920x1080) once pinned — two sizes for one file under
+/// one setting. Every road asks this one function now, so the two answers cannot disagree, and what
+/// separates the menu's two bases is the basis rather than the kind.
 #[test]
-fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
+fn a_hovered_video_fills_the_room_at_a_fit_and_takes_the_screen_share_below_one() {
     let small = PathBuf::from(r"C:\clips\holiday.mp4");
     let large = PathBuf::from(r"C:\clips\concert-4k.mp4");
     let room = (3840u32, 2160u32);
@@ -538,7 +538,7 @@ fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
             1080,
             room.0,
             room.1,
-            hover_preview_scale_of(&hover, at_fit)
+            effective_preview_scale_of(&hover, at_fit)
         ),
         (3840, 2160),
         "a 1080p film fitted to a 4K display is stretched over the whole work area, which is the \
@@ -548,7 +548,7 @@ fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
     // And the pinned window's own fit is the same answer, which is what makes the hover and the
     // maximize one rule rather than two: a film fitted in a pinned window fills the room.
     assert_eq!(
-        hover_preview_scale_of(&hover, at_fit),
+        effective_preview_scale_of(&hover, at_fit),
         effective_preview_scale(&small, at_fit),
         "a hover's fit and a pin's fit are the same fit, so a film does not change size when it is \
              pinned"
@@ -561,14 +561,14 @@ fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
             4320,
             room.0,
             room.1,
-            hover_preview_scale_of(&hover_large, at_fit)
+            effective_preview_scale_of(&hover_large, at_fit)
         ),
         (3840, 2160),
         "a 8K film fitted to a 4K display is still fitted down to it"
     );
 
     assert_eq!(
-        hover_preview_scale_of(
+        effective_preview_scale_of(
             &hover,
             HoverScales {
                 video: PreviewScale::Percent(150),
@@ -581,23 +581,24 @@ fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
     );
 
     assert_eq!(
-        hover_preview_scale_of(&hover, hover_scales()),
+        effective_preview_scale_of(&hover, hover_scales()),
         PreviewScale::Percent(100),
         "which is also what the app starts at, so a fresh install shows a film at its own size \
              and still does"
     );
 
-    // A reduced fit of the display is the room's fitted size reduced to the
-    // share it names, and a bitmap's fitted size is its own — so a hover is
-    // asked for that share of the film's own size, rather than half of the room.
+    // A reduced fit of the display is the room's fitted size reduced to the share it names, and a
+    // film is read that way on every road — the box its player is handed, which is what a
+    // `By Screen` row means.
     let at_half_fit = HoverScales {
         video: PreviewScale::FitToScreenReduced(50),
         ..hover_scales()
     };
     assert_eq!(
-        hover_preview_scale_of(&hover, at_half_fit),
-        PreviewScale::Percent(50),
-        "a reduced fit asks a video for half of its own size, not half of the room"
+        effective_preview_scale_of(&hover, at_half_fit),
+        PreviewScale::FitToScreenReduced(50),
+        "a reduced fit is kept as the share of the room it is, rather than read as a share of the \
+         film's own pixels"
     );
     assert_eq!(
         scale_dimensions(
@@ -605,11 +606,23 @@ fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
             1080,
             room.0,
             room.1,
-            hover_preview_scale_of(&hover, at_half_fit)
+            effective_preview_scale_of(&hover, at_half_fit)
         ),
-        (960, 540),
-        "a 1080p film at `By Screen 50%` is 960x540: half of the film, not half of the room, \
-             which is the base the menu's percentage rows are read against"
+        (1920, 1080),
+        "a 1080p film at `By Screen 50%` on a 4K display is 1920x1080: half of the fitted room, \
+         which is the whole of the display at the film's shape"
+    );
+    assert_ne!(
+        effective_preview_scale_of(&hover, at_half_fit),
+        effective_preview_scale_of(
+            &hover,
+            HoverScales {
+                video: PreviewScale::Percent(50),
+                ..hover_scales()
+            }
+        ),
+        "and `By Screen 50%` and `By Own Size 50%` are two sizes for one film, not one setting \
+         written twice"
     );
 
     // And a pinned window reads the fit the same way the hover does — asserted beside it above —
@@ -628,11 +641,8 @@ fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
              a maximize"
     );
 
-    // And the pin keeps the whole of the fit's bargain at a reduced fit too: the
-    // room is what is reduced, so a pinned film at half of a fitted room is
-    // half of the display rather than half of the film. It is the one place the two roads are
-    // still apart, and deliberately: a pinned window is fitted to the media it shows, and a
-    // reduced fit of the display is the room a maximize takes its share of.
+    // And the pin is the same size, which is what the fault was: a pinned film and a hovered one
+    // under one setting are one box, so what a hand pins does not change size under it.
     assert_eq!(
         scale_dimensions(
             1920,
@@ -645,20 +655,20 @@ fn a_hovered_video_fills_the_room_at_a_fit_and_takes_its_own_size_below_one() {
         "a pinned window is fitted to the room a reduced fit names, reduced"
     );
 
-    // And a size worked out again — the one a double-click puts a pinned window back to — is read
-    // at the *hover's* share of those two, because a window put back to the size the settings ask
-    // for is a window taken up again: what the pair resets is the size the window was pinned at
-    // (see `hover_preview_scale` and `reset_pinned_size`).
+    // And a size worked out again — the one a double-click puts a pinned window back to — is the
+    // same share, because a window put back to the size the settings ask for is a window taken up
+    // again (see `effective_preview_scale` and `reset_pinned_size`).
     assert_eq!(
-        hover_preview_scale(&small, at_half_fit),
-        PreviewScale::Percent(50),
-        "a size worked out again is read at the share a pinned window's own swaps use rather than \
-         at the one a take-up of the film is given"
-    );
-    assert_eq!(
-        hover_preview_scale(&small, at_fit),
-        effective_preview_scale(&small, at_fit),
-        "the two roads part company on a fit, which is not where they may"
+        scale_dimensions(
+            1920,
+            1080,
+            room.0,
+            room.1,
+            effective_preview_scale(&small, at_half_fit)
+        ),
+        (1920, 1080),
+        "a size worked out again is the share a take-up of the film is given, which is the whole \
+         of what the two roads agreeing means"
     );
 }
 

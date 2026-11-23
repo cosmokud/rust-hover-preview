@@ -52,7 +52,7 @@
 //! cache: a second hover of a book whose page is still held costs no conversion at all — which is
 //! the same answer `peazip_render` gives, and the same reason.
 
-use crate::config::config::{read_within_budget, AppConfig};
+use crate::config::config::{decode_budget_bytes, AppConfig};
 use crate::engines::document_cache::{self, PageKind};
 use crate::engines::supervisor::{self, Adapter, Worker};
 use once_cell::sync::Lazy;
@@ -236,7 +236,7 @@ fn convert(source: &Path) {
 /// nothing about the file's own name can move a file of this app's or be read as one of the
 /// engine's own switches.
 fn run(program: &Path, source: &Path, written: &Path) -> Option<Vec<u8>> {
-    let mut child = crate::app::engine_processes::hidden_command(program)
+    let mut child = supervisor::hidden_command(program)
         .arg(source)
         .arg(written)
         .stdin(Stdio::null())
@@ -272,7 +272,7 @@ fn run(program: &Path, source: &Path, written: &Path) -> Option<Vec<u8>> {
     // convert. What is read is bounded like every other read of this app's, by the ceiling one
     // hover may decode for — a book of a thousand scanned pages is a PDF of gigabytes, and one
     // past the budget is one no preview could draw.
-    let page = read_within_budget(written)?;
+    let page = supervisor::read_file_within_budget(written, decode_budget_bytes())?;
     page.starts_with(b"%PDF-").then_some(page)
 }
 

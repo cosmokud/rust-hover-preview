@@ -18,6 +18,7 @@ fn keyboard_placement(
         columns,
         orig_dims: (400, 300),
         follow_cursor: false,
+        bypass_placement: false,
         preview_scale: PreviewScale::Percent(100),
     }
 }
@@ -764,7 +765,8 @@ fn a_page_the_engine_draws_keeps_the_box_it_was_measured_at() {
         orig_dims: page,
         avoid: None,
         follow_cursor: false,
-        preview_scale: hover_preview_scale_of(&hover, hover.scales),
+        bypass_placement: false,
+        preview_scale: effective_preview_scale_of(&hover, hover.scales),
         at_the_pointer_corner: false,
     };
     let layout = compute_mouse_layout(900, 500, placement, bounds, dpi).expect("a layout");
@@ -819,4 +821,189 @@ fn a_page_the_engine_draws_keeps_the_box_it_was_measured_at() {
         (placed.2, placed.3),
         "and the frame that came back is placed again, the way every text preview is"
     );
+}
+
+fn assert_strictly_clear_of_cursor(layout: &PreviewLayout, cx: i32, cy: i32, gap: i32) {
+    let left = layout.pos_x;
+    let top = layout.pos_y;
+    let right = layout.pos_x + layout.preview_w as i32;
+    let bottom = layout.pos_y + layout.preview_h as i32;
+    let clear = left >= cx + gap || right <= cx - gap || top >= cy + gap || bottom <= cy - gap;
+    assert!(
+        clear,
+        "preview ({left},{top},{right},{bottom}) intrudes within {gap}px of cursor ({cx},{cy})"
+    );
+}
+
+#[test]
+fn bypass_placement_sizing_half_planes_avoid_and_no_double_shrink() {
+    let bounds = ScreenBounds {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1080,
+    };
+    let gap = logical_px(TEST_DPI, POINTER_STANDOFF_PIXELS);
+
+    let make = |orig_dims, preview_scale, avoid| HoverPlacement {
+        orig_dims,
+        avoid,
+        follow_cursor: false,
+        bypass_placement: true,
+        preview_scale,
+        at_the_pointer_corner: false,
+    };
+
+    // 50% By Screen with centered cursor: ~50% width (940x529), not 25% (470x264).
+    let half_center = compute_mouse_layout(
+        960,
+        540,
+        make((1920, 1080), PreviewScale::FitToScreenReduced(50), None),
+        bounds,
+        TEST_DPI,
+    )
+    .expect("layout");
+    assert_eq!((half_center.preview_w, half_center.preview_h), (940, 529));
+    assert_strictly_clear_of_cursor(&half_center, 960, 540, gap);
+
+    // Downstream load target must NOT double-apply fit_share.
+    let (load_w, load_h, load_scale) = hover_load_target(
+        &half_center,
+        PreviewScale::FitToScreenReduced(50),
+        false,
+        true,
+    );
+    let rendered = scale_dimensions(1920, 1080, load_w, load_h, load_scale);
+    assert_eq!(rendered, (940, 529));
+
+    // 75% By Screen with cursor near left edge: exact 75% (1440x810).
+    let edge_75 = compute_mouse_layout(
+        100,
+        540,
+        make((1920, 1080), PreviewScale::FitToScreenReduced(75), None),
+        bounds,
+        TEST_DPI,
+    )
+    .expect("layout");
+    assert_eq!((edge_75.preview_w, edge_75.preview_h), (1440, 810));
+    assert_strictly_clear_of_cursor(&edge_75, 100, 540, gap);
+
+    // 75% By Screen with centered cursor: max cursor-free fit with intact 16:9 ratio.
+    let center_75 = compute_mouse_layout(
+        960,
+        540,
+        make((1920, 1080), PreviewScale::FitToScreenReduced(75), None),
+        bounds,
+        TEST_DPI,
+    )
+    .expect("layout");
+    assert_eq!((center_75.preview_w, center_75.preview_h), (940, 529));
+    assert_strictly_clear_of_cursor(&center_75, 960, 540, gap);
+
+    // By Own Size (50% of 1920x1080) near edge -> exact 960x540; centered -> capped to 940x529.
+    let own_edge = compute_mouse_layout(
+        100,
+        540,
+        make((1920, 1080), PreviewScale::Percent(50), None),
+        bounds,
+        TEST_DPI,
+    )
+    .expect("layout");
+    assert_eq!((own_edge.preview_w, own_edge.preview_h), (960, 540));
+
+    // Extreme wide panorama picks Below/Above (full width 1920x200).
+    let wide = compute_mouse_layout(
+        960,
+        540,
+        make((3840, 400), PreviewScale::FitToScreen, None),
+        bounds,
+        TEST_DPI,
+    )
+    .expect("layout");
+    assert_eq!((wide.preview_w, wide.preview_h), (1920, 200));
+    assert!(wide.pos_y >= 540 + gap || wide.pos_y + wide.preview_h as i32 <= 540 - gap);
+    assert_strictly_clear_of_cursor(&wide, 960, 540, gap);
+
+    // Extreme tall portrait picks Right/Left (full height 113x1080).
+    let tall = compute_mouse_layout(
+        960,
+        540,
+        make((400, 3840), PreviewScale::FitToScreen, None),
+        bounds,
+        TEST_DPI,
+    )
+    .expect("layout");
+    assert_eq!((tall.preview_w, tall.preview_h), (113, 1080));
+    assert!(tall.pos_x >= 960 + gap || tall.pos_x + tall.preview_w as i32 <= 960 - gap);
+    assert_strictly_clear_of_cursor(&tall, 960, 540, gap);
+
+    // Avoid region is completely ignored when bypass_placement is true.
+    let with_avoid = compute_mouse_layout(
+        100,
+        540,
+        make(
+            (1920, 1080),
+            PreviewScale::FitToScreenReduced(75),
+            Some(AvoidRegion::column((120, 0, 1800, 1080))),
+        ),
+        bounds,
+        TEST_DPI,
+    )
+    .expect("layout");
+    assert_eq!(
+        (
+            with_avoid.pos_x,
+            with_avoid.pos_y,
+            with_avoid.preview_w,
+            with_avoid.preview_h
+        ),
+        (
+            edge_75.pos_x,
+            edge_75.pos_y,
+            edge_75.preview_w,
+            edge_75.preview_h
+        )
+    );
+
+    // Strict non-overlap & rcWork clamping across cursor positions (including edges/taskbar).
+    for (cx, cy) in [
+        (0, 0),
+        (1920, 1080),
+        (960, 540),
+        (15, 540),
+        (1910, 540),
+        (960, 10),
+        (960, 1075),
+        (960, 1100),
+    ] {
+        let l = compute_mouse_layout(
+            cx,
+            cy,
+            make((1920, 1080), PreviewScale::FitToScreenReduced(75), None),
+            bounds,
+            TEST_DPI,
+        )
+        .expect("layout");
+        assert!(l.pos_x >= bounds.left && l.pos_x + l.preview_w as i32 <= bounds.right);
+        assert!(l.pos_y >= bounds.top && l.pos_y + l.preview_h as i32 <= bounds.bottom);
+        assert_strictly_clear_of_cursor(&l, cx, cy, gap);
+    }
+
+    // Keyboard layout bypass: ignores row/avoid, sizes against full rcWork, centered.
+    let kb = compute_keyboard_layout(
+        KeyboardPlacement {
+            item_rect: (100, 200, 1200, 230),
+            avoid: Some((100, 200, 900, 230)),
+            columns: true,
+            orig_dims: (1920, 1080),
+            follow_cursor: true,
+            bypass_placement: true,
+            preview_scale: PreviewScale::FitToScreenReduced(75),
+        },
+        bounds,
+        TEST_DPI,
+    )
+    .expect("kb layout");
+    assert_eq!((kb.preview_w, kb.preview_h), (1440, 810));
+    assert_eq!((kb.pos_x, kb.pos_y), (240, 135));
 }
