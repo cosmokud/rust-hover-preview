@@ -2740,6 +2740,16 @@ pub fn run_preview_window() {
 
                 match preview_msg {
                     PreviewMessage::Refresh => {
+                        if custom_preview::is_showing()
+                            && custom_preview::active_path().is_none_or(|path| {
+                                !crate::formats::routing::is_custom_preview(
+                                    &path,
+                                    &crate::config::snapshot(),
+                                )
+                            })
+                        {
+                            custom_preview::hide();
+                        }
                         if latest_preview_msg.is_none() {
                             // A painted preview's colors are in its frame — the
                             // colors and glyphs of a text preview and the theme of

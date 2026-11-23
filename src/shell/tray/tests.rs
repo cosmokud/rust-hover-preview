@@ -2245,3 +2245,109 @@ fn toggle_pdf_full_mode_off_propagates_config_changed_before_close_pdf_pins() {
         "ConfigChanged must precede ClosePdfPins"
     );
 }
+
+#[test]
+fn custom_preview_submenu_is_directly_below_components_with_enable_and_edit() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreatePopupMenu, DestroyMenu, GetMenuItemCount, GetMenuItemID, GetMenuState,
+        GetMenuStringW, GetSubMenu, HMENU, MFS_CHECKED, MF_BYPOSITION,
+    };
+
+    unsafe fn menu_label(menu: HMENU, pos: u32) -> String {
+        let mut buf = [0u16; 128];
+        let len = GetMenuStringW(menu, pos, Some(&mut buf), MF_BYPOSITION) as usize;
+        String::from_utf16_lossy(&buf[..len])
+    }
+
+    let _folder = crate::config::config::ConfigFolderOfItsOwn::take();
+    for enabled in [true, false] {
+        let snap = crate::config::config::AppConfig {
+            custom_preview_enabled: enabled,
+            ..Default::default()
+        };
+        let menu = unsafe { CreatePopupMenu().unwrap() };
+        assert!(unsafe { menus::populate_context_menu(menu, &snap).is_some() });
+
+        let count = unsafe { GetMenuItemCount(menu) };
+        let labels: Vec<String> = (0..count as u32)
+            .map(|i| unsafe { menu_label(menu, i) })
+            .collect();
+
+        let comp_idx = labels
+            .iter()
+            .position(|l| l == "Components")
+            .expect("Components submenu present");
+        let custom_idx = labels
+            .iter()
+            .position(|l| l == "Custom Preview")
+            .expect("Custom Preview submenu present at root");
+        assert_eq!(
+            custom_idx,
+            comp_idx + 1,
+            "Custom Preview must sit directly below Components"
+        );
+
+        let sub = unsafe { GetSubMenu(menu, custom_idx as i32) };
+        assert!(!sub.0.is_null(), "Custom Preview must be a submenu");
+        assert_eq!(unsafe { GetMenuItemCount(sub) }, 2);
+        assert_eq!(unsafe { menu_label(sub, 0) }, "Enable");
+        assert_eq!(
+            unsafe { GetMenuItemID(sub, 0) },
+            ids::ID_TRAY_CUSTOM_PREVIEW_ENABLE as u32
+        );
+        let enable_checked = (unsafe { GetMenuState(sub, 0, MF_BYPOSITION) } & MFS_CHECKED.0) != 0;
+        assert_eq!(enable_checked, enabled);
+
+        assert_eq!(unsafe { menu_label(sub, 1) }, "Edit");
+        assert_eq!(
+            unsafe { GetMenuItemID(sub, 1) },
+            ids::ID_TRAY_CUSTOM_PREVIEW_EDIT as u32
+        );
+
+        let ps_idx = labels
+            .iter()
+            .position(|l| l == "Preview Settings")
+            .expect("Preview Settings submenu present");
+        let ps_sub = unsafe { GetSubMenu(menu, ps_idx as i32) };
+        let ps_count = unsafe { GetMenuItemCount(ps_sub) };
+        let ps_labels: Vec<String> = (0..ps_count as u32)
+            .map(|i| unsafe { menu_label(ps_sub, i) })
+            .collect();
+        assert!(
+            !ps_labels.iter().any(|l| l == "Custom Preview"),
+            "Custom Preview must be removed from Preview Settings"
+        );
+
+        let _ = unsafe { DestroyMenu(menu) };
+    }
+}
+
+#[test]
+fn toggle_custom_preview_enabled_flips_config_and_sends_refresh() {
+    use crate::app::seam::{self, PreviewMessage};
+    use std::sync::mpsc::channel;
+
+    let _folder = crate::config::config::ConfigFolderOfItsOwn::take();
+    crate::config::commit_config(|cfg| {
+        cfg.custom_preview_enabled = true;
+    });
+
+    let (tx, rx) = channel();
+    let prev_sender = seam::PREVIEW_SENDER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .replace(tx);
+
+    commands::toggle_custom_preview_enabled();
+
+    *seam::PREVIEW_SENDER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = prev_sender;
+
+    assert!(!crate::config::snapshot().custom_preview_enabled);
+    let msgs: Vec<PreviewMessage> = rx.try_iter().collect();
+    assert!(msgs
+        .iter()
+        .any(|m| matches!(m, PreviewMessage::ConfigChanged)));
+    assert!(msgs.iter().any(|m| matches!(m, PreviewMessage::Refresh)));
+}

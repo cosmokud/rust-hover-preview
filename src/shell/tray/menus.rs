@@ -16,18 +16,18 @@ use super::ids::{
     HTML_BACKGROUND_CHOICES, ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_ANIMATED_WEBP_BUDGET_BASE,
     ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SHUFFLE, ID_TRAY_AUDIO_VOLUME_BASE,
     ID_TRAY_AVOID_BASE, ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED, ID_TRAY_BYPASS_PLACEMENT,
-    ID_TRAY_CHECK_UPDATES, ID_TRAY_CUSTOM_PREVIEW, ID_TRAY_DDS_BACKGROUND_BASE,
-    ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
-    ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
-    ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
-    ID_TRAY_EVERYTHING_PREVIEWS, ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE, ID_TRAY_FONT_BACKGROUND_BASE,
-    ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE,
-    ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE,
-    ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
-    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_IDLE_BASE,
-    ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG,
-    ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
-    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ID_TRAY_CHECK_UPDATES, ID_TRAY_CUSTOM_PREVIEW_EDIT, ID_TRAY_CUSTOM_PREVIEW_ENABLE,
+    ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE,
+    ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
+    ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
+    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_EVERYTHING_PREVIEWS, ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE,
+    ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
+    ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
+    ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE,
+    ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE,
+    ID_TRAY_MPV_IDLE_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME,
+    ID_TRAY_OPEN_CONFIG, ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN,
+    ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
     ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
     ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_RESTORE,
@@ -972,17 +972,6 @@ pub(super) unsafe fn populate_context_menu(
     let _ = pdf_pin_mode_guard.append_to(pdf_menu, MF_STRING, w!("Pin Mode"));
     let _ = pdf_menu_guard.append_to(preview_settings, MF_STRING, w!("PDF"));
 
-    // The window a user's own previews are made in, below `PDF` and set apart from it: the rows
-    // above are settings of this app's own kinds, and this one opens a window rather than
-    // throwing a switch (see `ui::custom_preview_settings` and `ID_TRAY_CUSTOM_PREVIEW`).
-    let _ = AppendMenuW(preview_settings, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(
-        preview_settings,
-        MF_STRING,
-        ID_TRAY_CUSTOM_PREVIEW as usize,
-        w!("Custom Preview"),
-    );
-
     // The theme no longer hangs on the top menu beside the text preview it themes: it is
     // moved into `System`, between the two rows about this app's own place in the machine and
     // the ones about its file (see the `System` submenu below). The `theme_menu` it is built
@@ -1718,6 +1707,27 @@ pub(super) unsafe fn populate_context_menu(
 
     refresh_codecs();
     append_codecs_menu(menu, snap);
+
+    let custom_preview_menu_guard = MenuGuard::new()?;
+    let custom_preview_menu = custom_preview_menu_guard.handle();
+    let _ = AppendMenuW(
+        custom_preview_menu,
+        MF_STRING
+            | if snap.custom_preview_enabled {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_CUSTOM_PREVIEW_ENABLE as usize,
+        w!("Enable"),
+    );
+    let _ = AppendMenuW(
+        custom_preview_menu,
+        MF_STRING,
+        ID_TRAY_CUSTOM_PREVIEW_EDIT as usize,
+        w!("Edit"),
+    );
+    let _ = custom_preview_menu_guard.append_to(menu, MF_STRING, w!("Custom Preview"));
 
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 

@@ -907,3 +907,39 @@ fn bypass_placement_defaults_false_and_round_trips_ini() {
     let mut empty = Ini::new();
     assert!(!read_file(&mut empty).bypass_placement);
 }
+
+#[test]
+fn custom_preview_enabled_defaults_true_round_trips_and_resets() {
+    use super::super::defaults::DEFAULT_CUSTOM_PREVIEW_ENABLED;
+
+    let config = AppConfig::default();
+    assert_eq!(
+        config.custom_preview_enabled,
+        DEFAULT_CUSTOM_PREVIEW_ENABLED
+    );
+    assert!(config.custom_preview_enabled);
+
+    let mut cfg = AppConfig {
+        custom_preview_enabled: false,
+        ..AppConfig::default()
+    };
+    let mut ini = cfg.to_ini();
+    assert_eq!(
+        ini.get(CONFIG_SECTION, "custom_preview_enabled").as_deref(),
+        Some("false")
+    );
+    assert!(!read_file(&mut ini).custom_preview_enabled);
+
+    cfg.custom_preview_enabled = true;
+    let mut ini = cfg.to_ini();
+    assert!(read_file(&mut ini).custom_preview_enabled);
+
+    // Missing key defaults to true.
+    let mut empty = Ini::new();
+    assert!(read_file(&mut empty).custom_preview_enabled);
+
+    // Reset restores true while preserving presets.
+    cfg.custom_preview_enabled = false;
+    cfg.reset_to_recommended();
+    assert!(cfg.custom_preview_enabled);
+}

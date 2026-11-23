@@ -268,6 +268,8 @@ pub const DEFAULT_PDF_AUTOFOCUS: bool = true;
 /// Read where a document would be asked for and where one would be let go of, so a row moved under a
 /// pin that is up takes effect on the tick that follows it.
 pub const DEFAULT_PDF_FULL_MODE: bool = true;
+/// Master switch for user-defined custom preview presets; false routes all files to built-in previewers.
+pub const DEFAULT_CUSTOM_PREVIEW_ENABLED: bool = true;
 /// How long the pointer rests on a file before a preview is put up for it, in
 /// milliseconds.
 ///

@@ -797,6 +797,15 @@ pub(in super::super) fn toggle_bypass_placement() {
     });
 }
 
+pub(in super::super) fn toggle_custom_preview_enabled() {
+    publish_config_change(
+        |config| {
+            config.custom_preview_enabled = !config.custom_preview_enabled;
+        },
+        &[PreviewMessage::Refresh],
+    );
+}
+
 /// The way an item of the `Avoid` submenu stands for, by the position it was listed
 /// at. An id past the last way the menu offered is one that is not there.
 pub(in super::super) fn avoid_mode_at(index: u16) -> Option<AvoidMode> {

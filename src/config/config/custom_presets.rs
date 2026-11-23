@@ -540,6 +540,9 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
 /// hook callback may ask it (see `routing::custom_preset_for`). A preset with no program or no
 /// extension claims nothing: a half-filled tab is one the window keeps and no file is routed by.
 pub fn preset_for<'a>(config: &'a AppConfig, path: &Path) -> Option<&'a CustomPreset> {
+    if !config.custom_preview_enabled {
+        return None;
+    }
     config
         .custom_presets
         .iter()
@@ -986,5 +989,25 @@ mod tests {
                 CustomPromotionTechnique::DirectPromotion
             );
         }
+    }
+
+    #[test]
+    fn master_toggle_off_bypasses_all_presets_and_routing() {
+        let preset = CustomPreset {
+            name: "Viewer".into(),
+            exe: "viewer.exe".into(),
+            extensions: vec!["png".into()],
+            ..CustomPreset::default()
+        };
+        let mut cfg = config_with(vec![preset]);
+        let path = Path::new("photo.png");
+
+        assert!(preset_for(&cfg, path).is_some());
+        assert!(crate::formats::routing::is_custom_preview(path, &cfg));
+
+        cfg.custom_preview_enabled = false;
+        assert!(preset_for(&cfg, path).is_none());
+        assert!(!crate::formats::routing::is_custom_preview(path, &cfg));
+        assert!(crate::formats::routing::custom_preset_for(path, &cfg).is_none());
     }
 }
