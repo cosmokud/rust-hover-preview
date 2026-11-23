@@ -14,6 +14,7 @@ pub const HOOK_MAGIC: u32 = 0x5248_5048;
 pub const HOOK_VERSION: u32 = 1;
 pub const CMD_UNCLOAK: usize = 1;
 pub const CMD_CLOAK: usize = 2;
+pub const CMD_DETACH: usize = 3;
 
 const DLL_PROCESS_DETACH: u32 = 0;
 
@@ -313,8 +314,14 @@ unsafe extern "system" fn rhp_subclass_proc(
         let _ = unsafe { RemoveWindowSubclass(hwnd, rhp_subclass_proc, u_id_subclass) };
         return unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
     }
-    if msg == WM_WINDOWPOSCHANGING {
-        if let Some(state) = unsafe { shared_state() } {
+    if let Some(state) = unsafe { shared_state() } {
+        if msg == state.uncloak_msg && state.uncloak_msg != 0 && wparam == CMD_DETACH {
+            unsafe { set_cloak(hwnd, false) };
+            let _ = unsafe { RemoveWindowSubclass(hwnd, rhp_subclass_proc, u_id_subclass) };
+            state.hook_hits.fetch_add(1, Ordering::Relaxed);
+            return 0;
+        }
+        if msg == WM_WINDOWPOSCHANGING {
             if state.cloak_enabled.load(Ordering::Acquire) == 1 {
                 unsafe { set_cloak(hwnd, true) };
             }
@@ -357,6 +364,12 @@ pub unsafe extern "system" fn rhp_callwnd_proc(code: i32, wparam: usize, lparam:
                             state.hook_hits.fetch_add(1, Ordering::Relaxed);
                         } else if cmd == CMD_CLOAK {
                             unsafe { set_cloak(hwnd, true) };
+                            state.hook_hits.fetch_add(1, Ordering::Relaxed);
+                        } else if cmd == CMD_DETACH {
+                            unsafe { set_cloak(hwnd, false) };
+                            let _ = unsafe {
+                                RemoveWindowSubclass(hwnd, rhp_subclass_proc, SUBCLASS_ID)
+                            };
                             state.hook_hits.fetch_add(1, Ordering::Relaxed);
                         }
                     } else if matches!(

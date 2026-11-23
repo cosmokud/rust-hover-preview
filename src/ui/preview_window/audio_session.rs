@@ -172,6 +172,80 @@ pub(super) fn mixer_level(level: u32) -> f32 {
     level.min(100) as f32 / 100.0
 }
 
+/// Convert `CustomPreset.volume` (`0..=100`) to WASAPI `(scalar 0.0..=1.0, mute)`.
+pub(super) fn custom_preview_volume_params(volume: u32) -> (f32, bool) {
+    (mixer_level(volume), volume == 0)
+}
+
+#[derive(Clone, Debug)]
+struct CustomVolumeRequest {
+    pids: Vec<u32>,
+    volume: u32,
+}
+
+static CUSTOM_MIXER_ASK: Lazy<Arc<(Mutex<Option<CustomVolumeRequest>>, Condvar)>> =
+    Lazy::new(|| {
+        let slot = Arc::new((Mutex::new(None), Condvar::new()));
+        let worker = Arc::clone(&slot);
+        let _ = std::thread::Builder::new()
+            .name("custom-mixer-level".to_string())
+            .spawn(move || custom_mixing_thread(worker));
+        slot
+    });
+
+/// Non-blocking WASAPI volume + mute application for a custom preview's owned PIDs.
+pub(super) fn apply_custom_preview_volume(pids: Vec<u32>, volume: u32) {
+    if pids.is_empty() {
+        return;
+    }
+    let (slot, signal) = &**CUSTOM_MIXER_ASK;
+    if let Ok(mut waiting) = slot.lock() {
+        *waiting = Some(CustomVolumeRequest { pids, volume });
+        signal.notify_one();
+    }
+}
+
+fn custom_mixing_thread(slot: Arc<(Mutex<Option<CustomVolumeRequest>>, Condvar)>) {
+    if unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_err() {
+        return;
+    }
+    let (waiting, signal) = &*slot;
+    loop {
+        let req = {
+            let mut guard = match waiting.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            while guard.is_none() {
+                guard = match signal.wait(guard) {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+            }
+            guard.take().expect("slot filled")
+        };
+        let (scalar, mute) = custom_preview_volume_params(req.volume);
+        let mut no_neighbours: Option<Neighbours> = None;
+        unsafe {
+            each_session(
+                &mut None,
+                0,
+                &mut no_neighbours,
+                &mut |session_pid, control, _device| {
+                    if !req.pids.contains(&session_pid) {
+                        return false;
+                    }
+                    if let Ok(vol) = control.cast::<ISimpleAudioVolume>() {
+                        let _ = vol.SetMasterVolume(scalar, std::ptr::null());
+                        let _ = vol.SetMute(mute, std::ptr::null());
+                    }
+                    false // continue walking in case multiple owned PIDs hold sessions
+                },
+            );
+        }
+    }
+}
+
 /// One level still to be written, and the player it belongs to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct MixerRequest {

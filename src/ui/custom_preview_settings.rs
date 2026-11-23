@@ -15,14 +15,16 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW,
-    CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetDC,
-    GetStockObject, GetTextMetricsW, InvalidateRect, LineTo, MoveToEx, RedrawWindow, ReleaseDC,
-    RoundRect, ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
-    DIB_RGB_COLORS, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
-    FW_NORMAL, FW_SEMIBOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, NULL_BRUSH, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE,
-    RDW_UPDATENOW, SRCCOPY, TEXTMETRICW, TRANSPARENT,
+    CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect,
+    GdiAlphaBlend, GetDC, GetStockObject, GetTextMetricsW, InvalidateRect, LineTo, MoveToEx,
+    RedrawWindow, ReleaseDC, RoundRect, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
+    SetBrushOrgEx, SetStretchBltMode, SetTextColor, SetViewportOrgEx, StretchBlt, UpdateWindow,
+    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DT_CENTER,
+    DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_NORMAL, FW_SEMIBOLD,
+    HALFTONE, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, NULL_BRUSH, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+    PROOF_QUALITY, PS_SOLID, RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, SRCCOPY,
+    TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
@@ -422,30 +424,83 @@ fn primary_button_colors(
     }
 }
 
+const GRADIENT_W: i32 = 128;
+const GRADIENT_H: i32 = 96;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct BackdropKey {
-    width: i32,
-    height: i32,
+struct GradientKey {
     dark: bool,
     page: COLORREF,
-    card: COLORREF,
     accent: COLORREF,
-    dpi: i32,
-    titlebar_bottom: i32,
-    sidebar_card: [i32; 4],
-    editor_card: [i32; 4],
+    number: COLORREF,
 }
 
-struct BackdropCache {
-    key: BackdropKey,
+struct GradientCache {
+    key: GradientKey,
     dib: HBITMAP,
 }
 
-impl Drop for BackdropCache {
+impl Drop for GradientCache {
     fn drop(&mut self) {
         if !self.dib.is_invalid() {
             unsafe {
                 let _ = DeleteObject(HGDIOBJ(self.dib.0));
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CardSliceKey {
+    dark: bool,
+    card: COLORREF,
+    border: COLORREF,
+    dpi: i32,
+}
+
+/// Premultiplied-BGRA 9-slice card template (rounded corners + border + top sheen + soft shadow).
+struct CardSliceCache {
+    key: CardSliceKey,
+    dib: HBITMAP,
+    tex_w: i32,
+    tex_h: i32,
+    pad_l: i32,
+    pad_t: i32,
+    pad_r: i32,
+    pad_b: i32,
+    corner: i32,
+}
+
+impl Drop for CardSliceCache {
+    fn drop(&mut self) {
+        if !self.dib.is_invalid() {
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(self.dib.0));
+            }
+        }
+    }
+}
+
+/// Reused window backbuffer DC + bitmap grown lazily on resize to eliminate per-frame GDI allocs.
+struct BackbufferCache {
+    w: i32,
+    h: i32,
+    dc: HDC,
+    bmp: HBITMAP,
+    old_bmp: HGDIOBJ,
+}
+
+impl Drop for BackbufferCache {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.dc.is_invalid() {
+                if !self.old_bmp.is_invalid() {
+                    let _ = SelectObject(self.dc, self.old_bmp);
+                }
+                let _ = DeleteDC(self.dc);
+            }
+            if !self.bmp.is_invalid() {
+                let _ = DeleteObject(HGDIOBJ(self.bmp.0));
             }
         }
     }
@@ -510,7 +565,9 @@ struct State {
     pressed_tb: Option<TitlebarButton>,
     tracking_mouse: bool,
     rects: LayoutRects,
-    backdrop: Option<BackdropCache>,
+    gradient: Option<GradientCache>,
+    card_slice: Option<CardSliceCache>,
+    backbuffer: Option<BackbufferCache>,
 }
 
 impl Drop for State {
@@ -781,7 +838,8 @@ unsafe fn apply_combo_list_theme(combo: HWND, dark: bool) {
 unsafe fn apply_theme(state: &mut State) {
     let palette = Palette::of(theme_now());
     state.palette = palette;
-    state.backdrop = None;
+    state.gradient = None;
+    state.card_slice = None;
     unsafe {
         let _ = DeleteObject(HGDIOBJ(state.brush_page.0));
         let _ = DeleteObject(HGDIOBJ(state.brush_card.0));
@@ -1164,11 +1222,13 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             unsafe {
-                paint_double_buffered(hwnd, |hdc, _rc| {
-                    if let Some(state) = state_of(hwnd) {
-                        paint_window(state, hdc);
-                    }
-                });
+                if let Some(state) = state_of(hwnd) {
+                    paint_window_buffered(state, hwnd);
+                } else {
+                    let mut ps = PAINTSTRUCT::default();
+                    let _ = BeginPaint(hwnd, &mut ps);
+                    let _ = EndPaint(hwnd, &ps);
+                }
             }
             LRESULT(0)
         }
@@ -1254,41 +1314,188 @@ unsafe fn paint_double_buffered<F: FnOnce(HDC, RECT)>(hwnd: HWND, draw: F) {
     let _ = unsafe { EndPaint(hwnd, &ps) };
 }
 
-fn rect_arr(r: RECT) -> [i32; 4] {
-    [r.left, r.top, r.right, r.bottom]
+/// Paints main window using a reused compatible backbuffer bitmap (grown lazily on resize).
+unsafe fn paint_window_buffered(state: &mut State, hwnd: HWND) {
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+    let mut rc = RECT::default();
+    let _ = unsafe { GetClientRect(hwnd, &mut rc) };
+    let w = (rc.right - rc.left).max(1);
+    let h = (rc.bottom - rc.top).max(1);
+
+    let needs_alloc = state
+        .backbuffer
+        .as_ref()
+        .is_none_or(|bb| bb.w < w || bb.h < h || bb.dc.is_invalid() || bb.bmp.is_invalid());
+    if needs_alloc {
+        // Drop old before allocating new; add small headroom to avoid realloc on every 1px drag.
+        state.backbuffer = None;
+        let alloc_w = w.saturating_add(128);
+        let alloc_h = h.saturating_add(128);
+        let mem_dc = unsafe { CreateCompatibleDC(hdc) };
+        let mem_bmp = unsafe { CreateCompatibleBitmap(hdc, alloc_w, alloc_h) };
+        if !mem_dc.is_invalid() && !mem_bmp.is_invalid() {
+            let old_bmp = unsafe { SelectObject(mem_dc, HGDIOBJ(mem_bmp.0)) };
+            state.backbuffer = Some(BackbufferCache {
+                w: alloc_w,
+                h: alloc_h,
+                dc: mem_dc,
+                bmp: mem_bmp,
+                old_bmp,
+            });
+        } else {
+            if !mem_bmp.is_invalid() {
+                let _ = unsafe { DeleteObject(HGDIOBJ(mem_bmp.0)) };
+            }
+            if !mem_dc.is_invalid() {
+                let _ = unsafe { DeleteDC(mem_dc) };
+            }
+        }
+    }
+
+    if let Some(bb_dc) = state.backbuffer.as_ref().map(|bb| bb.dc) {
+        unsafe { paint_window(state, bb_dc) };
+        let _ = unsafe { BitBlt(hdc, 0, 0, w, h, bb_dc, 0, 0, SRCCOPY) };
+    } else {
+        unsafe { paint_window(state, hdc) };
+    }
+    let _ = unsafe { EndPaint(hwnd, &ps) };
 }
 
-/// Rebuilds the cached BGRA backdrop DIB only when dimensions, theme, or card rects change.
-unsafe fn ensure_backdrop_cache(state: &mut State, hdc: HDC, w: i32, h: i32) -> Option<HBITMAP> {
-    let key = BackdropKey {
-        width: w,
-        height: h,
+/// Rebuilds the cached `128x96` atmospheric gradient DIB only when theme changes (never on resize).
+unsafe fn ensure_gradient_cache(state: &mut State, hdc: HDC) -> Option<HBITMAP> {
+    let key = GradientKey {
         dark: state.palette.dark,
         page: state.palette.page,
-        card: state.palette.card,
         accent: state.palette.accent,
-        dpi: state.dpi,
-        titlebar_bottom: state.rects.titlebar.bottom,
-        sidebar_card: rect_arr(state.rects.sidebar_card),
-        editor_card: rect_arr(state.rects.editor_card),
+        number: state.palette.number,
     };
-    if let Some(cache) = &state.backdrop {
+    if let Some(cache) = &state.gradient {
         if cache.key == key && !cache.dib.is_invalid() {
             return Some(cache.dib);
         }
     }
-    let surface = render_backdrop(
-        w,
-        h,
-        state.palette,
-        state.dpi,
-        state.rects.titlebar.bottom,
-        state.rects.sidebar_card,
-        state.rects.editor_card,
-    );
+    let surface = render_gradient_backdrop(GRADIENT_W, GRADIENT_H, state.palette);
     let dib = unsafe { surface.create_dib(hdc) }?;
-    state.backdrop = Some(BackdropCache { key, dib });
+    state.gradient = Some(GradientCache { key, dib });
     Some(dib)
+}
+
+/// Rebuilds the cached premultiplied-BGRA 9-slice card template DIB only on theme/DPI change.
+unsafe fn ensure_card_slice_cache(state: &mut State, hdc: HDC) -> bool {
+    let key = CardSliceKey {
+        dark: state.palette.dark,
+        card: state.palette.card,
+        border: state.palette.border,
+        dpi: state.dpi,
+    };
+    if let Some(cache) = &state.card_slice {
+        if cache.key == key && !cache.dib.is_invalid() {
+            return true;
+        }
+    }
+    let (pixels, tex_w, tex_h, pad_l, pad_t, pad_r, pad_b, corner) =
+        render_card_9slice_pixels(state.palette, state.dpi);
+    let Some(dib) = (unsafe { create_bgra_dib(hdc, tex_w, tex_h, &pixels) }) else {
+        return false;
+    };
+    state.card_slice = Some(CardSliceCache {
+        key,
+        dib,
+        tex_w,
+        tex_h,
+        pad_l,
+        pad_t,
+        pad_r,
+        pad_b,
+        corner,
+    });
+    true
+}
+
+/// Draws an elevated SDF rounded card via 8 tiny 9-slice `GdiAlphaBlend` calls + 1 `FillRect`.
+unsafe fn draw_elevated_card_9slice(
+    hdc: HDC,
+    card: &CardSliceCache,
+    rect: RECT,
+    brush_card: HBRUSH,
+) {
+    let cw = rect.right - rect.left;
+    let ch = rect.bottom - rect.top;
+    if cw <= 0 || ch <= 0 {
+        return;
+    }
+    let src_dc = unsafe { CreateCompatibleDC(hdc) };
+    if src_dc.is_invalid() {
+        return;
+    }
+    let old = unsafe { SelectObject(src_dc, HGDIOBJ(card.dib.0)) };
+    let bf = BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: 255,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    };
+
+    let c = card.corner.min(cw / 2).min(ch / 2);
+    let sl = card.pad_l + c;
+    let st = card.pad_t + c;
+    let sr = card.pad_r + c;
+    let sb = card.pad_b + c;
+    let sx_r = card.tex_w - sr;
+    let sy_b = card.tex_h - sb;
+    let sx_mid = sl;
+    let sy_mid = st;
+    let sw_mid = (card.tex_w - sl - sr).max(1);
+    let sh_mid = (card.tex_h - st - sb).max(1);
+
+    let dx0 = rect.left - card.pad_l;
+    let dy0 = rect.top - card.pad_t;
+    let dx_mid = rect.left + c;
+    let dy_mid = rect.top + c;
+    let dx_r = rect.right - c;
+    let dy_b = rect.bottom - c;
+    let dw_mid = (dx_r - dx_mid).max(0);
+    let dh_mid = (dy_b - dy_mid).max(0);
+
+    unsafe {
+        // 4 corners (exact 1:1)
+        let _ = GdiAlphaBlend(hdc, dx0, dy0, sl, st, src_dc, 0, 0, sl, st, bf);
+        let _ = GdiAlphaBlend(hdc, dx_r, dy0, sr, st, src_dc, sx_r, 0, sr, st, bf);
+        let _ = GdiAlphaBlend(hdc, dx0, dy_b, sl, sb, src_dc, 0, sy_b, sl, sb, bf);
+        let _ = GdiAlphaBlend(hdc, dx_r, dy_b, sr, sb, src_dc, sx_r, sy_b, sr, sb, bf);
+
+        // 4 straight edge strips (shadow + 1px border + 1px top sheen)
+        if dw_mid > 0 {
+            let _ = GdiAlphaBlend(
+                hdc, dx_mid, dy0, dw_mid, st, src_dc, sx_mid, 0, sw_mid, st, bf,
+            );
+            let _ = GdiAlphaBlend(
+                hdc, dx_mid, dy_b, dw_mid, sb, src_dc, sx_mid, sy_b, sw_mid, sb, bf,
+            );
+        }
+        if dh_mid > 0 {
+            let _ = GdiAlphaBlend(
+                hdc, dx0, dy_mid, sl, dh_mid, src_dc, 0, sy_mid, sl, sh_mid, bf,
+            );
+            let _ = GdiAlphaBlend(
+                hdc, dx_r, dy_mid, sr, dh_mid, src_dc, sx_r, sy_mid, sr, sh_mid, bf,
+            );
+        }
+        // Solid flat card interior in one FillRect (zero per-pixel SDF work).
+        if dw_mid > 0 && dh_mid > 0 {
+            let inner = RECT {
+                left: dx_mid,
+                top: dy_mid,
+                right: dx_r,
+                bottom: dy_b,
+            };
+            FillRect(hdc, &inner, brush_card);
+        }
+
+        let _ = SelectObject(src_dc, old);
+        let _ = DeleteDC(src_dc);
+    }
 }
 
 unsafe fn paint_window(state: &mut State, hdc: HDC) {
@@ -1300,12 +1507,16 @@ unsafe fn paint_window(state: &mut State, hdc: HDC) {
     let dpi = state.dpi;
 
     unsafe {
-        // Cached atmospheric gradient + titlebar accent hairline + SDF elevated cards in 1 BitBlt.
-        if let Some(dib) = ensure_backdrop_cache(state, hdc, w, h) {
+        // Stretch cached 128x96 atmospheric gradient DIB via HALFTONE (<0.1ms, never rebuilt on resize).
+        if let Some(dib) = ensure_gradient_cache(state, hdc) {
             let src_dc = CreateCompatibleDC(hdc);
             if !src_dc.is_invalid() {
                 let old = SelectObject(src_dc, HGDIOBJ(dib.0));
-                let _ = BitBlt(hdc, 0, 0, w, h, src_dc, 0, 0, SRCCOPY);
+                let _ = SetStretchBltMode(hdc, HALFTONE);
+                let _ = SetBrushOrgEx(hdc, 0, 0, None);
+                let _ = StretchBlt(
+                    hdc, 0, 0, w, h, src_dc, 0, 0, GRADIENT_W, GRADIENT_H, SRCCOPY,
+                );
                 let _ = SelectObject(src_dc, old);
                 let _ = DeleteDC(src_dc);
             }
@@ -1313,19 +1524,50 @@ unsafe fn paint_window(state: &mut State, hdc: HDC) {
             FillRect(hdc, &client, state.brush_page);
         }
 
+        // Clean titlebar band + 1px bottom divider (no top neon bar or accent dot).
+        let tb_end = state.rects.titlebar.bottom.clamp(0, h);
+        if tb_end > 1 {
+            let tb_col = mix(p.page, p.titlebar, 88);
+            let tb_brush = CreateSolidBrush(tb_col);
+            let tb_rc = RECT {
+                left: 0,
+                top: 0,
+                right: w,
+                bottom: tb_end - 1,
+            };
+            FillRect(hdc, &tb_rc, tb_brush);
+            let _ = DeleteObject(HGDIOBJ(tb_brush.0));
+        }
+        if tb_end > 0 {
+            let div_brush = CreateSolidBrush(p.border);
+            let div_rc = RECT {
+                left: 0,
+                top: tb_end - 1,
+                right: w,
+                bottom: tb_end,
+            };
+            FillRect(hdc, &div_rc, div_brush);
+            let _ = DeleteObject(HGDIOBJ(div_brush.0));
+        }
+
+        // Smooth SDF elevated rounded cards via 9-slice AlphaBlend + FillRect (<0.1ms at 144Hz).
+        if ensure_card_slice_cache(state, hdc) {
+            if let Some(card) = state.card_slice.as_ref() {
+                draw_elevated_card_9slice(hdc, card, state.rects.sidebar_card, state.brush_card);
+                draw_elevated_card_9slice(hdc, card, state.rects.editor_card, state.brush_card);
+            }
+        }
+
         let border_pen = CreatePen(PS_SOLID, 1, p.border);
         let old_pen = SelectObject(hdc, HGDIOBJ(border_pen.0));
 
-        // Title on left (next to the SDF accent pill dot baked into the backdrop).
-        let dot_d = scale(8, dpi);
-        let dot_x = scale(16, dpi);
+        // Title on left aligned cleanly to pad.
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, p.ink);
         let old_font = SelectObject(hdc, HGDIOBJ(state.font_bold.0));
-        let hairline_h = scale(2, dpi).max(2);
         let mut title_rc = RECT {
-            left: dot_x + dot_d + scale(10, dpi),
-            top: hairline_h,
+            left: scale(16, dpi),
+            top: 0,
             right: state.rects.btn_min.left - scale(8, dpi),
             bottom: state.rects.titlebar.bottom - 1,
         };
@@ -1433,11 +1675,10 @@ unsafe fn paint_titlebar_button(state: &State, hdc: HDC, rect: RECT, kind: Title
     };
 
     unsafe {
-        let hairline_h = scale(2, state.dpi).max(2);
         if let Some(bg_col) = bg {
             let fill_rc = RECT {
                 left: rect.left,
-                top: rect.top + hairline_h,
+                top: rect.top,
                 right: rect.right,
                 bottom: rect.bottom - 1,
             };
@@ -1567,7 +1808,9 @@ unsafe fn build(hwnd: HWND) -> State {
             list_rect: RECT::default(),
             edit_boxes: EDIT_IDS.map(|id| (id, RECT::default())),
         },
-        backdrop: None,
+        gradient: None,
+        card_slice: None,
+        backbuffer: None,
     };
 
     let mut controls: Vec<HWND> = Vec::new();
@@ -2016,6 +2259,7 @@ unsafe extern "system" fn stepper_subclass_proc(
     let orig_proc = sub.orig_proc;
 
     match msg {
+        WM_ERASEBKGND => return LRESULT(1),
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             sub.pressed = true;
             unsafe {
@@ -2244,6 +2488,7 @@ unsafe extern "system" fn button_subclass_proc(
     let orig_proc = sub.orig_proc;
 
     match msg {
+        WM_ERASEBKGND => return LRESULT(1),
         WM_MOUSEMOVE => {
             if !sub.hovered {
                 sub.hovered = true;
@@ -2821,6 +3066,7 @@ impl AaSurface {
         }
     }
 
+    #[cfg(test)]
     fn fill_elevated_card(&mut self, rect: RECT, radius: f32, p: Palette, dpi: i32) {
         if rect.right <= rect.left || rect.bottom <= rect.top {
             return;
@@ -2844,27 +3090,46 @@ impl AaSurface {
         let sx1 = (x1 + shadow_spread).ceil().min(self.w as f32) as i32;
         let sy1 = (y1 + shadow_y + shadow_spread).ceil().min(self.h as f32) as i32;
 
+        let (cr, cg, cb) = colorref_rgb(p.card);
+        let card_bgra = pack_bgra(cr, cg, cb);
+        let corner_band = (radius.ceil() as i32 + 2).max(4);
+        let inner_y0 = (rect.top + corner_band).clamp(sy0, sy1);
+        let inner_y1 = (rect.bottom - corner_band).clamp(inner_y0, sy1);
+        let inner_x0 = (rect.left + corner_band).clamp(sx0, sx1);
+        let inner_x1 = (rect.right - corner_band).clamp(inner_x0, sx1);
+
         for y in sy0..sy1 {
             let py = y as f32 + 0.5;
-            for x in sx0..sx1 {
-                let px = x as f32 + 0.5;
-                let d_card = sd_rounded_box(px, py, cx, cy, hw, hh, radius);
-                if d_card > 0.0 {
-                    let d_sh = sd_rounded_box(px, py, cx, cy + shadow_y, hw, hh, radius);
-                    if d_sh < shadow_spread {
-                        let t = (1.0 - (d_sh.max(0.0) / shadow_spread)).clamp(0.0, 1.0);
-                        self.blend(x, y, rgb(0, 0, 0), t * t * shadow_alpha);
+            let in_mid_y = y >= inner_y0 && y < inner_y1 && inner_x1 > inner_x0;
+            let x_ranges = if in_mid_y {
+                let row_off = (y as usize) * (self.w as usize);
+                self.pixels[row_off + inner_x0 as usize..row_off + inner_x1 as usize]
+                    .fill(card_bgra);
+                [(sx0, inner_x0), (inner_x1, sx1)]
+            } else {
+                [(sx0, sx1), (sx1, sx1)]
+            };
+            for (rx0, rx1) in x_ranges {
+                for x in rx0..rx1 {
+                    let px = x as f32 + 0.5;
+                    let d_card = sd_rounded_box(px, py, cx, cy, hw, hh, radius);
+                    if d_card > 0.0 {
+                        let d_sh = sd_rounded_box(px, py, cx, cy + shadow_y, hw, hh, radius);
+                        if d_sh < shadow_spread {
+                            let t = (1.0 - (d_sh.max(0.0) / shadow_spread)).clamp(0.0, 1.0);
+                            self.blend(x, y, rgb(0, 0, 0), t * t * shadow_alpha);
+                        }
                     }
-                }
-                let outer = aa_coverage(d_card);
-                if outer > 0.0 {
-                    self.blend(x, y, p.border, outer);
-                    let inner = aa_coverage(d_card + 1.0);
-                    if inner > 0.0 {
-                        self.blend(x, y, p.card, inner);
-                        // Subtle 1px top-edge inner sheen inside card boundary.
-                        if py >= y0 + 1.0 && py < y0 + 2.2 {
-                            self.blend(x, y, rgb(255, 255, 255), inner * sheen_alpha);
+                    let outer = aa_coverage(d_card);
+                    if outer > 0.0 {
+                        self.blend(x, y, p.border, outer);
+                        let inner = aa_coverage(d_card + 1.0);
+                        if inner > 0.0 {
+                            self.blend(x, y, p.card, inner);
+                            // Subtle 1px top-edge inner sheen inside card boundary.
+                            if py >= y0 + 1.0 && py < y0 + 2.2 {
+                                self.blend(x, y, rgb(255, 255, 255), inner * sheen_alpha);
+                            }
                         }
                     }
                 }
@@ -2873,33 +3138,7 @@ impl AaSurface {
     }
 
     unsafe fn create_dib(&self, dst_dc: HDC) -> Option<HBITMAP> {
-        let bmi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: self.w,
-                biHeight: -self.h,
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let dib =
-            unsafe { CreateDIBSection(dst_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) }.ok()?;
-        if bits.is_null() {
-            let _ = unsafe { DeleteObject(HGDIOBJ(dib.0)) };
-            return None;
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                self.pixels.as_ptr(),
-                bits as *mut u32,
-                self.pixels.len(),
-            );
-        }
-        Some(dib)
+        unsafe { create_bgra_dib(dst_dc, self.w, self.h, &self.pixels) }
     }
 
     unsafe fn blit_to(&self, dst_dc: HDC, dst_x: i32, dst_y: i32) {
@@ -2917,17 +3156,33 @@ impl AaSurface {
     }
 }
 
-/// Renders the cached atmospheric window backdrop: diagonal theme gradient, subtle radial accent
-/// glow, 2px top accent gradient hairline, titlebar band + SDF dot, and SDF elevated rounded cards.
-fn render_backdrop(
-    w: i32,
-    h: i32,
-    p: Palette,
-    dpi: i32,
-    titlebar_bottom: i32,
-    sidebar_card: RECT,
-    editor_card: RECT,
-) -> AaSurface {
+unsafe fn create_bgra_dib(dst_dc: HDC, w: i32, h: i32, pixels: &[u32]) -> Option<HBITMAP> {
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+    let dib = unsafe { CreateDIBSection(dst_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) }.ok()?;
+    if bits.is_null() {
+        let _ = unsafe { DeleteObject(HGDIOBJ(dib.0)) };
+        return None;
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits as *mut u32, pixels.len());
+    }
+    Some(dib)
+}
+
+/// Renders the atmospheric diagonal gradient + soft radial glows into a compact `w x h` surface.
+fn render_gradient_backdrop(w: i32, h: i32, p: Palette) -> AaSurface {
     let w = w.max(1);
     let h = h.max(1);
     let mut surface = AaSurface::new(w, h, p.page);
@@ -2990,41 +3245,151 @@ fn render_backdrop(
             );
         }
     }
+    surface
+}
 
-    // Sleek 2px top accent gradient hairline + translucent titlebar band + crisp divider.
-    let hairline_h = scale(2, dpi).max(2).min(h);
-    let mid_col = mix(p.accent, p.number, if p.dark { 35 } else { 20 });
-    let end_col = mix(p.accent, p.titlebar, 48);
-    for x in 0..w {
-        let u = (x as f32) / fw;
-        let col = if u < 0.5 {
-            mix(p.accent, mid_col, (u * 2.0 * 100.0) as u32)
-        } else {
-            mix(mid_col, end_col, ((u - 0.5) * 2.0 * 100.0) as u32)
-        };
-        for y in 0..hairline_h {
-            surface.blend(x, y, col, 1.0);
+/// Renders a tiny premultiplied-BGRA 9-slice card template (corners + border + top sheen + shadow).
+fn render_card_9slice_pixels(
+    p: Palette,
+    dpi: i32,
+) -> (Vec<u32>, i32, i32, i32, i32, i32, i32, i32) {
+    let radius = scale(9, dpi) as f32;
+    let shadow_y = scale(2, dpi) as f32;
+    let shadow_spread = scale(6, dpi).max(4) as f32;
+    let shadow_alpha = if p.dark { 0.18_f32 } else { 0.07_f32 };
+    let sheen_alpha = if p.dark { 0.06_f32 } else { 0.65_f32 };
+
+    let pad_l = shadow_spread.ceil() as i32;
+    let pad_t = 2;
+    let pad_r = shadow_spread.ceil() as i32;
+    let pad_b = (shadow_y + shadow_spread).ceil() as i32;
+    let corner = radius.ceil() as i32 + 2;
+    let mid = 4;
+    let card_w = corner * 2 + mid;
+    let card_h = corner * 2 + mid;
+    let tex_w = pad_l + card_w + pad_r;
+    let tex_h = pad_t + card_h + pad_b;
+
+    let x0 = pad_l as f32;
+    let y0 = pad_t as f32;
+    let x1 = (pad_l + card_w) as f32;
+    let y1 = (pad_t + card_h) as f32;
+    let cx = (x0 + x1) * 0.5;
+    let cy = (y0 + y1) * 0.5;
+    let hw = (x1 - x0) * 0.5;
+    let hh = (y1 - y0) * 0.5;
+
+    let (br, bg, bb) = colorref_rgb(p.border);
+    let (cr, cg, cb) = colorref_rgb(p.card);
+    let mut pixels = vec![0u32; (tex_w * tex_h) as usize];
+
+    for y in 0..tex_h {
+        let py = y as f32 + 0.5;
+        let row_off = (y as usize) * (tex_w as usize);
+        for x in 0..tex_w {
+            let px = x as f32 + 0.5;
+            let d_card = sd_rounded_box(px, py, cx, cy, hw, hh, radius);
+            // Premultiplied straight-over accumulator (r, g, b in 0..255, a in 0..1).
+            let mut pr = 0.0_f32;
+            let mut pg = 0.0_f32;
+            let mut pb = 0.0_f32;
+            let mut pa = 0.0_f32;
+
+            if d_card > 0.0 {
+                let d_sh = sd_rounded_box(px, py, cx, cy + shadow_y, hw, hh, radius);
+                if d_sh < shadow_spread {
+                    let t = (1.0 - (d_sh.max(0.0) / shadow_spread)).clamp(0.0, 1.0);
+                    pa = t * t * shadow_alpha;
+                }
+            }
+            let outer = aa_coverage(d_card);
+            if outer > 0.0 {
+                let inv = 1.0 - outer;
+                pr = f32::from(br) * outer + pr * inv;
+                pg = f32::from(bg) * outer + pg * inv;
+                pb = f32::from(bb) * outer + pb * inv;
+                pa = outer + pa * inv;
+
+                let inner = aa_coverage(d_card + 1.0);
+                if inner > 0.0 {
+                    let inv_i = 1.0 - inner;
+                    pr = f32::from(cr) * inner + pr * inv_i;
+                    pg = f32::from(cg) * inner + pg * inv_i;
+                    pb = f32::from(cb) * inner + pb * inv_i;
+                    pa = inner + pa * inv_i;
+
+                    if py >= y0 + 1.0 && py < y0 + 2.2 {
+                        let sa = inner * sheen_alpha;
+                        let inv_s = 1.0 - sa;
+                        pr = 255.0 * sa + pr * inv_s;
+                        pg = 255.0 * sa + pg * inv_s;
+                        pb = 255.0 * sa + pb * inv_s;
+                        pa = sa + pa * inv_s;
+                    }
+                }
+            }
+            let a8 = (pa.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            let r8 = pr.clamp(0.0, f32::from(a8)) as u8;
+            let g8 = pg.clamp(0.0, f32::from(a8)) as u8;
+            let b8 = pb.clamp(0.0, f32::from(a8)) as u8;
+            pixels[row_off + x as usize] = (u32::from(a8) << 24)
+                | (u32::from(r8) << 16)
+                | (u32::from(g8) << 8)
+                | u32::from(b8);
         }
     }
+    (pixels, tex_w, tex_h, pad_l, pad_t, pad_r, pad_b, corner)
+}
 
-    let tb_end = titlebar_bottom.clamp(hairline_h, h);
-    for y in hairline_h..tb_end.saturating_sub(1) {
+/// Renders an SDF anti-aliased rounded pill badge (e.g. `"Off"` tag on disabled preset rows).
+fn render_off_badge_pill(
+    w: i32,
+    h: i32,
+    bg: COLORREF,
+    fill: COLORREF,
+    border: COLORREF,
+) -> AaSurface {
+    let w = w.max(1);
+    let h = h.max(1);
+    let mut surface = AaSurface::new(w, h, bg);
+    let radius = ((h as f32) - 1.0).max(1.0) * 0.5;
+    surface.fill_rounded_box(
+        [0.5, 0.5, w as f32 - 0.5, h as f32 - 0.5],
+        radius,
+        fill,
+        Some((border, 1.0)),
+    );
+    surface
+}
+
+/// Renders the atmospheric window backdrop: diagonal theme gradient, subtle radial accent glow,
+/// titlebar band + crisp divider, and SDF elevated rounded cards (no top neon bar or accent dot).
+#[cfg(test)]
+fn render_backdrop(
+    w: i32,
+    h: i32,
+    p: Palette,
+    dpi: i32,
+    titlebar_bottom: i32,
+    sidebar_card: RECT,
+    editor_card: RECT,
+) -> AaSurface {
+    let w = w.max(1);
+    let h = h.max(1);
+    let mut surface = render_gradient_backdrop(w, h, p);
+
+    let tb_end = titlebar_bottom.clamp(0, h);
+    for y in 0..tb_end.saturating_sub(1) {
         for x in 0..w {
             surface.blend(x, y, p.titlebar, 0.88);
         }
     }
-    if tb_end > hairline_h {
+    if tb_end > 0 {
         let div_y = tb_end - 1;
         for x in 0..w {
             surface.blend(x, div_y, p.border, 1.0);
         }
     }
-
-    // Smooth SDF accent dot beside title.
-    let dot_r = scale(4, dpi).max(3) as f32;
-    let dot_cx = scale(16, dpi) as f32 + dot_r;
-    let dot_cy = (hairline_h + tb_end.saturating_sub(1)) as f32 * 0.5;
-    surface.fill_circle(dot_cx, dot_cy, dot_r, p.accent, None, 0.0);
 
     // SDF anti-aliased rounded cards with soft drop shadow & top sheen.
     let card_radius = scale(9, dpi) as f32;
@@ -4598,8 +4963,31 @@ fn is_button(id: u32) -> bool {
         || is_stepper(id)
 }
 
+/// Offscreen-buffered `WM_DRAWITEM` helper so buttons, steppers, and list rows never flicker.
+unsafe fn draw_item_buffered<F: FnOnce(HDC)>(dst_dc: HDC, r: RECT, draw: F) {
+    let w = (r.right - r.left).max(1);
+    let h = (r.bottom - r.top).max(1);
+    let mem_dc = unsafe { CreateCompatibleDC(dst_dc) };
+    let mem_bmp = unsafe { CreateCompatibleBitmap(dst_dc, w, h) };
+    if !mem_dc.is_invalid() && !mem_bmp.is_invalid() {
+        let old_bmp = unsafe { SelectObject(mem_dc, HGDIOBJ(mem_bmp.0)) };
+        let _ = unsafe { SetViewportOrgEx(mem_dc, -r.left, -r.top, None) };
+        draw(mem_dc);
+        let _ = unsafe { SetViewportOrgEx(mem_dc, 0, 0, None) };
+        let _ = unsafe { BitBlt(dst_dc, r.left, r.top, w, h, mem_dc, 0, 0, SRCCOPY) };
+        let _ = unsafe { SelectObject(mem_dc, old_bmp) };
+    } else {
+        draw(dst_dc);
+    }
+    if !mem_bmp.is_invalid() {
+        let _ = unsafe { DeleteObject(HGDIOBJ(mem_bmp.0)) };
+    }
+    if !mem_dc.is_invalid() {
+        let _ = unsafe { DeleteDC(mem_dc) };
+    }
+}
+
 unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
-    let hdc = item.hDC;
     let p = state.palette;
     let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
     let disabled = item.itemState.0 & ODS_DISABLED.0 != 0;
@@ -4691,193 +5079,181 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
     };
 
     unsafe {
-        if is_button(item.CtlID) {
-            let r = item.rcItem;
-            let radius = if is_stepper(item.CtlID) {
-                scale(3, dpi)
-            } else {
-                scale(6, dpi)
-            };
-            if let Some((top_col, bot_col, bcol, _)) = primary_grad {
-                let bw = (r.right - r.left).max(1);
-                let bh = (r.bottom - r.top).max(1);
-                let mut surface = AaSurface::new(bw, bh, p.card);
-                surface.fill_rounded_box_gradient(
-                    [0.5, 0.5, bw as f32 - 0.5, bh as f32 - 0.5],
-                    radius as f32,
-                    top_col,
-                    bot_col,
-                    Some((bcol, 1.0)),
-                );
-                surface.blit_to(hdc, r.left, r.top);
-            } else {
-                let parent_brush =
-                    if item.CtlID == ID_DELETE as u32 || item.CtlID == ID_CLOSE_BUTTON as u32 {
-                        state.brush_page
-                    } else {
-                        state.brush_card
-                    };
-                FillRect(hdc, &item.rcItem, parent_brush);
+        draw_item_buffered(item.hDC, item.rcItem, |hdc| {
+            if is_button(item.CtlID) {
+                let r = item.rcItem;
+                let radius = if is_stepper(item.CtlID) {
+                    scale(3, dpi)
+                } else {
+                    scale(6, dpi)
+                };
+                if let Some((top_col, bot_col, bcol, _)) = primary_grad {
+                    let bw = (r.right - r.left).max(1);
+                    let bh = (r.bottom - r.top).max(1);
+                    let mut surface = AaSurface::new(bw, bh, p.card);
+                    surface.fill_rounded_box_gradient(
+                        [0.5, 0.5, bw as f32 - 0.5, bh as f32 - 0.5],
+                        radius as f32,
+                        top_col,
+                        bot_col,
+                        Some((bcol, 1.0)),
+                    );
+                    surface.blit_to(hdc, r.left, r.top);
+                } else {
+                    let parent_brush =
+                        if item.CtlID == ID_DELETE as u32 || item.CtlID == ID_CLOSE_BUTTON as u32 {
+                            state.brush_page
+                        } else {
+                            state.brush_card
+                        };
+                    FillRect(hdc, &item.rcItem, parent_brush);
 
+                    let brush = CreateSolidBrush(fill);
+                    let pen = CreatePen(PS_SOLID, 1, border_col);
+                    let old_b = SelectObject(hdc, HGDIOBJ(brush.0));
+                    let old_p = SelectObject(hdc, HGDIOBJ(pen.0));
+                    let _ = RoundRect(hdc, r.left, r.top, r.right, r.bottom, radius, radius);
+                    let _ = SelectObject(hdc, old_b);
+                    let _ = SelectObject(hdc, old_p);
+                    let _ = DeleteObject(HGDIOBJ(brush.0));
+                    let _ = DeleteObject(HGDIOBJ(pen.0));
+                }
+            } else {
                 let brush = CreateSolidBrush(fill);
-                let pen = CreatePen(PS_SOLID, 1, border_col);
-                let old_b = SelectObject(hdc, HGDIOBJ(brush.0));
-                let old_p = SelectObject(hdc, HGDIOBJ(pen.0));
-                let _ = RoundRect(hdc, r.left, r.top, r.right, r.bottom, radius, radius);
-                let _ = SelectObject(hdc, old_b);
-                let _ = SelectObject(hdc, old_p);
+                FillRect(hdc, &item.rcItem, brush);
                 let _ = DeleteObject(HGDIOBJ(brush.0));
-                let _ = DeleteObject(HGDIOBJ(pen.0));
+                if item.CtlID == ID_LIST as u32 && selected {
+                    // Smooth 3px rounded pill accent indicator bar on selected preset item.
+                    let bar_w = scale(3, dpi).max(3);
+                    let bar_x = item.rcItem.left + scale(2, dpi);
+                    let bar_top = item.rcItem.top + scale(4, dpi);
+                    let bar_bot = (item.rcItem.bottom - scale(4, dpi)).max(bar_top + bar_w);
+                    let pill_col = if list_preset_disabled {
+                        p.muted
+                    } else {
+                        p.accent
+                    };
+                    let pill_brush = CreateSolidBrush(pill_col);
+                    let pill_pen = CreatePen(PS_SOLID, 1, pill_col);
+                    let old_b = SelectObject(hdc, HGDIOBJ(pill_brush.0));
+                    let old_p = SelectObject(hdc, HGDIOBJ(pill_pen.0));
+                    let _ = RoundRect(hdc, bar_x, bar_top, bar_x + bar_w, bar_bot, bar_w, bar_w);
+                    let _ = SelectObject(hdc, old_b);
+                    let _ = SelectObject(hdc, old_p);
+                    let _ = DeleteObject(HGDIOBJ(pill_brush.0));
+                    let _ = DeleteObject(HGDIOBJ(pill_pen.0));
+                }
             }
-        } else {
-            let brush = CreateSolidBrush(fill);
-            FillRect(hdc, &item.rcItem, brush);
-            let _ = DeleteObject(HGDIOBJ(brush.0));
-            if item.CtlID == ID_LIST as u32 && selected {
-                // Smooth 3px rounded pill accent indicator bar on selected preset item.
-                let bar_w = scale(3, dpi).max(3);
-                let bar_x = item.rcItem.left + scale(2, dpi);
-                let bar_top = item.rcItem.top + scale(4, dpi);
-                let bar_bot = (item.rcItem.bottom - scale(4, dpi)).max(bar_top + bar_w);
-                let pill_col = if list_preset_disabled {
-                    p.muted
-                } else {
-                    p.accent
-                };
-                let pill_brush = CreateSolidBrush(pill_col);
-                let pill_pen = CreatePen(PS_SOLID, 1, pill_col);
-                let old_b = SelectObject(hdc, HGDIOBJ(pill_brush.0));
-                let old_p = SelectObject(hdc, HGDIOBJ(pill_pen.0));
-                let _ = RoundRect(hdc, bar_x, bar_top, bar_x + bar_w, bar_bot, bar_w, bar_w);
-                let _ = SelectObject(hdc, old_b);
-                let _ = SelectObject(hdc, old_p);
-                let _ = DeleteObject(HGDIOBJ(pill_brush.0));
-                let _ = DeleteObject(HGDIOBJ(pill_pen.0));
-            }
-        }
 
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, text_col);
-        let font = if is_stepper(item.CtlID) {
-            state.font_small
-        } else {
-            state.font
-        };
-        let _ = SelectObject(hdc, HGDIOBJ(font.0));
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, text_col);
+            let font = if is_stepper(item.CtlID) {
+                state.font_small
+            } else {
+                state.font
+            };
+            let _ = SelectObject(hdc, HGDIOBJ(font.0));
 
-        let text = match item.CtlID {
-            id if id == ID_LIST as u32 => {
-                let list = item.hwndItem;
-                let length =
-                    SendMessageW(list, LB_GETTEXTLEN, WPARAM(item.itemID as usize), LPARAM(0))
-                        .0
-                        .max(0) as usize;
-                let mut buffer = vec![0u16; length + 1];
-                SendMessageW(
-                    list,
-                    LB_GETTEXT,
-                    WPARAM(item.itemID as usize),
-                    LPARAM(buffer.as_mut_ptr() as isize),
-                );
-                String::from_utf16_lossy(&buffer[..length])
-            }
-            id if is_combo(id) => {
-                let combo = item.hwndItem;
-                let index = if item.itemID == u32::MAX {
-                    SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0
-                } else {
-                    item.itemID as isize
-                };
-                if index < 0 {
-                    String::new()
-                } else {
+            let text = match item.CtlID {
+                id if id == ID_LIST as u32 => {
+                    let list = item.hwndItem;
                     let length =
-                        SendMessageW(combo, CB_GETLBTEXTLEN, WPARAM(index as usize), LPARAM(0))
+                        SendMessageW(list, LB_GETTEXTLEN, WPARAM(item.itemID as usize), LPARAM(0))
                             .0
                             .max(0) as usize;
                     let mut buffer = vec![0u16; length + 1];
                     SendMessageW(
-                        combo,
-                        CB_GETLBTEXT,
-                        WPARAM(index as usize),
+                        list,
+                        LB_GETTEXT,
+                        WPARAM(item.itemID as usize),
                         LPARAM(buffer.as_mut_ptr() as isize),
                     );
                     String::from_utf16_lossy(&buffer[..length])
                 }
-            }
-            _ => {
-                let control = item.hwndItem;
-                let length = GetWindowTextLengthW(control).max(0) as usize;
-                let mut buffer = vec![0u16; length + 1];
-                let read = GetWindowTextW(control, &mut buffer).max(0) as usize;
-                String::from_utf16_lossy(&buffer[..read])
-            }
-        };
-
-        // Empty slice would hand DrawTextW a dangling alignment pointer; return early.
-        if text.is_empty() {
-            return 1;
-        }
-
-        let mut text: Vec<u16> = text.encode_utf16().collect();
-        let mut rect = if is_combo(item.CtlID) {
-            combo_label_rect(item.rcItem, dpi)
-        } else {
-            item.rcItem
-        };
-        if list_preset_disabled {
-            // Subtle "Off" pill tag on right side of disabled preset rows.
-            let tag_w = scale(30, dpi);
-            let tag_h = scale(16, dpi);
-            let tag_right = rect.right - scale(8, dpi);
-            let tag_left = (tag_right - tag_w).max(rect.left + scale(20, dpi));
-            let tag_top = (rect.top + rect.bottom - tag_h) / 2;
-            let mut tag_rc = RECT {
-                left: tag_left,
-                top: tag_top,
-                right: tag_right,
-                bottom: tag_top + tag_h,
+                id if is_combo(id) => {
+                    let combo = item.hwndItem;
+                    let index = if item.itemID == u32::MAX {
+                        SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0
+                    } else {
+                        item.itemID as isize
+                    };
+                    if index < 0 {
+                        String::new()
+                    } else {
+                        let length =
+                            SendMessageW(combo, CB_GETLBTEXTLEN, WPARAM(index as usize), LPARAM(0))
+                                .0
+                                .max(0) as usize;
+                        let mut buffer = vec![0u16; length + 1];
+                        SendMessageW(
+                            combo,
+                            CB_GETLBTEXT,
+                            WPARAM(index as usize),
+                            LPARAM(buffer.as_mut_ptr() as isize),
+                        );
+                        String::from_utf16_lossy(&buffer[..length])
+                    }
+                }
+                _ => {
+                    let control = item.hwndItem;
+                    let length = GetWindowTextLengthW(control).max(0) as usize;
+                    let mut buffer = vec![0u16; length + 1];
+                    let read = GetWindowTextW(control, &mut buffer).max(0) as usize;
+                    String::from_utf16_lossy(&buffer[..read])
+                }
             };
-            let tag_bg = CreateSolidBrush(p.button_bg);
-            let tag_pen = CreatePen(PS_SOLID, 1, p.border);
-            let old_b = SelectObject(hdc, HGDIOBJ(tag_bg.0));
-            let old_p = SelectObject(hdc, HGDIOBJ(tag_pen.0));
-            let _ = RoundRect(
-                hdc,
-                tag_rc.left,
-                tag_rc.top,
-                tag_rc.right,
-                tag_rc.bottom,
-                tag_h,
-                tag_h,
-            );
-            let _ = SelectObject(hdc, old_b);
-            let _ = SelectObject(hdc, old_p);
-            let _ = DeleteObject(HGDIOBJ(tag_bg.0));
-            let _ = DeleteObject(HGDIOBJ(tag_pen.0));
 
-            let old_f = SelectObject(hdc, HGDIOBJ(state.font_small.0));
-            SetTextColor(hdc, p.muted);
-            let mut off_w: Vec<u16> = "Off".encode_utf16().collect();
-            DrawTextW(
-                hdc,
-                &mut off_w,
-                &mut tag_rc,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-            );
-            let _ = SelectObject(hdc, old_f);
-            SetTextColor(hdc, text_col);
-            rect.right = (tag_left - scale(6, dpi)).max(rect.left + scale(10, dpi));
-        }
-        let flags = if is_button(item.CtlID) {
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
-        } else {
-            if !is_combo(item.CtlID) {
-                rect.left += scale(10, dpi);
+            // Empty slice would hand DrawTextW a dangling alignment pointer; return early.
+            if text.is_empty() {
+                return;
             }
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS
-        };
-        DrawTextW(hdc, &mut text, &mut rect, flags);
+
+            let mut text: Vec<u16> = text.encode_utf16().collect();
+            let mut rect = if is_combo(item.CtlID) {
+                combo_label_rect(item.rcItem, dpi)
+            } else {
+                item.rcItem
+            };
+            if list_preset_disabled {
+                // Smooth SDF anti-aliased "Off" pill tag on right side of disabled preset rows.
+                let tag_w = scale(30, dpi);
+                let tag_h = scale(16, dpi);
+                let tag_right = rect.right - scale(8, dpi);
+                let tag_left = (tag_right - tag_w).max(rect.left + scale(20, dpi));
+                let tag_top = (rect.top + rect.bottom - tag_h) / 2;
+                let actual_w = (tag_right - tag_left).max(1);
+                let mut tag_rc = RECT {
+                    left: tag_left,
+                    top: tag_top,
+                    right: tag_left + actual_w,
+                    bottom: tag_top + tag_h,
+                };
+                let badge = render_off_badge_pill(actual_w, tag_h, fill, p.button_bg, p.border);
+                badge.blit_to(hdc, tag_rc.left, tag_rc.top);
+
+                let old_f = SelectObject(hdc, HGDIOBJ(state.font_small.0));
+                SetTextColor(hdc, p.muted);
+                let mut off_w: Vec<u16> = "Off".encode_utf16().collect();
+                DrawTextW(
+                    hdc,
+                    &mut off_w,
+                    &mut tag_rc,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+                );
+                let _ = SelectObject(hdc, old_f);
+                SetTextColor(hdc, text_col);
+                rect.right = (tag_left - scale(6, dpi)).max(rect.left + scale(10, dpi));
+            }
+            let flags = if is_button(item.CtlID) {
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
+            } else {
+                if !is_combo(item.CtlID) {
+                    rect.left += scale(10, dpi);
+                }
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS
+            };
+            DrawTextW(hdc, &mut text, &mut rect, flags);
+        });
     }
 
     1
@@ -5534,7 +5910,7 @@ mod tests {
                 );
             }
 
-            // Atmospheric backdrop renders top 2px accent hairline, smooth gradient, and cards.
+            // Atmospheric backdrop has NO top neon bar or accent dot, keeps smooth gradient & cards.
             let rects = compute_layout_rects(920, 620, 96);
             let surface = render_backdrop(
                 920,
@@ -5548,13 +5924,40 @@ mod tests {
             let px =
                 |x: i32, y: i32| surface.pixels[(y as usize) * (surface.w as usize) + x as usize];
             let (ar, ag, ab) = colorref_rgb(p.accent);
-            assert_eq!(px(0, 0), pack_bgra(ar, ag, ab));
+            assert_ne!(
+                px(0, 0),
+                pack_bgra(ar, ag, ab),
+                "top neon hairline must be removed"
+            );
+            assert_ne!(
+                px(20, rects.titlebar.bottom / 2),
+                pack_bgra(ar, ag, ab),
+                "titlebar neon accent dot must be removed"
+            );
             assert_ne!(px(4, rects.titlebar.bottom + 4), px(915, 615));
             let (cr, cg, cb) = colorref_rgb(p.card);
             assert_eq!(
                 px(rects.editor_card.left + 40, rects.editor_card.top + 40),
                 pack_bgra(cr, cg, cb)
             );
+
+            // Compact 128x96 gradient cache & 9-slice card template build cleanly in both themes.
+            let grad = render_gradient_backdrop(GRADIENT_W, GRADIENT_H, p);
+            assert_eq!((grad.w, grad.h), (GRADIENT_W, GRADIENT_H));
+            assert_ne!(grad.pixels[0], *grad.pixels.last().unwrap());
+            let (slice_px, tw, th, ..) = render_card_9slice_pixels(p, 96);
+            assert_eq!(slice_px.len(), (tw * th) as usize);
+            assert_eq!(
+                slice_px[((th / 2) * tw + (tw / 2)) as usize],
+                pack_bgra(cr, cg, cb)
+            );
+
+            // SDF anti-aliased "Off" badge pill has background corners and solid fill center.
+            let pill = render_off_badge_pill(30, 16, p.field, p.button_bg, p.border);
+            let (fr, fg, fb) = colorref_rgb(p.field);
+            let (br, bg, bb) = colorref_rgb(p.button_bg);
+            assert_eq!(pill.pixels[0], pack_bgra(fr, fg, fb));
+            assert_eq!(pill.pixels[(8 * 30 + 15) as usize], pack_bgra(br, bg, bb));
         }
     }
 }
