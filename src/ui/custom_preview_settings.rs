@@ -43,7 +43,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
-use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_SELECTED};
+use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_DISABLED, ODS_SELECTED};
 use windows::Win32::UI::Controls::{EM_SETSEL, TBM_SETPOS, TBM_SETRANGE};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
@@ -698,11 +698,6 @@ unsafe fn build(hwnd: HWND) -> State {
         unsafe { combo_add(background_combo, background_label(background)) };
     }
 
-    // Neither combo is left unselected: a blank one is a field the user cannot read and a
-    // `WM_DRAWITEM` with nothing to draw.
-    unsafe { SendMessageW(scaling, CB_SETCURSEL, WPARAM(0), LPARAM(0)) };
-    unsafe { SendMessageW(background_combo, CB_SETCURSEL, WPARAM(0), LPARAM(0)) };
-
     let volume = unsafe { GetDlgItem(hwnd, ID_VOLUME) }.unwrap_or_default();
     unsafe {
         SendMessageW(volume, TBM_SETRANGE, WPARAM(1), LPARAM(0x640000));
@@ -715,6 +710,9 @@ unsafe fn build(hwnd: HWND) -> State {
     unsafe { rebuild_list(&mut state) };
     unsafe { fill_fields(&mut state) };
 
+    // Everything the right pane holds waits for a preset to show: there is none the first time
+    // the window is opened on a machine with none, and a field typed into then would be written
+    // to no preset at all.
     state
 }
 
@@ -763,6 +761,11 @@ unsafe fn combo_add(combo: HWND, text: &str) {
             LPARAM(text.as_ptr() as isize),
         );
     }
+}
+
+/// The dropdown room a combo needs below its own field, in this window's pixels.
+fn combo_drop_height(dpi: i32) -> i32 {
+    scale(22, dpi) * 5
 }
 
 /// Place every control for the window's current client area: the tabs on the left, the fields on
@@ -850,12 +853,15 @@ unsafe fn lay_out(state: &State) {
         row,
     );
     y += row + gap;
+    // **A combo's window height is its dropdown's, not its field's**: Windows fits the field to one
+    // item and drops a list as tall as the window it was given, so a combo given a row drops a
+    // one-item list — a click that opens nothing. The extra is the list's.
     place(
         ID_SCALING,
         field_left,
         y,
         (field_width - scale(88, dpi)).max(scale(80, dpi)),
-        row,
+        row + combo_drop_height(dpi),
     );
     place(
         ID_SCALING_PERCENT,
@@ -865,7 +871,13 @@ unsafe fn lay_out(state: &State) {
         row,
     );
     y += row + gap;
-    place(ID_BACKGROUND, field_left, y, field_width, row);
+    place(
+        ID_BACKGROUND,
+        field_left,
+        y,
+        field_width,
+        row + combo_drop_height(dpi),
+    );
     y += row + gap;
     place(
         ID_VOLUME,
@@ -978,9 +990,26 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
     }
 }
 
-/// Fill the fields from the selected preset.
+/// Fill the fields from the selected preset, and make the fields that need a preset to mean
+/// anything dead while there is none: an empty list leaves nothing for a keystroke to be read into.
 unsafe fn fill_fields(state: &mut State) {
     let Some(preset) = state.selected.and_then(|index| state.presets.get(index)) else {
+        state.loading = true;
+        for id in [
+            ID_NAME,
+            ID_EXTENSIONS,
+            ID_EXE,
+            ID_SCALING_PERCENT,
+            ID_VOLUME_VALUE,
+        ] {
+            unsafe { set_text(state.hwnd, id, "") };
+        }
+        for id in [ID_SCALING, ID_BACKGROUND] {
+            let combo = unsafe { GetDlgItem(state.hwnd, id) }.unwrap_or_default();
+            unsafe { SendMessageW(combo, CB_SETCURSEL, WPARAM(usize::MAX), LPARAM(0)) };
+        }
+        state.loading = false;
+        unsafe { set_fields_enabled(state, false) };
         return;
     };
     let name = preset.name.clone();
@@ -1032,6 +1061,32 @@ unsafe fn fill_fields(state: &mut State) {
         set_text(state.hwnd, ID_VOLUME_VALUE, &volume.to_string());
     }
     state.loading = false;
+    unsafe { set_fields_enabled(state, true) };
+}
+
+/// The preset fields, and the buttons that act on one, enabled or not. `Scaling`'s percentage is
+/// off whenever the fields are: with a preset it is its own rule, `Fit to screen` having none.
+unsafe fn set_fields_enabled(state: &State, enabled: bool) {
+    for id in [
+        ID_NAME,
+        ID_EXTENSIONS,
+        ID_EXE,
+        ID_BROWSE,
+        ID_SCALING,
+        ID_BACKGROUND,
+        ID_VOLUME,
+        ID_VOLUME_VALUE,
+        ID_DELETE,
+    ] {
+        if let Ok(control) = unsafe { GetDlgItem(state.hwnd, id) } {
+            let _ = unsafe { EnableWindow(control, enabled) };
+        }
+    }
+    if !enabled {
+        if let Ok(edit) = unsafe { GetDlgItem(state.hwnd, ID_SCALING_PERCENT) } {
+            let _ = unsafe { EnableWindow(edit, false) };
+        }
+    }
 }
 
 /// The tabs the search box asks for, as indexes into the preset list.
@@ -1364,6 +1419,7 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
     let hdc = item.hDC;
     let palette = state.palette;
     let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+    let disabled = item.itemState.0 & ODS_DISABLED.0 != 0;
 
     let fill = if is_button(item.CtlID) {
         if selected {
@@ -1385,7 +1441,9 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(
             hdc,
-            if fill == palette.accent {
+            if disabled {
+                mix(palette.field, palette.ink, 45)
+            } else if fill == palette.accent {
                 mix(palette.page, palette.ink, 10)
             } else {
                 palette.ink
@@ -1484,6 +1542,10 @@ mod tests {
     use super::*;
     use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
     use windows::Win32::UI::Controls::{ODA_DRAWENTIRE, ODS_FLAGS, ODT_COMBOBOX};
+    use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, CB_GETDROPPEDCONTROLRECT, CB_SHOWDROPDOWN,
+    };
 
     #[test]
     fn drawing_a_combo_with_nothing_selected_does_not_take_the_process_down() {
@@ -1521,6 +1583,76 @@ mod tests {
             assert_eq!(drawn.0, 1, "the empty combo was not drawn");
 
             ReleaseDC(hwnd, hdc);
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// `lay_out` gives a combo the height of its field plus its list, because that is what Windows
+    /// reads the list's height out of: a combo laid out at one row drops a list one row tall, which
+    /// is a click that opens nothing.
+    #[test]
+    fn a_combo_is_laid_out_with_a_list_to_drop() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+
+        unsafe {
+            let combo = GetDlgItem(hwnd, ID_SCALING).unwrap_or_default();
+            let mut field = RECT::default();
+            let _ = GetWindowRect(combo, &mut field);
+            SendMessageW(combo, CB_SHOWDROPDOWN, WPARAM(1), LPARAM(0));
+            let mut dropped = RECT::default();
+            SendMessageW(
+                combo,
+                CB_GETDROPPEDCONTROLRECT,
+                WPARAM(0),
+                LPARAM(&mut dropped as *mut _ as isize),
+            );
+            SendMessageW(combo, CB_SHOWDROPDOWN, WPARAM(0), LPARAM(0));
+
+            let field_height = field.bottom - field.top;
+            let dropped_height = dropped.bottom - dropped.top;
+            assert!(
+                dropped_height >= field_height * 3,
+                "the list drops {dropped_height}px high against a {field_height}px field"
+            );
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// A window opened on a machine with no preset has nothing for the right pane to be showing,
+    /// so every field that would write to one is off.
+    #[test]
+    fn with_no_preset_the_fields_are_off() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            if !state.presets.is_empty() {
+                let _ = DestroyWindow(hwnd);
+                return;
+            }
+
+            for id in [
+                ID_NAME,
+                ID_EXTENSIONS,
+                ID_EXE,
+                ID_SCALING,
+                ID_BACKGROUND,
+                ID_DELETE,
+            ] {
+                let control = GetDlgItem(hwnd, id).unwrap_or_default();
+                assert!(
+                    !IsWindowEnabled(control).as_bool(),
+                    "control {id} is editable with no preset to edit"
+                );
+            }
+
             let _ = DestroyWindow(hwnd);
         }
     }
