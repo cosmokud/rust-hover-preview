@@ -133,8 +133,9 @@ use windows::Win32::Graphics::Dwm::{
     DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FillRect, GetStockObject, InvalidateRect, UpdateWindow, HBRUSH,
-    HGDIOBJ, NULL_BRUSH,
+    CreateSolidBrush, DeleteObject, FillRect, GetMonitorInfoW, GetStockObject, InvalidateRect,
+    MonitorFromRect, UpdateWindow, HBRUSH, HGDIOBJ, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    NULL_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
@@ -156,10 +157,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
-    WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
-    WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::dimensions::{design_dimensions, picture_dimensions, vector_dimensions};
@@ -198,11 +199,6 @@ const WM_THERE_IS_NOTHING_TO_SHOW: u32 = WM_APP + 42;
 /// nothing of this app's is held by it. The cadence is the one a window is *hidden* at: a program
 /// shows its own window the moment it has one, and every poll is a poll a window can be hidden on.
 const WINDOW_WAIT: Duration = Duration::from_secs(6);
-
-/// How long a program that never shows a window is given to show one before the window it has is
-/// taken as the picture anyway: a program that honours the hidden launch never shows one, and one
-/// that is merely slow to show it is not a program with no window.
-const SHOWN_WAIT: Duration = Duration::from_millis(300);
 
 /// How often the launched process's own tree is read again while its window is looked for: a
 /// program that hands its file to a process of its own is a window under that process's id.
@@ -666,12 +662,12 @@ fn provisional_rect_for(
     ))
 }
 
-/// `STARTUPINFOW` hinting `SW_SHOWNOACTIVATE` and (when known) provisional preview rect.
+/// `STARTUPINFOW` hinting `SW_HIDE` and (when known) provisional preview rect.
 fn launch_startup_info(provisional: Option<(i32, i32, i32, i32)>) -> STARTUPINFOW {
     let mut si = STARTUPINFOW {
         cb: std::mem::size_of::<STARTUPINFOW>() as u32,
         dwFlags: STARTF_USESHOWWINDOW,
-        wShowWindow: SW_SHOWNOACTIVATE.0 as u16,
+        wShowWindow: SW_HIDE.0 as u16,
         ..Default::default()
     };
     if let Some((x, y, w, h)) = provisional {
@@ -684,8 +680,8 @@ fn launch_startup_info(provisional: Option<(i32, i32, i32, i32)>) -> STARTUPINFO
     si
 }
 
-/// Spawn target normally via `CreateProcessW` (no `SW_HIDE`, no `CREATE_NO_WINDOW`, no stdio
-/// redirection) with its exe folder as cwd and `STARTUPINFOW` position/size/no-activate hints.
+/// Spawn target normally via `CreateProcessW` (no `CREATE_NO_WINDOW`, no stdio redirection) with
+/// its exe folder as cwd and `STARTUPINFOW` `SW_HIDE` + provisional position/size hints.
 fn launch(
     exe: &str,
     path: &Path,
@@ -889,8 +885,6 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
     let mut placed_host_rect: Option<(i32, i32, i32, i32)> = None;
     let mut the_ask: Option<(i32, i32)> = None;
 
-    // Immediately sink `source` to target rect BEFORE `WaitForInputIdle` so it never flashes at
-    // its default position before frame-0 settles.
     let current_target_rect = || -> Option<(i32, i32, i32, i32)> {
         let at = WANT
             .lock()
@@ -898,42 +892,62 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             .and_then(|want| want.as_ref().map(|want| want.at))?;
         provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
     };
-    if let Some(target_rect) = current_target_rect() {
-        let mode = if place_behind_host(source, target_rect, window_mode) {
-            PlacementMode::BehindHost
-        } else {
-            let ask = the_ask_for(
-                (target_rect.2, target_rect.3),
-                source_size(source, window_mode),
-            );
-            the_ask = Some(ask);
-            park_offscreen(source, ask.0, ask.1);
-            PlacementMode::OffScreen
-        };
-        restore_foreground(launch.previous_foreground, &processes);
-        placed_mode = Some(mode);
-        placed_host_rect = Some(target_rect);
-    }
 
-    // Wait for initial UI startup + file load/paint settle after immediate positioning.
-    wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 500);
-    if source_pid != 0 && source_pid != launch.pid {
-        wait_for_input_idle(source_pid, 250);
-    }
-    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
-        return;
-    }
+    if !unsafe { IsWindowVisible(source) }.as_bool() {
+        // App honored `SW_HIDE`: atomically position + reveal at target rect via `SetWindowPlacement`
+        // so it never flashes at its old saved coordinates.
+        if let Some(target_rect) = current_target_rect() {
+            let insets = if window_mode == CustomWindowMode::Normal {
+                dwm_frame_insets(source)
+            } else {
+                (0, 0, 0, 0)
+            };
+            let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+            let workspace_rect = workspace_rect_for_screen(RECT {
+                left: wx,
+                top: wy,
+                right: wx + ww,
+                bottom: wy + wh,
+            });
+            let placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                flags: WINDOWPLACEMENT_FLAGS(0),
+                showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                rcNormalPosition: workspace_rect,
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(source, &placement) };
 
-    // Re-apply if the app resized/recentered itself during startup before `WM_NULL` flush.
-    if let Some(target_rect) = current_target_rect() {
-        if placed_host_rect != Some(target_rect)
-            || (placed_mode == Some(PlacementMode::BehindHost)
-                && !aligned_behind_host(source, target_rect))
-            || (placed_mode == Some(PlacementMode::OffScreen) && !parked(source))
-        {
-            if place_behind_host(source, target_rect, window_mode) {
-                the_ask = None;
-                placed_mode = Some(PlacementMode::BehindHost);
+            // Re-read DWM invisible border insets now that `source` is visible for exact alignment.
+            let insets2 = if window_mode == CustomWindowMode::Normal {
+                dwm_frame_insets(source)
+            } else {
+                (0, 0, 0, 0)
+            };
+            let (wx2, wy2, ww2, wh2) = behind_host_window_rect(target_rect, insets2);
+            let _ =
+                unsafe { SetWindowPos(source, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE) };
+            restore_foreground(launch.previous_foreground, &processes);
+
+            let _ = unsafe {
+                SendMessageTimeoutW(
+                    source,
+                    WM_NULL,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                    250,
+                    None,
+                )
+            };
+            let _ = unsafe { InvalidateRect(source, None, false) };
+            let _ = unsafe { UpdateWindow(source) };
+            if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+                return;
+            }
+
+            let mode = if aligned_behind_host(source, target_rect) {
+                PlacementMode::BehindHost
             } else {
                 let ask = the_ask_for(
                     (target_rect.2, target_rect.3),
@@ -941,26 +955,77 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
                 );
                 the_ask = Some(ask);
                 park_offscreen(source, ask.0, ask.1);
-                placed_mode = Some(PlacementMode::OffScreen);
-            }
+                PlacementMode::OffScreen
+            };
+            placed_mode = Some(mode);
             placed_host_rect = Some(target_rect);
-            restore_foreground(launch.previous_foreground, &processes);
         }
-    }
+    } else {
+        // App ignored `SW_HIDE` (e.g. WinUI 3 / Electron): sink immediately before settle.
+        if let Some(target_rect) = current_target_rect() {
+            let mode = if place_behind_host(source, target_rect, window_mode) {
+                PlacementMode::BehindHost
+            } else {
+                let ask = the_ask_for(
+                    (target_rect.2, target_rect.3),
+                    source_size(source, window_mode),
+                );
+                the_ask = Some(ask);
+                park_offscreen(source, ask.0, ask.1);
+                PlacementMode::OffScreen
+            };
+            restore_foreground(launch.previous_foreground, &processes);
+            placed_mode = Some(mode);
+            placed_host_rect = Some(target_rect);
+        }
 
-    let _ = unsafe {
-        SendMessageTimeoutW(
-            source,
-            WM_NULL,
-            WPARAM(0),
-            LPARAM(0),
-            SMTO_ABORTIFHUNG | SMTO_NORMAL,
-            500,
-            None,
-        )
-    };
-    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
-        return;
+        // Wait for initial UI startup + file load/paint settle after immediate positioning.
+        wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 500);
+        if source_pid != 0 && source_pid != launch.pid {
+            wait_for_input_idle(source_pid, 250);
+        }
+        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+            return;
+        }
+
+        // Re-apply if the app resized/recentered itself during startup before `WM_NULL` flush.
+        if let Some(target_rect) = current_target_rect() {
+            if placed_host_rect != Some(target_rect)
+                || (placed_mode == Some(PlacementMode::BehindHost)
+                    && !aligned_behind_host(source, target_rect))
+                || (placed_mode == Some(PlacementMode::OffScreen) && !parked(source))
+            {
+                if place_behind_host(source, target_rect, window_mode) {
+                    the_ask = None;
+                    placed_mode = Some(PlacementMode::BehindHost);
+                } else {
+                    let ask = the_ask_for(
+                        (target_rect.2, target_rect.3),
+                        source_size(source, window_mode),
+                    );
+                    the_ask = Some(ask);
+                    park_offscreen(source, ask.0, ask.1);
+                    placed_mode = Some(PlacementMode::OffScreen);
+                }
+                placed_host_rect = Some(target_rect);
+                restore_foreground(launch.previous_foreground, &processes);
+            }
+        }
+
+        let _ = unsafe {
+            SendMessageTimeoutW(
+                source,
+                WM_NULL,
+                WPARAM(0),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                500,
+                None,
+            )
+        };
+        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+            return;
+        }
     }
 
     let mut tree_read = Instant::now();
@@ -1503,6 +1568,31 @@ fn aligned_behind_host(window: HWND, host_rect: (i32, i32, i32, i32)) -> bool {
         && !unsafe { IsIconic(window) }.as_bool()
 }
 
+/// Convert screen rect to `WINDOWPLACEMENT::rcNormalPosition` workspace coordinates.
+fn screen_to_workspace_rect(screen: RECT, monitor: RECT, work: RECT) -> RECT {
+    let dx = work.left - monitor.left;
+    let dy = work.top - monitor.top;
+    RECT {
+        left: screen.left - dx,
+        top: screen.top - dy,
+        right: screen.right - dx,
+        bottom: screen.bottom - dy,
+    }
+}
+
+fn workspace_rect_for_screen(screen: RECT) -> RECT {
+    let hmon = unsafe { MonitorFromRect(&screen, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !hmon.is_invalid() && unsafe { GetMonitorInfoW(hmon, &mut info) }.as_bool() {
+        screen_to_workspace_rect(screen, info.rcMonitor, info.rcWork)
+    } else {
+        screen
+    }
+}
+
 /// Place `window` 100% on-monitor directly behind `host` at `HWND_BOTTOM` without `SWP_FRAMECHANGED`
 /// or `RDW_ERASE` so classic GDI apps (IrfanView) repaint natively. Returns true if it fits inside `host`.
 fn place_behind_host(
@@ -1520,13 +1610,14 @@ fn place_behind_host(
     if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
         let placement = WINDOWPLACEMENT {
             length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            flags: WINDOWPLACEMENT_FLAGS(0),
             showCmd: SW_SHOWNOACTIVATE.0 as u32,
-            rcNormalPosition: RECT {
+            rcNormalPosition: workspace_rect_for_screen(RECT {
                 left: wx,
                 top: wy,
                 right: wx + ww,
                 bottom: wy + wh,
-            },
+            }),
             ..Default::default()
         };
         let _ = unsafe { SetWindowPlacement(window, &placement) };
@@ -1890,7 +1981,6 @@ unsafe extern "system" fn win_event_proc(
 /// (`EVENT_OBJECT_CREATE`..`EVENT_OBJECT_SHOW`) with a 5ms `MsgWaitForMultipleObjectsEx` fallback.
 fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
-    let began = Instant::now();
     let mut processes = process_tree(launch.pid);
     let mut read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
@@ -1909,20 +1999,32 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     };
     let _guard = WinEventGuard(hook);
 
-    let check_now = |processes: &[u32],
-                     images: &mut HashMap<u32, Option<String>>|
-     -> Option<HWND> {
-        let look = census(launch, processes, images, 0, false);
-        if let Some((_, window)) = look.shown {
-            return Some(window);
-        }
-        if began.elapsed() >= SHOWN_WAIT {
-            if let Some((_, window)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+    let check_now =
+        |processes: &[u32], images: &mut HashMap<u32, Option<String>>| -> Option<HWND> {
+            let look = census(launch, processes, images, 0, false);
+            if let Some((_, window)) = look.shown {
                 return Some(window);
             }
-        }
-        None
-    };
+            if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+                // App honored `SW_HIDE`: let `WinMain` finish file loading while invisible, then re-check.
+                wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 250);
+                if !is_current(launch.id) {
+                    return None;
+                }
+                let look2 = census(launch, processes, images, 0, false);
+                if let Some((_, window)) = look2.shown {
+                    return Some(window);
+                }
+                return look2
+                    .found
+                    .iter()
+                    .copied()
+                    .max_by_key(|(area, _)| *area)
+                    .map(|(_, window)| window)
+                    .or(Some(hidden));
+            }
+            None
+        };
 
     while Instant::now() < deadline {
         if !is_current(launch.id) {
@@ -2539,11 +2641,11 @@ mod tests {
     }
 
     #[test]
-    fn startup_info_sets_noactivate_and_clamps_provisional_rect() {
+    fn startup_info_sets_hide_and_clamps_provisional_rect() {
         let none = launch_startup_info(None);
         assert_eq!(none.cb, std::mem::size_of::<STARTUPINFOW>() as u32);
         assert_eq!(none.dwFlags, STARTF_USESHOWWINDOW);
-        assert_eq!(none.wShowWindow, SW_SHOWNOACTIVATE.0 as u16);
+        assert_eq!(none.wShowWindow, SW_HIDE.0 as u16);
 
         let rect = provisional_rect_for(
             pointer((0, 0)),
@@ -2560,7 +2662,7 @@ mod tests {
             with_rect.dwFlags,
             STARTF_USESHOWWINDOW | STARTF_USEPOSITION | STARTF_USESIZE
         );
-        assert_eq!(with_rect.wShowWindow, SW_SHOWNOACTIVATE.0 as u16);
+        assert_eq!(with_rect.wShowWindow, SW_HIDE.0 as u16);
         assert_eq!(with_rect.dwX, rect.0.max(0) as u32);
         assert_eq!(with_rect.dwY, rect.1.max(0) as u32);
         assert_eq!(with_rect.dwXSize, rect.2 as u32);
@@ -2572,5 +2674,78 @@ mod tests {
         assert_eq!(clamped.dwY, 0);
         assert_eq!(clamped.dwXSize, 1);
         assert_eq!(clamped.dwYSize, 1);
+    }
+
+    #[test]
+    fn screen_to_workspace_rect_subtracts_taskbar_offset_on_primary_and_secondary() {
+        let screen = RECT {
+            left: 300,
+            top: 150,
+            right: 940,
+            bottom: 630,
+        };
+        // Primary monitor with bottom taskbar: work origin equals monitor origin.
+        let primary_mon = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let bottom_bar = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        assert_eq!(
+            screen_to_workspace_rect(screen, primary_mon, bottom_bar),
+            screen
+        );
+
+        // Primary monitor with top taskbar (48px) and left dock (64px): shifts by (-64, -48).
+        let top_left_bar = RECT {
+            left: 64,
+            top: 48,
+            right: 1920,
+            bottom: 1080,
+        };
+        assert_eq!(
+            screen_to_workspace_rect(screen, primary_mon, top_left_bar),
+            RECT {
+                left: 236,
+                top: 102,
+                right: 876,
+                bottom: 582,
+            }
+        );
+
+        // Secondary monitor to the left (-1920..0) with 40px top taskbar.
+        let secondary_mon = RECT {
+            left: -1920,
+            top: 0,
+            right: 0,
+            bottom: 1080,
+        };
+        let secondary_work = RECT {
+            left: -1920,
+            top: 40,
+            right: 0,
+            bottom: 1080,
+        };
+        let sec_screen = RECT {
+            left: -1500,
+            top: 200,
+            right: -700,
+            bottom: 800,
+        };
+        assert_eq!(
+            screen_to_workspace_rect(sec_screen, secondary_mon, secondary_work),
+            RECT {
+                left: -1500,
+                top: 160,
+                right: -700,
+                bottom: 760,
+            }
+        );
     }
 }
