@@ -244,6 +244,9 @@ const PROCESS_TIME_SLACK_100NS: u64 = 2 * 10_000_000;
 /// Kept well inside i16 (-32768..32767) so WM_MOVE lParam never wraps.
 const FALLBACK_PARKING: i32 = -20000;
 
+/// Off-screen staging coordinate for `CustomCaptureTechnique::OffscreenStaged`.
+const STAGE_COORD: i32 = -10_000;
+
 /// 1/255 alpha: keeps DWM compositing the source for `DwmRegisterThumbnail` while invisible on screen.
 const INVISIBLE_ALPHA: u8 = 1;
 const DIRECT_EX_STYLE: u32 = WS_EX_TRANSPARENT.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0;
@@ -339,6 +342,8 @@ static SOURCE_PID: AtomicU32 = AtomicU32::new(0);
 static SOURCE_IS_NEW: AtomicBool = AtomicBool::new(false);
 /// True while active `SOURCE` is in `PlacementMode::InvisibleLayered` (1/255 alpha on-monitor).
 static SOURCE_INVISIBLE_LAYERED: AtomicBool = AtomicBool::new(false);
+/// Saved on-screen rect for `OffscreenStaged` reused non-owned windows so teardown never leaves them at `STAGE_COORD`.
+static SOURCE_RESTORE_RECT: Mutex<Option<RECT>> = Mutex::new(None);
 /// The thumbnail registration the Shell is drawing through, while one stands.
 static THUMBNAIL: Mutex<isize> = Mutex::new(0);
 /// The hover on screen, while there is one.
@@ -418,7 +423,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 
     let launch_filetime = current_filetime_u64();
     let launched_at = Instant::now();
-    let Some((process, pid)) = launch(&exe, path, provisional) else {
+    let Some((process, pid)) = launch(&exe, path, provisional, capture_technique) else {
         return false;
     };
     let process = Arc::new(process);
@@ -549,9 +554,27 @@ fn end_the_program() {
     let source_pid = SOURCE_PID.swap(0, Ordering::SeqCst);
     let source_is_new = SOURCE_IS_NEW.swap(false, Ordering::SeqCst);
     SOURCE_INVISIBLE_LAYERED.store(false, Ordering::SeqCst);
+    let restore_rect = SOURCE_RESTORE_RECT.lock().ok().and_then(|mut r| r.take());
     if source != 0 {
         let source = HWND(source as *mut _);
         if unsafe { IsWindow(source) }.as_bool() {
+            if let Some(target) = restore_rect {
+                if window_rect(source).is_some_and(|cur| {
+                    should_restore_on_teardown(source_is_new, cur, virtual_screen())
+                }) {
+                    let _ = unsafe {
+                        SetWindowPos(
+                            source,
+                            HWND_BOTTOM,
+                            target.left,
+                            target.top,
+                            (target.right - target.left).max(1),
+                            (target.bottom - target.top).max(1),
+                            SWP_NOACTIVATE | SWP_NOZORDER,
+                        )
+                    };
+                }
+            }
             let _ = unsafe { PostMessageW(source, WM_CLOSE, WPARAM(0), LPARAM(0)) };
         }
     }
@@ -731,12 +754,43 @@ fn launch_startup_info(provisional: Option<(i32, i32, i32, i32)>) -> STARTUPINFO
     si
 }
 
+/// Safe positive off-screen `STARTUPINFOW` origin (`dwX`/`dwY` are `u32`).
+fn offscreen_staged_startup_origin(vscreen: RECT) -> (i32, i32) {
+    ((vscreen.right + 2000).max(0), vscreen.top.max(0))
+}
+
+/// `STARTUPINFOW` tailored for `capture_technique`; existing 4 techniques delegate unchanged.
+fn launch_startup_info_for(
+    provisional: Option<(i32, i32, i32, i32)>,
+    capture_technique: CustomCaptureTechnique,
+    vscreen: RECT,
+) -> STARTUPINFOW {
+    if capture_technique != CustomCaptureTechnique::OffscreenStaged {
+        return launch_startup_info(provisional);
+    }
+    let (sx, sy) = offscreen_staged_startup_origin(vscreen);
+    let (w, h) = provisional
+        .map(|(_, _, w, h)| (w.max(1), h.max(1)))
+        .unwrap_or((800, 600));
+    STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        dwFlags: STARTF_USESHOWWINDOW | STARTF_USEPOSITION | STARTF_USESIZE,
+        wShowWindow: SW_HIDE.0 as u16,
+        dwX: sx as u32,
+        dwY: sy as u32,
+        dwXSize: w as u32,
+        dwYSize: h as u32,
+        ..Default::default()
+    }
+}
+
 /// Spawn target normally via `CreateProcessW` (no `CREATE_NO_WINDOW`, no stdio redirection) with
 /// its exe folder as cwd and `STARTUPINFOW` `SW_HIDE` + provisional position/size hints.
 fn launch(
     exe: &str,
     path: &Path,
     provisional: Option<(i32, i32, i32, i32)>,
+    capture_technique: CustomCaptureTechnique,
 ) -> Option<(OwnedHandle, u32)> {
     let application = wide_null(OsStr::new(exe));
     let mut cmdline = build_command_line(OsStr::new(exe), path.as_os_str());
@@ -747,7 +801,7 @@ fn launch(
     let cwd_ptr = cwd_wide
         .as_ref()
         .map_or(PCWSTR::null(), |buf| PCWSTR(buf.as_ptr()));
-    let si = launch_startup_info(provisional);
+    let si = launch_startup_info_for(provisional, capture_technique, virtual_screen());
     let mut pi = PROCESS_INFORMATION::default();
 
     unsafe {
@@ -889,7 +943,11 @@ fn run_it(
     window_mode: CustomWindowMode,
     capture_technique: CustomCaptureTechnique,
 ) {
-    let Some(source) = wait_for_a_window(&launch) else {
+    let Some(source) = (if capture_technique == CustomCaptureTechnique::OffscreenStaged {
+        wait_for_a_window_offscreen_staged(&launch)
+    } else {
+        wait_for_a_window(&launch)
+    }) else {
         // A program that made no window is a preview with nothing to show: it goes, and the host
         // is already off the screen.
         if is_current(launch.id) {
@@ -955,218 +1013,183 @@ fn run_it(
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
 
-    // Scoped WinEvent hook during settle: re-snaps `source` in <1ms on LOCATIONCHANGE and
-    // suppresses owned splash/companion windows on CREATE/SHOW without blocking on WaitForInputIdle.
-    WINEVENT_EVENTS.with(|q| q.borrow_mut().clear());
-    let settle_hook = unsafe {
-        SetWinEventHook(
-            EVENT_OBJECT_CREATE,
-            EVENT_OBJECT_LOCATIONCHANGE,
-            None,
-            Some(win_event_proc),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-        )
-    };
-    let settle_guard = WinEventGuard(settle_hook);
+    let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
+    let mut registered: isize = 0;
 
-    if was_hidden {
-        // App honored `SW_HIDE`: atomically position + reveal via `SetWindowPlacement` so it never
-        // flashes at its old saved coordinates.
-        if let Some(target_rect) = current_target_rect() {
-            let mode = match capture_technique {
-                CustomCaptureTechnique::OffScreen => {
-                    let vscreen = virtual_screen();
-                    let (px, py) = parking_origin(vscreen);
-                    let placement = WINDOWPLACEMENT {
-                        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                        flags: WINDOWPLACEMENT_FLAGS(0),
-                        showCmd: SW_SHOWNOACTIVATE.0 as u32,
-                        rcNormalPosition: RECT {
-                            left: px,
-                            top: py,
-                            right: px + target_rect.2,
-                            bottom: py + target_rect.3,
-                        },
-                        ..Default::default()
-                    };
-                    let _ = unsafe { SetWindowPlacement(source, &placement) };
-                    let ask = the_ask_for(
-                        (target_rect.2, target_rect.3),
-                        source_size(source, window_mode),
-                    );
-                    the_ask = Some(ask);
-                    park_offscreen(source, ask.0, ask.1);
-                    restore_foreground(launch.previous_foreground, &processes);
-                    PlacementMode::OffScreen
-                }
-                CustomCaptureTechnique::DirectWindow => {
-                    let insets = if window_mode == CustomWindowMode::Normal {
-                        dwm_frame_insets(source)
-                    } else {
-                        (0, 0, 0, 0)
-                    };
-                    let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
-                    let placement = WINDOWPLACEMENT {
-                        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                        flags: WINDOWPLACEMENT_FLAGS(0),
-                        showCmd: SW_SHOWNOACTIVATE.0 as u32,
-                        rcNormalPosition: workspace_rect_for_screen(RECT {
-                            left: wx,
-                            top: wy,
-                            right: wx + ww,
-                            bottom: wy + wh,
-                        }),
-                        ..Default::default()
-                    };
-                    let _ = unsafe { SetWindowPlacement(source, &placement) };
-                    place_direct_window(source, target_rect, window_mode);
-                    restore_foreground(launch.previous_foreground, &processes);
-                    PlacementMode::DirectWindow
-                }
-                CustomCaptureTechnique::InvisibleLayered | CustomCaptureTechnique::BehindHost => {
-                    let insets = if window_mode == CustomWindowMode::Normal {
-                        dwm_frame_insets(source)
-                    } else {
-                        (0, 0, 0, 0)
-                    };
-                    let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
-                    let workspace_rect = workspace_rect_for_screen(RECT {
-                        left: wx,
-                        top: wy,
-                        right: wx + ww,
-                        bottom: wy + wh,
-                    });
-                    let placement = WINDOWPLACEMENT {
-                        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                        flags: WINDOWPLACEMENT_FLAGS(0),
-                        showCmd: SW_SHOWNOACTIVATE.0 as u32,
-                        rcNormalPosition: workspace_rect,
-                        ..Default::default()
-                    };
-                    let _ = unsafe { SetWindowPlacement(source, &placement) };
+    if capture_technique == CustomCaptureTechnique::OffscreenStaged {
+        let mut staged = OffscreenStagedState {
+            invisible_layered: &mut invisible_layered,
+            placed_mode: &mut placed_mode,
+            placed_host_rect: &mut placed_host_rect,
+            expected_rect: &mut expected_rect,
+            the_ask: &mut the_ask,
+            box_of_the_host: &mut box_of_the_host,
+            registered: &mut registered,
+        };
+        if !run_offscreen_staged_settle_and_reveal(
+            host,
+            source,
+            &launch,
+            &processes,
+            &mut images,
+            &mut creation_times,
+            was_hidden,
+            own,
+            window_mode,
+            &current_target_rect,
+            &mut staged,
+        ) {
+            return;
+        }
+    } else {
+        // Scoped WinEvent hook during settle: re-snaps `source` in <1ms on LOCATIONCHANGE and
+        // suppresses owned splash/companion windows on CREATE/SHOW without blocking on WaitForInputIdle.
+        WINEVENT_EVENTS.with(|q| q.borrow_mut().clear());
+        let settle_hook = unsafe {
+            SetWinEventHook(
+                EVENT_OBJECT_CREATE,
+                EVENT_OBJECT_LOCATIONCHANGE,
+                None,
+                Some(win_event_proc),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            )
+        };
+        let settle_guard = WinEventGuard(settle_hook);
 
-                    if tries_invisible_layered(capture_technique) {
-                        invisible_layered = make_source_invisible(source.0 as isize);
-                        SOURCE_INVISIBLE_LAYERED.store(invisible_layered, Ordering::SeqCst);
+        if was_hidden {
+            // App honored `SW_HIDE`: atomically position + reveal via `SetWindowPlacement` so it never
+            // flashes at its old saved coordinates.
+            if let Some(target_rect) = current_target_rect() {
+                let mode = match capture_technique {
+                    CustomCaptureTechnique::OffScreen => {
+                        let vscreen = virtual_screen();
+                        let (px, py) = parking_origin(vscreen);
+                        let placement = WINDOWPLACEMENT {
+                            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                            flags: WINDOWPLACEMENT_FLAGS(0),
+                            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                            rcNormalPosition: RECT {
+                                left: px,
+                                top: py,
+                                right: px + target_rect.2,
+                                bottom: py + target_rect.3,
+                            },
+                            ..Default::default()
+                        };
+                        let _ = unsafe { SetWindowPlacement(source, &placement) };
+                        let ask = the_ask_for(
+                            (target_rect.2, target_rect.3),
+                            source_size(source, window_mode),
+                        );
+                        the_ask = Some(ask);
+                        park_offscreen(source, ask.0, ask.1);
+                        restore_foreground(launch.previous_foreground, &processes);
+                        PlacementMode::OffScreen
                     }
-                    restore_foreground(launch.previous_foreground, &processes);
-
-                    if invisible_layered {
-                        place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
-                        PlacementMode::InvisibleLayered
-                    } else {
-                        // Re-read DWM invisible border insets now that `source` is visible for exact alignment.
-                        let insets2 = if window_mode == CustomWindowMode::Normal {
+                    CustomCaptureTechnique::DirectWindow => {
+                        let insets = if window_mode == CustomWindowMode::Normal {
                             dwm_frame_insets(source)
                         } else {
                             (0, 0, 0, 0)
                         };
-                        let (wx2, wy2, ww2, wh2) = behind_host_window_rect(target_rect, insets2);
-                        let _ = unsafe {
-                            SetWindowPos(source, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE)
+                        let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+                        let placement = WINDOWPLACEMENT {
+                            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                            flags: WINDOWPLACEMENT_FLAGS(0),
+                            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                            rcNormalPosition: workspace_rect_for_screen(RECT {
+                                left: wx,
+                                top: wy,
+                                right: wx + ww,
+                                bottom: wy + wh,
+                            }),
+                            ..Default::default()
                         };
+                        let _ = unsafe { SetWindowPlacement(source, &placement) };
+                        place_direct_window(source, target_rect, window_mode);
                         restore_foreground(launch.previous_foreground, &processes);
-                        let _ = unsafe { InvalidateRect(source, None, false) };
-                        let _ = unsafe { UpdateWindow(source) };
-
-                        if aligned_behind_host(source, target_rect) {
-                            PlacementMode::BehindHost
+                        PlacementMode::DirectWindow
+                    }
+                    CustomCaptureTechnique::InvisibleLayered
+                    | CustomCaptureTechnique::BehindHost
+                    | CustomCaptureTechnique::OffscreenStaged => {
+                        let insets = if window_mode == CustomWindowMode::Normal {
+                            dwm_frame_insets(source)
                         } else {
-                            let ask = the_ask_for(
-                                (target_rect.2, target_rect.3),
-                                source_size(source, window_mode),
-                            );
-                            the_ask = Some(ask);
-                            park_offscreen(source, ask.0, ask.1);
-                            PlacementMode::OffScreen
+                            (0, 0, 0, 0)
+                        };
+                        let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+                        let workspace_rect = workspace_rect_for_screen(RECT {
+                            left: wx,
+                            top: wy,
+                            right: wx + ww,
+                            bottom: wy + wh,
+                        });
+                        let placement = WINDOWPLACEMENT {
+                            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                            flags: WINDOWPLACEMENT_FLAGS(0),
+                            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                            rcNormalPosition: workspace_rect,
+                            ..Default::default()
+                        };
+                        let _ = unsafe { SetWindowPlacement(source, &placement) };
+
+                        if tries_invisible_layered(capture_technique) {
+                            invisible_layered = make_source_invisible(source.0 as isize);
+                            SOURCE_INVISIBLE_LAYERED.store(invisible_layered, Ordering::SeqCst);
+                        }
+                        restore_foreground(launch.previous_foreground, &processes);
+
+                        if invisible_layered {
+                            place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+                            PlacementMode::InvisibleLayered
+                        } else {
+                            // Re-read DWM invisible border insets now that `source` is visible for exact alignment.
+                            let insets2 = if window_mode == CustomWindowMode::Normal {
+                                dwm_frame_insets(source)
+                            } else {
+                                (0, 0, 0, 0)
+                            };
+                            let (wx2, wy2, ww2, wh2) =
+                                behind_host_window_rect(target_rect, insets2);
+                            let _ = unsafe {
+                                SetWindowPos(
+                                    source,
+                                    HWND_BOTTOM,
+                                    wx2,
+                                    wy2,
+                                    ww2,
+                                    wh2,
+                                    SWP_NOACTIVATE,
+                                )
+                            };
+                            restore_foreground(launch.previous_foreground, &processes);
+                            let _ = unsafe { InvalidateRect(source, None, false) };
+                            let _ = unsafe { UpdateWindow(source) };
+
+                            if aligned_behind_host(source, target_rect) {
+                                PlacementMode::BehindHost
+                            } else {
+                                let ask = the_ask_for(
+                                    (target_rect.2, target_rect.3),
+                                    source_size(source, window_mode),
+                                );
+                                the_ask = Some(ask);
+                                park_offscreen(source, ask.0, ask.1);
+                                PlacementMode::OffScreen
+                            }
                         }
                     }
-                }
-            };
-            placed_mode = Some(mode);
-            placed_host_rect = Some(target_rect);
-            let _ = drain_settle_events(source, &launch, &processes);
-            expected_rect = window_rect(source);
-        }
-    } else if let Some(target_rect) = current_target_rect() {
-        // App ignored `SW_HIDE`: apply the selected capture technique immediately.
-        placed_mode = Some(if invisible_layered {
-            place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
-            restore_foreground(launch.previous_foreground, &processes);
-            PlacementMode::InvisibleLayered
-        } else {
-            snap_source(
-                source,
-                capture_technique,
-                target_rect,
-                window_mode,
-                launch.previous_foreground,
-                &processes,
-                &mut the_ask,
-                placed_mode.zip(placed_host_rect),
-            )
-        });
-        placed_host_rect = Some(target_rect);
-        let _ = drain_settle_events(source, &launch, &processes);
-        expected_rect = window_rect(source);
-    }
-
-    // Immediately suppress any already-visible companion windows strictly in `processes`.
-    census(
-        &launch,
-        &processes,
-        &mut images,
-        &mut creation_times,
-        source.0 as isize,
-        true,
-        OwnershipMode::OwnedOnly,
-    )
-    .take();
-
-    let source_proc = (source_pid != 0 && source_pid != launch.pid)
-        .then(|| open_process_for_idle(source_pid))
-        .flatten();
-    let settle_start = Instant::now();
-    let mut last_activity = settle_start;
-    let settle_deadline = settle_start
-        + if was_hidden {
-            Duration::from_millis(250)
-        } else {
-            Duration::from_millis(500)
-        };
-
-    while Instant::now() < settle_deadline {
-        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
-            return;
-        }
-        let Some(target_rect) = current_target_rect() else {
-            break;
-        };
-
-        if invisible_layered {
-            keep_source_invisible(source.0 as isize);
-        } else if capture_technique == CustomCaptureTechnique::DirectWindow {
-            apply_direct_window_style(source);
-        }
-
-        // Ignore self-triggered LOCATIONCHANGE from our own SetWindowPos.
-        let raw_source_moved = drain_settle_events(source, &launch, &processes);
-        let source_moved = raw_source_moved && window_rect(source) != expected_rect;
-
-        let needs_resnap = source_moved
-            || placed_host_rect != Some(target_rect)
-            || match placed_mode {
-                Some(PlacementMode::InvisibleLayered | PlacementMode::DirectWindow) => false,
-                Some(PlacementMode::BehindHost) => !aligned_behind_host(source, target_rect),
-                Some(PlacementMode::OffScreen) => !parked(source),
-                None => true,
-            };
-        if needs_resnap {
-            if placed_host_rect.is_some_and(|p| p.2 != target_rect.2 || p.3 != target_rect.3) {
-                the_ask = None;
+                };
+                placed_mode = Some(mode);
+                placed_host_rect = Some(target_rect);
+                let _ = drain_settle_events(source, &launch, &processes);
+                expected_rect = window_rect(source);
             }
+        } else if let Some(target_rect) = current_target_rect() {
+            // App ignored `SW_HIDE`: apply the selected capture technique immediately.
             placed_mode = Some(if invisible_layered {
                 place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
                 restore_foreground(launch.previous_foreground, &processes);
@@ -1186,82 +1209,158 @@ fn run_it(
             placed_host_rect = Some(target_rect);
             let _ = drain_settle_events(source, &launch, &processes);
             expected_rect = window_rect(source);
-            last_activity = Instant::now();
         }
 
-        let launch_idle = is_input_idle_now(HANDLE(launch.process.as_raw_handle()));
-        let source_idle = source_proc
-            .as_ref()
-            .is_none_or(|h| is_input_idle_now(HANDLE(h.as_raw_handle())));
-        // Exit settle promptly once BehindHost is aligned so host covers source right away.
-        let behind_host_ready = placed_mode == Some(PlacementMode::BehindHost)
-            && aligned_behind_host(source, target_rect);
-        // Visible InvisibleLayered apps get a short quiet window so startup WindowFit finishes while 1/255 invisible.
-        let invisible_quiet = placed_mode == Some(PlacementMode::InvisibleLayered)
-            && (was_hidden || last_activity.elapsed() >= Duration::from_millis(60));
-        let ready_to_probe = if placed_mode == Some(PlacementMode::InvisibleLayered) {
-            invisible_quiet
-                && (was_hidden
-                    || (launch_idle && source_idle)
-                    || settle_start.elapsed() >= Duration::from_millis(150))
-        } else {
-            behind_host_ready
-                || placed_mode == Some(PlacementMode::DirectWindow)
-                || was_hidden
-                || (launch_idle && source_idle)
-                || settle_start.elapsed() >= Duration::from_millis(150)
-        };
+        // Immediately suppress any already-visible companion windows strictly in `processes`.
+        census(
+            &launch,
+            &processes,
+            &mut images,
+            &mut creation_times,
+            source.0 as isize,
+            true,
+            OwnershipMode::OwnedOnly,
+        )
+        .take();
 
-        if ready_to_probe && !source_moved {
-            let answered = unsafe {
-                SendMessageTimeoutW(
-                    source,
-                    WM_NULL,
-                    WPARAM(0),
-                    LPARAM(0),
-                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
-                    50,
-                    None,
-                )
-            }
-            .0 != 0;
+        let source_proc = (source_pid != 0 && source_pid != launch.pid)
+            .then(|| open_process_for_idle(source_pid))
+            .flatten();
+        let settle_start = Instant::now();
+        let mut last_activity = settle_start;
+        let settle_deadline = settle_start
+            + if was_hidden {
+                Duration::from_millis(250)
+            } else {
+                Duration::from_millis(500)
+            };
+
+        while Instant::now() < settle_deadline {
             if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
                 return;
             }
-            if answered {
-                let no_drift = window_rect(source) == expected_rect;
-                let aligned = no_drift
-                    && match placed_mode {
-                        Some(PlacementMode::InvisibleLayered) => {
-                            keep_source_invisible(source.0 as isize);
-                            true
-                        }
-                        Some(PlacementMode::DirectWindow) => true,
-                        Some(PlacementMode::BehindHost) => aligned_behind_host(source, target_rect),
-                        Some(PlacementMode::OffScreen) => parked(source),
-                        None => false,
-                    };
-                if aligned {
-                    break;
+            let Some(target_rect) = current_target_rect() else {
+                break;
+            };
+
+            if invisible_layered {
+                keep_source_invisible(source.0 as isize);
+            } else if capture_technique == CustomCaptureTechnique::DirectWindow {
+                apply_direct_window_style(source);
+            }
+
+            // Ignore self-triggered LOCATIONCHANGE from our own SetWindowPos.
+            let raw_source_moved = drain_settle_events(source, &launch, &processes);
+            let source_moved = raw_source_moved && window_rect(source) != expected_rect;
+
+            let needs_resnap = source_moved
+                || placed_host_rect != Some(target_rect)
+                || match placed_mode {
+                    Some(PlacementMode::InvisibleLayered | PlacementMode::DirectWindow) => false,
+                    Some(PlacementMode::BehindHost) => !aligned_behind_host(source, target_rect),
+                    Some(PlacementMode::OffScreen) => !parked(source),
+                    None => true,
+                };
+            if needs_resnap {
+                if placed_host_rect.is_some_and(|p| p.2 != target_rect.2 || p.3 != target_rect.3) {
+                    the_ask = None;
+                }
+                placed_mode = Some(if invisible_layered {
+                    place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+                    restore_foreground(launch.previous_foreground, &processes);
+                    PlacementMode::InvisibleLayered
+                } else {
+                    snap_source(
+                        source,
+                        capture_technique,
+                        target_rect,
+                        window_mode,
+                        launch.previous_foreground,
+                        &processes,
+                        &mut the_ask,
+                        placed_mode.zip(placed_host_rect),
+                    )
+                });
+                placed_host_rect = Some(target_rect);
+                let _ = drain_settle_events(source, &launch, &processes);
+                expected_rect = window_rect(source);
+                last_activity = Instant::now();
+            }
+
+            let launch_idle = is_input_idle_now(HANDLE(launch.process.as_raw_handle()));
+            let source_idle = source_proc
+                .as_ref()
+                .is_none_or(|h| is_input_idle_now(HANDLE(h.as_raw_handle())));
+            // Exit settle promptly once BehindHost is aligned so host covers source right away.
+            let behind_host_ready = placed_mode == Some(PlacementMode::BehindHost)
+                && aligned_behind_host(source, target_rect);
+            // Visible InvisibleLayered apps get a short quiet window so startup WindowFit finishes while 1/255 invisible.
+            let invisible_quiet = placed_mode == Some(PlacementMode::InvisibleLayered)
+                && (was_hidden || last_activity.elapsed() >= Duration::from_millis(60));
+            let ready_to_probe = if placed_mode == Some(PlacementMode::InvisibleLayered) {
+                invisible_quiet
+                    && (was_hidden
+                        || (launch_idle && source_idle)
+                        || settle_start.elapsed() >= Duration::from_millis(150))
+            } else {
+                behind_host_ready
+                    || placed_mode == Some(PlacementMode::DirectWindow)
+                    || was_hidden
+                    || (launch_idle && source_idle)
+                    || settle_start.elapsed() >= Duration::from_millis(150)
+            };
+
+            if ready_to_probe && !source_moved {
+                let answered = unsafe {
+                    SendMessageTimeoutW(
+                        source,
+                        WM_NULL,
+                        WPARAM(0),
+                        LPARAM(0),
+                        SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                        50,
+                        None,
+                    )
+                }
+                .0 != 0;
+                if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+                    return;
+                }
+                if answered {
+                    let no_drift = window_rect(source) == expected_rect;
+                    let aligned = no_drift
+                        && match placed_mode {
+                            Some(PlacementMode::InvisibleLayered) => {
+                                keep_source_invisible(source.0 as isize);
+                                true
+                            }
+                            Some(PlacementMode::DirectWindow) => true,
+                            Some(PlacementMode::BehindHost) => {
+                                aligned_behind_host(source, target_rect)
+                            }
+                            Some(PlacementMode::OffScreen) => parked(source),
+                            None => false,
+                        };
+                    if aligned {
+                        break;
+                    }
                 }
             }
-        }
 
-        let slice_ms = settle_deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis()
-            .min(10) as u32;
-        if slice_ms > 0 {
-            let _ = unsafe {
-                MsgWaitForMultipleObjectsEx(None, slice_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
-            };
+            let slice_ms = settle_deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .min(10) as u32;
+            if slice_ms > 0 {
+                let _ = unsafe {
+                    MsgWaitForMultipleObjectsEx(None, slice_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+                };
+            }
         }
+        drop(settle_guard);
+        drop(source_proc);
     }
-    drop(settle_guard);
-    drop(source_proc);
 
-    let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
-    let mut registered: isize = 0;
     let mut lingering: Option<Instant> = None;
 
     loop {
@@ -2364,7 +2463,9 @@ fn decide_snap_action(
                 SnapAction::ReparkOffScreen
             }
         }
-        CustomCaptureTechnique::InvisibleLayered | CustomCaptureTechnique::BehindHost => {
+        CustomCaptureTechnique::InvisibleLayered
+        | CustomCaptureTechnique::BehindHost
+        | CustomCaptureTechnique::OffscreenStaged => {
             if current_mode == Some(PlacementMode::InvisibleLayered) {
                 return SnapAction::KeepInvisibleLayered;
             }
@@ -2805,6 +2906,577 @@ fn preposition_hidden_candidate(hwnd: HWND, provisional: (i32, i32, i32, i32)) {
             SWP_NOACTIVATE | SWP_NOOWNERZORDER,
         )
     };
+}
+
+fn stage_rect(w: i32, h: i32) -> RECT {
+    RECT {
+        left: STAGE_COORD,
+        top: STAGE_COORD,
+        right: STAGE_COORD + w.max(1),
+        bottom: STAGE_COORD + h.max(1),
+    }
+}
+
+fn stage_workspace_rect(w: i32, h: i32) -> RECT {
+    workspace_rect_for_screen(stage_rect(w, h))
+}
+
+fn is_at_stage_coord(rect: RECT) -> bool {
+    (rect.left - STAGE_COORD).abs() <= 64 && (rect.top - STAGE_COORD).abs() <= 64
+}
+
+fn should_restore_on_teardown(source_is_new: bool, rect: RECT, vscreen: RECT) -> bool {
+    !source_is_new && (is_off_screen(&rect, vscreen) || is_at_stage_coord(rect))
+}
+
+/// Immediately stage a newly created or shown top-level candidate at `(STAGE_COORD, STAGE_COORD)`.
+fn stage_candidate_offscreen(hwnd: HWND, w: i32, h: i32) {
+    if !unsafe { IsWindow(hwnd) }.as_bool() {
+        return;
+    }
+    let owned = unsafe { GetWindow(hwnd, GW_OWNER) }
+        .ok()
+        .is_some_and(|o| !o.0.is_null());
+    if owned {
+        return;
+    }
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+        return;
+    }
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_BOTTOM,
+            STAGE_COORD,
+            STAGE_COORD,
+            w.max(1),
+            h.max(1),
+            SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+        )
+    };
+}
+
+/// Non-blocking window discovery for `OffscreenStaged`: never calls `WaitForInputIdle`, stages
+/// candidates at `(STAGE_COORD, STAGE_COORD)` on CREATE/SHOW, adopts hidden candidates after 40ms.
+fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
+    let deadline = Instant::now() + WINDOW_WAIT;
+    let mut processes = process_tree(launch.pid);
+    let mut read = Instant::now();
+    let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
+    let mut first_hidden: Option<(Instant, HWND)> = None;
+    let (stage_w, stage_h) = launch
+        .provisional
+        .map(|(_, _, w, h)| (w.max(1), h.max(1)))
+        .unwrap_or((800, 600));
+
+    WINEVENT_EVENTS.with(|q| q.borrow_mut().clear());
+    let hook = unsafe {
+        SetWinEventHook(
+            EVENT_OBJECT_CREATE,
+            EVENT_OBJECT_LOCATIONCHANGE,
+            None,
+            Some(win_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+    };
+    let _guard = WinEventGuard(hook);
+
+    let broker_grace = if launch.packaged_broker {
+        Duration::ZERO
+    } else {
+        BROKER_FALLBACK_GRACE
+    };
+    let fallback_allowed = |launch: &Launch| -> bool {
+        process_has_exited(HANDLE(launch.process.as_raw_handle()))
+            || launch.launched_at.elapsed() >= broker_grace
+    };
+
+    let check_now = |processes: &[u32],
+                     images: &mut HashMap<u32, Option<String>>,
+                     creation_times: &mut HashMap<u32, Option<u64>>,
+                     first_hidden: &mut Option<(Instant, HWND)>|
+     -> Option<HWND> {
+        let tree_only = OwnershipMode::Discover {
+            allow_image_fallback: false,
+        };
+        let look = census(
+            launch,
+            processes,
+            images,
+            creation_times,
+            0,
+            false,
+            tree_only,
+        );
+        if let Some((_, window)) = look.shown {
+            return Some(window);
+        }
+        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+            let entry = first_hidden.get_or_insert_with(|| (Instant::now(), hidden));
+            entry.1 = hidden;
+            if entry.0.elapsed() >= Duration::from_millis(40) {
+                return Some(hidden);
+            }
+            return None;
+        }
+
+        if !fallback_allowed(launch) {
+            return None;
+        }
+        let with_fallback = OwnershipMode::Discover {
+            allow_image_fallback: true,
+        };
+        let look = census(
+            launch,
+            processes,
+            images,
+            creation_times,
+            0,
+            false,
+            with_fallback,
+        );
+        if let Some((_, window)) = look.shown {
+            return Some(window);
+        }
+        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+            let entry = first_hidden.get_or_insert_with(|| (Instant::now(), hidden));
+            entry.1 = hidden;
+            if entry.0.elapsed() >= Duration::from_millis(40) {
+                return Some(hidden);
+            }
+        }
+        None
+    };
+
+    while Instant::now() < deadline {
+        if !is_current(launch.id) {
+            return None;
+        }
+        if let Some(window) = check_now(
+            &processes,
+            &mut images,
+            &mut creation_times,
+            &mut first_hidden,
+        ) {
+            return Some(window);
+        }
+
+        if read.elapsed() >= TREE_POLL {
+            processes = process_tree(launch.pid);
+            read = Instant::now();
+        }
+
+        let remaining_ms = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(5) as u32;
+        if remaining_ms > 0 {
+            let _ = unsafe {
+                MsgWaitForMultipleObjectsEx(None, remaining_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+            };
+        }
+
+        let mut msg = MSG::default();
+        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+            let _ = unsafe { TranslateMessage(&msg) };
+            unsafe { DispatchMessageW(&msg) };
+
+            let allow_fallback = fallback_allowed(launch);
+            let mode = OwnershipMode::Discover {
+                allow_image_fallback: allow_fallback,
+            };
+            let mut matched = false;
+            WINEVENT_EVENTS.with(|q| {
+                for (event, raw) in q.borrow_mut().drain(..) {
+                    if launch.windows_before.contains(&raw) {
+                        continue;
+                    }
+                    let hwnd = HWND(raw as *mut _);
+                    let pid = pid_of(hwnd);
+                    if pid == 0 {
+                        continue;
+                    }
+                    let belongs = if processes.contains(&pid) {
+                        true
+                    } else if allow_fallback {
+                        let image = image_name_of(pid, &mut images);
+                        let creation = if image.as_deref() == Some(launch.exe.as_str())
+                            && !launch.processes_before.contains(&pid)
+                        {
+                            creation_time_of(pid, &mut creation_times)
+                        } else {
+                            None
+                        };
+                        belongs_to_preview(
+                            pid,
+                            &processes,
+                            mode,
+                            &launch.exe,
+                            launch.launch_filetime,
+                            &launch.processes_before,
+                            image.as_deref(),
+                            creation,
+                        )
+                    } else {
+                        false
+                    };
+                    if belongs {
+                        if event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW {
+                            stage_candidate_offscreen(hwnd, stage_w, stage_h);
+                            restore_foreground(launch.previous_foreground, &processes);
+                        }
+                        matched = true;
+                    }
+                }
+            });
+            if matched {
+                if let Some(window) = check_now(
+                    &processes,
+                    &mut images,
+                    &mut creation_times,
+                    &mut first_hidden,
+                ) {
+                    return Some(window);
+                }
+            }
+        }
+    }
+    first_hidden.map(|(_, hwnd)| hwnd)
+}
+
+struct OffscreenStagedState<'a> {
+    invisible_layered: &'a mut bool,
+    placed_mode: &'a mut Option<PlacementMode>,
+    placed_host_rect: &'a mut Option<(i32, i32, i32, i32)>,
+    expected_rect: &'a mut Option<RECT>,
+    the_ask: &'a mut Option<(i32, i32)>,
+    box_of_the_host: &'a mut Option<(i32, i32, i32, i32)>,
+    registered: &'a mut isize,
+}
+
+/// Strictly isolated stage -> settle at `(STAGE_COORD, STAGE_COORD)` -> reveal phase for `OffscreenStaged`.
+/// Returns `false` if launch was superseded or `source` was destroyed.
+#[allow(clippy::too_many_arguments)]
+fn run_offscreen_staged_settle_and_reveal(
+    host: HWND,
+    source: HWND,
+    launch: &Launch,
+    processes: &[u32],
+    images: &mut HashMap<u32, Option<String>>,
+    creation_times: &mut HashMap<u32, Option<u64>>,
+    was_hidden: bool,
+    own: (u32, u32),
+    window_mode: CustomWindowMode,
+    current_target_rect: &dyn Fn() -> Option<(i32, i32, i32, i32)>,
+    state: &mut OffscreenStagedState<'_>,
+) -> bool {
+    let vscreen = virtual_screen();
+    let initial_target = current_target_rect();
+    // Save an on-screen restore rect for reused non-owned windows so teardown never leaves them at STAGE_COORD.
+    let saved_restore = window_rect(source)
+        .filter(|r| !is_off_screen(r, vscreen) && !is_at_stage_coord(*r))
+        .or_else(|| {
+            initial_target.map(|(x, y, w, h)| RECT {
+                left: x,
+                top: y,
+                right: x + w.max(1),
+                bottom: y + h.max(1),
+            })
+        })
+        .unwrap_or(RECT {
+            left: 100,
+            top: 100,
+            right: 900,
+            bottom: 700,
+        });
+    if let Ok(mut slot) = SOURCE_RESTORE_RECT.lock() {
+        *slot = Some(saved_restore);
+    }
+
+    let (stage_w, stage_h) = initial_target
+        .map(|(_, _, w, h)| (w.max(1), h.max(1)))
+        .unwrap_or((own.0.max(1) as i32, own.1.max(1) as i32));
+
+    WINEVENT_EVENTS.with(|q| q.borrow_mut().clear());
+    let settle_hook = unsafe {
+        SetWinEventHook(
+            EVENT_OBJECT_CREATE,
+            EVENT_OBJECT_LOCATIONCHANGE,
+            None,
+            Some(win_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+    };
+    let settle_guard = WinEventGuard(settle_hook);
+
+    if was_hidden {
+        // Reveal atomically at `(STAGE_COORD, STAGE_COORD)` so zero pixels ever appear on-screen.
+        let placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            flags: WINDOWPLACEMENT_FLAGS(0),
+            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+            rcNormalPosition: stage_workspace_rect(stage_w, stage_h),
+            ..Default::default()
+        };
+        let _ = unsafe { SetWindowPlacement(source, &placement) };
+        let _ = unsafe {
+            SetWindowPos(
+                source,
+                HWND_BOTTOM,
+                STAGE_COORD,
+                STAGE_COORD,
+                stage_w,
+                stage_h,
+                SWP_NOACTIVATE,
+            )
+        };
+        restore_foreground(launch.previous_foreground, processes);
+    } else {
+        if unsafe { IsZoomed(source) }.as_bool() || unsafe { IsIconic(source) }.as_bool() {
+            let placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                flags: WINDOWPLACEMENT_FLAGS(0),
+                showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                rcNormalPosition: stage_workspace_rect(stage_w, stage_h),
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(source, &placement) };
+        }
+        let _ = unsafe {
+            SetWindowPos(
+                source,
+                HWND_BOTTOM,
+                STAGE_COORD,
+                STAGE_COORD,
+                stage_w,
+                stage_h,
+                SWP_NOACTIVATE,
+            )
+        };
+        restore_foreground(launch.previous_foreground, processes);
+    }
+
+    // Suppress any owned companion windows strictly in `processes`.
+    census(
+        launch,
+        processes,
+        images,
+        creation_times,
+        source.0 as isize,
+        true,
+        OwnershipMode::OwnedOnly,
+    )
+    .take();
+
+    let _ = drain_settle_events(source, launch, processes);
+    let mut staged_expected = window_rect(source);
+    // If app immediately clamped our first move back onto the monitor, don't fight it in a loop.
+    let stage_refused = staged_expected.is_some_and(|r| !is_off_screen(&r, vscreen));
+
+    let settle_start = Instant::now();
+    let mut last_activity = settle_start;
+    let settle_deadline = settle_start + Duration::from_millis(550);
+
+    while !stage_refused && Instant::now() < settle_deadline {
+        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+            return false;
+        }
+        if current_target_rect().is_none() {
+            break;
+        }
+
+        let raw_moved = drain_settle_events(source, launch, processes);
+        let cur_rect = window_rect(source);
+        let drifted = (raw_moved && cur_rect != staged_expected)
+            || cur_rect.is_some_and(|r| !is_off_screen(&r, vscreen));
+        if drifted {
+            let _ = unsafe {
+                SetWindowPos(
+                    source,
+                    HWND_BOTTOM,
+                    STAGE_COORD,
+                    STAGE_COORD,
+                    stage_w,
+                    stage_h,
+                    SWP_NOACTIVATE,
+                )
+            };
+            restore_foreground(launch.previous_foreground, processes);
+            let _ = drain_settle_events(source, launch, processes);
+            staged_expected = window_rect(source);
+            if staged_expected.is_some_and(|r| !is_off_screen(&r, vscreen)) {
+                break;
+            }
+            last_activity = Instant::now();
+        } else if last_activity.elapsed() >= Duration::from_millis(100) {
+            let answered = unsafe {
+                SendMessageTimeoutW(
+                    source,
+                    WM_NULL,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                    50,
+                    None,
+                )
+            }
+            .0 != 0;
+            if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+                return false;
+            }
+            if answered && window_rect(source) == staged_expected {
+                break;
+            }
+        }
+
+        let slice_ms = settle_deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(5) as u32;
+        if slice_ms > 0 {
+            let _ = unsafe {
+                MsgWaitForMultipleObjectsEx(None, slice_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+            };
+        }
+    }
+    drop(settle_guard);
+
+    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+        return false;
+    }
+
+    let Some(host_rect) = current_target_rect() else {
+        return true;
+    };
+    let (hx, hy, hw, hh) = host_rect;
+
+    // Branch A: try `WS_EX_LAYERED` + `LWA_ALPHA = 1` WHILE STILL AT `(STAGE_COORD, STAGE_COORD)`.
+    if make_source_invisible(source.0 as isize) {
+        *state.invisible_layered = true;
+        SOURCE_INVISIBLE_LAYERED.store(true, Ordering::SeqCst);
+        place_invisible_layered(source, host_rect, window_mode, state.the_ask);
+        if window_rect(source).is_some_and(|r| is_off_screen(&r, vscreen)) {
+            let (aw, ah) = state.the_ask.unwrap_or((hw, hh));
+            let _ = unsafe { SetWindowPos(source, HWND_BOTTOM, hx, hy, aw, ah, SWP_NOACTIVATE) };
+            let _ = unsafe { InvalidateRect(source, None, false) };
+            let _ = unsafe { UpdateWindow(source) };
+        }
+        keep_source_invisible(source.0 as isize);
+        restore_foreground(launch.previous_foreground, processes);
+        *state.placed_mode = Some(PlacementMode::InvisibleLayered);
+        *state.placed_host_rect = Some(host_rect);
+        *state.expected_rect = window_rect(source);
+        return true;
+    }
+
+    // Branch B: `WS_EX_NOREDIRECTIONBITMAP` GPU/Avalonia/WinUI apps.
+    // 1. Resize while still at `(STAGE_COORD, STAGE_COORD)`.
+    let insets = if window_mode == CustomWindowMode::Normal {
+        dwm_frame_insets(source)
+    } else {
+        (0, 0, 0, 0)
+    };
+    let (_, _, ww, wh) = behind_host_window_rect(host_rect, insets);
+    let _ = unsafe {
+        SetWindowPos(
+            source,
+            HWND_BOTTOM,
+            STAGE_COORD,
+            STAGE_COORD,
+            ww,
+            wh,
+            SWP_NOACTIVATE,
+        )
+    };
+
+    // 2. Size `host`, bind DWM thumbnail, update properties, and SHOW `host` FIRST synchronously
+    // so our opaque topmost host already covers `(hx, hy, hw, hh)` before `source` moves on-screen.
+    let _ = unsafe {
+        SetWindowPos(
+            host,
+            HWND::default(),
+            hx,
+            hy,
+            hw,
+            hh,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
+    *state.box_of_the_host = Some(host_rect);
+
+    if *state.registered == 0 {
+        if let Ok(registration) = unsafe { DwmRegisterThumbnail(host, source) } {
+            *state.registered = registration;
+            if let Ok(mut held) = THUMBNAIL.lock() {
+                *held = registration;
+            }
+        }
+    }
+    if *state.registered != 0 {
+        let mut client = RECT::default();
+        let _ = unsafe { GetClientRect(host, &mut client) };
+        let picture = if window_mode == CustomWindowMode::Normal {
+            unsafe { DwmQueryThumbnailSourceSize(*state.registered) }
+                .ok()
+                .filter(|s| s.cx > 0 && s.cy > 0)
+                .map(|s| (s.cx, s.cy))
+                .unwrap_or_else(|| {
+                    let (w, h) = source_size(source, window_mode);
+                    (w as i32, h as i32)
+                })
+        } else {
+            let (w, h) = source_size(source, window_mode);
+            (w as i32, h as i32)
+        };
+        let properties = thumbnail_properties(client.right, client.bottom, picture, window_mode);
+        if unsafe { DwmUpdateThumbnailProperties(*state.registered, &properties) }.is_ok() {
+            SHOWN.store(true, Ordering::SeqCst);
+            let _ = unsafe {
+                SendMessageTimeoutW(
+                    host,
+                    WM_THE_PICTURE_IS_READY,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                    100,
+                    None,
+                )
+            };
+        }
+    }
+
+    // 3. Move `source` straight onto real screen behind the already-visible `host`.
+    let mode = if place_behind_host(source, host_rect, window_mode) {
+        PlacementMode::BehindHost
+    } else {
+        let ask = the_ask_for((hw, hh), source_size(source, window_mode));
+        *state.the_ask = Some(ask);
+        let _ = unsafe {
+            SetWindowPos(
+                source,
+                HWND_BOTTOM,
+                STAGE_COORD,
+                STAGE_COORD,
+                ask.0,
+                ask.1,
+                SWP_NOACTIVATE,
+            )
+        };
+        let _ = unsafe { InvalidateRect(source, None, false) };
+        let _ = unsafe { UpdateWindow(source) };
+        PlacementMode::OffScreen
+    };
+    restore_foreground(launch.previous_foreground, processes);
+    *state.placed_mode = Some(mode);
+    *state.placed_host_rect = Some(host_rect);
+    *state.expected_rect = window_rect(source);
+    true
 }
 
 /// The program's window, waited for within [`WINDOW_WAIT`] via out-of-context WinEvent hook
@@ -4071,5 +4743,63 @@ mod tests {
             ),
             SnapAction::PlaceDirectWindow
         );
+        assert!(uses_dwm_host(CustomCaptureTechnique::OffscreenStaged));
+        assert!(!tries_invisible_layered(
+            CustomCaptureTechnique::OffscreenStaged
+        ));
+    }
+
+    #[test]
+    fn offscreen_staged_startup_stage_rect_and_teardown_safeguard_helpers() {
+        let vscreen = RECT {
+            left: -1920,
+            top: 0,
+            right: 3840,
+            bottom: 2160,
+        };
+        let si = launch_startup_info_for(
+            Some((200, 150, 900, 700)),
+            CustomCaptureTechnique::OffscreenStaged,
+            vscreen,
+        );
+        assert_eq!(
+            si.dwFlags,
+            STARTF_USESHOWWINDOW | STARTF_USEPOSITION | STARTF_USESIZE
+        );
+        assert_eq!(si.wShowWindow, SW_HIDE.0 as u16);
+        assert_eq!(si.dwX, (vscreen.right + 2000) as u32);
+        assert_eq!(si.dwY, 0);
+        assert_eq!(si.dwXSize, 900);
+        assert_eq!(si.dwYSize, 700);
+
+        // Existing techniques remain delegated unchanged to launch_startup_info.
+        let legacy = launch_startup_info_for(
+            Some((200, 150, 900, 700)),
+            CustomCaptureTechnique::InvisibleLayered,
+            vscreen,
+        );
+        assert_eq!(legacy.dwX, 200);
+        assert_eq!(legacy.dwY, 150);
+
+        // Stage rect sits at (-10000, -10000) and is completely off-screen.
+        let st = stage_rect(640, 480);
+        assert_eq!(
+            (st.left, st.top, st.right, st.bottom),
+            (-10_000, -10_000, -9360, -9520)
+        );
+        assert!(is_off_screen(&st, vscreen));
+        assert!(is_at_stage_coord(st));
+
+        // Anti-stuck teardown guard restores reused non-owned windows when off-screen/staged,
+        // and never touches newly spawned windows (terminated) or already on-screen windows.
+        assert!(should_restore_on_teardown(false, st, vscreen));
+        assert!(!should_restore_on_teardown(true, st, vscreen));
+        let on_screen = RECT {
+            left: 100,
+            top: 100,
+            right: 900,
+            bottom: 700,
+        };
+        assert!(!should_restore_on_teardown(false, on_screen, vscreen));
     }
 }

@@ -103,6 +103,8 @@ pub enum CustomCaptureTechnique {
     OffScreen,
     /// Target window placed directly at preview rect (`HWND_TOPMOST`, click-through, no host/thumbnail).
     DirectWindow,
+    /// Staged at `(-10000, -10000)` until settled, then revealed on-monitor with zero flash.
+    OffscreenStaged,
 }
 
 impl CustomCaptureTechnique {
@@ -112,6 +114,7 @@ impl CustomCaptureTechnique {
             Self::BehindHost => "behind_host",
             Self::OffScreen => "off_screen",
             Self::DirectWindow => "direct_window",
+            Self::OffscreenStaged => "offscreen_staged",
         }
     }
 
@@ -121,6 +124,9 @@ impl CustomCaptureTechnique {
             "behind_host" | "behind-host" => Some(Self::BehindHost),
             "off_screen" | "off-screen" | "offscreen" => Some(Self::OffScreen),
             "direct_window" | "direct-window" => Some(Self::DirectWindow),
+            "offscreen_staged" | "offscreen-staged" | "off_screen_staged" | "off-screen-staged" => {
+                Some(Self::OffscreenStaged)
+            }
             _ => None,
         }
     }
@@ -754,6 +760,7 @@ mod tests {
             (CustomCaptureTechnique::BehindHost, "behind_host"),
             (CustomCaptureTechnique::OffScreen, "off_screen"),
             (CustomCaptureTechnique::DirectWindow, "direct_window"),
+            (CustomCaptureTechnique::OffscreenStaged, "offscreen_staged"),
         ];
         for (tech, expected_str) in cases {
             let mut preset = CustomPreset::named("TechTest");
