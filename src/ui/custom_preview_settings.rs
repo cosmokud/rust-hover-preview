@@ -51,21 +51,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CBN_SELENDOK, CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL,
     CB_GETDROPPEDSTATE, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE,
     ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
-    HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_SIZEALL,
-    LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED,
-    LB_ADDSTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT,
-    LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS, SM_CXDOUBLECLK,
-    SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-    SW_SHOW, SW_SHOWNORMAL, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP,
-    WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN,
-    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ENABLE,
-    WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE,
-    WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
-    WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND,
+    IDC_SIZEALL, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY,
+    LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETITEMRECT, LB_GETTEXT,
+    LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG,
+    NCCALCSIZE_PARAMS, SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WA_INACTIVE, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN,
+    WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT,
+    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES,
+    WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::config::config::{
@@ -108,6 +108,8 @@ const WM_PRESET_DRAG_END: u32 = WM_APP + 26;
 /// focus or the pointer leaves it, so the save runs on the parent's own message rather than inside
 /// the control's (`WM_PRESET_DRAG_MOVE` says why that matters).
 const WM_AUTOSAVE: u32 = WM_APP + 27;
+// Posted by list_subclass_proc on row pill click; wparam = drawn row index.
+const WM_PRESET_ROW_TOGGLE: u32 = WM_APP + 28;
 
 const TITLEBAR_LOGICAL_H: i32 = 40;
 const TITLEBAR_BTN_W: i32 = 44;
@@ -643,6 +645,8 @@ struct ListSubclass {
     /// The drawn row the drag was last posted for, so one row is one message rather than one a
     /// mouse pixel.
     posted: Option<usize>,
+    hovered_pill: Option<usize>,
+    tracking: bool,
 }
 
 struct SliderState {
@@ -1165,6 +1169,12 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
         WM_AUTOSAVE => {
             if let Some(state) = unsafe { state_of(hwnd) } {
                 unsafe { autosave(state) };
+            }
+            LRESULT(0)
+        }
+        WM_PRESET_ROW_TOGGLE => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                unsafe { row_pill_toggled(state, wparam.0) };
             }
             LRESULT(0)
         }
@@ -2781,8 +2791,71 @@ unsafe fn install_list_subclass(list: HWND, parent: HWND) {
         press: None,
         dragging: false,
         posted: None,
+        hovered_pill: None,
+        tracking: false,
     }));
     unsafe { SetWindowLongPtrW(list, GWLP_USERDATA, data as isize) };
+}
+
+fn list_row_pill_rect(item_rect: RECT, dpi: u32) -> RECT {
+    let dpi = dpi as i32;
+    let pill_w = scale(32, dpi);
+    let pill_h = scale(17, dpi);
+    let right = item_rect.right - scale(8, dpi);
+    let left = (right - pill_w).max(item_rect.left + scale(20, dpi));
+    let top = (item_rect.top + item_rect.bottom - pill_h) / 2;
+    let actual_w = (right - left).max(1);
+    RECT {
+        left,
+        top,
+        right: left + actual_w,
+        bottom: top + pill_h,
+    }
+}
+
+unsafe fn invalidate_list_row(list: HWND, row: usize) {
+    let mut rc = RECT::default();
+    let ok = unsafe {
+        SendMessageW(
+            list,
+            LB_GETITEMRECT,
+            WPARAM(row),
+            LPARAM(&mut rc as *mut RECT as isize),
+        )
+        .0
+    };
+    if ok >= 0 {
+        let _ = unsafe { InvalidateRect(list, Some(&rc), false) };
+    }
+}
+
+unsafe fn list_pill_at_point(list: HWND, parent: HWND, lparam: LPARAM) -> Option<usize> {
+    let count = unsafe { SendMessageW(list, LB_GETCOUNT, WPARAM(0), LPARAM(0)).0 };
+    if count <= 0 {
+        return None;
+    }
+    let (row, outside) = row_at_point(list, lparam);
+    if outside || row >= count as usize {
+        return None;
+    }
+    let mut rc = RECT::default();
+    let ok = unsafe {
+        SendMessageW(
+            list,
+            LB_GETITEMRECT,
+            WPARAM(row),
+            LPARAM(&mut rc as *mut RECT as isize),
+        )
+        .0
+    };
+    if ok < 0 {
+        return None;
+    }
+    let dpi = unsafe { state_of(parent) }.map_or(96, |s| s.dpi) as u32;
+    let pill = list_row_pill_rect(rc, dpi);
+    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+    (x >= pill.left && x < pill.right && y >= pill.top && y < pill.bottom).then_some(row)
 }
 
 // Double-buffers LISTBOX client area & suppresses unbuffered WM_ERASEBKGND to eliminate resize bounce/flicker.
@@ -2801,19 +2874,54 @@ unsafe extern "system" fn list_subclass_proc(
 
     match msg {
         WM_ERASEBKGND => LRESULT(1),
-        WM_LBUTTONDOWN => {
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            if let Some(row) = unsafe { list_pill_at_point(hwnd, parent, lparam) } {
+                sub.press = None;
+                sub.dragging = false;
+                sub.posted = None;
+                let _ =
+                    unsafe { PostMessageW(parent, WM_PRESET_ROW_TOGGLE, WPARAM(row), LPARAM(0)) };
+                return LRESULT(0);
+            }
             let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
-            // The list's own selection runs first: a press on a row is one that may become a drag,
-            // and a press below the last row drags nothing. No `SetCapture` here — the box takes
-            // its own on a press, and a second one hands this proc the `WM_CAPTURECHANGED` of the
-            // capture it just lost.
-            let count = unsafe { SendMessageW(hwnd, LB_GETCOUNT, WPARAM(0), LPARAM(0)).0 };
-            let (row, outside) = row_at_point(hwnd, lparam);
-            sub.press = (!outside && row < count as usize).then_some(row);
+            if msg == WM_LBUTTONDOWN {
+                // The list's own selection runs first: a press on a row is one that may become a drag,
+                // and a press below the last row drags nothing. No `SetCapture` here — the box takes
+                // its own on a press, and a second one hands this proc the `WM_CAPTURECHANGED` of the
+                // capture it just lost.
+                let count = unsafe { SendMessageW(hwnd, LB_GETCOUNT, WPARAM(0), LPARAM(0)).0 };
+                let (row, outside) = row_at_point(hwnd, lparam);
+                sub.press = (!outside && row < count as usize).then_some(row);
+            }
             res
         }
         WM_MOUSEMOVE => {
+            if !sub.tracking {
+                sub.tracking = true;
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                let _ = unsafe { TrackMouseEvent(&mut tme) };
+            }
             let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+            let next_hover = if sub.dragging {
+                None
+            } else {
+                unsafe { list_pill_at_point(hwnd, parent, lparam) }
+            };
+            if next_hover != sub.hovered_pill {
+                let prev = sub.hovered_pill;
+                sub.hovered_pill = next_hover;
+                if let Some(r) = prev {
+                    unsafe { invalidate_list_row(hwnd, r) };
+                }
+                if let Some(r) = next_hover {
+                    unsafe { invalidate_list_row(hwnd, r) };
+                }
+            }
             let Some(press) = sub.press else {
                 return res;
             };
@@ -2838,6 +2946,9 @@ unsafe extern "system" fn list_subclass_proc(
                     return res;
                 }
                 sub.dragging = true;
+                if let Some(prev) = sub.hovered_pill.take() {
+                    unsafe { invalidate_list_row(hwnd, prev) };
+                }
                 let _ = unsafe { SetCursor(LoadCursorW(None, IDC_SIZEALL).unwrap_or_default()) };
             }
             if sub.posted == Some(row) {
@@ -2855,6 +2966,20 @@ unsafe extern "system" fn list_subclass_proc(
                 )
             };
             res
+        }
+        WM_MOUSELEAVE => {
+            sub.tracking = false;
+            if let Some(prev) = sub.hovered_pill.take() {
+                unsafe { invalidate_list_row(hwnd, prev) };
+            }
+            LRESULT(0)
+        }
+        WM_SETCURSOR => {
+            if !sub.dragging && sub.hovered_pill.is_some() {
+                let _ = unsafe { SetCursor(LoadCursorW(None, IDC_HAND).unwrap_or_default()) };
+                return LRESULT(1);
+            }
+            unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
         }
         WM_LBUTTONUP => {
             let dragged = sub.dragging;
@@ -3394,8 +3519,51 @@ fn render_card_9slice_pixels(
     (pixels, tex_w, tex_h, pad_l, pad_t, pad_r, pad_b, corner)
 }
 
-/// Renders an SDF anti-aliased rounded pill badge (e.g. `"Off"` tag on disabled preset rows).
-fn render_off_badge_pill(
+/// Theme colors `(fill, border, text)` for a preset list row's `"On"` / `"Off"` status pill.
+fn status_pill_colors(p: Palette, enabled: bool, hovered: bool) -> (COLORREF, COLORREF, COLORREF) {
+    if enabled {
+        let fill_share = match (p.dark, hovered) {
+            (true, true) => 26,
+            (true, false) => 16,
+            (false, true) => 20,
+            (false, false) => 12,
+        };
+        let fill = mix(p.field, p.accent, fill_share);
+        let border = if hovered { p.accent_hover } else { p.accent };
+        let text = if p.dark {
+            mix(p.accent, rgb(255, 255, 255), 42)
+        } else {
+            mix(p.accent, rgb(0, 0, 0), 34)
+        };
+        (fill, border, text)
+    } else {
+        let fill = if p.dark {
+            if hovered {
+                mix(p.field, p.button_hover, 65)
+            } else {
+                mix(p.field, p.button_bg, 45)
+            }
+        } else if hovered {
+            p.button_hover
+        } else {
+            p.button_bg
+        };
+        let border = if hovered {
+            mix(p.border, p.ink, 25)
+        } else {
+            p.border
+        };
+        let text = if hovered {
+            p.ink
+        } else {
+            mix(p.muted, p.ink, 45)
+        };
+        (fill, border, text)
+    }
+}
+
+/// Renders an SDF anti-aliased rounded status pill badge (`"On"` / `"Off"` on preset list rows).
+fn render_status_badge_pill(
     w: i32,
     h: i32,
     bg: COLORREF,
@@ -4926,6 +5094,38 @@ unsafe fn enabled_toggled(state: &mut State, enabled: bool) {
     }
 }
 
+unsafe fn row_pill_toggled(state: &mut State, row: usize) {
+    let Some(&preset_idx) = state.shown.get(row) else {
+        return;
+    };
+    let Some(preset) = state.presets.get_mut(preset_idx) else {
+        return;
+    };
+    preset.enabled = !preset.enabled;
+    let enabled = preset.enabled;
+    state.dirtied = true;
+
+    if state.selected == Some(preset_idx) {
+        state.loading = true;
+        if let Ok(toggle) = unsafe { GetDlgItem(state.hwnd, ID_ENABLED) } {
+            unsafe {
+                SendMessageW(
+                    toggle,
+                    WM_TOGGLE_SET_VALUE,
+                    WPARAM(usize::from(enabled)),
+                    LPARAM(0),
+                );
+            }
+        }
+        state.loading = false;
+    }
+
+    unsafe { autosave(state) };
+    if let Ok(list) = unsafe { GetDlgItem(state.hwnd, ID_LIST) } {
+        unsafe { invalidate_list_row(list, row) };
+    }
+}
+
 unsafe fn volume_moved(state: &mut State) {
     let Some(index) = state.selected else {
         return;
@@ -5307,47 +5507,45 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
                 }
             };
 
+            let mut rect = if is_combo(item.CtlID) {
+                combo_label_rect(item.rcItem, dpi)
+            } else {
+                item.rcItem
+            };
+            if item.CtlID == ID_LIST as u32 {
+                let mut pill_rc = list_row_pill_rect(item.rcItem, dpi as u32);
+                let pill_w = (pill_rc.right - pill_rc.left).max(1);
+                let pill_h = (pill_rc.bottom - pill_rc.top).max(1);
+                let raw = GetWindowLongPtrW(item.hwndItem, GWLP_USERDATA) as *const ListSubclass;
+                let pill_hovered = raw
+                    .as_ref()
+                    .is_some_and(|s| s.hovered_pill == Some(item.itemID as usize));
+                let enabled = !list_preset_disabled;
+                let (pill_fill, pill_border, pill_fg) =
+                    status_pill_colors(p, enabled, pill_hovered);
+                let badge = render_status_badge_pill(pill_w, pill_h, fill, pill_fill, pill_border);
+                badge.blit_to(hdc, pill_rc.left, pill_rc.top);
+
+                let old_f = SelectObject(hdc, HGDIOBJ(state.font_small.0));
+                SetTextColor(hdc, pill_fg);
+                let mut label_w: Vec<u16> =
+                    if enabled { "On" } else { "Off" }.encode_utf16().collect();
+                DrawTextW(
+                    hdc,
+                    &mut label_w,
+                    &mut pill_rc,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+                );
+                let _ = SelectObject(hdc, old_f);
+                SetTextColor(hdc, text_col);
+                rect.right = (pill_rc.left - scale(6, dpi)).max(rect.left + scale(10, dpi));
+            }
             // Empty slice would hand DrawTextW a dangling alignment pointer; return early.
             if text.is_empty() {
                 return;
             }
 
             let mut text: Vec<u16> = text.encode_utf16().collect();
-            let mut rect = if is_combo(item.CtlID) {
-                combo_label_rect(item.rcItem, dpi)
-            } else {
-                item.rcItem
-            };
-            if list_preset_disabled {
-                // Smooth SDF anti-aliased "Off" pill tag on right side of disabled preset rows.
-                let tag_w = scale(30, dpi);
-                let tag_h = scale(16, dpi);
-                let tag_right = rect.right - scale(8, dpi);
-                let tag_left = (tag_right - tag_w).max(rect.left + scale(20, dpi));
-                let tag_top = (rect.top + rect.bottom - tag_h) / 2;
-                let actual_w = (tag_right - tag_left).max(1);
-                let mut tag_rc = RECT {
-                    left: tag_left,
-                    top: tag_top,
-                    right: tag_left + actual_w,
-                    bottom: tag_top + tag_h,
-                };
-                let badge = render_off_badge_pill(actual_w, tag_h, fill, p.button_bg, p.border);
-                badge.blit_to(hdc, tag_rc.left, tag_rc.top);
-
-                let old_f = SelectObject(hdc, HGDIOBJ(state.font_small.0));
-                SetTextColor(hdc, p.muted);
-                let mut off_w: Vec<u16> = "Off".encode_utf16().collect();
-                DrawTextW(
-                    hdc,
-                    &mut off_w,
-                    &mut tag_rc,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-                );
-                let _ = SelectObject(hdc, old_f);
-                SetTextColor(hdc, text_col);
-                rect.right = (tag_left - scale(6, dpi)).max(rect.left + scale(10, dpi));
-            }
             let flags = if is_button(item.CtlID) {
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
             } else {
@@ -6126,12 +6324,56 @@ mod tests {
                 pack_bgra(cr, cg, cb)
             );
 
-            // SDF anti-aliased "Off" badge pill has background corners and solid fill center.
-            let pill = render_off_badge_pill(30, 16, p.field, p.button_bg, p.border);
+            // SDF anti-aliased status badge pill has background corners and solid fill center.
+            let pill = render_status_badge_pill(32, 17, p.field, p.button_bg, p.border);
             let (fr, fg, fb) = colorref_rgb(p.field);
             let (br, bg, bb) = colorref_rgb(p.button_bg);
             assert_eq!(pill.pixels[0], pack_bgra(fr, fg, fb));
-            assert_eq!(pill.pixels[(8 * 30 + 15) as usize], pack_bgra(br, bg, bb));
+            assert_eq!(pill.pixels[(8 * 32 + 16) as usize], pack_bgra(br, bg, bb));
+        }
+    }
+
+    #[test]
+    fn list_row_pill_rect_fits_and_aligns_right_across_dpis() {
+        for dpi in [96u32, 120, 144, 192] {
+            let row_h = scale(26, dpi as i32);
+            let row = RECT {
+                left: 0,
+                top: row_h * 2,
+                right: scale(220, dpi as i32),
+                bottom: row_h * 3,
+            };
+            let pill = list_row_pill_rect(row, dpi);
+            assert!(pill.left >= row.left + scale(20, dpi as i32));
+            assert_eq!(pill.right, row.right - scale(8, dpi as i32));
+            assert_eq!(pill.right - pill.left, scale(32, dpi as i32));
+            assert_eq!(pill.bottom - pill.top, scale(17, dpi as i32));
+            assert!(pill.top >= row.top && pill.bottom <= row.bottom);
+            let top_gap = pill.top - row.top;
+            let bot_gap = row.bottom - pill.bottom;
+            assert!((top_gap - bot_gap).abs() <= 1);
+        }
+    }
+
+    #[test]
+    fn status_pill_contrast_is_legible_in_both_themes() {
+        for theme in [TextTheme::Dark, TextTheme::Light] {
+            let p = Palette::of(theme);
+            for hovered in [false, true] {
+                let (on_fill, _, on_fg) = status_pill_colors(p, true, hovered);
+                let on_ratio = contrast_ratio(on_fg, on_fill);
+                assert!(
+                    on_ratio >= 4.5,
+                    "{theme:?} On pill contrast (hovered={hovered}) {on_ratio:.2} < 4.5"
+                );
+
+                let (off_fill, _, off_fg) = status_pill_colors(p, false, hovered);
+                let off_ratio = contrast_ratio(off_fg, off_fill);
+                assert!(
+                    off_ratio >= 4.5,
+                    "{theme:?} Off pill contrast (hovered={hovered}) {off_ratio:.2} < 4.5"
+                );
+            }
         }
     }
 }
