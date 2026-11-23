@@ -892,6 +892,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
 
     let mut placed_mode: Option<PlacementMode> = None;
     let mut placed_host_rect: Option<(i32, i32, i32, i32)> = None;
+    let mut expected_rect: Option<RECT> = None;
     let mut the_ask: Option<(i32, i32)> = None;
 
     let current_target_rect = || -> Option<(i32, i32, i32, i32)> {
@@ -974,6 +975,8 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             };
             placed_mode = Some(mode);
             placed_host_rect = Some(target_rect);
+            let _ = drain_settle_events(source, &launch, &processes);
+            expected_rect = window_rect(source);
         }
     } else if let Some(target_rect) = current_target_rect() {
         // App ignored `SW_HIDE` (e.g. WinUI 3 / Electron): sink immediately before settle.
@@ -984,8 +987,11 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             launch.previous_foreground,
             &processes,
             &mut the_ask,
+            placed_mode.zip(placed_host_rect),
         ));
         placed_host_rect = Some(target_rect);
+        let _ = drain_settle_events(source, &launch, &processes);
+        expected_rect = window_rect(source);
     }
 
     // Immediately suppress any already-visible companion windows strictly in `processes`.
@@ -1019,29 +1025,9 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             break;
         };
 
-        let mut msg = MSG::default();
-        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
-            let _ = unsafe { TranslateMessage(&msg) };
-            unsafe { DispatchMessageW(&msg) };
-        }
-
-        let mut source_moved = false;
-        WINEVENT_EVENTS.with(|q| {
-            for (event, raw) in q.borrow_mut().drain(..) {
-                if raw == source.0 as isize {
-                    if event == EVENT_OBJECT_LOCATIONCHANGE {
-                        source_moved = true;
-                    }
-                } else if (event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW)
-                    && !launch.windows_before.contains(&raw)
-                {
-                    let hwnd = HWND(raw as *mut _);
-                    if processes.contains(&pid_of(hwnd)) {
-                        suppress_companion_window(hwnd, source.0 as isize);
-                    }
-                }
-            }
-        });
+        // Ignore self-triggered LOCATIONCHANGE from our own SetWindowPos.
+        let raw_source_moved = drain_settle_events(source, &launch, &processes);
+        let source_moved = raw_source_moved && window_rect(source) != expected_rect;
 
         let needs_resnap = source_moved
             || placed_host_rect != Some(target_rect)
@@ -1058,15 +1044,22 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
                 launch.previous_foreground,
                 &processes,
                 &mut the_ask,
+                placed_mode.zip(placed_host_rect),
             ));
             placed_host_rect = Some(target_rect);
+            let _ = drain_settle_events(source, &launch, &processes);
+            expected_rect = window_rect(source);
         }
 
         let launch_idle = is_input_idle_now(HANDLE(launch.process.as_raw_handle()));
         let source_idle = source_proc
             .as_ref()
             .is_none_or(|h| is_input_idle_now(HANDLE(h.as_raw_handle())));
-        let ready_to_probe = was_hidden
+        // Exit settle promptly once BehindHost is aligned so host covers source right away.
+        let behind_host_ready = placed_mode == Some(PlacementMode::BehindHost)
+            && aligned_behind_host(source, target_rect);
+        let ready_to_probe = behind_host_ready
+            || was_hidden
             || (launch_idle && source_idle)
             || settle_start.elapsed() >= Duration::from_millis(150);
 
@@ -1087,11 +1080,13 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
                 return;
             }
             if answered {
-                let aligned = match placed_mode {
-                    Some(PlacementMode::BehindHost) => aligned_behind_host(source, target_rect),
-                    Some(PlacementMode::OffScreen) => parked(source),
-                    None => false,
-                };
+                let no_drift = window_rect(source) == expected_rect;
+                let aligned = no_drift
+                    && match placed_mode {
+                        Some(PlacementMode::BehindHost) => aligned_behind_host(source, target_rect),
+                        Some(PlacementMode::OffScreen) => parked(source),
+                        None => false,
+                    };
                 if aligned {
                     break;
                 }
@@ -1181,19 +1176,15 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         let host_rect = (x, y, width, height);
 
         if placed_mode.is_none() || placed_host_rect != Some(host_rect) {
-            // Primary: keep source 100% on-monitor behind opaque topmost host (GDI apps repaint
-            // natively on-monitor). Fallback to off-screen only if min size exceeds host.
-            let mode = if place_behind_host(source, host_rect, window_mode) {
-                the_ask = None;
-                PlacementMode::BehindHost
-            } else {
-                let ask = the_ask_for((width, height), source_size(source, window_mode));
-                the_ask = Some(ask);
-                park_offscreen(source, ask.0, ask.1);
-                PlacementMode::OffScreen
-            };
-            restore_foreground(launch.previous_foreground, &processes);
-            placed_mode = Some(mode);
+            placed_mode = Some(snap_source(
+                source,
+                host_rect,
+                window_mode,
+                launch.previous_foreground,
+                &processes,
+                &mut the_ask,
+                placed_mode.zip(placed_host_rect),
+            ));
             placed_host_rect = Some(host_rect);
         } else {
             match placed_mode {
@@ -1631,19 +1622,53 @@ fn behind_host_window_rect(
     )
 }
 
-/// True when `actual_visible` fits within `host_rect` (+2px tolerance) and lies inside it.
+fn window_rect(window: HWND) -> Option<RECT> {
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(window, &mut rect) }
+        .ok()
+        .map(|()| rect)
+}
+
+/// Drain queued WinEvents; suppress owned companion windows and report `source` location changes.
+fn drain_settle_events(source: HWND, launch: &Launch, processes: &[u32]) -> bool {
+    let mut msg = MSG::default();
+    while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+        let _ = unsafe { TranslateMessage(&msg) };
+        unsafe { DispatchMessageW(&msg) };
+    }
+    let mut source_moved = false;
+    WINEVENT_EVENTS.with(|q| {
+        for (event, raw) in q.borrow_mut().drain(..) {
+            if raw == source.0 as isize {
+                if event == EVENT_OBJECT_LOCATIONCHANGE {
+                    source_moved = true;
+                }
+            } else if (event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW)
+                && !launch.windows_before.contains(&raw)
+            {
+                let hwnd = HWND(raw as *mut _);
+                if processes.contains(&pid_of(hwnd)) {
+                    suppress_companion_window(hwnd, source.0 as isize);
+                }
+            }
+        }
+    });
+    source_moved
+}
+
+const ALIGN_TOLERANCE: i32 = 4;
+
+/// True when `actual_visible` fits inside `host_rect` (+4px DPI rounding tolerance).
 fn is_aligned_behind_host(actual_visible: RECT, host_rect: (i32, i32, i32, i32)) -> bool {
     let (hx, hy, hw, hh) = host_rect;
     let aw = actual_visible.right - actual_visible.left;
     let ah = actual_visible.bottom - actual_visible.top;
     aw > 0
         && ah > 0
-        && aw <= hw + 2
-        && ah <= hh + 2
-        && actual_visible.left >= hx - 2
-        && actual_visible.top >= hy - 2
-        && actual_visible.right <= hx + hw + 2
-        && actual_visible.bottom <= hy + hh + 2
+        && actual_visible.left >= hx - ALIGN_TOLERANCE
+        && actual_visible.top >= hy - ALIGN_TOLERANCE
+        && actual_visible.right <= hx + hw + ALIGN_TOLERANCE
+        && actual_visible.bottom <= hy + hh + ALIGN_TOLERANCE
 }
 
 fn aligned_behind_host(window: HWND, host_rect: (i32, i32, i32, i32)) -> bool {
@@ -1747,11 +1772,39 @@ fn parked(window: HWND) -> bool {
         && !unsafe { IsIconic(window) }.as_bool()
 }
 
+/// True only when primary parking `SetWindowPos` failed or primary coords overlap `vscreen`.
+/// Never fling to `FALLBACK_PARKING` when the app clamped the window onto the monitor.
+fn should_try_fallback_parking(
+    primary_swp_ok: bool,
+    primary_origin: (i32, i32),
+    actual_rect: Option<RECT>,
+    vscreen: RECT,
+) -> bool {
+    if !primary_swp_ok {
+        return true;
+    }
+    let primary_overlaps_vscreen = primary_origin.0 >= vscreen.left
+        && primary_origin.0 < vscreen.right
+        && primary_origin.1 >= vscreen.top
+        && primary_origin.1 < vscreen.bottom;
+    if primary_overlaps_vscreen {
+        return true;
+    }
+    let Some(rect) = actual_rect else {
+        return true;
+    };
+    if is_off_screen(&rect, vscreen) {
+        return false;
+    }
+    let clamped_onto_monitor = rect.left < vscreen.right && rect.right > vscreen.left;
+    !clamped_onto_monitor
+}
+
 /// Fast off-screen move preserving size (used on `hide()` / `LINGER` so `source` never stays visible).
 fn push_offscreen(window: HWND) {
     let vscreen = virtual_screen();
     let (px, py) = parking_origin(vscreen);
-    let _ = unsafe {
+    let swp_ok = unsafe {
         SetWindowPos(
             window,
             HWND_BOTTOM,
@@ -1761,9 +1814,9 @@ fn push_offscreen(window: HWND) {
             0,
             SWP_NOSIZE | SWP_NOACTIVATE,
         )
-    };
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(window, &mut rect) }.is_ok() && !is_off_screen(&rect, vscreen) {
+    }
+    .is_ok();
+    if should_try_fallback_parking(swp_ok, (px, py), window_rect(window), vscreen) {
         let _ = unsafe {
             SetWindowPos(
                 window,
@@ -1811,10 +1864,10 @@ fn park_offscreen(window: HWND, width: i32, height: i32) {
         let _ = unsafe { SetWindowPlacement(window, &placement) };
     }
 
-    let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, px, py, width, height, SWP_NOACTIVATE) };
+    let swp_ok =
+        unsafe { SetWindowPos(window, HWND_BOTTOM, px, py, width, height, SWP_NOACTIVATE) }.is_ok();
 
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(window, &mut rect) }.is_ok() && !is_off_screen(&rect, vscreen) {
+    if should_try_fallback_parking(swp_ok, (px, py), window_rect(window), vscreen) {
         let _ = unsafe {
             SetWindowPos(
                 window,
@@ -1836,6 +1889,33 @@ fn park_offscreen(window: HWND, width: i32, height: i32) {
     let _ = unsafe { UpdateWindow(window) };
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapAction {
+    KeepOffScreen,
+    ReparkOffScreen,
+    TryBehindHost,
+}
+
+/// Never bounce an `OffScreen` window back through `BehindHost` unless `host_rect` grew.
+fn decide_snap_action(
+    current_mode: Option<PlacementMode>,
+    is_parked: bool,
+    prev_host_rect: Option<(i32, i32, i32, i32)>,
+    target_rect: (i32, i32, i32, i32),
+) -> SnapAction {
+    let host_grew =
+        prev_host_rect.is_some_and(|(_, _, pw, ph)| target_rect.2 > pw || target_rect.3 > ph);
+    if current_mode == Some(PlacementMode::OffScreen) && !host_grew {
+        if is_parked {
+            SnapAction::KeepOffScreen
+        } else {
+            SnapAction::ReparkOffScreen
+        }
+    } else {
+        SnapAction::TryBehindHost
+    }
+}
+
 /// Snap `source` behind `host` (or off-screen if min size exceeds `target_rect`) and restore focus.
 fn snap_source(
     source: HWND,
@@ -1844,21 +1924,40 @@ fn snap_source(
     previous_foreground: isize,
     processes: &[u32],
     the_ask: &mut Option<(i32, i32)>,
+    prior: Option<(PlacementMode, (i32, i32, i32, i32))>,
 ) -> PlacementMode {
-    let mode = if place_behind_host(source, target_rect, window_mode) {
-        *the_ask = None;
-        PlacementMode::BehindHost
-    } else {
-        let ask = the_ask_for(
-            (target_rect.2, target_rect.3),
-            source_size(source, window_mode),
-        );
-        *the_ask = Some(ask);
-        park_offscreen(source, ask.0, ask.1);
-        PlacementMode::OffScreen
-    };
-    restore_foreground(previous_foreground, processes);
-    mode
+    let (current_mode, prev_host_rect) = prior.unzip();
+    match decide_snap_action(current_mode, parked(source), prev_host_rect, target_rect) {
+        SnapAction::KeepOffScreen => PlacementMode::OffScreen,
+        SnapAction::ReparkOffScreen => {
+            let ask = the_ask.unwrap_or_else(|| {
+                the_ask_for(
+                    (target_rect.2, target_rect.3),
+                    source_size(source, window_mode),
+                )
+            });
+            *the_ask = Some(ask);
+            park_offscreen(source, ask.0, ask.1);
+            restore_foreground(previous_foreground, processes);
+            PlacementMode::OffScreen
+        }
+        SnapAction::TryBehindHost => {
+            let mode = if place_behind_host(source, target_rect, window_mode) {
+                *the_ask = None;
+                PlacementMode::BehindHost
+            } else {
+                let ask = the_ask_for(
+                    (target_rect.2, target_rect.3),
+                    source_size(source, window_mode),
+                );
+                *the_ask = Some(ask);
+                park_offscreen(source, ask.0, ask.1);
+                PlacementMode::OffScreen
+            };
+            restore_foreground(previous_foreground, processes);
+            mode
+        }
+    }
 }
 
 fn wait_for_input_idle_handle(process: HANDLE, timeout_ms: u32) {
@@ -2816,14 +2915,22 @@ mod tests {
         };
         assert!(is_aligned_behind_host(exact_visible, host));
 
-        // 2px tolerance still aligned.
-        let slightly_inset = RECT {
-            left: 200,
-            top: 120,
-            right: 842,
-            bottom: 602,
+        // Smaller contained window and up to 4px DPI rounding tolerance still aligned.
+        let smaller_contained = RECT {
+            left: 220,
+            top: 140,
+            right: 800,
+            bottom: 560,
         };
-        assert!(is_aligned_behind_host(slightly_inset, host));
+        assert!(is_aligned_behind_host(smaller_contained, host));
+
+        let dpi_rounded = RECT {
+            left: 196,
+            top: 116,
+            right: 844,
+            bottom: 604,
+        };
+        assert!(is_aligned_behind_host(dpi_rounded, host));
 
         // Window refusing to shrink (e.g. Paint min size 704x500 > host 640x480) triggers fallback.
         let too_big = RECT {
@@ -2842,6 +2949,101 @@ mod tests {
             bottom: 600,
         };
         assert!(!is_aligned_behind_host(drifted, host));
+    }
+
+    #[test]
+    fn offscreen_mode_never_bounces_through_behind_host_unless_host_grew() {
+        let host = (200, 120, 640, 480);
+        // Already parked OffScreen -> no-op.
+        assert_eq!(
+            decide_snap_action(Some(PlacementMode::OffScreen), true, Some(host), host),
+            SnapAction::KeepOffScreen
+        );
+        // OffScreen drifted on-screen -> re-park directly, never bounce through BehindHost.
+        assert_eq!(
+            decide_snap_action(Some(PlacementMode::OffScreen), false, Some(host), host),
+            SnapAction::ReparkOffScreen
+        );
+        // Host moved without growing -> stay OffScreen.
+        assert_eq!(
+            decide_snap_action(
+                Some(PlacementMode::OffScreen),
+                true,
+                Some(host),
+                (300, 180, 640, 480),
+            ),
+            SnapAction::KeepOffScreen
+        );
+        // Host grew larger -> retry BehindHost.
+        assert_eq!(
+            decide_snap_action(
+                Some(PlacementMode::OffScreen),
+                true,
+                Some(host),
+                (200, 120, 800, 480),
+            ),
+            SnapAction::TryBehindHost
+        );
+        // Initial or BehindHost -> try BehindHost.
+        assert_eq!(
+            decide_snap_action(None, false, None, host),
+            SnapAction::TryBehindHost
+        );
+        assert_eq!(
+            decide_snap_action(Some(PlacementMode::BehindHost), false, Some(host), host),
+            SnapAction::TryBehindHost
+        );
+    }
+
+    #[test]
+    fn fallback_parking_skipped_when_app_clamped_primary_move_onto_monitor() {
+        let vscreen = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let primary = parking_origin(vscreen);
+        // App clamped right-edge off-screen move back onto right edge of monitor -> do NOT fling to -20000.
+        let clamped_right = RECT {
+            left: 1120,
+            top: 0,
+            right: 1920,
+            bottom: 600,
+        };
+        assert!(!should_try_fallback_parking(
+            true,
+            primary,
+            Some(clamped_right),
+            vscreen
+        ));
+        // Already off-screen -> no fallback needed.
+        let offscreen = RECT {
+            left: primary.0,
+            top: primary.1,
+            right: primary.0 + 800,
+            bottom: primary.1 + 600,
+        };
+        assert!(!should_try_fallback_parking(
+            true,
+            primary,
+            Some(offscreen),
+            vscreen
+        ));
+        // Primary SetWindowPos failed -> try fallback.
+        assert!(should_try_fallback_parking(
+            false,
+            primary,
+            Some(clamped_right),
+            vscreen
+        ));
+        // Primary origin overlaps virtual screen -> try fallback.
+        assert!(should_try_fallback_parking(
+            true,
+            (500, 100),
+            Some(clamped_right),
+            vscreen
+        ));
     }
 
     #[test]
