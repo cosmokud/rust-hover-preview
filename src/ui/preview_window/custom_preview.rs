@@ -705,7 +705,7 @@ fn clamp_rect_to_work_area(rect: (i32, i32, i32, i32), work: RECT) -> (i32, i32,
     (x, y, w, h)
 }
 
-fn monitor_work_area_for(rect: (i32, i32, i32, i32)) -> RECT {
+fn monitor_rect_for(rect: (i32, i32, i32, i32)) -> RECT {
     let screen = RECT {
         left: rect.0,
         top: rect.1,
@@ -718,7 +718,7 @@ fn monitor_work_area_for(rect: (i32, i32, i32, i32)) -> RECT {
         ..Default::default()
     };
     if !hmon.is_invalid() && unsafe { GetMonitorInfoW(hmon, &mut info) }.as_bool() {
-        info.rcWork
+        info.rcMonitor
     } else {
         let bounds = work_area_at(rect.0, rect.1);
         RECT {
@@ -728,6 +728,38 @@ fn monitor_work_area_for(rect: (i32, i32, i32, i32)) -> RECT {
             bottom: bounds.bottom,
         }
     }
+}
+
+type WindowBox = (i32, i32, i32, i32);
+
+/// Clamp visible `host_rect` to `monitor` (not `rcWork`) BEFORE adding invisible DWM border insets
+/// so edge-touching / fit-to-screen previews never shrink by taskbar height or DWM border width.
+fn promoted_window_rects(
+    host_rect: WindowBox,
+    insets: WindowBox,
+    monitor: RECT,
+) -> (WindowBox, WindowBox) {
+    let visible = clamp_rect_to_work_area(host_rect, monitor);
+    let outer = behind_host_window_rect(visible, insets);
+    (visible, outer)
+}
+
+fn visible_rect_matches_target(actual_visible: RECT, target: (i32, i32, i32, i32)) -> bool {
+    let aw = actual_visible.right - actual_visible.left;
+    let ah = actual_visible.bottom - actual_visible.top;
+    (actual_visible.left - target.0).abs() <= 1
+        && (actual_visible.top - target.1).abs() <= 1
+        && (aw - target.2).abs() <= 1
+        && (ah - target.3).abs() <= 1
+}
+
+/// Shift `(dx, dy)` to keep `actual_visible` inside `bounds` without shrinking or clipping DWM borders.
+fn visible_clamp_delta(actual_visible: RECT, bounds: RECT) -> (i32, i32) {
+    let w = (actual_visible.right - actual_visible.left).max(1);
+    let h = (actual_visible.bottom - actual_visible.top).max(1);
+    let (fx, fy, _, _) =
+        clamp_rect_to_work_area((actual_visible.left, actual_visible.top, w, h), bounds);
+    (fx - actual_visible.left, fy - actual_visible.top)
 }
 
 struct DetachGuard;
@@ -896,9 +928,9 @@ fn try_detach_active_preview(path: &Path) -> bool {
     }
 
     if let Some(hr) = host_rect {
-        let work = monitor_work_area_for(hr);
+        let monitor = monitor_rect_for(hr);
         let insets = dwm_frame_insets(source_hwnd);
-        let (ax, ay, aw, ah) = clamp_rect_to_work_area(behind_host_window_rect(hr, insets), work);
+        let (visible_target, (ax, ay, aw, ah)) = promoted_window_rects(hr, insets, monitor);
         unsafe {
             raise_source_above_explorer(
                 source_hwnd,
@@ -910,19 +942,38 @@ fn try_detach_active_preview(path: &Path) -> bool {
                 windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS(0),
             );
         }
-        // Re-clamp top-left if app's WM_GETMINMAXINFO grew window past monitor edges.
-        if let Some(actual) = window_rect(source_hwnd) {
-            let actual_w = (actual.right - actual.left).max(1);
-            let actual_h = (actual.bottom - actual.top).max(1);
-            let (fx, fy, _, _) =
-                clamp_rect_to_work_area((actual.left, actual.top, actual_w, actual_h), work);
-            if fx != actual.left || fy != actual.top {
+        // Re-apply once on target monitor if WM_DPICHANGED resized `source` or DWM insets changed
+        // after moving off STAGE_COORD / restoring frame styles.
+        let insets_after = dwm_frame_insets(source_hwnd);
+        let needs_reapply = insets_after != insets
+            || visible_frame_rect(source_hwnd)
+                .is_some_and(|vis| !visible_rect_matches_target(vis, visible_target));
+        if needs_reapply {
+            let (ax2, ay2, aw2, ah2) = behind_host_window_rect(visible_target, insets_after);
+            let _ = unsafe {
+                SetWindowPos(
+                    source_hwnd,
+                    HWND::default(),
+                    ax2,
+                    ay2,
+                    aw2,
+                    ah2,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            };
+        }
+        // Slide top-left only if app's WM_GETMINMAXINFO pushed visible bounds past monitor edges.
+        if let (Some(vis), Some(actual)) =
+            (visible_frame_rect(source_hwnd), window_rect(source_hwnd))
+        {
+            let (dx, dy) = visible_clamp_delta(vis, monitor);
+            if dx != 0 || dy != 0 {
                 let _ = unsafe {
                     SetWindowPos(
                         source_hwnd,
                         HWND::default(),
-                        fx,
-                        fy,
+                        actual.left + dx,
+                        actual.top + dy,
                         0,
                         0,
                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
@@ -6621,6 +6672,73 @@ mod tests {
             clamp_rect_to_work_area((100, 100, 3000, 2000), work),
             (0, 0, 1920, 1040)
         );
+    }
+
+    #[test]
+    fn promoted_window_rects_preserves_fit_to_screen_size_with_dwm_insets() {
+        let monitor = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let insets = (7, 0, 7, 7);
+
+        // Fit-to-screen preview touching top and bottom of work area (1040px) or full monitor (1080px):
+        // visible rect must NOT shrink, and outer rect must include invisible DWM border overhang.
+        let (vis_work, outer_work) = promoted_window_rects((300, 0, 1000, 1040), insets, monitor);
+        assert_eq!(vis_work, (300, 0, 1000, 1040));
+        assert_eq!(outer_work, (293, 0, 1014, 1047));
+
+        let (vis_full, outer_full) = promoted_window_rects((0, 0, 1920, 1080), insets, monitor);
+        assert_eq!(vis_full, (0, 0, 1920, 1080));
+        assert_eq!(outer_full, (-7, 0, 1934, 1087));
+
+        // Edge-aligned visible frame needs zero clamp shift; overflowing min-size frame slides cleanly.
+        assert_eq!(
+            visible_clamp_delta(
+                RECT {
+                    left: 0,
+                    top: 0,
+                    right: 1920,
+                    bottom: 1080
+                },
+                monitor
+            ),
+            (0, 0)
+        );
+        assert_eq!(
+            visible_clamp_delta(
+                RECT {
+                    left: 1600,
+                    top: 700,
+                    right: 2100,
+                    bottom: 1120
+                },
+                monitor
+            ),
+            (-180, -40)
+        );
+
+        // Post-move size verification catches WM_DPICHANGED / stale-inset shrink.
+        assert!(visible_rect_matches_target(
+            RECT {
+                left: 300,
+                top: 0,
+                right: 1300,
+                bottom: 1040
+            },
+            vis_work
+        ));
+        assert!(!visible_rect_matches_target(
+            RECT {
+                left: 300,
+                top: 0,
+                right: 1300,
+                bottom: 992
+            },
+            vis_work
+        ));
     }
 
     #[test]
