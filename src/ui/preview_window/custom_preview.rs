@@ -158,10 +158,10 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClassNameW, GetClientRect,
-    GetForegroundWindow, GetLayeredWindowAttributes, GetSystemMetrics, GetWindow,
-    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
-    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+    AllowSetForegroundWindow, BringWindowToTop, CreateWindowExW, DefWindowProcW, DispatchMessageW,
+    EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetLayeredWindowAttributes,
+    GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
+    GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
     MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW,
     RegisterWindowMessageW, SendMessageTimeoutW, SetForegroundWindow, SetLayeredWindowAttributes,
     SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW, ShowWindow,
@@ -425,6 +425,8 @@ struct Launch {
 static HOST: AtomicIsize = AtomicIsize::new(0);
 /// Whether the host is on the screen.
 static SHOWN: AtomicBool = AtomicBool::new(false);
+/// True while `try_detach_active_preview` is promoting `SOURCE` behind `HOST`; suppresses premature `hide_the_host()`.
+static DETACHING: AtomicBool = AtomicBool::new(false);
 /// The program's window registered into it, while one is.
 static SOURCE: AtomicIsize = AtomicIsize::new(0);
 /// The process that window belongs to, which is not the launched one where the program is
@@ -728,6 +730,59 @@ fn monitor_work_area_for(rect: (i32, i32, i32, i32)) -> RECT {
     }
 }
 
+struct DetachGuard;
+impl Drop for DetachGuard {
+    fn drop(&mut self) {
+        DETACHING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Raise `source` to top of normal Z-order (strictly above Explorer, strictly below `host` if visible).
+/// Uses TOPMOST -> NOTOPMOST so Win32 lifts a HWND_BOTTOM window above Explorer even when foreground lock rejects SetForegroundWindow.
+unsafe fn raise_source_above_explorer(
+    source_hwnd: HWND,
+    host_hwnd: Option<HWND>,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    extra_flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
+) {
+    let insert_after = match host_hwnd {
+        Some(host) if IsWindowVisible(host).as_bool() => {
+            let _ = SetWindowPos(
+                host,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            host
+        }
+        _ => HWND_TOPMOST,
+    };
+    let _ = SetWindowPos(
+        source_hwnd,
+        insert_after,
+        x,
+        y,
+        w,
+        h,
+        extra_flags | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+    );
+    let _ = SetWindowPos(
+        source_hwnd,
+        HWND_NOTOPMOST,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE,
+    );
+}
+
 /// Detach & promote an active live custom preview for `path` in-place; returns `true` if detached.
 fn try_detach_active_preview(path: &Path) -> bool {
     let matches_active = PROGRAM
@@ -743,6 +798,17 @@ fn try_detach_active_preview(path: &Path) -> bool {
         return false;
     }
 
+    // Hold DETACHING until `source` is positioned, raised, and DWM-flushed behind `host` so neither
+    // `run_it()` nor `hide()` can hide `host` early and cause a flash.
+    DETACHING.store(true, Ordering::SeqCst);
+    let detach_guard = DetachGuard;
+
+    let host_hwnd = {
+        let raw = HOST.load(Ordering::SeqCst);
+        let hwnd = HWND(raw as *mut _);
+        (raw != 0 && unsafe { IsWindow(hwnd) }.as_bool()).then_some(hwnd)
+    };
+
     // Bump LAUNCH first so `run_it` stops touching `source` and drops `InProcessHookSession`.
     LAUNCH.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut want) = WANT.lock() {
@@ -756,7 +822,10 @@ fn try_detach_active_preview(path: &Path) -> bool {
     }
 
     SOURCE.store(0, Ordering::SeqCst);
-    SOURCE_PID.store(0, Ordering::SeqCst);
+    let mut source_pid = SOURCE_PID.swap(0, Ordering::SeqCst);
+    if source_pid == 0 {
+        let _ = unsafe { GetWindowThreadProcessId(source_hwnd, Some(&mut source_pid)) };
+    }
     SOURCE_IS_NEW.store(false, Ordering::SeqCst);
     let was_invisible_layered = SOURCE_INVISIBLE_LAYERED.swap(false, Ordering::SeqCst);
     if let Ok(mut r) = SOURCE_RESTORE_RECT.lock() {
@@ -778,16 +847,7 @@ fn try_detach_active_preview(path: &Path) -> bool {
         .map(|g| *g)
         .unwrap_or(CustomWindowMode::Normal);
 
-    let thumbnail = THUMBNAIL
-        .lock()
-        .map(|mut held| std::mem::replace(&mut *held, 0))
-        .unwrap_or(0);
-    if thumbnail != 0 {
-        let _ = unsafe { DwmUnregisterThumbnail(thumbnail) };
-    }
-    hide_the_host();
-
-    // Detach hook subclass BEFORE SetWindowPos(HWND_NOTOPMOST) so rhp_subclass_proc never overrides Z-order.
+    // Detach hook subclass BEFORE SetWindowPos so rhp_subclass_proc never overrides Z-order or rect.
     if let Some(ctrl) = hook_ctrl {
         let _ = ctrl.detach_sync(source_hwnd);
     }
@@ -811,7 +871,7 @@ fn try_detach_active_preview(path: &Path) -> bool {
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             )
         };
     } else if capture_technique == CustomCaptureTechnique::DirectWindow
@@ -830,7 +890,7 @@ fn try_detach_active_preview(path: &Path) -> bool {
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
             )
         };
     }
@@ -839,8 +899,17 @@ fn try_detach_active_preview(path: &Path) -> bool {
         let work = monitor_work_area_for(hr);
         let insets = dwm_frame_insets(source_hwnd);
         let (ax, ay, aw, ah) = clamp_rect_to_work_area(behind_host_window_rect(hr, insets), work);
-        let _ =
-            unsafe { SetWindowPos(source_hwnd, HWND_NOTOPMOST, ax, ay, aw, ah, SWP_SHOWWINDOW) };
+        unsafe {
+            raise_source_above_explorer(
+                source_hwnd,
+                host_hwnd,
+                ax,
+                ay,
+                aw,
+                ah,
+                windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS(0),
+            );
+        }
         // Re-clamp top-left if app's WM_GETMINMAXINFO grew window past monitor edges.
         if let Some(actual) = window_rect(source_hwnd) {
             let actual_w = (actual.right - actual.left).max(1);
@@ -856,7 +925,7 @@ fn try_detach_active_preview(path: &Path) -> bool {
                         fy,
                         0,
                         0,
-                        SWP_NOSIZE | SWP_NOZORDER,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                     )
                 };
             }
@@ -873,30 +942,55 @@ fn try_detach_active_preview(path: &Path) -> bool {
             .map(|r| ((r.right - r.left).max(1), (r.bottom - r.top).max(1)))
             .unwrap_or((800, 600));
         let (fx, fy, _, _) = clamp_rect_to_work_area((work.left, work.top, aw, ah), work);
-        let _ = unsafe {
-            SetWindowPos(
-                source_hwnd,
-                HWND_NOTOPMOST,
-                fx,
-                fy,
-                0,
-                0,
-                SWP_NOSIZE | SWP_SHOWWINDOW,
-            )
-        };
+        unsafe {
+            raise_source_above_explorer(source_hwnd, host_hwnd, fx, fy, 0, 0, SWP_NOSIZE);
+        }
     } else {
-        let _ = unsafe {
-            SetWindowPos(
+        unsafe {
+            raise_source_above_explorer(
                 source_hwnd,
-                HWND_NOTOPMOST,
+                host_hwnd,
                 0,
                 0,
                 0,
                 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                SWP_NOMOVE | SWP_NOSIZE,
+            );
+        }
+    }
+
+    // Flush paint & DWM composition while `host` still covers `source` for a zero-flicker reveal.
+    let _ = unsafe { InvalidateRect(source_hwnd, None, false) };
+    let _ = unsafe { UpdateWindow(source_hwnd) };
+    let _ = unsafe { DwmFlush() };
+
+    drop(detach_guard);
+    hide_the_host();
+    if let Some(host) = host_hwnd {
+        let _ = unsafe {
+            SendMessageTimeoutW(
+                host,
+                WM_THERE_IS_NOTHING_TO_SHOW,
+                WPARAM(0),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG,
+                50,
+                None,
             )
         };
     }
+    let thumbnail = THUMBNAIL
+        .lock()
+        .map(|mut held| std::mem::replace(&mut *held, 0))
+        .unwrap_or(0);
+    if thumbnail != 0 {
+        let _ = unsafe { DwmUnregisterThumbnail(thumbnail) };
+    }
+
+    if source_pid != 0 {
+        let _ = unsafe { AllowSetForegroundWindow(source_pid) };
+    }
+    let _ = unsafe { BringWindowToTop(source_hwnd) };
     let _ = unsafe { SetForegroundWindow(source_hwnd) };
     true
 }
@@ -1004,6 +1098,9 @@ fn end_process(pid: u32) {
 
 /// Take the host off the screen, on the thread that made it.
 fn hide_the_host() {
+    if DETACHING.load(Ordering::SeqCst) {
+        return;
+    }
     SHOWN.store(false, Ordering::SeqCst);
 
     let host = HOST.load(Ordering::SeqCst);
@@ -2043,6 +2140,9 @@ fn run_it(
             None => false,
         };
         if !placement_ok {
+            if !is_current(launch.id) {
+                return;
+            }
             hide_the_host();
             std::thread::sleep(KEEP_POLL);
             continue;
@@ -6599,5 +6699,113 @@ mod tests {
         );
 
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+    }
+
+    #[test]
+    fn promote_lifts_bottom_window_above_sibling_without_staying_topmost() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = PathBuf::from("zorder.custom");
+        let bounds = work_area_at(0, 0);
+        let x = bounds.left + 100;
+        let y = bounds.top + 100;
+
+        let sibling = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("Explorer Sibling"),
+                WS_CAPTION,
+                x,
+                y,
+                320,
+                240,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create sibling window")
+        };
+        let _ = unsafe { ShowWindow(sibling, SW_SHOWNOACTIVATE) };
+
+        let source = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("Preview Source"),
+                WS_CAPTION,
+                x,
+                y,
+                320,
+                240,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create source window")
+        };
+        let _ = unsafe {
+            SetWindowPos(
+                source,
+                HWND_BOTTOM,
+                x,
+                y,
+                320,
+                240,
+                SWP_SHOWWINDOW | SWP_NOACTIVATE,
+            )
+        };
+
+        if let Ok(mut p) = PROGRAM.lock() {
+            *p = Some(dummy_program(path.clone()));
+        }
+        SOURCE.store(source.0 as isize, Ordering::SeqCst);
+        if let Ok(mut r) = LAST_HOST_RECT.lock() {
+            *r = Some((x, y, 320, 240));
+        }
+
+        // Verify hide_the_host() is suppressed while DETACHING is set.
+        SHOWN.store(true, Ordering::SeqCst);
+        DETACHING.store(true, Ordering::SeqCst);
+        hide_the_host();
+        assert!(
+            SHOWN.load(Ordering::SeqCst),
+            "hide_the_host must be suppressed during DETACHING"
+        );
+        DETACHING.store(false, Ordering::SeqCst);
+
+        assert!(try_detach_active_preview(&path));
+        assert!(!DETACHING.load(Ordering::SeqCst));
+
+        let ex_after = unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) } as u32;
+        assert_eq!(
+            ex_after & WS_EX_TOPMOST.0,
+            0,
+            "promoted window must be demoted to HWND_NOTOPMOST"
+        );
+
+        // Walk downward from `source` via GW_HWNDNEXT; `sibling` must appear strictly below `source`.
+        let mut cursor = source;
+        let mut sibling_below = false;
+        while let Ok(next) =
+            unsafe { GetWindow(cursor, windows::Win32::UI::WindowsAndMessaging::GW_HWNDNEXT) }
+        {
+            if next == sibling {
+                sibling_below = true;
+                break;
+            }
+            if next.0.is_null() {
+                break;
+            }
+            cursor = next;
+        }
+        assert!(
+            sibling_below,
+            "promoted window must sit strictly above sibling normal window in Z-order"
+        );
+
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(source) };
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(sibling) };
     }
 }
