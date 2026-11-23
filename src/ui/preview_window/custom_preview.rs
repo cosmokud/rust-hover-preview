@@ -149,20 +149,22 @@ use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVE
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClassNameW, GetClientRect,
-    GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
-    GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
-    RegisterClassExW, SendMessageTimeoutW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage, CHILDID_SELF,
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE,
-    GW_OWNER, HWND_BOTTOM, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT,
-    SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE,
-    SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
-    WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    GetForegroundWindow, GetLayeredWindowAttributes, GetSystemMetrics, GetWindow,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
+    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+    MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SendMessageTimeoutW,
+    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement,
+    SetWindowPos, ShowWindow, TranslateMessage, CHILDID_SELF, EVENT_OBJECT_CREATE,
+    EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM,
+    LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE,
+    QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
+    WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::dimensions::{design_dimensions, picture_dimensions, vector_dimensions};
@@ -241,6 +243,11 @@ const PROCESS_TIME_SLACK_100NS: u64 = 2 * 10_000_000;
 /// Fallback off-screen parking coordinate when positive off-screen X is clamped by the target app.
 /// Kept well inside i16 (-32768..32767) so WM_MOVE lParam never wraps.
 const FALLBACK_PARKING: i32 = -20000;
+
+/// 1/255 alpha: keeps DWM compositing the source for `DwmRegisterThumbnail` while invisible on screen.
+const INVISIBLE_ALPHA: u8 = 1;
+const INVISIBLE_EX_STYLE: u32 =
+    WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0;
 
 /// What a hover of a custom preview is asked to be drawn at: the pointer's own placement, or the
 /// focused item's.
@@ -330,6 +337,8 @@ static SOURCE: AtomicIsize = AtomicIsize::new(0);
 static SOURCE_PID: AtomicU32 = AtomicU32::new(0);
 /// Whether that process is one the launch made, which is the only kind this app ends.
 static SOURCE_IS_NEW: AtomicBool = AtomicBool::new(false);
+/// True while active `SOURCE` is in `PlacementMode::InvisibleLayered` (1/255 alpha on-monitor).
+static SOURCE_INVISIBLE_LAYERED: AtomicBool = AtomicBool::new(false);
 /// The thumbnail registration the Shell is drawing through, while one stands.
 static THUMBNAIL: Mutex<isize> = Mutex::new(0);
 /// The hover on screen, while there is one.
@@ -475,8 +484,12 @@ pub(super) fn hide() {
     if let Ok(mut want) = WANT.lock() {
         *want = None;
     }
-    // Push on-monitor source off-screen before hiding host so it never flashes on desktop during LINGER.
-    park_source_offscreen_now();
+    if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
+        keep_source_invisible(SOURCE.load(Ordering::SeqCst));
+    } else {
+        // Push on-monitor source off-screen before hiding host so it never flashes on desktop during LINGER.
+        park_source_offscreen_now();
+    }
     hide_the_host();
 }
 
@@ -526,6 +539,7 @@ fn end_the_program() {
     let source = SOURCE.swap(0, Ordering::SeqCst);
     let source_pid = SOURCE_PID.swap(0, Ordering::SeqCst);
     let source_is_new = SOURCE_IS_NEW.swap(false, Ordering::SeqCst);
+    SOURCE_INVISIBLE_LAYERED.store(false, Ordering::SeqCst);
     if source != 0 {
         let source = HWND(source as *mut _);
         if unsafe { IsWindow(source) }.as_bool() {
@@ -877,6 +891,21 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
     SOURCE.store(source.0 as isize, Ordering::SeqCst);
     SOURCE_PID.store(source_pid, Ordering::SeqCst);
     SOURCE_IS_NEW.store(source_is_new, Ordering::SeqCst);
+    SOURCE_INVISIBLE_LAYERED.store(false, Ordering::SeqCst);
+
+    // Lock ownership strictly to our launched tree (+ adopted brokered tree if newly spawned).
+    let mut processes = owned_pids_for(launch.pid, source_pid, source_is_new);
+
+    // Visible app (ignored `SW_HIDE`): make 1/255 invisible BEFORE any style/size/move changes.
+    let was_hidden = !unsafe { IsWindowVisible(source) }.as_bool();
+    let mut invisible_layered = if !was_hidden {
+        let ok = make_source_invisible(source.0 as isize);
+        SOURCE_INVISIBLE_LAYERED.store(ok, Ordering::SeqCst);
+        restore_foreground(launch.previous_foreground, &processes);
+        ok
+    } else {
+        false
+    };
 
     // Read intrinsic shape once before any placement mutates `rcNormalPosition`.
     let own = launch.initial_own.unwrap_or_else(|| own_size(source));
@@ -885,10 +914,10 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
     // Normal mode keeps target chrome/styles untouched; Borderless strips frame chrome.
     if window_mode == CustomWindowMode::Borderless {
         strip_the_frame(source);
+        if invisible_layered {
+            keep_source_invisible(source.0 as isize);
+        }
     }
-
-    // Lock ownership strictly to our launched tree (+ adopted brokered tree if newly spawned).
-    let mut processes = owned_pids_for(launch.pid, source_pid, source_is_new);
 
     let mut placed_mode: Option<PlacementMode> = None;
     let mut placed_host_rect: Option<(i32, i32, i32, i32)> = None;
@@ -923,7 +952,6 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
     };
     let settle_guard = WinEventGuard(settle_hook);
 
-    let was_hidden = !unsafe { IsWindowVisible(source) }.as_bool();
     if was_hidden {
         // App honored `SW_HIDE`: atomically position + reveal at target rect via `SetWindowPlacement`
         // so it never flashes at its old saved coordinates.
@@ -949,29 +977,39 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             };
             let _ = unsafe { SetWindowPlacement(source, &placement) };
 
-            // Re-read DWM invisible border insets now that `source` is visible for exact alignment.
-            let insets2 = if window_mode == CustomWindowMode::Normal {
-                dwm_frame_insets(source)
-            } else {
-                (0, 0, 0, 0)
-            };
-            let (wx2, wy2, ww2, wh2) = behind_host_window_rect(target_rect, insets2);
-            let _ =
-                unsafe { SetWindowPos(source, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE) };
+            invisible_layered = make_source_invisible(source.0 as isize);
+            SOURCE_INVISIBLE_LAYERED.store(invisible_layered, Ordering::SeqCst);
             restore_foreground(launch.previous_foreground, &processes);
-            let _ = unsafe { InvalidateRect(source, None, false) };
-            let _ = unsafe { UpdateWindow(source) };
 
-            let mode = if aligned_behind_host(source, target_rect) {
-                PlacementMode::BehindHost
+            let mode = if invisible_layered {
+                place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+                PlacementMode::InvisibleLayered
             } else {
-                let ask = the_ask_for(
-                    (target_rect.2, target_rect.3),
-                    source_size(source, window_mode),
-                );
-                the_ask = Some(ask);
-                park_offscreen(source, ask.0, ask.1);
-                PlacementMode::OffScreen
+                // Re-read DWM invisible border insets now that `source` is visible for exact alignment.
+                let insets2 = if window_mode == CustomWindowMode::Normal {
+                    dwm_frame_insets(source)
+                } else {
+                    (0, 0, 0, 0)
+                };
+                let (wx2, wy2, ww2, wh2) = behind_host_window_rect(target_rect, insets2);
+                let _ = unsafe {
+                    SetWindowPos(source, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE)
+                };
+                restore_foreground(launch.previous_foreground, &processes);
+                let _ = unsafe { InvalidateRect(source, None, false) };
+                let _ = unsafe { UpdateWindow(source) };
+
+                if aligned_behind_host(source, target_rect) {
+                    PlacementMode::BehindHost
+                } else {
+                    let ask = the_ask_for(
+                        (target_rect.2, target_rect.3),
+                        source_size(source, window_mode),
+                    );
+                    the_ask = Some(ask);
+                    park_offscreen(source, ask.0, ask.1);
+                    PlacementMode::OffScreen
+                }
             };
             placed_mode = Some(mode);
             placed_host_rect = Some(target_rect);
@@ -979,16 +1017,22 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             expected_rect = window_rect(source);
         }
     } else if let Some(target_rect) = current_target_rect() {
-        // App ignored `SW_HIDE` (e.g. WinUI 3 / Electron): sink immediately before settle.
-        placed_mode = Some(snap_source(
-            source,
-            target_rect,
-            window_mode,
-            launch.previous_foreground,
-            &processes,
-            &mut the_ask,
-            placed_mode.zip(placed_host_rect),
-        ));
+        // App ignored `SW_HIDE`: keep on-monitor in InvisibleLayered, or fall back to BehindHost/OffScreen.
+        placed_mode = Some(if invisible_layered {
+            place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+            restore_foreground(launch.previous_foreground, &processes);
+            PlacementMode::InvisibleLayered
+        } else {
+            snap_source(
+                source,
+                target_rect,
+                window_mode,
+                launch.previous_foreground,
+                &processes,
+                &mut the_ask,
+                placed_mode.zip(placed_host_rect),
+            )
+        });
         placed_host_rect = Some(target_rect);
         let _ = drain_settle_events(source, &launch, &processes);
         expected_rect = window_rect(source);
@@ -1010,6 +1054,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         .then(|| open_process_for_idle(source_pid))
         .flatten();
     let settle_start = Instant::now();
+    let mut last_activity = settle_start;
     let settle_deadline = settle_start
         + if was_hidden {
             Duration::from_millis(250)
@@ -1025,6 +1070,10 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             break;
         };
 
+        if invisible_layered {
+            keep_source_invisible(source.0 as isize);
+        }
+
         // Ignore self-triggered LOCATIONCHANGE from our own SetWindowPos.
         let raw_source_moved = drain_settle_events(source, &launch, &processes);
         let source_moved = raw_source_moved && window_rect(source) != expected_rect;
@@ -1032,23 +1081,34 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         let needs_resnap = source_moved
             || placed_host_rect != Some(target_rect)
             || match placed_mode {
+                Some(PlacementMode::InvisibleLayered) => false,
                 Some(PlacementMode::BehindHost) => !aligned_behind_host(source, target_rect),
                 Some(PlacementMode::OffScreen) => !parked(source),
                 None => true,
             };
         if needs_resnap {
-            placed_mode = Some(snap_source(
-                source,
-                target_rect,
-                window_mode,
-                launch.previous_foreground,
-                &processes,
-                &mut the_ask,
-                placed_mode.zip(placed_host_rect),
-            ));
+            if placed_host_rect.is_some_and(|p| p.2 != target_rect.2 || p.3 != target_rect.3) {
+                the_ask = None;
+            }
+            placed_mode = Some(if invisible_layered {
+                place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+                restore_foreground(launch.previous_foreground, &processes);
+                PlacementMode::InvisibleLayered
+            } else {
+                snap_source(
+                    source,
+                    target_rect,
+                    window_mode,
+                    launch.previous_foreground,
+                    &processes,
+                    &mut the_ask,
+                    placed_mode.zip(placed_host_rect),
+                )
+            });
             placed_host_rect = Some(target_rect);
             let _ = drain_settle_events(source, &launch, &processes);
             expected_rect = window_rect(source);
+            last_activity = Instant::now();
         }
 
         let launch_idle = is_input_idle_now(HANDLE(launch.process.as_raw_handle()));
@@ -1058,10 +1118,20 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         // Exit settle promptly once BehindHost is aligned so host covers source right away.
         let behind_host_ready = placed_mode == Some(PlacementMode::BehindHost)
             && aligned_behind_host(source, target_rect);
-        let ready_to_probe = behind_host_ready
-            || was_hidden
-            || (launch_idle && source_idle)
-            || settle_start.elapsed() >= Duration::from_millis(150);
+        // Visible InvisibleLayered apps get a short quiet window so startup WindowFit finishes while 1/255 invisible.
+        let invisible_quiet = placed_mode == Some(PlacementMode::InvisibleLayered)
+            && (was_hidden || last_activity.elapsed() >= Duration::from_millis(60));
+        let ready_to_probe = if placed_mode == Some(PlacementMode::InvisibleLayered) {
+            invisible_quiet
+                && (was_hidden
+                    || (launch_idle && source_idle)
+                    || settle_start.elapsed() >= Duration::from_millis(150))
+        } else {
+            behind_host_ready
+                || was_hidden
+                || (launch_idle && source_idle)
+                || settle_start.elapsed() >= Duration::from_millis(150)
+        };
 
         if ready_to_probe && !source_moved {
             let answered = unsafe {
@@ -1083,6 +1153,10 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
                 let no_drift = window_rect(source) == expected_rect;
                 let aligned = no_drift
                     && match placed_mode {
+                        Some(PlacementMode::InvisibleLayered) => {
+                            keep_source_invisible(source.0 as isize);
+                            true
+                        }
                         Some(PlacementMode::BehindHost) => aligned_behind_host(source, target_rect),
                         Some(PlacementMode::OffScreen) => parked(source),
                         None => false,
@@ -1130,10 +1204,14 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         let Some(at) = at else {
             // Hover gone (LINGER): never run hide_others census so user-opened instances stay untouched.
             let since = *lingering.get_or_insert_with(Instant::now);
-            placed_mode = None;
             placed_host_rect = None;
-            if !is_window_offscreen(source) {
-                push_offscreen(source);
+            if invisible_layered {
+                keep_source_invisible(source.0 as isize);
+            } else {
+                placed_mode = None;
+                if !is_window_offscreen(source) {
+                    push_offscreen(source);
+                }
             }
             hide_the_host();
             if since.elapsed() >= LINGER {
@@ -1162,10 +1240,14 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         }
 
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
-            placed_mode = None;
             placed_host_rect = None;
-            if !is_window_offscreen(source) {
-                push_offscreen(source);
+            if invisible_layered {
+                keep_source_invisible(source.0 as isize);
+            } else {
+                placed_mode = None;
+                if !is_window_offscreen(source) {
+                    push_offscreen(source);
+                }
             }
             hide_the_host();
             std::thread::sleep(KEEP_POLL);
@@ -1176,18 +1258,36 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         let host_rect = (x, y, width, height);
 
         if placed_mode.is_none() || placed_host_rect != Some(host_rect) {
-            placed_mode = Some(snap_source(
-                source,
-                host_rect,
-                window_mode,
-                launch.previous_foreground,
-                &processes,
-                &mut the_ask,
-                placed_mode.zip(placed_host_rect),
-            ));
+            if placed_host_rect.is_some_and(|p| p.2 != host_rect.2 || p.3 != host_rect.3) {
+                the_ask = None;
+            }
+            placed_mode = Some(if invisible_layered {
+                place_invisible_layered(source, host_rect, window_mode, &mut the_ask);
+                restore_foreground(launch.previous_foreground, &processes);
+                PlacementMode::InvisibleLayered
+            } else {
+                snap_source(
+                    source,
+                    host_rect,
+                    window_mode,
+                    launch.previous_foreground,
+                    &processes,
+                    &mut the_ask,
+                    placed_mode.zip(placed_host_rect),
+                )
+            });
             placed_host_rect = Some(host_rect);
+            expected_rect = window_rect(source);
         } else {
             match placed_mode {
+                Some(PlacementMode::InvisibleLayered) => {
+                    keep_source_invisible(source.0 as isize);
+                    if window_rect(source) != expected_rect {
+                        place_invisible_layered(source, host_rect, window_mode, &mut the_ask);
+                        restore_foreground(launch.previous_foreground, &processes);
+                        expected_rect = window_rect(source);
+                    }
+                }
                 Some(PlacementMode::BehindHost) if !aligned_behind_host(source, host_rect) => {
                     if !place_behind_host(source, host_rect, window_mode) {
                         let ask = the_ask_for((width, height), source_size(source, window_mode));
@@ -1207,6 +1307,10 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         }
 
         let placement_ok = match placed_mode {
+            Some(PlacementMode::InvisibleLayered) => {
+                keep_source_invisible(source.0 as isize);
+                true
+            }
             Some(PlacementMode::BehindHost) => aligned_behind_host(source, host_rect),
             Some(PlacementMode::OffScreen) => parked(source),
             None => false,
@@ -1541,8 +1645,191 @@ fn the_picture_in(client_width: i32, client_height: i32, picture: (i32, i32)) ->
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PlacementMode {
+    InvisibleLayered,
     BehindHost,
     OffScreen,
+}
+
+/// True when `WS_EX_LAYERED` + `LWA_ALPHA = 1` is safe for a window with `ex_style`.
+/// Rejects DirectComposition/WinUI 3 (`WS_EX_NOREDIRECTIONBITMAP`) and `UpdateLayeredWindow` windows.
+fn can_use_invisible_layered(ex_style: u32, layered_attr_ok: Option<bool>) -> bool {
+    if (ex_style & WS_EX_NOREDIRECTIONBITMAP.0) != 0 {
+        return false;
+    }
+    if (ex_style & WS_EX_LAYERED.0) != 0 && layered_attr_ok == Some(false) {
+        return false;
+    }
+    true
+}
+
+fn layered_alpha_flags(source: HWND) -> Option<(u8, LAYERED_WINDOW_ATTRIBUTES_FLAGS)> {
+    let mut key = COLORREF(0);
+    let mut alpha = 0u8;
+    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+    unsafe {
+        GetLayeredWindowAttributes(source, Some(&mut key), Some(&mut alpha), Some(&mut flags))
+    }
+    .is_ok()
+    .then_some((alpha, flags))
+}
+
+/// Apply `WS_EX_LAYERED` + `LWA_ALPHA = 1` on a visible source; reverts immediately if rejected.
+fn make_source_invisible(source: isize) -> bool {
+    if source == 0 {
+        return false;
+    }
+    let hwnd = HWND(source as *mut _);
+    // Must be visible first: applying LWA_ALPHA before first show can be ignored by Windows.
+    if !unsafe { IsWindow(hwnd) }.as_bool() || !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+        return false;
+    }
+    let original_ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let ex_u32 = original_ex as u32;
+    let layered_attr_ok =
+        ((ex_u32 & WS_EX_LAYERED.0) != 0).then(|| layered_alpha_flags(hwnd).is_some());
+    if !can_use_invisible_layered(ex_u32, layered_attr_ok) {
+        return false;
+    }
+
+    let _ = unsafe {
+        SetWindowLongPtrW(
+            hwnd,
+            GWL_EXSTYLE,
+            original_ex | (INVISIBLE_EX_STYLE as isize),
+        )
+    };
+    let _ = unsafe {
+        SetWindowPos(
+            hwnd,
+            HWND_BOTTOM,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        )
+    };
+    let applied =
+        unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA) };
+    let verified = applied.is_ok()
+        && layered_alpha_flags(hwnd)
+            .is_some_and(|(alpha, flags)| (flags.0 & LWA_ALPHA.0) != 0 && alpha == INVISIBLE_ALPHA);
+    if !verified {
+        // Revert immediately to prevent black-band artifact on windows that reject LWA_ALPHA.
+        let _ = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, original_ex) };
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
+        return false;
+    }
+    true
+}
+
+/// Re-assert `INVISIBLE_EX_STYLE` + `LWA_ALPHA = 1` + `HWND_BOTTOM` if the app stripped or reset them.
+fn keep_source_invisible(source: isize) {
+    if source == 0 {
+        return;
+    }
+    let hwnd = HWND(source as *mut _);
+    if !unsafe { IsWindow(hwnd) }.as_bool() {
+        return;
+    }
+    let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let missing_style = (ex as u32 & INVISIBLE_EX_STYLE) != INVISIBLE_EX_STYLE;
+    let alpha_ok = !missing_style
+        && layered_alpha_flags(hwnd)
+            .is_some_and(|(alpha, flags)| (flags.0 & LWA_ALPHA.0) != 0 && alpha == INVISIBLE_ALPHA);
+    if alpha_ok {
+        return;
+    }
+    if missing_style {
+        let _ = unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | (INVISIBLE_EX_STYLE as isize)) };
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
+    } else {
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND_BOTTOM,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+            )
+        };
+    }
+    let _ = unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), INVISIBLE_ALPHA, LWA_ALPHA) };
+}
+
+/// Position `window` on-monitor at `(host_x, host_y, ask_w, ask_h)` in `InvisibleLayered` mode.
+/// Never flings off-screen even if min-size floor exceeds `host_rect`.
+fn place_invisible_layered(
+    window: HWND,
+    host_rect: (i32, i32, i32, i32),
+    window_mode: CustomWindowMode,
+    the_ask: &mut Option<(i32, i32)>,
+) {
+    keep_source_invisible(window.0 as isize);
+    let (hx, hy, hw, hh) = host_rect;
+    let (tw, th) = the_ask.unwrap_or((hw, hh));
+    let insets = if window_mode == CustomWindowMode::Normal {
+        dwm_frame_insets(window)
+    } else {
+        (0, 0, 0, 0)
+    };
+    let (wx, wy, ww, wh) = behind_host_window_rect((hx, hy, tw, th), insets);
+
+    if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
+        let placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            flags: WINDOWPLACEMENT_FLAGS(0),
+            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+            rcNormalPosition: workspace_rect_for_screen(RECT {
+                left: wx,
+                top: wy,
+                right: wx + ww,
+                bottom: wy + wh,
+            }),
+            ..Default::default()
+        };
+        let _ = unsafe { SetWindowPlacement(window, &placement) };
+    }
+
+    let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+
+    // If app's min-size floor refused `(tw, th)`, resize on-monitor to `the_ask_for` keeping aspect ratio.
+    let taken = source_size(window, window_mode);
+    let ask = the_ask_for((hw, hh), taken);
+    if ask != (tw, th) {
+        *the_ask = (ask != (hw, hh)).then_some(ask);
+        let (wx2, wy2, ww2, wh2) = behind_host_window_rect((hx, hy, ask.0, ask.1), insets);
+        let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE) };
+    }
+
+    if !unsafe { IsWindowVisible(window) }.as_bool() {
+        let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+    }
+    keep_source_invisible(window.0 as isize);
+    let _ = unsafe { InvalidateRect(window, None, false) };
+    let _ = unsafe { UpdateWindow(window) };
 }
 
 fn virtual_screen() -> RECT {
@@ -1891,18 +2178,22 @@ fn park_offscreen(window: HWND, width: i32, height: i32) {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SnapAction {
+    KeepInvisibleLayered,
     KeepOffScreen,
     ReparkOffScreen,
     TryBehindHost,
 }
 
-/// Never bounce an `OffScreen` window back through `BehindHost` unless `host_rect` grew.
+/// Never bounce an `InvisibleLayered` or `OffScreen` window back through `BehindHost` (unless `OffScreen` and `host_rect` grew).
 fn decide_snap_action(
     current_mode: Option<PlacementMode>,
     is_parked: bool,
     prev_host_rect: Option<(i32, i32, i32, i32)>,
     target_rect: (i32, i32, i32, i32),
 ) -> SnapAction {
+    if current_mode == Some(PlacementMode::InvisibleLayered) {
+        return SnapAction::KeepInvisibleLayered;
+    }
     let host_grew =
         prev_host_rect.is_some_and(|(_, _, pw, ph)| target_rect.2 > pw || target_rect.3 > ph);
     if current_mode == Some(PlacementMode::OffScreen) && !host_grew {
@@ -1928,6 +2219,11 @@ fn snap_source(
 ) -> PlacementMode {
     let (current_mode, prev_host_rect) = prior.unzip();
     match decide_snap_action(current_mode, parked(source), prev_host_rect, target_rect) {
+        SnapAction::KeepInvisibleLayered => {
+            place_invisible_layered(source, target_rect, window_mode, the_ask);
+            restore_foreground(previous_foreground, processes);
+            PlacementMode::InvisibleLayered
+        }
         SnapAction::KeepOffScreen => PlacementMode::OffScreen,
         SnapAction::ReparkOffScreen => {
             let ask = the_ask.unwrap_or_else(|| {
@@ -3465,5 +3761,56 @@ mod tests {
         )));
         assert!(!is_packaged_broker_path(Path::new(r"tools\WindowsApps")));
         assert!(!is_packaged_broker_path(Path::new("viewer.exe")));
+    }
+
+    #[test]
+    fn can_use_invisible_layered_rejects_noredirectionbitmap_and_update_layered_window() {
+        // DirectComposition / WinUI 3 (WS_EX_NOREDIRECTIONBITMAP) must be rejected.
+        assert!(!can_use_invisible_layered(
+            WS_EX_NOREDIRECTIONBITMAP.0,
+            None
+        ));
+        assert!(!can_use_invisible_layered(
+            WS_EX_NOREDIRECTIONBITMAP.0 | WS_EX_LAYERED.0,
+            Some(true)
+        ));
+        // Already WS_EX_LAYERED via UpdateLayeredWindow (GetLayeredWindowAttributes fails) rejected.
+        assert!(!can_use_invisible_layered(WS_EX_LAYERED.0, Some(false)));
+        // Normal window and LWA_ALPHA-compatible layered window accepted.
+        assert!(can_use_invisible_layered(0, None));
+        assert!(can_use_invisible_layered(WS_EX_TOOLWINDOW.0, None));
+        assert!(can_use_invisible_layered(WS_EX_LAYERED.0, Some(true)));
+    }
+
+    #[test]
+    fn invisible_layered_mode_stays_on_monitor_across_host_moves_and_resizes() {
+        let host = (200, 120, 640, 480);
+        assert_eq!(
+            decide_snap_action(
+                Some(PlacementMode::InvisibleLayered),
+                false,
+                Some(host),
+                host
+            ),
+            SnapAction::KeepInvisibleLayered
+        );
+        assert_eq!(
+            decide_snap_action(
+                Some(PlacementMode::InvisibleLayered),
+                false,
+                Some(host),
+                (300, 200, 900, 700)
+            ),
+            SnapAction::KeepInvisibleLayered
+        );
+        assert_eq!(
+            decide_snap_action(
+                Some(PlacementMode::InvisibleLayered),
+                true,
+                Some(host),
+                (100, 80, 320, 240)
+            ),
+            SnapAction::KeepInvisibleLayered
+        );
     }
 }
