@@ -95,7 +95,6 @@ impl CustomWindowMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CustomCaptureTechnique {
     /// On-monitor `WS_EX_LAYERED` + `LWA_ALPHA = 1` + DWM thumbnail (auto-falls back when unsupported).
-    #[default]
     InvisibleLayered,
     /// On-monitor behind opaque `host` at `HWND_BOTTOM` + DWM thumbnail.
     BehindHost,
@@ -106,6 +105,7 @@ pub enum CustomCaptureTechnique {
     /// Staged at `(-10000, -10000)` until settled, then revealed on-monitor with zero flash.
     OffscreenStaged,
     /// In-process `WH_CBT` + `WH_CALLWNDPROC` hook with `DWMWA_CLOAK` + synchronous rect lock.
+    #[default]
     InProcessHook,
 }
 
@@ -757,8 +757,17 @@ mod tests {
     }
 
     #[test]
-    fn capture_technique_round_trips_and_defaults_to_invisible_layered() {
+    fn capture_technique_round_trips_and_defaults_to_in_process_hook() {
+        assert_eq!(
+            CustomCaptureTechnique::default(),
+            CustomCaptureTechnique::InProcessHook
+        );
+        assert_eq!(
+            CustomPreset::named("Fresh").capture_technique,
+            CustomCaptureTechnique::InProcessHook
+        );
         let cases = [
+            (CustomCaptureTechnique::InProcessHook, "in_process_hook"),
             (
                 CustomCaptureTechnique::InvisibleLayered,
                 "invisible_layered",
@@ -767,7 +776,6 @@ mod tests {
             (CustomCaptureTechnique::OffScreen, "off_screen"),
             (CustomCaptureTechnique::DirectWindow, "direct_window"),
             (CustomCaptureTechnique::OffscreenStaged, "offscreen_staged"),
-            (CustomCaptureTechnique::InProcessHook, "in_process_hook"),
         ];
         for (tech, expected_str) in cases {
             let mut preset = CustomPreset::named("TechTest");
@@ -788,7 +796,7 @@ mod tests {
             assert_eq!(read.custom_presets[0].capture_technique, tech);
         }
 
-        // Missing or unknown value falls back to InvisibleLayered.
+        // Missing or unknown value falls back to InProcessHook.
         let mut legacy = Ini::new();
         legacy.set("custom:missing", "name", Some("Missing".into()));
         legacy.set("custom:missing", "exe", Some("a.exe".into()));
@@ -802,10 +810,7 @@ mod tests {
         read_all(&legacy, &mut read);
         assert_eq!(read.custom_presets.len(), 2);
         for p in &read.custom_presets {
-            assert_eq!(
-                p.capture_technique,
-                CustomCaptureTechnique::InvisibleLayered
-            );
+            assert_eq!(p.capture_technique, CustomCaptureTechnique::InProcessHook);
         }
     }
 }
