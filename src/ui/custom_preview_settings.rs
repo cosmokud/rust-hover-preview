@@ -14,14 +14,15 @@ use windows::Win32::Graphics::Dwm::{
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreatePen,
-    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, Ellipse, EndPaint, FillRect, GetDC,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW,
+    CreatePen, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetDC,
     GetStockObject, GetTextMetricsW, InvalidateRect, LineTo, MoveToEx, RedrawWindow, ReleaseDC,
     RoundRect, ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT,
-    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, HGDIOBJ,
-    NULL_BRUSH, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, RDW_ALLCHILDREN,
-    RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, SRCCOPY, TEXTMETRICW, TRANSPARENT,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
+    DIB_RGB_COLORS, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
+    FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, HGDIOBJ, NULL_BRUSH, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE,
+    RDW_UPDATENOW, SRCCOPY, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
@@ -41,25 +42,25 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, CallWindowProcW, CreateWindowExW, DefWindowProcW, DeferWindowPos,
     DestroyWindow, DispatchMessageW, EndDeferWindowPos, GetClientRect, GetDlgItem, GetMessageTime,
-    GetMessageW, GetNextDlgTabItem, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
-    GetWindowTextLengthW, GetWindowTextW, IsWindow, IsZoomed, KillTimer, LoadCursorW, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW,
-    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL,
-    CB_GETDROPPEDSTATE, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE,
-    ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
-    HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE,
-    LBS_HASSTRINGS, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_GETTEXT,
+    GetMessageW, GetNextDlgTabItem, GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW,
+    GetWindowTextW, IsWindow, IsZoomed, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
+    SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
+    CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE, CB_GETLBTEXT,
+    CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA,
+    GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT,
+    HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS,
+    LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_GETTEXT,
     LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS,
     SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-    SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CANCELMODE,
+    SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE,
+    SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CANCELMODE,
     WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
     WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND,
     WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCDESTROY,
-    WM_NCHITTEST, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
-    WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER,
+    WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
     WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
     WS_VISIBLE, WS_VSCROLL,
 };
@@ -80,6 +81,7 @@ static SLIDER_CLASS_REGISTERED: Once = Once::new();
 static TOGGLE_CLASS_REGISTERED: Once = Once::new();
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const PRF_CLIENT: isize = 0x0004;
 
 const WM_BRING_FORWARD: u32 = WM_APP + 17;
 const WM_THEME_CHANGED: u32 = WM_APP + 18;
@@ -181,6 +183,7 @@ struct Palette {
     field_disabled: COLORREF,
     border: COLORREF,
     ink: COLORREF,
+    label: COLORREF,
     muted: COLORREF,
     accent: COLORREF,
     accent_hover: COLORREF,
@@ -292,6 +295,12 @@ impl Palette {
             rgb(0xFF, 0xFF, 0xFF)
         };
 
+        let label = if dark {
+            rgb(0xD4, 0xDA, 0xE4)
+        } else {
+            rgb(0x23, 0x26, 0x2E)
+        };
+
         Self {
             page,
             titlebar,
@@ -300,7 +309,8 @@ impl Palette {
             field_disabled,
             border,
             ink,
-            muted: mix(ink, page, 45),
+            label,
+            muted: mix(ink, page, 32),
             accent,
             accent_hover,
             accent_press,
@@ -328,6 +338,7 @@ struct LayoutRects {
     btn_min: RECT,
     btn_max: RECT,
     btn_close: RECT,
+    list_rect: RECT,
     edit_boxes: [(i32, RECT); 6],
 }
 
@@ -421,6 +432,11 @@ struct ComboSubclass {
     parent: HWND,
     hovered: bool,
     tracking: bool,
+}
+
+struct ListSubclass {
+    orig_proc: WNDPROC,
+    parent: HWND,
 }
 
 struct SliderState {
@@ -937,7 +953,7 @@ unsafe extern "system" fn window_proc(
             } else if ctl == status_hwnd {
                 (state.palette.page, state.brush_page, state.palette.muted)
             } else {
-                (state.palette.card, state.brush_card, state.palette.muted)
+                (state.palette.card, state.brush_card, state.palette.label)
             };
             unsafe {
                 SetTextColor(hdc, ink);
@@ -1168,40 +1184,29 @@ unsafe fn paint_window(state: &State, hdc: HDC) {
             );
         }
 
-        // Border & focus accent ring around LISTBOX.
-        if let Ok(ctrl) = GetDlgItem(state.hwnd, ID_LIST) {
-            let mut r = RECT::default();
-            if GetWindowRect(ctrl, &mut r).is_ok() {
-                let mut tl = POINT {
-                    x: r.left,
-                    y: r.top,
-                };
-                let mut br = POINT {
-                    x: r.right,
-                    y: r.bottom,
-                };
-                let _ = ScreenToClient(state.hwnd, &mut tl);
-                let _ = ScreenToClient(state.hwnd, &mut br);
-                let is_focused = ctrl == focused;
-                let _ = SelectObject(
-                    hdc,
-                    HGDIOBJ(if is_focused {
-                        focus_pen.0
-                    } else {
-                        border_pen.0
-                    }),
-                );
-                let _ = SelectObject(hdc, HGDIOBJ(state.brush_field.0));
-                let _ = RoundRect(
-                    hdc,
-                    tl.x - 1,
-                    tl.y - 1,
-                    br.x + 1,
-                    br.y + 1,
-                    field_radius,
-                    field_radius,
-                );
-            }
+        // Border & focus accent ring around LISTBOX (uses lay_out rect to stay locked during resize).
+        let lr = state.rects.list_rect;
+        if lr.right > lr.left && lr.bottom > lr.top {
+            let ctrl = GetDlgItem(state.hwnd, ID_LIST).unwrap_or_default();
+            let is_focused = !ctrl.0.is_null() && ctrl == focused;
+            let _ = SelectObject(
+                hdc,
+                HGDIOBJ(if is_focused {
+                    focus_pen.0
+                } else {
+                    border_pen.0
+                }),
+            );
+            let _ = SelectObject(hdc, HGDIOBJ(state.brush_field.0));
+            let _ = RoundRect(
+                hdc,
+                lr.left - 1,
+                lr.top - 1,
+                lr.right + 1,
+                lr.bottom + 1,
+                field_radius,
+                field_radius,
+            );
         }
 
         let _ = SelectObject(hdc, old_pen);
@@ -1357,6 +1362,7 @@ unsafe fn build(hwnd: HWND) -> State {
             btn_min: RECT::default(),
             btn_max: RECT::default(),
             btn_close: RECT::default(),
+            list_rect: RECT::default(),
             edit_boxes: EDIT_IDS.map(|id| (id, RECT::default())),
         },
     };
@@ -1377,7 +1383,8 @@ unsafe fn build(hwnd: HWND) -> State {
                     | WS_VSCROLL.0
                     | LBS_NOTIFY as u32
                     | LBS_OWNERDRAWFIXED as u32
-                    | LBS_HASSTRINGS as u32,
+                    | LBS_HASSTRINGS as u32
+                    | LBS_NOINTEGRALHEIGHT as u32,
             ),
             ID_LIST,
         )
@@ -1466,6 +1473,18 @@ unsafe fn build(hwnd: HWND) -> State {
             }
         }
     }
+    for index in 0..7 {
+        if let Ok(lbl) = unsafe { GetDlgItem(hwnd, ID_LABEL_BASE + index) } {
+            unsafe {
+                SendMessageW(
+                    lbl,
+                    WM_SETFONT,
+                    WPARAM(state.font_bold.0 as usize),
+                    LPARAM(1),
+                );
+            }
+        }
+    }
     for stepper in [scaling_up, scaling_dn, vol_up, vol_dn] {
         if !stepper.0.is_null() {
             unsafe {
@@ -1505,6 +1524,7 @@ unsafe fn build(hwnd: HWND) -> State {
             w!("")
         };
         let _ = unsafe { SetWindowTheme(list, theme, None) };
+        unsafe { install_list_subclass(list, hwnd) };
     }
 
     let window_mode_combo = unsafe { GetDlgItem(hwnd, ID_WINDOW_MODE) }.unwrap_or_default();
@@ -2200,6 +2220,273 @@ unsafe extern "system" fn combo_subclass_proc(
     unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
 }
 
+unsafe fn install_list_subclass(list: HWND, parent: HWND) {
+    let orig = unsafe {
+        SetWindowLongPtrW(
+            list,
+            GWLP_WNDPROC,
+            list_subclass_proc as *const () as usize as isize,
+        )
+    };
+    let orig_proc: WNDPROC = unsafe { std::mem::transmute(orig) };
+    let data = Box::into_raw(Box::new(ListSubclass { orig_proc, parent }));
+    unsafe { SetWindowLongPtrW(list, GWLP_USERDATA, data as isize) };
+}
+
+// Double-buffers LISTBOX client area & suppresses unbuffered WM_ERASEBKGND to eliminate resize bounce/flicker.
+unsafe extern "system" fn list_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut ListSubclass;
+    let Some(sub) = (unsafe { raw.as_mut() }) else {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+    let orig_proc = sub.orig_proc;
+    let parent = sub.parent;
+
+    match msg {
+        WM_ERASEBKGND => LRESULT(1),
+        WM_PAINT => {
+            unsafe {
+                paint_double_buffered(hwnd, |hdc, rc| {
+                    if let Some(state) = state_of(parent) {
+                        FillRect(hdc, &rc, state.brush_field);
+                    }
+                    let _ = CallWindowProcW(
+                        orig_proc,
+                        hwnd,
+                        WM_PRINTCLIENT,
+                        WPARAM(hdc.0 as usize),
+                        LPARAM(PRF_CLIENT),
+                    );
+                });
+            }
+            LRESULT(0)
+        }
+        WM_SIZE => {
+            let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+            let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            res
+        }
+        WM_NCDESTROY => unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            drop(Box::from_raw(raw));
+            CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam)
+        },
+        _ => unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// Signed distance to circle centered at `(cx, cy)` with radius `r` (<0 inside, >0 outside).
+fn sd_circle(px: f32, py: f32, cx: f32, cy: f32, r: f32) -> f32 {
+    (px - cx).hypot(py - cy) - r
+}
+
+/// Signed distance to axis-aligned rounded box centered at `(cx, cy)` with half-extents `(hw, hh)` and corner radius `r`.
+fn sd_rounded_box(px: f32, py: f32, cx: f32, cy: f32, hw: f32, hh: f32, r: f32) -> f32 {
+    let r = r.min(hw).min(hh).max(0.0);
+    let qx = (px - cx).abs() - (hw - r);
+    let qy = (py - cy).abs() - (hh - r);
+    qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r
+}
+
+/// Smooth 1px anti-aliased coverage in `0.0..=1.0` from signed distance `d`.
+fn aa_coverage(d: f32) -> f32 {
+    (0.5 - d).clamp(0.0, 1.0)
+}
+
+fn colorref_rgb(c: COLORREF) -> (u8, u8, u8) {
+    (
+        (c.0 & 0xFF) as u8,
+        ((c.0 >> 8) & 0xFF) as u8,
+        ((c.0 >> 16) & 0xFF) as u8,
+    )
+}
+
+fn pack_bgra(r: u8, g: u8, b: u8) -> u32 {
+    u32::from(b) | (u32::from(g) << 8) | (u32::from(r) << 16) | 0xFF00_0000
+}
+
+/// 32-bit BGRA top-down DIB canvas for subpixel SDF anti-aliased controls.
+struct AaSurface {
+    w: i32,
+    h: i32,
+    pixels: Vec<u32>,
+}
+
+impl AaSurface {
+    fn new(w: i32, h: i32, bg: COLORREF) -> Self {
+        let w = w.max(1);
+        let h = h.max(1);
+        let (r, g, b) = colorref_rgb(bg);
+        Self {
+            w,
+            h,
+            pixels: vec![pack_bgra(r, g, b); (w as usize) * (h as usize)],
+        }
+    }
+
+    #[inline]
+    fn blend(&mut self, x: i32, y: i32, col: COLORREF, alpha: f32) {
+        if alpha <= 0.0 || x < 0 || y < 0 || x >= self.w || y >= self.h {
+            return;
+        }
+        let idx = (y as usize) * (self.w as usize) + (x as usize);
+        let (sr, sg, sb) = colorref_rgb(col);
+        if alpha >= 1.0 {
+            self.pixels[idx] = pack_bgra(sr, sg, sb);
+            return;
+        }
+        let dst = self.pixels[idx];
+        let db = (dst & 0xFF) as f32;
+        let dg = ((dst >> 8) & 0xFF) as f32;
+        let dr = ((dst >> 16) & 0xFF) as f32;
+        let inv = 1.0 - alpha;
+        let r = (f32::from(sr) * alpha + dr * inv + 0.5) as u8;
+        let g = (f32::from(sg) * alpha + dg * inv + 0.5) as u8;
+        let b = (f32::from(sb) * alpha + db * inv + 0.5) as u8;
+        self.pixels[idx] = pack_bgra(r, g, b);
+    }
+
+    fn fill_rounded_box(
+        &mut self,
+        bounds: [f32; 4],
+        radius: f32,
+        fill: COLORREF,
+        border: Option<(COLORREF, f32)>,
+    ) {
+        let [x0, y0, x1, y1] = bounds;
+        let cx = (x0 + x1) * 0.5;
+        let cy = (y0 + y1) * 0.5;
+        let hw = ((x1 - x0) * 0.5).max(0.0);
+        let hh = ((y1 - y0) * 0.5).max(0.0);
+        let ix0 = (x0.floor() as i32 - 1).max(0);
+        let iy0 = (y0.floor() as i32 - 1).max(0);
+        let ix1 = (x1.ceil() as i32 + 1).min(self.w);
+        let iy1 = (y1.ceil() as i32 + 1).min(self.h);
+
+        for y in iy0..iy1 {
+            let py = y as f32 + 0.5;
+            for x in ix0..ix1 {
+                let px = x as f32 + 0.5;
+                let d = sd_rounded_box(px, py, cx, cy, hw, hh, radius);
+                let outer = aa_coverage(d);
+                if outer <= 0.0 {
+                    continue;
+                }
+                if let Some((bcol, bw)) = border {
+                    self.blend(x, y, bcol, outer);
+                    let inner = aa_coverage(d + bw);
+                    if inner > 0.0 {
+                        self.blend(x, y, fill, inner);
+                    }
+                } else {
+                    self.blend(x, y, fill, outer);
+                }
+            }
+        }
+    }
+
+    fn fill_soft_circle(&mut self, cx: f32, cy: f32, r: f32, col: COLORREF, max_alpha: f32) {
+        let ix0 = ((cx - r).floor() as i32 - 1).max(0);
+        let iy0 = ((cy - r).floor() as i32 - 1).max(0);
+        let ix1 = ((cx + r).ceil() as i32 + 1).min(self.w);
+        let iy1 = ((cy + r).ceil() as i32 + 1).min(self.h);
+        for y in iy0..iy1 {
+            let py = y as f32 + 0.5;
+            for x in ix0..ix1 {
+                let px = x as f32 + 0.5;
+                let dist = (px - cx).hypot(py - cy);
+                if dist < r {
+                    let t = 1.0 - (dist / r);
+                    self.blend(x, y, col, t * t * max_alpha);
+                }
+            }
+        }
+    }
+
+    fn fill_circle(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        r: f32,
+        fill: COLORREF,
+        border: Option<(COLORREF, f32)>,
+        shadow_alpha: f32,
+    ) {
+        if shadow_alpha > 0.0 {
+            self.fill_soft_circle(cx, cy + 1.0, r + 2.2, rgb(0, 0, 0), shadow_alpha);
+        }
+        let ix0 = ((cx - r).floor() as i32 - 1).max(0);
+        let iy0 = ((cy - r).floor() as i32 - 1).max(0);
+        let ix1 = ((cx + r).ceil() as i32 + 1).min(self.w);
+        let iy1 = ((cy + r).ceil() as i32 + 1).min(self.h);
+
+        for y in iy0..iy1 {
+            let py = y as f32 + 0.5;
+            for x in ix0..ix1 {
+                let px = x as f32 + 0.5;
+                let d = sd_circle(px, py, cx, cy, r);
+                let outer = aa_coverage(d);
+                if outer <= 0.0 {
+                    continue;
+                }
+                if let Some((bcol, bw)) = border {
+                    self.blend(x, y, bcol, outer);
+                    let inner = aa_coverage(d + bw);
+                    if inner > 0.0 {
+                        self.blend(x, y, fill, inner);
+                    }
+                } else {
+                    self.blend(x, y, fill, outer);
+                }
+            }
+        }
+    }
+
+    unsafe fn blit_to(&self, dst_dc: HDC, dst_x: i32, dst_y: i32) {
+        let bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: self.w,
+                biHeight: -self.h,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+        let Ok(dib) =
+            (unsafe { CreateDIBSection(dst_dc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) })
+        else {
+            return;
+        };
+        if !bits.is_null() {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    self.pixels.as_ptr(),
+                    bits as *mut u32,
+                    self.pixels.len(),
+                );
+            }
+            let src_dc = unsafe { CreateCompatibleDC(dst_dc) };
+            if !src_dc.is_invalid() {
+                let old = unsafe { SelectObject(src_dc, HGDIOBJ(dib.0)) };
+                let _ =
+                    unsafe { BitBlt(dst_dc, dst_x, dst_y, self.w, self.h, src_dc, 0, 0, SRCCOPY) };
+                let _ = unsafe { SelectObject(src_dc, old) };
+                let _ = unsafe { DeleteDC(src_dc) };
+            }
+        }
+        let _ = unsafe { DeleteObject(HGDIOBJ(dib.0)) };
+    }
+}
+
 fn slider_value_from_x(x: i32, track_left: i32, track_right: i32) -> u32 {
     let span = (track_right - track_left).max(1);
     let clamped = (x - track_left).clamp(0, span);
@@ -2260,7 +2547,7 @@ unsafe extern "system" fn slider_proc(
     let track_bounds = |hwnd: HWND, dpi: i32| -> (RECT, i32, i32) {
         let mut rc = RECT::default();
         let _ = unsafe { GetClientRect(hwnd, &mut rc) };
-        let pad = scale(8, dpi);
+        let pad = scale(11, dpi);
         let left = pad;
         let right = (rc.right - pad).max(left + 1);
         (rc, left, right)
@@ -2288,79 +2575,79 @@ unsafe extern "system" fn slider_proc(
         WM_SLIDER_GET_VALUE => LRESULT(sl.value as isize),
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
-            let (p, card_brush) = match unsafe { state_of(sl.parent) } {
-                Some(state) => (state.palette, Some(state.brush_card)),
-                None => (Palette::of(theme_now()), None),
+            let p = match unsafe { state_of(sl.parent) } {
+                Some(state) => state.palette,
+                None => Palette::of(theme_now()),
             };
             let (_, track_left, track_right) = track_bounds(hwnd, dpi);
             let enabled = unsafe { IsWindowEnabled(hwnd) }.as_bool();
             let focused = enabled && unsafe { GetFocus() } == hwnd;
-            let track_h = scale(4, dpi).max(3);
-            let thumb_x = slider_thumb_x(sl.value, track_left, track_right);
-            let base_r = scale(6, dpi).max(5);
+            let dpi_s = dpi as f32 / 96.0;
+            let track_h = (4.0 * dpi_s).max(3.0);
+            let thumb_x = slider_thumb_x(sl.value, track_left, track_right) as f32;
+            let base_r = (6.0 * dpi_s).max(5.0);
             let thumb_r = if enabled && (sl.dragging || sl.hovered) {
-                base_r + 1
+                base_r + 1.0 * dpi_s
             } else {
                 base_r
             };
 
             unsafe {
                 paint_double_buffered(hwnd, |hdc, rc| {
-                    let cy = (rc.top + rc.bottom) / 2;
-                    let track_top = cy - track_h / 2;
-                    let track_bot = track_top + track_h;
+                    let w = (rc.right - rc.left).max(1);
+                    let h = (rc.bottom - rc.top).max(1);
+                    let cy = h as f32 * 0.5;
+                    let half_h = track_h * 0.5;
+                    let mut surface = AaSurface::new(w, h, p.card);
 
-                    if let Some(cb) = card_brush {
-                        FillRect(hdc, &rc, cb);
-                    } else {
-                        let b = CreateSolidBrush(p.card);
-                        FillRect(hdc, &rc, b);
-                        let _ = DeleteObject(HGDIOBJ(b.0));
-                    }
-
-                    // Unfilled track.
+                    // Unfilled pill rail.
                     let track_col = if enabled { p.slider_track } else { p.border };
-                    let tb = CreateSolidBrush(track_col);
-                    let tp = CreatePen(PS_SOLID, 1, track_col);
-                    let old_b = SelectObject(hdc, HGDIOBJ(tb.0));
-                    let old_p = SelectObject(hdc, HGDIOBJ(tp.0));
-                    let _ = RoundRect(
-                        hdc,
-                        track_left,
-                        track_top,
-                        track_right,
-                        track_bot,
-                        track_h,
-                        track_h,
+                    surface.fill_rounded_box(
+                        [
+                            track_left as f32,
+                            cy - half_h,
+                            track_right as f32,
+                            cy + half_h,
+                        ],
+                        half_h,
+                        track_col,
+                        None,
                     );
-                    let _ = SelectObject(hdc, old_b);
-                    let _ = SelectObject(hdc, old_p);
-                    let _ = DeleteObject(HGDIOBJ(tb.0));
-                    let _ = DeleteObject(HGDIOBJ(tp.0));
 
-                    // Active filled bar (0..value).
-                    if thumb_x > track_left {
+                    // Active filled rail (0..value).
+                    if thumb_x > track_left as f32 {
                         let active_col = if enabled { p.accent } else { p.muted };
-                        let ab = CreateSolidBrush(active_col);
-                        let ap = CreatePen(PS_SOLID, 1, active_col);
-                        let old_b = SelectObject(hdc, HGDIOBJ(ab.0));
-                        let old_p = SelectObject(hdc, HGDIOBJ(ap.0));
-                        let _ = RoundRect(
-                            hdc,
-                            track_left,
-                            track_top,
-                            thumb_x.min(track_right),
-                            track_bot,
-                            track_h,
-                            track_h,
+                        surface.fill_rounded_box(
+                            [
+                                track_left as f32,
+                                cy - half_h,
+                                thumb_x.min(track_right as f32),
+                                cy + half_h,
+                            ],
+                            half_h,
+                            active_col,
+                            None,
                         );
-                        let _ = SelectObject(hdc, old_b);
-                        let _ = SelectObject(hdc, old_p);
-                        let _ = DeleteObject(HGDIOBJ(ab.0));
-                        let _ = DeleteObject(HGDIOBJ(ap.0));
                     }
 
-                    // Circular thumb (bright highlight on hover/drag; subtle focus halo when focused).
+                    // Soft hover / drag / focus halo behind circular thumb.
+                    if enabled && (sl.dragging || sl.hovered || focused) {
+                        let halo_col = if focused && !sl.hovered && !sl.dragging {
+                            p.ink
+                        } else {
+                            p.accent
+                        };
+                        let halo_alpha = if sl.dragging { 0.30 } else { 0.22 };
+                        surface.fill_soft_circle(
+                            thumb_x,
+                            cy,
+                            thumb_r + 4.5 * dpi_s,
+                            halo_col,
+                            halo_alpha,
+                        );
+                    }
+
+                    // Anti-aliased circular thumb with subtle shadow & crisp ring.
                     let thumb_fill = if !enabled {
                         p.muted
                     } else if sl.dragging || sl.hovered {
@@ -2369,21 +2656,22 @@ unsafe extern "system" fn slider_proc(
                         p.accent
                     };
                     let thumb_border = if focused { p.ink } else { p.card };
-                    let cb = CreateSolidBrush(thumb_fill);
-                    let cp = CreatePen(PS_SOLID, 1, thumb_border);
-                    let old_b = SelectObject(hdc, HGDIOBJ(cb.0));
-                    let old_p = SelectObject(hdc, HGDIOBJ(cp.0));
-                    let _ = Ellipse(
-                        hdc,
-                        thumb_x - thumb_r,
-                        cy - thumb_r,
-                        thumb_x + thumb_r + 1,
-                        cy + thumb_r + 1,
+                    let shadow_alpha = if !enabled {
+                        0.0
+                    } else if p.dark {
+                        0.28
+                    } else {
+                        0.18
+                    };
+                    surface.fill_circle(
+                        thumb_x,
+                        cy,
+                        thumb_r,
+                        thumb_fill,
+                        Some((thumb_border, (1.25 * dpi_s).max(1.0))),
+                        shadow_alpha,
                     );
-                    let _ = SelectObject(hdc, old_b);
-                    let _ = SelectObject(hdc, old_p);
-                    let _ = DeleteObject(HGDIOBJ(cb.0));
-                    let _ = DeleteObject(HGDIOBJ(cp.0));
+                    surface.blit_to(hdc, 0, 0);
                 });
             }
             LRESULT(0)
@@ -2583,12 +2871,16 @@ unsafe extern "system" fn toggle_proc(
                         let _ = DeleteObject(HGDIOBJ(b.0));
                     }
 
-                    let track_w = scale(38, dpi);
-                    let track_h = scale(20, dpi);
-                    let track_left = rc.left;
-                    let track_top = (rc.top + rc.bottom - track_h) / 2;
-                    let track_right = track_left + track_w;
+                    let dpi_s = dpi as f32 / 96.0;
+                    let track_w = 38.0 * dpi_s;
+                    let track_h = 20.0 * dpi_s;
+                    let inset = 2.0;
+                    let dib_w = (track_w + inset * 2.0).ceil() as i32;
+                    let dib_h = (rc.bottom - rc.top).max(1);
+                    let track_top = (dib_h as f32 - track_h) * 0.5;
                     let track_bot = track_top + track_h;
+                    let track_left = inset;
+                    let track_right = track_left + track_w;
 
                     let (track_fill, track_border) = if !enabled {
                         (p.button_disabled, p.border)
@@ -2604,33 +2896,24 @@ unsafe extern "system" fn toggle_proc(
                         (fill, if focused { p.accent } else { p.border })
                     };
 
-                    let tb = CreateSolidBrush(track_fill);
-                    let tp = CreatePen(PS_SOLID, 1, track_border);
-                    let old_b = SelectObject(hdc, HGDIOBJ(tb.0));
-                    let old_p = SelectObject(hdc, HGDIOBJ(tp.0));
-                    let _ = RoundRect(
-                        hdc,
-                        track_left,
-                        track_top,
-                        track_right,
-                        track_bot,
-                        track_h,
-                        track_h,
+                    let mut surface = AaSurface::new(dib_w, dib_h, p.card);
+                    let border_w = (1.0 * dpi_s).max(1.0);
+                    surface.fill_rounded_box(
+                        [track_left, track_top, track_right, track_bot],
+                        track_h * 0.5,
+                        track_fill,
+                        Some((track_border, border_w)),
                     );
-                    let _ = SelectObject(hdc, old_b);
-                    let _ = SelectObject(hdc, old_p);
-                    let _ = DeleteObject(HGDIOBJ(tb.0));
-                    let _ = DeleteObject(HGDIOBJ(tp.0));
 
-                    // Circular thumb inside pill.
-                    let pad = scale(3, dpi).max(2);
-                    let thumb_d = (track_h - pad * 2).max(8);
-                    let thumb_left = if checked {
-                        track_right - pad - thumb_d
+                    // Anti-aliased circular knob inside pill with subtle drop shadow.
+                    let pad = (3.0 * dpi_s).max(2.0);
+                    let thumb_r = ((track_h - pad * 2.0) * 0.5).max(4.0);
+                    let thumb_cx = if checked {
+                        track_right - pad - thumb_r
                     } else {
-                        track_left + pad
+                        track_left + pad + thumb_r
                     };
-                    let thumb_top = track_top + pad;
+                    let thumb_cy = (track_top + track_bot) * 0.5;
                     let thumb_fill = if !enabled {
                         p.muted
                     } else if checked {
@@ -2638,33 +2921,41 @@ unsafe extern "system" fn toggle_proc(
                     } else {
                         p.ink
                     };
-                    let cb = CreateSolidBrush(thumb_fill);
-                    let cp = CreatePen(PS_SOLID, 1, thumb_fill);
-                    let old_b = SelectObject(hdc, HGDIOBJ(cb.0));
-                    let old_p = SelectObject(hdc, HGDIOBJ(cp.0));
-                    let _ = Ellipse(
-                        hdc,
-                        thumb_left,
-                        thumb_top,
-                        thumb_left + thumb_d,
-                        thumb_top + thumb_d,
+                    let shadow_alpha = if !enabled {
+                        0.0
+                    } else if p.dark {
+                        0.26
+                    } else {
+                        0.16
+                    };
+                    surface.fill_circle(
+                        thumb_cx,
+                        thumb_cy,
+                        thumb_r,
+                        thumb_fill,
+                        None,
+                        shadow_alpha,
                     );
-                    let _ = SelectObject(hdc, old_b);
-                    let _ = SelectObject(hdc, old_p);
-                    let _ = DeleteObject(HGDIOBJ(cb.0));
-                    let _ = DeleteObject(HGDIOBJ(cp.0));
+                    surface.blit_to(hdc, rc.left, rc.top);
 
                     // Status label ("Enabled" / "Disabled").
                     let label = if checked { "Enabled" } else { "Disabled" };
                     let mut label_w: Vec<u16> = label.encode_utf16().collect();
                     let mut text_rc = RECT {
-                        left: track_right + scale(10, dpi),
+                        left: rc.left + dib_w + scale(8, dpi),
                         top: rc.top,
                         right: rc.right,
                         bottom: rc.bottom,
                     };
                     SetBkMode(hdc, TRANSPARENT);
-                    SetTextColor(hdc, if !enabled || !checked { p.muted } else { p.ink });
+                    SetTextColor(
+                        hdc,
+                        if !enabled || !checked {
+                            p.muted
+                        } else {
+                            p.label
+                        },
+                    );
                     let old_f = if !font.0.is_null() {
                         Some(SelectObject(hdc, HGDIOBJ(font.0)))
                     } else {
@@ -2845,6 +3136,7 @@ fn compute_layout_rects(width: i32, height: i32, dpi: i32) -> LayoutRects {
         btn_min,
         btn_max,
         btn_close,
+        list_rect: RECT::default(),
         edit_boxes: EDIT_IDS.map(|id| (id, RECT::default())),
     }
 }
@@ -2904,13 +3196,15 @@ unsafe fn lay_out(state: &mut State) {
     let search_w = (s_w - add_w - scale(8, dpi)).max(scale(60, dpi));
     place_edit(ID_SEARCH, s_left, s_top, search_w, row);
     place(ID_ADD, s_left + search_w + scale(8, dpi), s_top, add_w, row);
-    place(
-        ID_LIST,
-        s_left,
-        s_top + row + gap,
-        s_w,
-        (sc.bottom - inner - (s_top + row + gap)).max(row),
-    );
+    let list_top = s_top + row + gap;
+    let list_h = (sc.bottom - inner - list_top).max(row);
+    state.rects.list_rect = RECT {
+        left: s_left,
+        top: list_top,
+        right: s_left + s_w,
+        bottom: list_top + list_h,
+    };
+    place(ID_LIST, s_left, list_top, s_w, list_h);
 
     // Editor card interior.
     let ec = state.rects.editor_card;
@@ -3039,8 +3333,9 @@ unsafe fn lay_out(state: &mut State) {
     );
 
     // Batch all child moves/resizes into a single atomic DeferWindowPos transaction.
+    // SWP_NOCOPYBITS prevents Windows from blitting stale shifted bits before repaint during drag-resize.
     let moves = moves.into_inner();
-    let flags = SWP_NOZORDER | SWP_NOACTIVATE;
+    let flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
     unsafe {
         if let Ok(mut hdwp) = BeginDeferWindowPos(moves.len() as i32) {
             let mut ok = true;
@@ -4125,5 +4420,83 @@ mod tests {
             Some(TitlebarButton::Minimize)
         );
         assert_eq!(rects.titlebar_button_at(20, 10), None);
+    }
+
+    fn relative_luminance(c: COLORREF) -> f32 {
+        let lin = |ch: u8| -> f32 {
+            let s = f32::from(ch) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let (r, g, b) = colorref_rgb(c);
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    fn contrast_ratio(a: COLORREF, b: COLORREF) -> f32 {
+        let la = relative_luminance(a);
+        let lb = relative_luminance(b);
+        let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn field_label_contrast_is_high_in_both_themes() {
+        let dark = Palette::of(TextTheme::Dark);
+        let dark_ratio = contrast_ratio(dark.label, dark.card);
+        assert!(
+            dark_ratio >= 7.0,
+            "One Dark Pro label/card contrast {dark_ratio:.2} < 7.0"
+        );
+
+        let light = Palette::of(TextTheme::Light);
+        let light_ratio = contrast_ratio(light.label, light.card);
+        assert!(
+            light_ratio >= 7.0,
+            "Atom One Light label/card contrast {light_ratio:.2} < 7.0"
+        );
+    }
+
+    #[test]
+    fn sdf_aa_coverage_is_smooth_across_circle_and_pill_boundaries() {
+        // Circle boundary: inside = 1.0, exact edge = 0.5, outside = 0.0, monotone across [-0.5, 0.5].
+        let c_in = aa_coverage(sd_circle(10.0, 10.0, 10.0, 10.0, 6.0));
+        let c_mid = aa_coverage(sd_circle(16.0, 10.0, 10.0, 10.0, 6.0));
+        let c_near_in = aa_coverage(sd_circle(15.75, 10.0, 10.0, 10.0, 6.0));
+        let c_near_out = aa_coverage(sd_circle(16.25, 10.0, 10.0, 10.0, 6.0));
+        let c_out = aa_coverage(sd_circle(17.0, 10.0, 10.0, 10.0, 6.0));
+        assert_eq!(c_in, 1.0);
+        assert!((c_near_in - 0.75).abs() < 1e-4);
+        assert!((c_mid - 0.5).abs() < 1e-4);
+        assert!((c_near_out - 0.25).abs() < 1e-4);
+        assert_eq!(c_out, 0.0);
+
+        // Rounded pill boundary: smooth transition across curved cap.
+        let p_in = aa_coverage(sd_rounded_box(20.0, 10.0, 20.0, 10.0, 19.0, 10.0, 10.0));
+        let p_edge = aa_coverage(sd_rounded_box(39.0, 10.0, 20.0, 10.0, 19.0, 10.0, 10.0));
+        let p_out = aa_coverage(sd_rounded_box(40.0, 10.0, 20.0, 10.0, 19.0, 10.0, 10.0));
+        assert_eq!(p_in, 1.0);
+        assert!((p_edge - 0.5).abs() < 1e-4);
+        assert_eq!(p_out, 0.0);
+    }
+
+    #[test]
+    fn preset_listbox_has_nointegralheight_style() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let list = GetDlgItem(hwnd, ID_LIST).unwrap_or_default();
+            let style =
+                GetWindowLongPtrW(list, windows::Win32::UI::WindowsAndMessaging::GWL_STYLE) as u32;
+            assert_ne!(
+                style & (LBS_NOINTEGRALHEIGHT as u32),
+                0,
+                "ID_LIST must have LBS_NOINTEGRALHEIGHT to prevent vertical resize bounce"
+            );
+            let _ = DestroyWindow(hwnd);
+        }
     }
 }
