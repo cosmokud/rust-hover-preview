@@ -2113,6 +2113,21 @@ unsafe extern "system" fn combo_subclass_proc(
                     let _ = DeleteObject(HGDIOBJ(border_pen.0));
 
                     // Selected item label.
+                    // **Drawn in the combo's own item box, not the client rect.** The item's own
+                    // `WM_DRAWITEM` paint starts at the combo's inner margin (x=3), so measuring
+                    // the inset from the client edge put this paint 3px left of that one — and
+                    // the two swap in and out on mouse-over, which is the label snapping left.
+                    let mut info = COMBOBOXINFO {
+                        cbSize: std::mem::size_of::<COMBOBOXINFO>() as u32,
+                        ..Default::default()
+                    };
+                    let item = if GetComboBoxInfo(hwnd, &mut info).is_ok()
+                        && info.rcItem.right > info.rcItem.left
+                    {
+                        info.rcItem
+                    } else {
+                        rc
+                    };
                     let sel = SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
                     if sel >= 0 {
                         let len =
@@ -2128,12 +2143,7 @@ unsafe extern "system" fn combo_subclass_proc(
                                 LPARAM(buf.as_mut_ptr() as isize),
                             );
                             buf.truncate(len);
-                            let mut text_rc = RECT {
-                                left: rc.left + scale(10, dpi),
-                                top: rc.top,
-                                right: (rc.right - scale(26, dpi)).max(rc.left + scale(10, dpi)),
-                                bottom: rc.bottom,
-                            };
+                            let mut text_rc = combo_label_rect(item, dpi);
                             SetBkMode(hdc, TRANSPARENT);
                             SetTextColor(hdc, if enabled { p.ink } else { p.muted });
                             let old_f = if !font.0.is_null() {
@@ -3080,6 +3090,21 @@ unsafe fn combo_add(combo: HWND, text: &str) {
 
 fn combo_drop_height(dpi: i32) -> i32 {
     scale(26, dpi) * 6
+}
+
+/// Where a closed combo's selected label is drawn, measured from the combo's own item box.
+///
+/// **Both paints of that label go through this** — the closed combo's own `WM_PAINT` and the
+/// item's `WM_DRAWITEM` — because they swap in and out on mouse-over, and measuring one from the
+/// client rect (3px wider than the item box on each side) made the label jump on hover.
+fn combo_label_rect(item: RECT, dpi: i32) -> RECT {
+    let left = item.left + scale(10, dpi);
+    RECT {
+        left,
+        top: item.top,
+        right: (item.right - scale(26, dpi)).max(left),
+        bottom: item.bottom,
+    }
 }
 
 fn compute_layout_rects(width: i32, height: i32, dpi: i32) -> LayoutRects {
@@ -4136,7 +4161,11 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         }
 
         let mut text: Vec<u16> = text.encode_utf16().collect();
-        let mut rect = item.rcItem;
+        let mut rect = if item.CtlID == ID_WINDOW_MODE as u32 || item.CtlID == ID_SCALING as u32 {
+            combo_label_rect(item.rcItem, dpi)
+        } else {
+            item.rcItem
+        };
         if list_preset_disabled {
             // Subtle "Off" pill tag on right side of disabled preset rows.
             let tag_w = scale(30, dpi);
@@ -4184,7 +4213,9 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         let flags = if is_button(item.CtlID) {
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
         } else {
-            rect.left += scale(10, dpi);
+            if item.CtlID != ID_WINDOW_MODE as u32 && item.CtlID != ID_SCALING as u32 {
+                rect.left += scale(10, dpi);
+            }
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS
         };
         DrawTextW(hdc, &mut text, &mut rect, flags);
@@ -4276,6 +4307,23 @@ mod tests {
 
             let _ = DestroyWindow(hwnd);
         }
+    }
+
+    #[test]
+    fn a_combo_label_is_measured_from_its_item_box() {
+        // The combo's item box starts 3px inside its client rect; both label paints must place
+        // the text from the item, or the label jumps 3px when they swap on mouse-over.
+        let item = RECT {
+            left: 3,
+            top: 3,
+            right: 472,
+            bottom: 29,
+        };
+        let label = combo_label_rect(item, 96);
+        assert_eq!(label.left, 13);
+        assert_eq!(label.top, item.top);
+        assert_eq!(label.bottom, item.bottom);
+        assert_eq!(label.right, item.right - 26);
     }
 
     #[test]
