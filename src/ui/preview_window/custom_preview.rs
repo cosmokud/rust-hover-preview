@@ -124,31 +124,32 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::{
     DwmQueryThumbnailSourceSize, DwmRegisterThumbnail, DwmUnregisterThumbnail,
-    DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION,
-    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
+    DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY,
+    DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FillRect, GetStockObject, RedrawWindow, HBRUSH, HGDIOBJ,
-    NULL_BRUSH, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE,
+    CreateSolidBrush, DeleteObject, FillRect, GetStockObject, RedrawWindow, UpdateWindow, HBRUSH,
+    HGDIOBJ, NULL_BRUSH, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, WaitForInputIdle,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, EnumWindows, GetClientRect, GetForegroundWindow,
-    GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
-    GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-    PostMessageW, RegisterClassExW, SendMessageTimeoutW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM,
-    SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
-    SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
-    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    CreateWindowExW, DefWindowProcW, EnumWindows, GetClassNameW, GetClientRect,
+    GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
+    GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow,
+    IsWindowVisible, IsZoomed, PostMessageW, RegisterClassExW, SendMessageTimeoutW,
+    SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow,
+    GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM, SMTO_ABORTIFHUNG, SMTO_NORMAL,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    WS_THICKFRAME,
 };
 
 use super::dimensions::{design_dimensions, picture_dimensions, vector_dimensions};
@@ -580,10 +581,17 @@ fn resolved(exe: &str) -> Option<String> {
         .map(|candidate| candidate.to_string_lossy().into_owned())
 }
 
-/// Spawn target normally (no SW_HIDE / CREATE_NO_WINDOW / stdio redirection) so GDI, WinUI,
-/// Electron, and UWP apps initialize and paint their surface properly.
+/// Spawn target normally with its exe folder as cwd so relative plugin/DLL loads work.
 fn launch(exe: &str, path: &Path) -> Option<Child> {
-    Command::new(exe).arg(path).spawn().ok()
+    let mut cmd = Command::new(exe);
+    cmd.arg(path);
+    if let Some(dir) = Path::new(exe)
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+    {
+        cmd.current_dir(dir);
+    }
+    cmd.spawn().ok()
 }
 
 /// The colour a backdrop names, as a host window fills it.
@@ -716,8 +724,12 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         return;
     }
 
-    // Wait briefly for target UI thread to finish initial WM_CREATE/WM_SHOWWINDOW/WM_PAINT
-    // before parking off-screen (avoids blank white surface in classic Win32 GDI apps).
+    // Wait for initial UI startup + file load before parking (avoids frame-0 blank white GDI surface).
+    wait_for_input_idle(launch.pid, 500);
+    let source_pid = pid_of(source);
+    if source_pid != 0 && source_pid != launch.pid {
+        wait_for_input_idle(source_pid, 250);
+    }
     let _ = unsafe {
         SendMessageTimeoutW(
             source,
@@ -725,7 +737,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             WPARAM(0),
             LPARAM(0),
             SMTO_ABORTIFHUNG | SMTO_NORMAL,
-            250,
+            500,
             None,
         )
     };
@@ -733,7 +745,6 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         return;
     }
 
-    let source_pid = pid_of(source);
     SOURCE.store(source.0 as isize, Ordering::SeqCst);
     SOURCE_PID.store(source_pid, Ordering::SeqCst);
     SOURCE_IS_NEW.store(
@@ -878,9 +889,9 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             };
             let properties =
                 thumbnail_properties(client.right, client.bottom, picture, window_mode);
-            let _ = unsafe { DwmUpdateThumbnailProperties(registered, &properties) };
-
-            if !SHOWN.load(Ordering::SeqCst) {
+            if unsafe { DwmUpdateThumbnailProperties(registered, &properties) }.is_ok()
+                && !SHOWN.load(Ordering::SeqCst)
+            {
                 SHOWN.store(true, Ordering::SeqCst);
                 let _ =
                     unsafe { PostMessageW(host, WM_THE_PICTURE_IS_READY, WPARAM(0), LPARAM(0)) };
@@ -898,7 +909,10 @@ fn thumbnail_properties(
     window_mode: CustomWindowMode,
 ) -> DWM_THUMBNAIL_PROPERTIES {
     DWM_THUMBNAIL_PROPERTIES {
-        dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_SOURCECLIENTAREAONLY,
+        dwFlags: DWM_TNP_RECTDESTINATION
+            | DWM_TNP_VISIBLE
+            | DWM_TNP_SOURCECLIENTAREAONLY
+            | DWM_TNP_OPACITY,
         rcDestination: the_picture_in(client_width, client_height, picture),
         rcSource: RECT::default(),
         opacity: 255,
@@ -1166,16 +1180,19 @@ fn virtual_screen() -> RECT {
     }
 }
 
-/// Positive off-screen origin past the right edge of every monitor, clamped inside i16 range so
-/// classic Win32 WM_MOVE lParam coordinates never wrap.
+/// Park origin with 1px intersecting the virtual screen's bottom-right corner so MonitorFromWindow
+/// succeeds and Win11 DWM keeps updating classic Win32 GDI redirection surfaces.
 fn parking_origin(vscreen: RECT) -> (i32, i32) {
-    let x = (vscreen.right + 1000).clamp(10000, 26000);
-    let y = vscreen.top.clamp(-16000, 16000);
+    let x = (vscreen.right - 1).clamp(-30000, 30000);
+    let y = (vscreen.bottom - 1).clamp(-30000, 30000);
     (x, y)
 }
 
+/// True when `rect` is at the 1px virtual-screen corner or completely off-screen.
 fn is_off_screen(rect: &RECT, vscreen: RECT) -> bool {
-    rect.left >= vscreen.right
+    let at_corner = rect.left >= vscreen.right - 2 && rect.top >= vscreen.bottom - 2;
+    at_corner
+        || rect.left >= vscreen.right
         || rect.right <= vscreen.left
         || rect.top >= vscreen.bottom
         || rect.bottom <= vscreen.top
@@ -1193,9 +1210,8 @@ fn parked(window: HWND) -> bool {
         && !unsafe { IsIconic(window) }.as_bool()
 }
 
-/// Move `window` off-screen WITHOUT calling SW_HIDE (hiding destroys DWM's redirection surface and
-/// leaves classic Win32 GDI apps blank white). Falls back to negative off-screen coords if the app
-/// clamps positive X.
+/// Move `window` to the 1px corner (sunk to HWND_BOTTOM, no activate, never SW_HIDE) so Win11 DWM
+/// keeps updating its GDI redirection surface. Falls back to negative off-screen if clamped.
 fn park(window: HWND, width: i32, height: i32) {
     let vscreen = virtual_screen();
     let (px, py) = parking_origin(vscreen);
@@ -1247,15 +1263,30 @@ fn park(window: HWND, width: i32, height: i32) {
         let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
     }
 
-    // Non-blocking repaint trigger so GDI apps redraw at the parked size.
+    // Flush GDI paint synchronously at the parked size so DWM captures a fresh frame.
     let _ = unsafe {
         RedrawWindow(
             window,
             None,
             None,
-            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_FRAME,
+            RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME,
         )
     };
+    let _ = unsafe { UpdateWindow(window) };
+}
+
+fn wait_for_input_idle(pid: u32, timeout_ms: u32) {
+    let Ok(process) = (unsafe {
+        OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        )
+    }) else {
+        return;
+    };
+    let _ = unsafe { WaitForInputIdle(process, timeout_ms) };
+    let _ = unsafe { CloseHandle(process) };
 }
 
 /// Restore previous foreground window (e.g. Explorer) if the spawned app stole focus.
@@ -1264,7 +1295,10 @@ fn restore_foreground(previous: isize, processes: &[u32]) {
         return;
     }
     let prev = HWND(previous as *mut _);
-    if !unsafe { IsWindow(prev) }.as_bool() {
+    if !unsafe { IsWindow(prev) }.as_bool()
+        || !unsafe { IsWindowVisible(prev) }.as_bool()
+        || !unsafe { IsWindowEnabled(prev) }.as_bool()
+    {
         return;
     }
     let current = unsafe { GetForegroundWindow() };
@@ -1357,7 +1391,10 @@ impl Census<'_> {
         }
 
         let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
-        let owned = unsafe { GetWindow(hwnd, GW_OWNER) }.is_ok_and(|owner| !owner.0.is_null());
+        let owner_hwnd = unsafe { GetWindow(hwnd, GW_OWNER) }
+            .ok()
+            .filter(|o| !o.0.is_null());
+        let owned = owner_hwnd.is_some();
         let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
         let mut rect = RECT::default();
         let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
@@ -1375,7 +1412,14 @@ impl Census<'_> {
                 self.shown = Some((area, hwnd));
             }
             if self.hide_others {
-                let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+                // Never SW_HIDE an owned #32770 modal dialog: hiding leaves `source` WS_DISABLED
+                // (white/frozen + Windows ding). Dismiss via WM_CLOSE instead.
+                let owned_by_keep = owner_hwnd.is_some_and(|o| o.0 as isize == self.keep);
+                if owned_by_keep && is_dialog_class(hwnd) {
+                    let _ = unsafe { PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) };
+                } else if !owned_by_keep {
+                    let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+                }
             }
         }
 
@@ -1461,6 +1505,13 @@ fn process_tree(pid: u32) -> Vec<u32> {
         }
     }
     found
+}
+
+/// True when `hwnd` is a standard Win32 dialog (`#32770`).
+fn is_dialog_class(hwnd: HWND) -> bool {
+    let mut buf = [0u16; 32];
+    let len = unsafe { GetClassNameW(hwnd, &mut buf) } as usize;
+    len == 6 && String::from_utf16_lossy(&buf[..len]) == "#32770"
 }
 
 /// The window's process.
@@ -1734,18 +1785,22 @@ mod tests {
     }
 
     #[test]
-    fn thumbnail_properties_sets_source_client_area_flag_for_both_modes() {
+    fn thumbnail_properties_sets_source_client_area_and_opacity_flags() {
         let normal = thumbnail_properties(400, 300, (400, 300), CustomWindowMode::Normal);
         assert_ne!(normal.dwFlags & DWM_TNP_SOURCECLIENTAREAONLY, 0);
+        assert_ne!(normal.dwFlags & DWM_TNP_OPACITY, 0);
+        assert_eq!(normal.opacity, 255);
         assert!(!normal.fSourceClientAreaOnly.as_bool());
 
         let borderless = thumbnail_properties(400, 300, (400, 300), CustomWindowMode::Borderless);
         assert_ne!(borderless.dwFlags & DWM_TNP_SOURCECLIENTAREAONLY, 0);
+        assert_ne!(borderless.dwFlags & DWM_TNP_OPACITY, 0);
+        assert_eq!(borderless.opacity, 255);
         assert!(borderless.fSourceClientAreaOnly.as_bool());
     }
 
     #[test]
-    fn parking_origin_is_off_screen_and_within_i16_range() {
+    fn parking_origin_intersects_vscreen_corner_by_one_pixel_within_i16_range() {
         let vscreen = RECT {
             left: -1920,
             top: 0,
@@ -1753,8 +1808,8 @@ mod tests {
             bottom: 2160,
         };
         let (x, y) = parking_origin(vscreen);
-        assert!(x >= vscreen.right);
-        assert!(x <= i16::MAX as i32 - 4000);
+        assert_eq!((x, y), (vscreen.right - 1, vscreen.bottom - 1));
+        assert!(x >= i16::MIN as i32 && x <= i16::MAX as i32);
         assert!(y >= i16::MIN as i32 && y <= i16::MAX as i32);
         let parked_rect = RECT {
             left: x,
@@ -1763,6 +1818,13 @@ mod tests {
             bottom: y + 600,
         };
         assert!(is_off_screen(&parked_rect, vscreen));
+        let fallback_rect = RECT {
+            left: FALLBACK_PARKING,
+            top: FALLBACK_PARKING,
+            right: FALLBACK_PARKING + 800,
+            bottom: FALLBACK_PARKING + 600,
+        };
+        assert!(is_off_screen(&fallback_rect, vscreen));
         let on_screen = RECT {
             left: 100,
             top: 100,
