@@ -186,11 +186,12 @@ fn window_mode_label(mode: CustomWindowMode) -> &'static str {
     }
 }
 
-const CAPTURE_TECHNIQUES: [CustomCaptureTechnique; 4] = [
+const CAPTURE_TECHNIQUES: [CustomCaptureTechnique; 5] = [
     CustomCaptureTechnique::InvisibleLayered,
     CustomCaptureTechnique::BehindHost,
     CustomCaptureTechnique::OffScreen,
     CustomCaptureTechnique::DirectWindow,
+    CustomCaptureTechnique::OffscreenStaged,
 ];
 
 fn capture_technique_label(technique: CustomCaptureTechnique) -> &'static str {
@@ -199,6 +200,7 @@ fn capture_technique_label(technique: CustomCaptureTechnique) -> &'static str {
         CustomCaptureTechnique::BehindHost => "Behind Host (On-Screen)",
         CustomCaptureTechnique::OffScreen => "Off-Screen (DWM)",
         CustomCaptureTechnique::DirectWindow => "Direct Window",
+        CustomCaptureTechnique::OffscreenStaged => "Off-Screen Staged (-10000 -> Reveal)",
     }
 }
 
@@ -5095,6 +5097,15 @@ mod tests {
                 CustomCaptureTechnique::InvisibleLayered
             );
 
+            assert_eq!(CAPTURE_TECHNIQUES.len(), 5);
+            assert_eq!(
+                CAPTURE_TECHNIQUES[4],
+                CustomCaptureTechnique::OffscreenStaged
+            );
+            assert_eq!(
+                capture_technique_label(CustomCaptureTechnique::OffscreenStaged),
+                "Off-Screen Staged (-10000 -> Reveal)"
+            );
             for (idx, expected) in CAPTURE_TECHNIQUES.iter().copied().enumerate() {
                 SendMessageW(combo, CB_SETCURSEL, WPARAM(idx), LPARAM(0));
                 command(state, ID_CAPTURE_TECHNIQUE, CBN_SELCHANGE);
