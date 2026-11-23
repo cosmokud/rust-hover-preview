@@ -6,6 +6,10 @@
 
 - **Presets in `Tray → Preview Settings → Custom Preview` can be dragged into an order, and the top one wins an extension two of them name** — a `.jpg` claimed by both `Paint` and `Photoshop` is previewed by whichever sits higher in the list, so the order is now the precedence between presets rather than only the shape of the list. The order is written to `config.ini` as `custom_preset_order` (`[settings]`), the names top first, and a move is saved the moment the row is dropped; a preset written by hand with no place in that list is listed after the ones that have one. A drag that only clicks a row is still a click, and a search narrows which rows can be moved. The order the `[custom:<name>]` sections appear in is unchanged — they are written alphabetically — which is why the list is a key of its own.
 
+### Changed
+
+- **`Custom Preview` saves itself, and the rest of the app follows at once** — the `Save` button is gone: a field is written when it is left, never per keystroke. The triggers are the ones that mean the user is done with what they were editing: the focus leaving a name, extensions, program, percentage or volume box, a pick confirmed in `Window` or `Scaling`, the volume thumb released, the `Enabled` switch flipped, a program chosen in the browse dialog, a dragged row dropped, and the window itself going inactive or closing. A write that changed nothing writes nothing, and a preset the file may not hold — no name, or two of one name — is refused with the reason on the status line rather than written. Each write bumps the cross-process configuration generation and sends `PreviewMessage::ConfigChanged`, so the tray's rows, the hook's bindings and every viewer read the presets immediately rather than at their next one-second look; the file watcher no longer sees the editor's own write as an outside edit.
+
 ## [0.5.11] - 2026-11-23
 
 ### Added
