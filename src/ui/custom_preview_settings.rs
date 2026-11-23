@@ -69,8 +69,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::config::{
-    sanitize_program_input, CustomCaptureTechnique, CustomPreset, CustomScaling, CustomWindowMode,
-    PreviewScale, TextTheme, MAX_PRESETS,
+    sanitize_program_input, CustomCaptureTechnique, CustomPreset, CustomPromotionTechnique,
+    CustomScaling, CustomWindowMode, PreviewScale, TextTheme, MAX_PRESETS,
 };
 use crate::text::{text_paint, text_theme};
 use crate::CONFIG;
@@ -146,6 +146,7 @@ const ID_SCALING_UP: i32 = 123;
 const ID_SCALING_DOWN: i32 = 124;
 const ID_VOLUME_UP: i32 = 125;
 const ID_VOLUME_DOWN: i32 = 126;
+const ID_PROMOTION_TECHNIQUE: i32 = 127;
 const ID_STATUS: i32 = 130;
 const ID_LABEL_BASE: i32 = 140;
 
@@ -208,8 +209,23 @@ fn capture_technique_label(technique: CustomCaptureTechnique) -> &'static str {
     }
 }
 
+const PROMOTION_TECHNIQUES: [CustomPromotionTechnique; 2] = [
+    CustomPromotionTechnique::DirectPromotion,
+    CustomPromotionTechnique::OpenAsNewProcess,
+];
+
+fn promotion_technique_label(technique: CustomPromotionTechnique) -> &'static str {
+    match technique {
+        CustomPromotionTechnique::DirectPromotion => "Direct Promotion",
+        CustomPromotionTechnique::OpenAsNewProcess => "Open as New Process",
+    }
+}
+
 fn is_combo(id: u32) -> bool {
-    id == ID_WINDOW_MODE as u32 || id == ID_CAPTURE_TECHNIQUE as u32 || id == ID_SCALING as u32
+    id == ID_WINDOW_MODE as u32
+        || id == ID_CAPTURE_TECHNIQUE as u32
+        || id == ID_PROMOTION_TECHNIQUE as u32
+        || id == ID_SCALING as u32
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -781,7 +797,7 @@ fn create_window() -> Option<HWND> {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             920,
-            620,
+            660,
             None,
             None,
             HINSTANCE(hinstance.0),
@@ -850,7 +866,12 @@ unsafe fn apply_theme(state: &mut State) {
         state.brush_field = CreateSolidBrush(palette.field);
         state.brush_field_disabled = CreateSolidBrush(palette.field_disabled);
         apply_dwm_chrome(state.hwnd, palette.dark);
-        for id in [ID_WINDOW_MODE, ID_CAPTURE_TECHNIQUE, ID_SCALING] {
+        for id in [
+            ID_WINDOW_MODE,
+            ID_CAPTURE_TECHNIQUE,
+            ID_PROMOTION_TECHNIQUE,
+            ID_SCALING,
+        ] {
             if let Ok(combo) = GetDlgItem(state.hwnd, id) {
                 apply_combo_list_theme(combo, palette.dark);
             }
@@ -1095,7 +1116,7 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
             let dpi = (unsafe { GetDpiForWindow(hwnd) } as i32).max(96);
             info.ptMinTrackSize.x = scale(680, dpi);
-            info.ptMinTrackSize.y = scale(500, dpi);
+            info.ptMinTrackSize.y = scale(540, dpi);
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -1843,6 +1864,7 @@ unsafe fn build(hwnd: HWND) -> State {
         "Extensions",
         "Program",
         "Capture Technique",
+        "Promotion Technique",
         "Window",
         "Scaling",
         "Volume",
@@ -1876,6 +1898,21 @@ unsafe fn build(hwnd: HWND) -> State {
                     | CBS_HASSTRINGS as u32,
             ),
             ID_CAPTURE_TECHNIQUE,
+        )
+    });
+    controls.push(unsafe {
+        child(
+            hwnd,
+            w!("COMBOBOX"),
+            "",
+            child_style(
+                WS_TABSTOP.0
+                    | WS_VSCROLL.0
+                    | CBS_DROPDOWNLIST as u32
+                    | CBS_OWNERDRAWFIXED as u32
+                    | CBS_HASSTRINGS as u32,
+            ),
+            ID_PROMOTION_TECHNIQUE,
         )
     });
     controls.push(unsafe {
@@ -1935,7 +1972,7 @@ unsafe fn build(hwnd: HWND) -> State {
             }
         }
     }
-    for index in 0..8 {
+    for index in 0..9 {
         if let Ok(lbl) = unsafe { GetDlgItem(hwnd, ID_LABEL_BASE + index) } {
             unsafe {
                 SendMessageW(
@@ -2000,13 +2037,29 @@ unsafe fn build(hwnd: HWND) -> State {
         unsafe { combo_add(capture_technique_combo, capture_technique_label(technique)) };
     }
 
+    let promotion_technique_combo =
+        unsafe { GetDlgItem(hwnd, ID_PROMOTION_TECHNIQUE) }.unwrap_or_default();
+    for technique in PROMOTION_TECHNIQUES {
+        unsafe {
+            combo_add(
+                promotion_technique_combo,
+                promotion_technique_label(technique),
+            )
+        };
+    }
+
     let scaling = unsafe { GetDlgItem(hwnd, ID_SCALING) }.unwrap_or_default();
     for (label, _) in SCALE_CHOICES {
         unsafe { combo_add(scaling, label) };
     }
     unsafe { combo_add(scaling, "Custom…") };
 
-    for combo in [window_mode_combo, capture_technique_combo, scaling] {
+    for combo in [
+        window_mode_combo,
+        capture_technique_combo,
+        promotion_technique_combo,
+        scaling,
+    ] {
         if !combo.0.is_null() {
             unsafe {
                 install_combo_subclass(combo, hwnd);
@@ -4088,7 +4141,7 @@ unsafe fn lay_out(state: &mut State) {
     let inner = scale(12, dpi);
     let row = scale(30, dpi);
     let gap = scale(10, dpi);
-    let label_w = scale(140, dpi);
+    let label_w = scale(156, dpi);
     let stepper_w = scale(22, dpi);
     let half_row = row / 2;
     let text_h = unsafe { font_text_height(state.hwnd, state.font) };
@@ -4147,7 +4200,7 @@ unsafe fn lay_out(state: &mut State) {
     let field_w = (ec.right - inner - scale(4, dpi) - field_left).max(scale(140, dpi));
 
     let mut y = ec.top + inner + scale(4, dpi);
-    for index in 0..8 {
+    for index in 0..9 {
         place(
             ID_LABEL_BASE + index,
             e_left,
@@ -4179,6 +4232,15 @@ unsafe fn lay_out(state: &mut State) {
 
     place(
         ID_CAPTURE_TECHNIQUE,
+        field_left,
+        y,
+        field_w,
+        row + combo_drop_height(dpi),
+    );
+    y += row + gap;
+
+    place(
+        ID_PROMOTION_TECHNIQUE,
         field_left,
         y,
         field_w,
@@ -4325,12 +4387,14 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                 unsafe { exe_changed(state) };
             }
         }
-        ID_WINDOW_MODE | ID_CAPTURE_TECHNIQUE | ID_SCALING => {
+        ID_WINDOW_MODE | ID_CAPTURE_TECHNIQUE | ID_PROMOTION_TECHNIQUE | ID_SCALING => {
             if notice == CBN_SELCHANGE {
                 if id == ID_WINDOW_MODE {
                     unsafe { window_mode_chosen(state) };
                 } else if id == ID_CAPTURE_TECHNIQUE {
                     unsafe { capture_technique_chosen(state) };
+                } else if id == ID_PROMOTION_TECHNIQUE {
+                    unsafe { promotion_technique_chosen(state) };
                 } else {
                     unsafe { scaling_chosen(state) };
                 }
@@ -4412,7 +4476,12 @@ unsafe fn fill_fields(state: &mut State) {
         ] {
             unsafe { set_text(state.hwnd, id, "") };
         }
-        for id in [ID_WINDOW_MODE, ID_CAPTURE_TECHNIQUE, ID_SCALING] {
+        for id in [
+            ID_WINDOW_MODE,
+            ID_CAPTURE_TECHNIQUE,
+            ID_PROMOTION_TECHNIQUE,
+            ID_SCALING,
+        ] {
             let combo = unsafe { GetDlgItem(state.hwnd, id) }.unwrap_or_default();
             unsafe { SendMessageW(combo, CB_SETCURSEL, WPARAM(usize::MAX), LPARAM(0)) };
         }
@@ -4429,6 +4498,7 @@ unsafe fn fill_fields(state: &mut State) {
     let exe = preset.exe.clone();
     let window_mode = preset.window_mode;
     let capture_technique = preset.capture_technique;
+    let promotion_technique = preset.promotion_technique;
     let scaling = preset.scaling;
     let volume = preset.volume;
 
@@ -4467,6 +4537,18 @@ unsafe fn fill_fields(state: &mut State) {
             technique_combo,
             CB_SETCURSEL,
             WPARAM(technique_index as usize),
+            LPARAM(0),
+        );
+
+        let promotion_combo = GetDlgItem(state.hwnd, ID_PROMOTION_TECHNIQUE).unwrap_or_default();
+        let promotion_index = PROMOTION_TECHNIQUES
+            .iter()
+            .position(|held| *held == promotion_technique)
+            .unwrap_or(0) as i32;
+        SendMessageW(
+            promotion_combo,
+            CB_SETCURSEL,
+            WPARAM(promotion_index as usize),
             LPARAM(0),
         );
 
@@ -4509,6 +4591,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_BROWSE,
         ID_WINDOW_MODE,
         ID_CAPTURE_TECHNIQUE,
+        ID_PROMOTION_TECHNIQUE,
         ID_SCALING,
         ID_VOLUME,
         ID_VOLUME_VALUE,
@@ -4744,6 +4827,27 @@ unsafe fn capture_technique_chosen(state: &mut State) {
     };
     if let Some(preset) = state.presets.get_mut(index) {
         preset.capture_technique = technique;
+    }
+    state.dirtied = true;
+}
+
+unsafe fn promotion_technique_chosen(state: &mut State) {
+    if state.loading {
+        return;
+    }
+    let Some(index) = state.selected else {
+        return;
+    };
+    let combo = unsafe { GetDlgItem(state.hwnd, ID_PROMOTION_TECHNIQUE) }.unwrap_or_default();
+    let choice = unsafe { SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+    let Some(technique) = usize::try_from(choice)
+        .ok()
+        .and_then(|choice| PROMOTION_TECHNIQUES.get(choice).copied())
+    else {
+        return;
+    };
+    if let Some(preset) = state.presets.get_mut(index) {
+        preset.promotion_technique = technique;
     }
     state.dirtied = true;
 }
@@ -5406,6 +5510,7 @@ mod tests {
                 ID_EXE,
                 ID_WINDOW_MODE,
                 ID_CAPTURE_TECHNIQUE,
+                ID_PROMOTION_TECHNIQUE,
                 ID_SCALING,
                 ID_SCALING_UP,
                 ID_SCALING_DOWN,
@@ -5848,17 +5953,22 @@ mod tests {
                 state.dirtied = false;
             }
 
-            // Capture Technique row sits directly above Window row (both control & label) and
-            // precedes it in Tab order.
+            // Capture Technique sits directly above Promotion Technique, which sits directly above
+            // Window (both controls & labels) and follows that exact Tab order.
+            let promo_combo = GetDlgItem(hwnd, ID_PROMOTION_TECHNIQUE).unwrap_or_default();
             let win_combo = GetDlgItem(hwnd, ID_WINDOW_MODE).unwrap_or_default();
             let browse_btn = GetDlgItem(hwnd, ID_BROWSE).unwrap_or_default();
-            let (mut cap_rc, mut win_rc) = (RECT::default(), RECT::default());
+            let (mut cap_rc, mut promo_rc, mut win_rc) =
+                (RECT::default(), RECT::default(), RECT::default());
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(combo, &mut cap_rc);
+            let _ =
+                windows::Win32::UI::WindowsAndMessaging::GetWindowRect(promo_combo, &mut promo_rc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(win_combo, &mut win_rc);
             assert!(
-                cap_rc.top < win_rc.top,
-                "Capture Technique ({}) must be above Window ({})",
+                cap_rc.top < promo_rc.top && promo_rc.top < win_rc.top,
+                "Row order must be Capture Technique ({}) < Promotion Technique ({}) < Window ({})",
                 cap_rc.top,
+                promo_rc.top,
                 win_rc.top
             );
             assert_eq!(
@@ -5868,22 +5978,86 @@ mod tests {
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, combo, false).ok(),
+                Some(promo_combo),
+                "Tab from Capture Technique must move to Promotion Technique"
+            );
+            assert_eq!(
+                GetNextDlgTabItem(hwnd, promo_combo, false).ok(),
                 Some(win_combo),
-                "Tab from Capture Technique must move to Window"
+                "Tab from Promotion Technique must move to Window"
             );
 
-            // Label 4 ("Capture Technique") is above label 5 ("Window") and wide enough.
+            // Label 4 ("Capture Technique") < Label 5 ("Promotion Technique") < Label 6 ("Window").
             let cap_label = GetDlgItem(hwnd, ID_LABEL_BASE + 4).unwrap_or_default();
-            let win_label = GetDlgItem(hwnd, ID_LABEL_BASE + 5).unwrap_or_default();
-            let (mut lrc, mut wlrc) = (RECT::default(), RECT::default());
+            let promo_label = GetDlgItem(hwnd, ID_LABEL_BASE + 5).unwrap_or_default();
+            let win_label = GetDlgItem(hwnd, ID_LABEL_BASE + 6).unwrap_or_default();
+            let (mut lrc, mut plrc, mut wlrc) = (RECT::default(), RECT::default(), RECT::default());
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(cap_label, &mut lrc);
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(promo_label, &mut plrc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(win_label, &mut wlrc);
-            assert!(lrc.top < wlrc.top);
+            assert!(lrc.top < plrc.top && plrc.top < wlrc.top);
             assert!(
-                lrc.right - lrc.left >= scale(125, state.dpi),
-                "Capture Technique label width {}px too narrow",
-                lrc.right - lrc.left
+                plrc.right - plrc.left >= scale(140, state.dpi),
+                "Promotion Technique label width {}px too narrow",
+                plrc.right - plrc.left
             );
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn promotion_technique_combo_selects_and_updates_preset_technique() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.presets.clear();
+            state.presets.push(CustomPreset::named("PromoTest"));
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
+
+            let combo = GetDlgItem(hwnd, ID_PROMOTION_TECHNIQUE).unwrap_or_default();
+            assert!(IsWindowEnabled(combo).as_bool());
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                0,
+                "defaults to DirectPromotion (index 0)"
+            );
+            assert_eq!(
+                state.presets[0].promotion_technique,
+                CustomPromotionTechnique::DirectPromotion
+            );
+
+            assert_eq!(PROMOTION_TECHNIQUES.len(), 2);
+            assert_eq!(
+                PROMOTION_TECHNIQUES[0],
+                CustomPromotionTechnique::DirectPromotion
+            );
+            assert_eq!(
+                promotion_technique_label(CustomPromotionTechnique::DirectPromotion),
+                "Direct Promotion"
+            );
+            assert_eq!(
+                PROMOTION_TECHNIQUES[1],
+                CustomPromotionTechnique::OpenAsNewProcess
+            );
+            assert_eq!(
+                promotion_technique_label(CustomPromotionTechnique::OpenAsNewProcess),
+                "Open as New Process"
+            );
+
+            for (idx, expected) in PROMOTION_TECHNIQUES.iter().copied().enumerate() {
+                SendMessageW(combo, CB_SETCURSEL, WPARAM(idx), LPARAM(0));
+                command(state, ID_PROMOTION_TECHNIQUE, CBN_SELCHANGE);
+                assert_eq!(state.presets[0].promotion_technique, expected);
+                assert!(state.dirtied);
+                state.dirtied = false;
+            }
 
             let _ = DestroyWindow(hwnd);
         }

@@ -138,6 +138,33 @@ impl CustomCaptureTechnique {
     }
 }
 
+/// How pinning / opening a custom preview promotes the target application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomPromotionTechnique {
+    /// Detach and promote the live preview window in-place (falls back to spawn when cold).
+    #[default]
+    DirectPromotion,
+    /// End the preview and launch a fresh, untouched detached process for the file.
+    OpenAsNewProcess,
+}
+
+impl CustomPromotionTechnique {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectPromotion => "direct_promotion",
+            Self::OpenAsNewProcess => "open_as_new_process",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "direct_promotion" | "direct-promotion" => Some(Self::DirectPromotion),
+            "open_as_new_process" | "open-as-new-process" => Some(Self::OpenAsNewProcess),
+            _ => None,
+        }
+    }
+}
+
 /// How a custom preview is sized: either following `Tray -> Scaling` for the hovered file's kind,
 /// or an explicit per-preset override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -202,6 +229,8 @@ pub struct CustomPreset {
     pub window_mode: CustomWindowMode,
     /// Capture/display technique used for this preset's target window.
     pub capture_technique: CustomCaptureTechnique,
+    /// Promotion technique used when pinning / opening this preset's file.
+    pub promotion_technique: CustomPromotionTechnique,
     /// How large the preview is drawn in the hover: following `Tray -> Scaling` by default, or an
     /// explicit per-preset share of the room.
     pub scaling: CustomScaling,
@@ -218,6 +247,7 @@ impl Default for CustomPreset {
             extensions: Vec::new(),
             window_mode: CustomWindowMode::default(),
             capture_technique: CustomCaptureTechnique::default(),
+            promotion_technique: CustomPromotionTechnique::default(),
             scaling: CustomScaling::default(),
             volume: DEFAULT_AUDIO_VOLUME,
         }
@@ -368,6 +398,11 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
             "capture_technique",
             Some(preset.capture_technique.as_str().to_string()),
         );
+        ini.set(
+            &section,
+            "promotion_technique",
+            Some(preset.promotion_technique.as_str().to_string()),
+        );
         ini.set(&section, "scaling", Some(preset.scaling.as_str()));
         ini.set(&section, "volume", Some(preset.volume.to_string()));
     }
@@ -440,6 +475,11 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         if let Some(technique) = ini.get(section, "capture_technique") {
             if let Some(parsed) = CustomCaptureTechnique::from_str(&technique) {
                 preset.capture_technique = parsed;
+            }
+        }
+        if let Some(technique) = ini.get(section, "promotion_technique") {
+            if let Some(parsed) = CustomPromotionTechnique::from_str(&technique) {
+                preset.promotion_technique = parsed;
             }
         }
         if let Some(scaling) = ini.get(section, "scaling") {
@@ -811,6 +851,71 @@ mod tests {
         assert_eq!(read.custom_presets.len(), 2);
         for p in &read.custom_presets {
             assert_eq!(p.capture_technique, CustomCaptureTechnique::InProcessHook);
+        }
+    }
+
+    #[test]
+    fn promotion_technique_round_trips_and_defaults_to_direct_promotion() {
+        assert_eq!(
+            CustomPromotionTechnique::default(),
+            CustomPromotionTechnique::DirectPromotion
+        );
+        assert_eq!(
+            CustomPreset::named("Fresh").promotion_technique,
+            CustomPromotionTechnique::DirectPromotion
+        );
+        let cases = [
+            (
+                CustomPromotionTechnique::DirectPromotion,
+                "direct_promotion",
+            ),
+            (
+                CustomPromotionTechnique::OpenAsNewProcess,
+                "open_as_new_process",
+            ),
+        ];
+        for (tech, expected_str) in cases {
+            let mut preset = CustomPreset::named("PromoTest");
+            preset.exe = "viewer.exe".into();
+            preset.set_extensions_text("png");
+            preset.promotion_technique = tech;
+
+            let cfg = config_with(vec![preset]);
+            let mut ini = Ini::new();
+            write_all(&cfg, &mut ini);
+            assert_eq!(
+                ini.get("custom:promotest", "promotion_technique")
+                    .as_deref(),
+                Some(expected_str)
+            );
+
+            let mut read = AppConfig::default();
+            read_all(&ini, &mut read);
+            assert_eq!(read.custom_presets[0].promotion_technique, tech);
+        }
+
+        // Missing or unknown value falls back to DirectPromotion.
+        let mut legacy = Ini::new();
+        legacy.set("custom:missing", "name", Some("Missing".into()));
+        legacy.set("custom:missing", "exe", Some("a.exe".into()));
+        legacy.set("custom:missing", "extensions", Some("png".into()));
+        legacy.set("custom:unknown", "name", Some("Unknown".into()));
+        legacy.set("custom:unknown", "exe", Some("b.exe".into()));
+        legacy.set("custom:unknown", "extensions", Some("png".into()));
+        legacy.set(
+            "custom:unknown",
+            "promotion_technique",
+            Some("bogus".into()),
+        );
+
+        let mut read = AppConfig::default();
+        read_all(&legacy, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        for p in &read.custom_presets {
+            assert_eq!(
+                p.promotion_technique,
+                CustomPromotionTechnique::DirectPromotion
+            );
         }
     }
 }

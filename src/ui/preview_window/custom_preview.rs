@@ -195,8 +195,8 @@ use super::preview_scale::{animated_scale_for, fit_reduced, HoverScales};
 use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
 use crate::config::config::{
-    custom_preset_for, CustomCaptureTechnique, CustomPreset, CustomScaling, CustomWindowMode,
-    PreviewScale, PreviewType, DEFAULT_AUDIO_SCALE,
+    custom_preset_for, CustomCaptureTechnique, CustomPreset, CustomPromotionTechnique,
+    CustomScaling, CustomWindowMode, PreviewScale, PreviewType, DEFAULT_AUDIO_SCALE,
 };
 use crate::readers::{pdf_preview, svg_preview, video_player};
 use crate::CONFIG;
@@ -1046,6 +1046,55 @@ fn try_detach_active_preview(path: &Path) -> bool {
     true
 }
 
+fn clear_want() {
+    if let Ok(mut want) = WANT.lock() {
+        *want = None;
+    }
+}
+
+/// Spawn a completely untouched, detached process for `exe` + `path` (no job, no hooks, no STARTUPINFO).
+fn spawn_detached_normal(exe: &str, path: &Path) {
+    let mut cmd = Command::new(exe);
+    cmd.arg(path);
+    if let Some(dir) = Path::new(exe)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty() && d.is_dir())
+    {
+        cmd.current_dir(dir);
+    }
+    let _ = cmd.spawn();
+}
+
+fn dispatch_open_fully<D, S>(
+    technique: CustomPromotionTechnique,
+    path: &Path,
+    exe: &str,
+    try_detach: D,
+    spawn_new: S,
+) -> bool
+where
+    D: FnOnce(&Path) -> bool,
+    S: FnOnce(&str, &Path),
+{
+    match technique {
+        CustomPromotionTechnique::DirectPromotion => {
+            if try_detach(path) {
+                return true;
+            }
+            end_the_program();
+            spawn_new(exe, path);
+            true
+        }
+        CustomPromotionTechnique::OpenAsNewProcess => {
+            clear_want();
+            hide_the_host();
+            end_the_program();
+            spawn_new(exe, path);
+            true
+        }
+    }
+}
+
 pub(super) fn open_fully(path: &Path) -> bool {
     let Some(preset) = preset_for(path) else {
         return false;
@@ -1054,13 +1103,13 @@ pub(super) fn open_fully(path: &Path) -> bool {
         return false;
     };
 
-    if try_detach_active_preview(path) {
-        return true;
-    }
-
-    end_the_program();
-    let _ = Command::new(exe).arg(path).spawn();
-    true
+    dispatch_open_fully(
+        preset.promotion_technique,
+        path,
+        &exe,
+        try_detach_active_preview,
+        spawn_detached_normal,
+    )
 }
 
 /// End the program, its window's registration, and the hover it was drawing.
@@ -6925,5 +6974,82 @@ mod tests {
 
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(source) };
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(sibling) };
+    }
+
+    #[test]
+    fn open_fully_dispatch_respects_promotion_technique() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let path = PathBuf::from("dispatch.custom");
+
+        // DirectPromotion: uses try_detach first and skips spawning when active detach succeeds.
+        let mut detached = false;
+        let mut spawned = false;
+        assert!(dispatch_open_fully(
+            CustomPromotionTechnique::DirectPromotion,
+            &path,
+            "viewer.exe",
+            |p| {
+                assert_eq!(p, path.as_path());
+                detached = true;
+                true
+            },
+            |_, _| spawned = true,
+        ));
+        assert!(detached);
+        assert!(!spawned);
+
+        // DirectPromotion fallback when cold/inactive: falls through to normal detached spawn.
+        let mut detached = false;
+        let mut spawned = false;
+        assert!(dispatch_open_fully(
+            CustomPromotionTechnique::DirectPromotion,
+            &path,
+            "viewer.exe",
+            |_| {
+                detached = true;
+                false
+            },
+            |exe, p| {
+                assert_eq!(exe, "viewer.exe");
+                assert_eq!(p, path.as_path());
+                spawned = true;
+            },
+        ));
+        assert!(detached);
+        assert!(spawned);
+
+        // OpenAsNewProcess: never detaches; clears WANT/SHOWN/SOURCE and spawns a fresh process.
+        if let Ok(mut w) = WANT.lock() {
+            *w = Some(Want {
+                at: Where::Pointer {
+                    cursor: (0, 0),
+                    avoid: None,
+                },
+            });
+        }
+        SHOWN.store(true, Ordering::SeqCst);
+        let mut detached = false;
+        let mut spawned = false;
+        assert!(dispatch_open_fully(
+            CustomPromotionTechnique::OpenAsNewProcess,
+            &path,
+            "viewer.exe",
+            |_| {
+                detached = true;
+                true
+            },
+            |exe, p| {
+                assert_eq!(exe, "viewer.exe");
+                assert_eq!(p, path.as_path());
+                spawned = true;
+            },
+        ));
+        assert!(!detached, "OpenAsNewProcess must not detach in-place");
+        assert!(spawned, "OpenAsNewProcess must spawn a fresh process");
+        assert!(!is_showing(), "OpenAsNewProcess must clear WANT");
+        assert!(
+            !SHOWN.load(Ordering::SeqCst),
+            "OpenAsNewProcess must hide host"
+        );
     }
 }
