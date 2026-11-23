@@ -123,13 +123,14 @@ use windows::Win32::Foundation::{
     CloseHandle, BOOL, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
-    DwmQueryThumbnailSourceSize, DwmRegisterThumbnail, DwmUnregisterThumbnail,
-    DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY,
-    DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
+    DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
+    DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWMWA_EXTENDED_FRAME_BOUNDS,
+    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION,
+    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FillRect, GetStockObject, RedrawWindow, UpdateWindow, HBRUSH,
-    HGDIOBJ, NULL_BRUSH, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW,
+    CreateSolidBrush, DeleteObject, FillRect, GetStockObject, InvalidateRect, UpdateWindow, HBRUSH,
+    HGDIOBJ, NULL_BRUSH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
@@ -145,11 +146,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow,
     GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM, SMTO_ABORTIFHUNG, SMTO_NORMAL,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
-    WS_THICKFRAME,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
+    WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY,
+    WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP,
+    WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::dimensions::{design_dimensions, picture_dimensions, vector_dimensions};
@@ -434,6 +435,8 @@ pub(super) fn hide() {
     if let Ok(mut want) = WANT.lock() {
         *want = None;
     }
+    // Push on-monitor source off-screen before hiding host so it never flashes on desktop during LINGER.
+    park_source_offscreen_now();
     hide_the_host();
 }
 
@@ -771,6 +774,8 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
     let mut lingering: Option<Instant> = None;
+    let mut placed_mode: Option<PlacementMode> = None;
+    let mut placed_host_rect: Option<(i32, i32, i32, i32)> = None;
     let mut the_ask: Option<(i32, i32)> = None;
 
     loop {
@@ -801,10 +806,14 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             .ok()
             .and_then(|want| want.as_ref().map(|want| want.at));
         let Some(at) = at else {
-            // **The hover is gone; the program is not.** The host leaves the screen at once, and
-            // the window is kept where it is for a moment, so that a hover the pointer gives back
-            // is this program shown again rather than a second launch.
+            // Hover gone: push source off-screen immediately so it never sits visible during LINGER,
+            // and reset placement so re-hover brings it back behind host.
             let since = *lingering.get_or_insert_with(Instant::now);
+            placed_mode = None;
+            placed_host_rect = None;
+            if !is_window_offscreen(source) {
+                push_offscreen(source);
+            }
             hide_the_host();
             if since.elapsed() >= LINGER {
                 end_the_program();
@@ -816,37 +825,21 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         lingering = None;
 
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
+            placed_mode = None;
+            placed_host_rect = None;
+            if !is_window_offscreen(source) {
+                push_offscreen(source);
+            }
             hide_the_host();
             std::thread::sleep(KEEP_POLL);
             continue;
         };
         let (x, y) = (layout.pos_x, layout.pos_y);
         let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
+        let host_rect = (x, y, width, height);
 
-        if the_ask.is_none() {
-            park(source, width, height);
-            restore_foreground(launch.previous_foreground, &processes);
-            if parked(source) {
-                let ask = the_ask_for((width, height), source_size(source, window_mode));
-                the_ask = Some(ask);
-                if ask != (width, height) {
-                    park(source, ask.0, ask.1);
-                }
-            }
-        }
-        if !parked(source) {
-            if let Some(ask) = the_ask {
-                park(source, ask.0, ask.1);
-                restore_foreground(launch.previous_foreground, &processes);
-            }
-        }
-        if !parked(source) {
-            hide_the_host();
-            std::thread::sleep(KEEP_POLL);
-            continue;
-        }
-
-        if box_of_the_host != Some((x, y, width, height)) {
+        // Size & position host before placing source behind it so opaque topmost host covers source.
+        if box_of_the_host != Some(host_rect) {
             let _ = unsafe {
                 SetWindowPos(
                     host,
@@ -858,7 +851,53 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 )
             };
-            box_of_the_host = Some((x, y, width, height));
+            box_of_the_host = Some(host_rect);
+        }
+
+        if placed_mode.is_none() || placed_host_rect != Some(host_rect) {
+            // Primary: keep source 100% on-monitor behind opaque topmost host (GDI apps like IrfanView
+            // repaint natively on-monitor). Fallback to off-screen only if min size exceeds host.
+            let mode = if place_behind_host(source, host_rect, window_mode) {
+                the_ask = None;
+                PlacementMode::BehindHost
+            } else {
+                let ask = the_ask_for((width, height), source_size(source, window_mode));
+                the_ask = Some(ask);
+                park_offscreen(source, ask.0, ask.1);
+                PlacementMode::OffScreen
+            };
+            restore_foreground(launch.previous_foreground, &processes);
+            placed_mode = Some(mode);
+            placed_host_rect = Some(host_rect);
+        } else {
+            match placed_mode {
+                Some(PlacementMode::BehindHost) if !aligned_behind_host(source, host_rect) => {
+                    if !place_behind_host(source, host_rect, window_mode) {
+                        let ask = the_ask_for((width, height), source_size(source, window_mode));
+                        the_ask = Some(ask);
+                        park_offscreen(source, ask.0, ask.1);
+                        placed_mode = Some(PlacementMode::OffScreen);
+                    }
+                    restore_foreground(launch.previous_foreground, &processes);
+                }
+                Some(PlacementMode::OffScreen) if !parked(source) => {
+                    let ask = the_ask.unwrap_or((width, height));
+                    park_offscreen(source, ask.0, ask.1);
+                    restore_foreground(launch.previous_foreground, &processes);
+                }
+                _ => {}
+            }
+        }
+
+        let placement_ok = match placed_mode {
+            Some(PlacementMode::BehindHost) => aligned_behind_host(source, host_rect),
+            Some(PlacementMode::OffScreen) => parked(source),
+            None => false,
+        };
+        if !placement_ok {
+            hide_the_host();
+            std::thread::sleep(KEEP_POLL);
+            continue;
         }
 
         if registered == 0 {
@@ -1167,6 +1206,12 @@ fn the_picture_in(client_width: i32, client_height: i32, picture: (i32, i32)) ->
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PlacementMode {
+    BehindHost,
+    OffScreen,
+}
+
 fn virtual_screen() -> RECT {
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
     let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
@@ -1180,39 +1225,205 @@ fn virtual_screen() -> RECT {
     }
 }
 
-/// Park origin with 1px intersecting the virtual screen's bottom-right corner so MonitorFromWindow
-/// succeeds and Win11 DWM keeps updating classic Win32 GDI redirection surfaces.
-fn parking_origin(vscreen: RECT) -> (i32, i32) {
-    let x = (vscreen.right - 1).clamp(-30000, 30000);
-    let y = (vscreen.bottom - 1).clamp(-30000, 30000);
-    (x, y)
-}
-
-/// True when `rect` is at the 1px virtual-screen corner or completely off-screen.
-fn is_off_screen(rect: &RECT, vscreen: RECT) -> bool {
-    let at_corner = rect.left >= vscreen.right - 2 && rect.top >= vscreen.bottom - 2;
-    at_corner
-        || rect.left >= vscreen.right
-        || rect.right <= vscreen.left
-        || rect.top >= vscreen.bottom
-        || rect.bottom <= vscreen.top
-}
-
-fn parked(window: HWND) -> bool {
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(window, &mut rect) }.is_err() {
-        return false;
+/// Invisible Win11 DWM border insets `(left, top, right, bottom)` between `GetWindowRect` and
+/// `DWMWA_EXTENDED_FRAME_BOUNDS` (zeros if unavailable).
+fn dwm_frame_insets(window: HWND) -> (i32, i32, i32, i32) {
+    let mut wr = RECT::default();
+    if unsafe { GetWindowRect(window, &mut wr) }.is_err() {
+        return (0, 0, 0, 0);
     }
+    let mut ef = RECT::default();
+    let ok = unsafe {
+        DwmGetWindowAttribute(
+            window,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut ef as *mut RECT as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        )
+    }
+    .is_ok();
+    if !ok || ef.right <= ef.left || ef.bottom <= ef.top {
+        return (0, 0, 0, 0);
+    }
+    (
+        (ef.left - wr.left).max(0),
+        (ef.top - wr.top).max(0),
+        (wr.right - ef.right).max(0),
+        (wr.bottom - ef.bottom).max(0),
+    )
+}
 
-    is_off_screen(&rect, virtual_screen())
+/// Visible frame rect via `DWMWA_EXTENDED_FRAME_BOUNDS`, falling back to `GetWindowRect`.
+fn visible_frame_rect(window: HWND) -> Option<RECT> {
+    let mut ef = RECT::default();
+    if unsafe {
+        DwmGetWindowAttribute(
+            window,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut ef as *mut RECT as *mut _,
+            std::mem::size_of::<RECT>() as u32,
+        )
+    }
+    .is_ok()
+        && ef.right > ef.left
+        && ef.bottom > ef.top
+    {
+        return Some(ef);
+    }
+    let mut wr = RECT::default();
+    unsafe { GetWindowRect(window, &mut wr) }.ok().map(|()| wr)
+}
+
+/// Outer window rect `(x, y, w, h)` so visible frame aligns pixel-for-pixel inside `host_rect`.
+fn behind_host_window_rect(
+    host_rect: (i32, i32, i32, i32),
+    insets: (i32, i32, i32, i32),
+) -> (i32, i32, i32, i32) {
+    let (hx, hy, hw, hh) = host_rect;
+    let (il, it, ir, ib) = insets;
+    (
+        hx - il,
+        hy - it,
+        (hw + il + ir).max(1),
+        (hh + it + ib).max(1),
+    )
+}
+
+/// True when `actual_visible` fits within `host_rect` (+2px tolerance) and lies inside it.
+fn is_aligned_behind_host(actual_visible: RECT, host_rect: (i32, i32, i32, i32)) -> bool {
+    let (hx, hy, hw, hh) = host_rect;
+    let aw = actual_visible.right - actual_visible.left;
+    let ah = actual_visible.bottom - actual_visible.top;
+    aw > 0
+        && ah > 0
+        && aw <= hw + 2
+        && ah <= hh + 2
+        && actual_visible.left >= hx - 2
+        && actual_visible.top >= hy - 2
+        && actual_visible.right <= hx + hw + 2
+        && actual_visible.bottom <= hy + hh + 2
+}
+
+fn aligned_behind_host(window: HWND, host_rect: (i32, i32, i32, i32)) -> bool {
+    visible_frame_rect(window).is_some_and(|r| is_aligned_behind_host(r, host_rect))
         && unsafe { IsWindowVisible(window) }.as_bool()
         && !unsafe { IsZoomed(window) }.as_bool()
         && !unsafe { IsIconic(window) }.as_bool()
 }
 
-/// Move `window` to the 1px corner (sunk to HWND_BOTTOM, no activate, never SW_HIDE) so Win11 DWM
-/// keeps updating its GDI redirection surface. Falls back to negative off-screen if clamped.
-fn park(window: HWND, width: i32, height: i32) {
+/// Place `window` 100% on-monitor directly behind `host` at `HWND_BOTTOM` without `SWP_FRAMECHANGED`
+/// or `RDW_ERASE` so classic GDI apps (IrfanView) repaint natively. Returns true if it fits inside `host`.
+fn place_behind_host(
+    window: HWND,
+    host_rect: (i32, i32, i32, i32),
+    window_mode: CustomWindowMode,
+) -> bool {
+    let insets = if window_mode == CustomWindowMode::Normal {
+        dwm_frame_insets(window)
+    } else {
+        (0, 0, 0, 0)
+    };
+    let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
+
+    if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
+        let placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+            rcNormalPosition: RECT {
+                left: wx,
+                top: wy,
+                right: wx + ww,
+                bottom: wy + wh,
+            },
+            ..Default::default()
+        };
+        let _ = unsafe { SetWindowPlacement(window, &placement) };
+    }
+
+    let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+
+    if !unsafe { IsWindowVisible(window) }.as_bool() {
+        let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+    }
+
+    let _ = unsafe { InvalidateRect(window, None, false) };
+    let _ = unsafe { UpdateWindow(window) };
+
+    aligned_behind_host(window, host_rect)
+}
+
+/// Off-screen parking origin past virtual screen's right edge (clamped to i16 range).
+fn parking_origin(vscreen: RECT) -> (i32, i32) {
+    let x = (vscreen.right + 1000).clamp(-30000, 30000);
+    let y = vscreen.top.clamp(-30000, 30000);
+    (x, y)
+}
+
+/// True when `rect` is completely outside `vscreen`.
+fn is_off_screen(rect: &RECT, vscreen: RECT) -> bool {
+    rect.left >= vscreen.right
+        || rect.right <= vscreen.left
+        || rect.top >= vscreen.bottom
+        || rect.bottom <= vscreen.top
+}
+
+fn is_window_offscreen(window: HWND) -> bool {
+    let mut rect = RECT::default();
+    unsafe { GetWindowRect(window, &mut rect) }.is_ok() && is_off_screen(&rect, virtual_screen())
+}
+
+fn parked(window: HWND) -> bool {
+    is_window_offscreen(window)
+        && unsafe { IsWindowVisible(window) }.as_bool()
+        && !unsafe { IsZoomed(window) }.as_bool()
+        && !unsafe { IsIconic(window) }.as_bool()
+}
+
+/// Fast off-screen move preserving size (used on `hide()` / `LINGER` so `source` never stays visible).
+fn push_offscreen(window: HWND) {
+    let vscreen = virtual_screen();
+    let (px, py) = parking_origin(vscreen);
+    let _ = unsafe {
+        SetWindowPos(
+            window,
+            HWND_BOTTOM,
+            px,
+            py,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE,
+        )
+    };
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(window, &mut rect) }.is_ok() && !is_off_screen(&rect, vscreen) {
+        let _ = unsafe {
+            SetWindowPos(
+                window,
+                HWND_BOTTOM,
+                FALLBACK_PARKING,
+                FALLBACK_PARKING,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        };
+    }
+}
+
+/// Synchronously push active `SOURCE` off-screen before hiding `host`.
+fn park_source_offscreen_now() {
+    let source = SOURCE.load(Ordering::SeqCst);
+    if source == 0 {
+        return;
+    }
+    let hwnd = HWND(source as *mut _);
+    if unsafe { IsWindow(hwnd) }.as_bool() && !is_window_offscreen(hwnd) {
+        push_offscreen(hwnd);
+    }
+}
+
+/// Fallback off-screen park when `window`'s minimum size exceeds `host`.
+fn park_offscreen(window: HWND, width: i32, height: i32) {
     let vscreen = virtual_screen();
     let (px, py) = parking_origin(vscreen);
     let target = RECT {
@@ -1232,17 +1443,7 @@ fn park(window: HWND, width: i32, height: i32) {
         let _ = unsafe { SetWindowPlacement(window, &placement) };
     }
 
-    let _ = unsafe {
-        SetWindowPos(
-            window,
-            HWND_BOTTOM,
-            px,
-            py,
-            width,
-            height,
-            SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        )
-    };
+    let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, px, py, width, height, SWP_NOACTIVATE) };
 
     let mut rect = RECT::default();
     if unsafe { GetWindowRect(window, &mut rect) }.is_ok() && !is_off_screen(&rect, vscreen) {
@@ -1263,15 +1464,7 @@ fn park(window: HWND, width: i32, height: i32) {
         let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
     }
 
-    // Flush GDI paint synchronously at the parked size so DWM captures a fresh frame.
-    let _ = unsafe {
-        RedrawWindow(
-            window,
-            None,
-            None,
-            RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME,
-        )
-    };
+    let _ = unsafe { InvalidateRect(window, None, false) };
     let _ = unsafe { UpdateWindow(window) };
 }
 
@@ -1326,6 +1519,17 @@ fn strip_the_frame(window: HWND) {
     let ex_style = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32;
     let stripped = ex_style | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0;
     let _ = unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, stripped as isize) };
+    let _ = unsafe {
+        SetWindowPos(
+            window,
+            HWND::default(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
 }
 
 /// One look at the desktop: every window the program has put up since it was begun.
@@ -1800,7 +2004,53 @@ mod tests {
     }
 
     #[test]
-    fn parking_origin_intersects_vscreen_corner_by_one_pixel_within_i16_range() {
+    fn behind_host_placement_aligns_visible_frame_and_detects_overflow() {
+        let host = (200, 120, 640, 480);
+        let insets = (7, 0, 7, 7);
+        assert_eq!(
+            behind_host_window_rect(host, insets),
+            (193, 120, 654, 487),
+            "outer window expands by invisible DWM insets so visible frame matches host"
+        );
+
+        let exact_visible = RECT {
+            left: 200,
+            top: 120,
+            right: 840,
+            bottom: 600,
+        };
+        assert!(is_aligned_behind_host(exact_visible, host));
+
+        // 2px tolerance still aligned.
+        let slightly_inset = RECT {
+            left: 200,
+            top: 120,
+            right: 842,
+            bottom: 602,
+        };
+        assert!(is_aligned_behind_host(slightly_inset, host));
+
+        // Window refusing to shrink (e.g. Paint min size 704x500 > host 640x480) triggers fallback.
+        let too_big = RECT {
+            left: 200,
+            top: 120,
+            right: 904,
+            bottom: 620,
+        };
+        assert!(!is_aligned_behind_host(too_big, host));
+
+        // Drifted window (recentered by app) is detected as unaligned.
+        let drifted = RECT {
+            left: 300,
+            top: 120,
+            right: 940,
+            bottom: 600,
+        };
+        assert!(!is_aligned_behind_host(drifted, host));
+    }
+
+    #[test]
+    fn parking_origin_is_completely_offscreen_within_i16_range() {
         let vscreen = RECT {
             left: -1920,
             top: 0,
@@ -1808,7 +2058,7 @@ mod tests {
             bottom: 2160,
         };
         let (x, y) = parking_origin(vscreen);
-        assert_eq!((x, y), (vscreen.right - 1, vscreen.bottom - 1));
+        assert_eq!((x, y), (vscreen.right + 1000, vscreen.top));
         assert!(x >= i16::MIN as i32 && x <= i16::MAX as i32);
         assert!(y >= i16::MIN as i32 && y <= i16::MAX as i32);
         let parked_rect = RECT {
