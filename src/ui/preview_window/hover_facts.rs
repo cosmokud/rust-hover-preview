@@ -287,7 +287,8 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
     let pin_hwnd = pin_real_window::real_pin_window();
     let pin_visible = pin_hwnd.is_some_and(|hwnd| unsafe { IsWindowVisible(hwnd).as_bool() });
     let preview_visible = pin_visible
-        || (preview_hwnd != 0
+        || (!pin_lifecycle::is_deferred_preview_hide_pending()
+            && preview_hwnd != 0
             && unsafe { IsWindowVisible(HWND(preview_hwnd as *mut _)).as_bool() });
     if !preview_visible && video_hwnd == 0 && video_pid == 0 && engine_hwnd == 0 {
         return PreviewCursorHover::NONE;

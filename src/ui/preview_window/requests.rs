@@ -233,6 +233,7 @@ pub fn show_preview(path: &Path, x: i32, y: i32, avoid: Option<((i32, i32, i32, 
     if pinned() {
         return;
     }
+    pin_lifecycle::cancel_deferred_preview_hide();
 
     // The window this hover puts up is the film its subtitle copy belongs to, so the copy of
     // any *other* film is dropped: the pass reads the whole film, and only the film being shown
@@ -266,6 +267,7 @@ pub fn show_preview_keyboard(
     if pinned() {
         return;
     }
+    pin_lifecycle::cancel_deferred_preview_hide();
 
     // And it is a hover like any other for the subtitle copy too: the film being shown is the
     // one whose copy is kept, and any other's is dropped (see `show_preview`).
@@ -297,6 +299,7 @@ pub fn hide_preview() {
     if pinned() {
         return;
     }
+    pin_lifecycle::cancel_deferred_preview_hide();
 
     // A hover that is going away takes the copy of its film's subtitles with it: the pass reads
     // the whole film, and a read outliving the window that asked for it is a read nobody is

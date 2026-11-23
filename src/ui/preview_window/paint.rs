@@ -2053,6 +2053,7 @@ unsafe fn show_at_the_wait(hwnd: HWND, pl: &PendingLoad, media: MediaData) {
     } else {
         render_layered_preview(hwnd);
     }
+    pin_lifecycle::cancel_deferred_preview_hide();
     let _ = SetWindowPos(
         hwnd,
         band_place(),
