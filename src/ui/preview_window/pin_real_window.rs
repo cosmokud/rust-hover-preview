@@ -30,16 +30,17 @@ use std::sync::Once;
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, GetForegroundWindow, GetWindowLongPtrW, IsWindowVisible, MoveWindow,
-    RegisterClassExW, SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE,
-    ICON_BIG, ICON_SMALL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETICON, WNDCLASSEXW,
-    WS_CLIPCHILDREN, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    CreateWindowExW, GetWindowLongPtrW, IsWindowVisible, MoveWindow, RegisterClassExW,
+    SendMessageW, SetWindowLongPtrW, SetWindowPos, ShowWindow, GWL_EXSTYLE, ICON_BIG, ICON_SMALL,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_SETICON, WNDCLASSEXW, WS_CLIPCHILDREN, WS_EX_APPWINDOW,
+    WS_EX_LAYERED, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
 };
 
-use super::pin_trace::note_pin_trace;
 use super::window_proc;
 use super::ScreenRegion;
 
@@ -80,78 +81,37 @@ fn real_pin_style() -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
     )
 }
 
-/// Ask for or give back a window's taskbar button and Alt+Tab entry: what a pin whose chrome is owned
-/// by its film host gives up, and what the host it is owned by takes on (see
-/// `pin_film_host::own_the_pin_window`). A window's place in the Shell's lists is asked of the window
-/// rather than of the asker, so it is written with the road and not with the setting.
-///
-/// Write a window's taskbar bit **and no show**: the road every *arrival* takes, because the show the
-/// pair is about to be given is the one the Shell reads the bit with (see
-/// `pin_film_host::promote_the_hover_film_host` and `pin_lifecycle::show_pinned_window`).
-///
-/// **A bit written this way is read at the window's next show, and that is the price of the road.** A
-/// promotion takes a host that is already on the screen, so its own show here would be a hide and a
-/// re-show — a hole where the film is, which is the flash this road exists to avoid. What the Shell
-/// therefore answers with is the button the pair wore before the take-up: it gains the setting's one at
-/// the next show the host is given, which is the first collapse and restore of the pair or the next
-/// film's own appearance (see `set_the_pin_film_host_visible`, whose show writes the bit again).
+/// Update `WS_EX_APPWINDOW` and sync Shell taskbar tab via `ITaskbarList` if visible, never hiding
+/// a live window (`SW_HIDE`/`SW_SHOWNOACTIVATE` unmaps/flashes live video hosts).
 pub(super) unsafe fn write_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
     if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
         unsafe { ask_the_window_to_re_read_its_style(hwnd) };
-    }
-}
-
-/// **A button is the Shell's answer to a window being *shown*, and a bit written behind a visible
-/// window's back is not re-read for it.** Measured: a window that stays up wears the button it was
-/// shown with, however the bit is re-read — which is why the pair's button was intermittent. So a
-/// window that is on the screen when its bit changes is put down and up again, which is the show the
-/// Shell reads.
-///
-/// **That show is paid here and only where no other show is coming.** Every *arrival* writes the bit
-/// through `write_the_pin_window_appwindow` instead: the pair is about to be shown, and that show is
-/// the one the Shell reads it with. A hide paid here is a hole where the pin is — measured, a hover a
-/// pin was taken up from carried one `WM_SHOWWINDOW` 0 and 1 a millisecond apart, and the frames the
-/// compositor made between them were the listing's rows rather than the film.
-pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
-    if unsafe { set_an_ex_style(hwnd, WS_EX_APPWINDOW, app_window) } {
-        unsafe { ask_the_window_to_re_read_its_style(hwnd) };
-
-        // **A window the user is in keeps the show it was given, because the show that re-reads the
-        // bit is one the user watches.** The Shell reads whether a window is listed from the show
-        // that put it on the screen, so the only way to have it read a bit written now is to put the
-        // window down and up again — and a window put down is a window the desktop behind it shows
-        // through. Under the hand that pressed `Always On Top`, that is the sound card blinking out
-        // on every press: the pin is the window the user is in (a press on it took the caret, see
-        // `pin_take_focus`), so the bit is written here and read at the pin's next show rather than
-        // paid for now. A button that is one show late is the smaller price than a hole where the
-        // card was.
-        if unsafe { GetForegroundWindow() } == hwnd && the_pins_own_window(hwnd) {
-            note_pin_trace!(
-                "appwindow {} of {}: the user is in it, read at its next show",
-                app_window as u8,
-                super::pin_trace::window_name(hwnd),
-            );
-            return;
-        }
-
-        // A window that is down is left alone as well: the show it is owed is the one that brings it,
-        // and that show reads the bit (see `pin_film_host::create` and `promote_the_hover_film_host`,
-        // which write the bit before any show rather than paying for one here).
         if unsafe { IsWindowVisible(hwnd) }.as_bool() {
-            #[cfg(test)]
-            if let Ok(mut shown) = APPWINDOW_SHOWS.lock() {
-                shown.push(hwnd.0 as isize);
-            }
-            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-            let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+            unsafe { sync_taskbar_tab(hwnd, app_window) };
         }
     }
 }
 
-/// Whether `hwnd` is the window a pin of this app's stands in right now (see
-/// `set_the_pin_window_appwindow`).
-fn the_pins_own_window(hwnd: HWND) -> bool {
-    super::pinned() && super::pinned_window() == hwnd
+/// Update `WS_EX_APPWINDOW` and sync Shell taskbar tab without hiding a visible window.
+pub(super) unsafe fn set_the_pin_window_appwindow(hwnd: HWND, app_window: bool) {
+    unsafe { write_the_pin_window_appwindow(hwnd, app_window) };
+}
+
+// Non-hiding Shell taskbar button sync for already-visible windows (fails soft if COM uninitialized).
+unsafe fn sync_taskbar_tab(hwnd: HWND, app_window: bool) {
+    let list: ITaskbarList =
+        match unsafe { CoCreateInstance(&TaskbarList, None, CLSCTX_INPROC_SERVER) } {
+            Ok(list) => list,
+            Err(_) => return,
+        };
+    if unsafe { list.HrInit() }.is_err() {
+        return;
+    }
+    if app_window {
+        let _ = unsafe { list.AddTab(hwnd) };
+    } else {
+        let _ = unsafe { list.DeleteTab(hwnd) };
+    }
 }
 
 /// The windows whose taskbar bit this run has paid a show for: the one thing that road does that a
@@ -332,8 +292,8 @@ mod tests {
     use super::*;
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        DestroyWindow, GetWindowLongPtrW, GetWindowRect, GWL_EXSTYLE, WM_GETICON, WS_EX_NOACTIVATE,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+        DestroyWindow, GetWindowLongPtrW, GetWindowRect, GWL_EXSTYLE, SW_SHOWNOACTIVATE,
+        WM_GETICON, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     };
 
     /// What makes a window a window as far as the Shell is concerned, and what makes it not one: the
@@ -444,12 +404,23 @@ mod tests {
             "the stand's window is a window, so its box is readable"
         );
 
-        // The bit the window was made with is taken off it: the change is a put-down and a show.
+        // Toggling WS_EX_APPWINDOW on a visible window updates style without SW_HIDE/SW_SHOWNOACTIVATE.
+        forget_the_appwindow_shows();
         unsafe { set_the_pin_window_appwindow(hwnd, false) };
 
         assert!(
+            the_appwindow_shows().is_empty(),
+            "updating WS_EX_APPWINDOW on a visible window must not hide/re-show it"
+        );
+        assert_eq!(
+            WINDOW_EX_STYLE(unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32)
+                & WS_EX_APPWINDOW,
+            WINDOW_EX_STYLE::default(),
+            "WS_EX_APPWINDOW cleared"
+        );
+        assert!(
             unsafe { IsWindowVisible(hwnd) }.as_bool(),
-            "the window the Shell was shown is a window on the screen"
+            "the window stays visible throughout"
         );
         let mut after = RECT::default();
         assert!(
