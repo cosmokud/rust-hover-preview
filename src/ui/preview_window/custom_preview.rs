@@ -138,6 +138,11 @@ use windows::Win32::Graphics::Gdi::{
     MonitorFromRect, UpdateWindow, HBRUSH, HGDIOBJ, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     NULL_BRUSH,
 };
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
@@ -147,8 +152,8 @@ use windows::Win32::System::Threading::{
     CreateProcessW, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, ResumeThread,
     TerminateProcess, WaitForInputIdle, WaitForSingleObject, CREATE_SUSPENDED,
     PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTF_USEPOSITION,
-    STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
@@ -162,17 +167,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW, ShowWindow,
     TranslateMessage, UnhookWindowsHookEx, CHILDID_SELF, EVENT_OBJECT_CREATE,
     EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HHOOK,
-    HOOKPROC, HWND_BOTTOM, HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG,
-    MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    HOOKPROC, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
+    LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG,
+    SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WH_CALLWNDPROC, WH_CBT, WINDOWPLACEMENT,
-    WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WH_CALLWNDPROC, WH_CBT,
+    WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
     WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
     WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
     WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
+
+use super::audio_session;
 
 use super::dimensions::{design_dimensions, picture_dimensions, vector_dimensions};
 use super::displays::{dpi_at, work_area_at};
@@ -288,6 +295,83 @@ struct Want {
     at: Where,
 }
 
+/// Per-preview Job Object with `KILL_ON_JOB_CLOSE` while previewing; `detach()` clears the flag
+/// before closing so promoted windows outlive `rust-hover-preview.exe`.
+struct PreviewJob {
+    handle: HANDLE,
+}
+
+// SAFETY: Win32 Job Object handles are process-wide and safe to transfer across threads.
+unsafe impl Send for PreviewJob {}
+
+impl PreviewJob {
+    fn create_and_assign(pid: u32) -> Option<Self> {
+        unsafe {
+            let job = CreateJobObjectW(None, PCWSTR::null()).ok()?;
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of!(limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+            .is_err()
+            {
+                let _ = CloseHandle(job);
+                return None;
+            }
+            let Ok(proc_h) = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) else {
+                let _ = CloseHandle(job);
+                return None;
+            };
+            let assigned = AssignProcessToJobObject(job, proc_h).is_ok();
+            let _ = CloseHandle(proc_h);
+            if !assigned {
+                let _ = CloseHandle(job);
+                return None;
+            }
+            Some(Self { handle: job })
+        }
+    }
+
+    /// Clear `KILL_ON_JOB_CLOSE` before closing so the process survives independently on promote.
+    fn detach(mut self) -> bool {
+        if self.handle.is_invalid() || self.handle.0.is_null() {
+            return false;
+        }
+        let limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+            BasicLimitInformation:
+                windows::Win32::System::JobObjects::JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                    LimitFlags: JOB_OBJECT_LIMIT(0),
+                    ..Default::default()
+                },
+            ..Default::default()
+        };
+        let cleared = unsafe {
+            SetInformationJobObject(
+                self.handle,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of!(limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        }
+        .is_ok();
+        let _ = unsafe { CloseHandle(self.handle) };
+        self.handle = HANDLE::default();
+        cleared
+    }
+}
+
+impl Drop for PreviewJob {
+    fn drop(&mut self) {
+        if !self.handle.is_invalid() && !self.handle.0.is_null() {
+            let _ = unsafe { CloseHandle(self.handle) };
+            self.handle = HANDLE::default();
+        }
+    }
+}
+
 /// The program this app started, while it is up: the file it was begun for, the program itself,
 /// and the process it is.
 ///
@@ -298,6 +382,7 @@ struct Program {
     exe: String,
     process: Arc<OwnedHandle>,
     pid: u32,
+    job: Option<PreviewJob>,
 }
 
 /// What one launch is: the process it began, the image that program runs under, and the windows
@@ -353,6 +438,14 @@ static SOURCE_INVISIBLE_LAYERED: AtomicBool = AtomicBool::new(false);
 static SOURCE_RESTORE_RECT: Mutex<Option<RECT>> = Mutex::new(None);
 /// Active `InProcessHook` shared-memory control handle so `hide()` cloaks synchronously before hiding `host`.
 static ACTIVE_HOOK_CONTROL: Mutex<Option<Arc<HookSharedView>>> = Mutex::new(None);
+/// Last screen rect `(x, y, w, h)` of the active preview host, used by `open_fully` to promote in-place.
+static LAST_HOST_RECT: Mutex<Option<(i32, i32, i32, i32)>> = Mutex::new(None);
+/// Saved `GWL_STYLE` & `GWL_EXSTYLE` of `SOURCE` before preview styling so promote restores a normal window.
+static SOURCE_ORIGINAL_STYLE: Mutex<Option<isize>> = Mutex::new(None);
+static SOURCE_ORIGINAL_EX_STYLE: Mutex<Option<isize>> = Mutex::new(None);
+static ACTIVE_CAPTURE_TECHNIQUE: Mutex<CustomCaptureTechnique> =
+    Mutex::new(CustomCaptureTechnique::InProcessHook);
+static ACTIVE_WINDOW_MODE: Mutex<CustomWindowMode> = Mutex::new(CustomWindowMode::Normal);
 /// The thumbnail registration the Shell is drawing through, while one stands.
 static THUMBNAIL: Mutex<isize> = Mutex::new(0);
 /// The hover on screen, while there is one.
@@ -424,6 +517,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let scaling = preset.scaling;
     let window_mode = preset.window_mode;
     let capture_technique = preset.capture_technique;
+    let volume = preset.volume;
     let initial_own = base_size(path);
     let provisional = initial_own.and_then(|own| {
         let scale = resolve_scale(path, scaling);
@@ -463,24 +557,27 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         .map(|name| name.to_string_lossy().to_lowercase())
         .unwrap_or_default();
     let packaged_broker = is_packaged_broker_path(Path::new(&exe));
+    // Per-preview detachable Job Object: crash-reaps while previewing, detaches cleanly on promote.
+    let job = PreviewJob::create_and_assign(pid);
+    engine_processes::record_player(&exe, pid);
     if let Ok(mut held) = PROGRAM.lock() {
         *held = Some(Program {
             path: path.to_path_buf(),
             exe: exe.clone(),
             process: Arc::clone(&process),
             pid,
+            job,
         });
     }
     if let Ok(mut want) = WANT.lock() {
         *want = Some(Want { at });
     }
-    // **The program is this app's while it draws the hover.** It is put in the run's job so a
-    // crash takes it with the app, and written down so a run that never got to end it is
-    // answered for by the next one — the same charge every engine of this app's is under
-    // (see `engine_processes`). A program opened by the pin is not: that one is the user's,
-    // opened the way the listing opens it.
-    let _ = engine_processes::adopt(pid);
-    engine_processes::record_player(&exe, pid);
+    if let Ok(mut slot) = ACTIVE_CAPTURE_TECHNIQUE.lock() {
+        *slot = capture_technique;
+    }
+    if let Ok(mut slot) = ACTIVE_WINDOW_MODE.lock() {
+        *slot = window_mode;
+    }
 
     // Read after the launch is written down, so a worker begun for it is current exactly when it
     // is the program on screen.
@@ -510,6 +607,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             scaling,
             window_mode,
             capture_technique,
+            volume,
             hook_session,
         )
     });
@@ -577,6 +675,131 @@ pub(super) fn open_fully(path: &Path) -> bool {
         return false;
     };
 
+    // If a live custom preview for `path` is active, detach & promote its window in-place.
+    let matches_active = PROGRAM
+        .lock()
+        .ok()
+        .is_some_and(|held| held.as_ref().is_some_and(|p| p.path.as_path() == path));
+    let source_raw = SOURCE.load(Ordering::SeqCst);
+    if matches_active && source_raw != 0 {
+        let source_hwnd = HWND(source_raw as *mut _);
+        if unsafe { IsWindow(source_hwnd) }.as_bool() {
+            // Bump LAUNCH first so `run_it` stops touching `source` and drops `InProcessHookSession`.
+            LAUNCH.fetch_add(1, Ordering::SeqCst);
+            if let Ok(mut want) = WANT.lock() {
+                *want = None;
+            }
+            if let Some(mut program) = PROGRAM.lock().ok().and_then(|mut held| held.take()) {
+                if let Some(job) = program.job.take() {
+                    let _ = job.detach();
+                }
+                engine_processes::forget(program.pid);
+            }
+
+            SOURCE.store(0, Ordering::SeqCst);
+            SOURCE_PID.store(0, Ordering::SeqCst);
+            SOURCE_IS_NEW.store(false, Ordering::SeqCst);
+            let was_invisible_layered = SOURCE_INVISIBLE_LAYERED.swap(false, Ordering::SeqCst);
+            if let Ok(mut r) = SOURCE_RESTORE_RECT.lock() {
+                *r = None;
+            }
+            let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|mut g| g.take());
+            let host_rect = LAST_HOST_RECT.lock().ok().and_then(|mut g| g.take());
+            let orig_style = SOURCE_ORIGINAL_STYLE.lock().ok().and_then(|mut g| g.take());
+            let orig_ex_style = SOURCE_ORIGINAL_EX_STYLE
+                .lock()
+                .ok()
+                .and_then(|mut g| g.take());
+            let capture_technique = ACTIVE_CAPTURE_TECHNIQUE
+                .lock()
+                .map(|g| *g)
+                .unwrap_or(CustomCaptureTechnique::InProcessHook);
+            let window_mode = ACTIVE_WINDOW_MODE
+                .lock()
+                .map(|g| *g)
+                .unwrap_or(CustomWindowMode::Normal);
+
+            let thumbnail = THUMBNAIL
+                .lock()
+                .map(|mut held| std::mem::replace(&mut *held, 0))
+                .unwrap_or(0);
+            if thumbnail != 0 {
+                let _ = unsafe { DwmUnregisterThumbnail(thumbnail) };
+            }
+            hide_the_host();
+
+            if let Some(ctrl) = hook_ctrl {
+                let _ = ctrl.detach_sync(source_hwnd);
+            }
+            if window_mode == CustomWindowMode::Borderless {
+                if let Some(style) = orig_style {
+                    let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_STYLE, style) };
+                }
+            }
+            if was_invisible_layered {
+                let _ =
+                    unsafe { SetLayeredWindowAttributes(source_hwnd, COLORREF(0), 255, LWA_ALPHA) };
+                let target_ex = orig_ex_style.unwrap_or_else(|| {
+                    let cur = unsafe { GetWindowLongPtrW(source_hwnd, GWL_EXSTYLE) } as u32;
+                    (cur & !INVISIBLE_EX_STYLE) as isize
+                });
+                let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_EXSTYLE, target_ex) };
+                let _ = unsafe {
+                    SetWindowPos(
+                        source_hwnd,
+                        HWND::default(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                    )
+                };
+            } else if capture_technique == CustomCaptureTechnique::DirectWindow
+                || window_mode == CustomWindowMode::Borderless
+            {
+                let target_ex = orig_ex_style.unwrap_or_else(|| {
+                    let cur = unsafe { GetWindowLongPtrW(source_hwnd, GWL_EXSTYLE) } as u32;
+                    (cur & !DIRECT_EX_STYLE) as isize
+                });
+                let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_EXSTYLE, target_ex) };
+                let _ = unsafe {
+                    SetWindowPos(
+                        source_hwnd,
+                        HWND::default(),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+                    )
+                };
+            }
+
+            if let Some(hr) = host_rect {
+                let insets = dwm_frame_insets(source_hwnd);
+                let (ax, ay, aw, ah) = behind_host_window_rect(hr, insets);
+                let _ = unsafe {
+                    SetWindowPos(source_hwnd, HWND_NOTOPMOST, ax, ay, aw, ah, SWP_SHOWWINDOW)
+                };
+            } else {
+                let _ = unsafe {
+                    SetWindowPos(
+                        source_hwnd,
+                        HWND_NOTOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                    )
+                };
+            }
+            let _ = unsafe { SetForegroundWindow(source_hwnd) };
+            return true;
+        }
+    }
+
     end_the_program();
     let _ = Command::new(exe).arg(path).spawn();
     true
@@ -608,6 +831,15 @@ fn end_the_program() {
     SOURCE_INVISIBLE_LAYERED.store(false, Ordering::SeqCst);
     if let Ok(mut ctrl) = ACTIVE_HOOK_CONTROL.lock() {
         *ctrl = None;
+    }
+    if let Ok(mut r) = LAST_HOST_RECT.lock() {
+        *r = None;
+    }
+    if let Ok(mut s) = SOURCE_ORIGINAL_STYLE.lock() {
+        *s = None;
+    }
+    if let Ok(mut ex) = SOURCE_ORIGINAL_EX_STYLE.lock() {
+        *ex = None;
     }
     let restore_rect = SOURCE_RESTORE_RECT.lock().ok().and_then(|mut r| r.take());
     if source != 0 {
@@ -1000,6 +1232,7 @@ fn run_it(
     scaling: CustomScaling,
     window_mode: CustomWindowMode,
     capture_technique: CustomCaptureTechnique,
+    volume: u32,
     hook_session: Option<InProcessHookSession>,
 ) {
     let Some(source) = (if let Some(ref session) = hook_session {
@@ -1033,9 +1266,17 @@ fn run_it(
     SOURCE_PID.store(source_pid, Ordering::SeqCst);
     SOURCE_IS_NEW.store(source_is_new, Ordering::SeqCst);
     SOURCE_INVISIBLE_LAYERED.store(false, Ordering::SeqCst);
+    if let Ok(mut s) = SOURCE_ORIGINAL_STYLE.lock() {
+        *s = Some(unsafe { GetWindowLongPtrW(source, GWL_STYLE) });
+    }
+    if let Ok(mut ex) = SOURCE_ORIGINAL_EX_STYLE.lock() {
+        *ex = Some(unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) });
+    }
 
     // Lock ownership strictly to our launched tree (+ adopted brokered tree if newly spawned).
     let mut processes = owned_pids_for(launch.pid, source_pid, source_is_new);
+    audio_session::apply_custom_preview_volume(processes.clone(), volume);
+    let mut last_volume_apply = Instant::now();
 
     // Visible app (ignored `SW_HIDE`): make 1/255 invisible BEFORE any style/size/move changes
     // when technique is `InvisibleLayered`.
@@ -1531,6 +1772,10 @@ fn run_it(
             processes = owned_pids_for(launch.pid, source_pid, source_is_new);
             tree_read = Instant::now();
         }
+        if last_volume_apply.elapsed() >= Duration::from_millis(500) {
+            audio_session::apply_custom_preview_volume(processes.clone(), volume);
+            last_volume_apply = Instant::now();
+        }
 
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
             placed_host_rect = None;
@@ -1569,6 +1814,9 @@ fn run_it(
         let (x, y) = (layout.pos_x, layout.pos_y);
         let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
         let host_rect = (x, y, width, height);
+        if let Ok(mut slot) = LAST_HOST_RECT.lock() {
+            *slot = Some(host_rect);
+        }
 
         if let Some(ref session) = hook_session {
             let needs_reposition = session.view.is_cloaked()
@@ -3519,6 +3767,9 @@ fn run_offscreen_staged_settle_and_reveal(
     let Some(host_rect) = current_target_rect() else {
         return true;
     };
+    if let Ok(mut slot) = LAST_HOST_RECT.lock() {
+        *slot = Some(host_rect);
+    }
     let (hx, hy, hw, hh) = host_rect;
 
     // Branch A: try `WS_EX_LAYERED` + `LWA_ALPHA = 1` WHILE STILL AT `(STAGE_COORD, STAGE_COORD)`.
@@ -3650,6 +3901,7 @@ const HOOK_MAGIC: u32 = 0x5248_5048;
 const HOOK_VERSION: u32 = 1;
 const CMD_UNCLOAK: usize = 1;
 const CMD_CLOAK: usize = 2;
+const CMD_DETACH: usize = 3;
 const HOOK_CONTROL_MSG_NAME: PCWSTR = w!("RhpCustomPreviewHookControl");
 
 #[repr(C)]
@@ -3830,6 +4082,30 @@ impl HookSharedView {
                 )
             };
         }
+    }
+
+    /// Clear cloak + rect lock and synchronously remove the in-process subclass hook (`CMD_DETACH`).
+    fn detach_sync(&self, hwnd: HWND) -> bool {
+        let s = self.state();
+        s.cloak_enabled.store(0, Ordering::Release);
+        s.rect_locked.store(0, Ordering::Release);
+        if hwnd.0.is_null() || !unsafe { IsWindow(hwnd) }.as_bool() {
+            return false;
+        }
+        let hits_before = self.hook_hits();
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                self.uncloak_msg,
+                WPARAM(CMD_DETACH),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                100,
+                None,
+            )
+        }
+        .0 != 0;
+        sent && self.hook_hits() > hits_before
     }
 }
 
@@ -4153,6 +4429,9 @@ fn reveal_in_process_hook(
     window_mode: CustomWindowMode,
     state: &mut OffscreenStagedState<'_>,
 ) {
+    if let Ok(mut slot) = LAST_HOST_RECT.lock() {
+        *slot = Some(host_rect);
+    }
     // Late-hooked fallback (`hook_hits == 0`): source is not cloaked; use InvisibleLayered if active.
     if session.view.hook_hits() == 0 && *state.invisible_layered {
         session
@@ -5954,6 +6233,31 @@ mod tests {
         assert_eq!(view.state().x.load(Ordering::Acquire), STAGE_COORD);
         assert_eq!(view.state().y.load(Ordering::Acquire), STAGE_COORD);
 
+        // CMD_DETACH clears cloak_enabled + rect_locked and removes the in-process subclass hook.
+        assert!(
+            view.detach_sync(main_hwnd),
+            "detach_sync must deliver CMD_DETACH synchronously and increment hook_hits"
+        );
+        assert_eq!(view.state().cloak_enabled.load(Ordering::Acquire), 0);
+        assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 0);
+        let _ = unsafe {
+            SetWindowPos(
+                main_hwnd,
+                HWND_NOTOPMOST,
+                210,
+                140,
+                320,
+                240,
+                SWP_NOACTIVATE,
+            )
+        };
+        let detached_rect = window_rect(main_hwnd).expect("detached main_hwnd rect");
+        assert_eq!(
+            (detached_rect.left, detached_rect.top),
+            (210, 140),
+            "detached window must move freely with zero leftover subclass rect-lock"
+        );
+
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(main_hwnd) };
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(helper_hwnd) };
         let _ = unsafe { UnhookWindowsHookEx(current_hooks.0) };
@@ -5972,5 +6276,41 @@ mod tests {
                 "REJECTED_BEFORE_RESUME (retry-after-resume path active)"
             }
         );
+    }
+
+    #[test]
+    fn custom_preview_volume_params_clamps_and_mutes_at_zero() {
+        assert_eq!(audio_session::custom_preview_volume_params(0), (0.0, true));
+        assert_eq!(
+            audio_session::custom_preview_volume_params(50),
+            (0.5, false)
+        );
+        assert_eq!(
+            audio_session::custom_preview_volume_params(100),
+            (1.0, false)
+        );
+        assert_eq!(
+            audio_session::custom_preview_volume_params(250),
+            (1.0, false)
+        );
+    }
+
+    #[test]
+    fn preview_job_detach_clears_kill_on_close_and_preserves_child() {
+        let mut child = engine_processes::hidden_command("cmd.exe")
+            .args(["/C", "ping -n 6 127.0.0.1 >nul"])
+            .spawn()
+            .expect("spawn hidden helper child");
+        let pid = child.id();
+        let job = PreviewJob::create_and_assign(pid).expect("create per-preview job");
+        assert!(job.detach(), "detach must clear KILL_ON_JOB_CLOSE");
+        // Child must still be alive after detached job is closed.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "detached child must survive job close"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
