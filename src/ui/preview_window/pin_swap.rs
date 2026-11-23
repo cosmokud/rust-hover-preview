@@ -79,11 +79,29 @@ pub(super) struct PinSwapSpace {
 ///
 /// It is read rather than asked for piece by piece so that the lock is let go of before
 /// anything is measured or asked for an engine — the same rule `PinUpdate` keeps.
+pub(super) fn current_pin_scaling_mode() -> PinScalingMode {
+    CONFIG
+        .lock()
+        .map(|cfg| cfg.pin_scaling_mode)
+        .unwrap_or(DEFAULT_PIN_SCALING_MODE)
+}
+
 pub(super) fn pin_swap_space(pin: &PinnedPreview) -> PinSwapSpace {
+    pin_swap_space_for(pin, current_pin_scaling_mode())
+}
+
+// UseScalingSettings drops pin.bound so swaps recompute fresh from pinned_room using configured scale.
+pub(super) fn pin_swap_space_for(
+    pin: &PinnedPreview,
+    scaling_mode: PinScalingMode,
+) -> PinSwapSpace {
     let bounds = work_area_at(pin.content.0, pin.content.1);
     PinSwapSpace {
         current: pin.content,
-        bound: pin.bound,
+        bound: match scaling_mode {
+            PinScalingMode::UntilResized => pin.bound,
+            PinScalingMode::UseScalingSettings => None,
+        },
         transport_bar: pin.transport_bar,
         overlay: pin.overlay,
         caption: pin.caption,
@@ -368,8 +386,9 @@ fn pin_update_content_measured(
         return Some(PinBox::Waiting);
     }
 
-    let scale = effective_preview_scale(path, current_hover_scales());
-    let Some(shape) = media_dimensions(path, bounds, dpi) else {
+    let hover = HoverFacts::read(path);
+    let scale = effective_preview_scale_of(&hover, hover.scales);
+    let Some(shape) = media_dimensions_of(&hover, path, bounds, dpi) else {
         note_a_swap_box(
             "none",
             path,
@@ -387,7 +406,7 @@ fn pin_update_content_measured(
     // for: the measure this call has just taken is what starts the read that settles it, so what
     // the pin has of the new file is a wait to keep rather than a shape to lay out (see
     // `pin_swap_awaits`).
-    if pin_swap_awaits(path, shape) {
+    if pin_swap_awaits_of(&hover, shape) {
         note_a_swap_box(
             "waiting",
             path,
@@ -405,13 +424,14 @@ fn pin_update_content_measured(
     // whatever box it is handed, so a swap gives it the box a fresh take-up of the same file
     // gives it — the work area's own room at the share its kind names — and keeps that inside the
     // bound the pin was given, the way every file with a shape of its own is (see `pinned_media_box`,
-    // `hover_preview_scale` and `reset_pinned_size`). The share is the take-up's rather than the
-    // hover's, because the box this answers is the one the take-up installs the file in.
+    // `effective_preview_scale` and `reset_pinned_size`). The share is the take-up's, because the
+    // box this answers is the one the take-up installs the file in.
     //
     // Asked only of a pin that is up: a box handed to a file where no pin stands is the hover's
-    // own to decide (see `hover_preview_scale_of`).
+    // own to decide, which is the same share asked of a file rather than of a loaded one (see
+    // `effective_preview_scale_of`).
     if pinned() && webview_preview::draws(path) {
-        let share = hover_preview_scale(path, current_hover_scales());
+        let share = scale;
         let own = pinned_media_box(shape, bounds, share);
         let content = match space.bound {
             // No bound asked of this window yet, so the file is its own size in the middle of the
@@ -465,7 +485,7 @@ fn pin_update_content_measured(
     // was decides only whether the room a picture left is a caption shorter than this one's — and
     // which way that goes, every other swap in this file already measures the same way (see
     // `pin_swap_room`).
-    if pin_keeps_its_box(path) {
+    if pin_keeps_its_box_of(&hover) {
         let laid_out = pin_update_box(space.room.region(), shape, scale);
         let content = centred_at(
             (laid_out.2 - laid_out.0, laid_out.3 - laid_out.1),
@@ -517,19 +537,28 @@ fn pin_update_content_measured(
     }
 
     let room = pin_swap_room(space, bounds, dpi);
-    let content = pin_update_box(room, shape, scale);
+    let swap_scale = pin_swap_scale(space.bound, scale);
+    let content = pin_update_box(room, shape, swap_scale);
 
     note_a_swap_box(
         "bound",
         path,
         &space,
         Some(shape),
-        Some(scale),
+        Some(swap_scale),
         room,
         Some(content),
     );
 
     Some(PinBox::Measured(content))
+}
+
+// Bound already constrains room; FitToScreenReduced must not re-apply fit_share on top of bound.
+pub(super) fn pin_swap_scale(bound: Option<i32>, scale: PreviewScale) -> PreviewScale {
+    match (bound, scale) {
+        (Some(_), PreviewScale::FitToScreenReduced(_)) => PreviewScale::FitToScreen,
+        _ => scale,
+    }
 }
 
 /// One line about the box a swap measured its incoming file out in, written under the name of the
@@ -579,8 +608,13 @@ fn note_a_swap_box(
 /// the placeholder sometimes, and a box of that size held for one is the file's own size rather
 /// than a wait — while a placeholder nothing is reading behind is a size that will never change,
 /// and a pick that waited on it would wait forever.
+#[cfg(test)]
 pub(super) fn pin_swap_awaits(path: &Path, shape: (u32, u32)) -> bool {
     box_is_the_wait(shape) && (measure_waiting(path) || video_probe_due(&HoverFacts::read(path)))
+}
+
+pub(super) fn pin_swap_awaits_of(hover: &HoverFacts, shape: (u32, u32)) -> bool {
+    box_is_the_wait(shape) && (measure_waiting(hover.probe.path()) || video_probe_due(hover))
 }
 
 /// Whether a measured shape is the wait for a box rather than one: the placeholder every measurer
@@ -740,25 +774,25 @@ fn pin_swap_content(content: ScreenRegion, space: PinSwapSpace, dpi: u32) -> Scr
 /// draws it at whatever box it is handed, so it is the file's own box that is laid out and a bound
 /// of its own that the files after it are given (see `pin_update_content`).
 pub(super) fn pin_keeps_its_box(path: &Path) -> bool {
-    if html_is_engine_drawn(path) {
+    pin_keeps_its_box_of(&HoverFacts::read(path))
+}
+
+pub(super) fn pin_keeps_its_box_of(hover: &HoverFacts) -> bool {
+    if hover.html_drawn_by_the_engine() {
         return false;
     }
 
-    // Asked of the content, with the entry read before the lock rather than the whole
-    // configuration copied out of it: the take-up that asks this one is a take-up that must
-    // not be holding a lock a window message may be waiting on, and a copy of the
-    // configuration is sixteen lists to clone to read one answer (see `content_of`).
-    if let crate::formats::content_type::Content::Kind(kind) = content_of(path) {
+    if let crate::formats::content_type::Content::Kind(kind) = hover.route.content {
         return matches!(
             kind,
             PreviewType::Text | PreviewType::Archives | PreviewType::Peazip | PreviewType::Audio
         );
     }
 
-    is_text_preview(path)
-        || previewed_as(path, PreviewType::Archives)
-        || peazip_formats::is_peazip_file(path) && PreviewType::Peazip.enabled()
-        || drawn_as_audio(path)
+    hover.is_text()
+        || (hover.archive_named && PreviewType::Archives.enabled())
+        || (hover.engine_archive() && PreviewType::Peazip.enabled())
+        || hover.is_audio()
 }
 
 /// The bound a pin has once the file just taken up is the one on screen: a side the files that

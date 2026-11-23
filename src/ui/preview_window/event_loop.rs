@@ -174,9 +174,6 @@ pub fn run_preview_window() {
         // And the facts line of the same card, scrolled the same way where the room the clock
         // leaves has no place for it: put up with the card too (see `audio_preview::facts_scroll`).
         let mut audio_facts_scroll: Option<audio_preview::NameScroll> = None;
-        // The hover the preview came from, so a theme or Markdown switch can rebuild it without
-        // waiting for the next hover.
-        let mut current_show: Option<PreviewMessage> = None;
         // Video position/size, for the periodic topmost re-assertion.
         let mut video_pos: (i32, i32, i32, i32) = (0, 0, 0, 0); // (x, y, w, h)
         let mut last_topmost_check = Instant::now();
@@ -217,6 +214,7 @@ pub fn run_preview_window() {
         // one thing the loop itself cannot do (see `spawn_pin_watchdog`).
         spawn_pin_watchdog();
         let mut current_generation: u64 = 0;
+        let mut seen_config_gen: u64 = crate::app::seam::config_generation();
         let mut pending_load: Option<PendingLoad> = None;
         let mut pending_load_cancel: Option<Arc<AtomicBool>> = None;
         let mut last_stream_overlay_repaint = Instant::now();
@@ -228,45 +226,12 @@ pub fn run_preview_window() {
         // once for a file the pointer has settled on rather than on every tick (see
         // `warm_engines_for`).
         let mut warmed_generation: Option<u64> = None;
-        // A page that arrived for the hover already on screen, and is being loaded
-        // to replace what is there rather than to open a new preview.
-        let mut page_upgrade: Option<PathBuf> = None;
         // The video whose probe a hover is waiting on, and the generation of the hover
         // that is waiting: the geometry is measured on a thread of its own and the hover
         // is replayed when the answer lands (see `VideoProbed`).
         let mut video_probe: Option<(PathBuf, u64)> = None;
-        // The hover a video's probe has just answered for. Its replay is the same wait
-        // carried on rather than a new preview: what is on screen — the spinner — stays
-        // where it is until the video replaces it, the way a page landing on a spinner
-        // behaves (see `upgrading`).
-        let mut video_replay: Option<PathBuf> = None;
-        // The file the engine was watched failing at: the engine took it and then never drew a
-        // frame of it, so it is a file no player here will take — which, now that FFmpeg's player
-        // is where every video is played where it is installed at all, is a machine whose only
-        // player is the one that failed. The hover that is up is replayed to be answered without
-        // a preview, which is what this waits to be done where a replay can be started — the tick
-        // that finds the failure out cannot start one itself (see `video_player::mark_unplayable`).
-        let mut engine_failed: Option<PathBuf> = None;
-        // The hover a box measured off the preview thread has just answered for. Its replay is
-        // the same wait carried on rather than a new preview, the way a video's is (see
-        // `measure_replay`).
-        let mut measure_replay: Option<PathBuf> = None;
-        // The file a pinned window is waiting for a box of: what the user picked has no box of its
-        // own yet — a page being measured off the preview thread, a video being probed — so what
-        // the pick comes to is a wait rather than a swap. The file is picked up again by name when
-        // the answer lands, which is a tick of its own, so this outlives the tick the way the
-        // replay flags above it do (see `PinPlan::Awaiting`).
-        let mut pin_awaiting_box: Option<PathBuf> = None;
-        // The file a cold pin was taken up on that its own take-up could not draw at once: an engine owes
-        // it a page, a picture or a listing, or a read or a probe owes it a box. Nothing is loaded for it
-        // until that answer lands, and the engine is asked once per press — a second ask would be a second
-        // launch for a page the first one is already writing (see `a_cold_pins_file_is_owed`).
-        let mut pin_cold_wait: Option<PathBuf> = None;
-        // The page this loop last raised the pin's window on, for a pin of an engine kind: the window is put
-        // up where the page is drawn rather than at the take-up, and what answers for it is a page the engine
-        // has published (see `the_pins_page_is_on_the_screen` and `show_pinned_window`, which refuses the
-        // show until it has).
-        let mut pin_page_shown: Option<PathBuf> = None;
+        // Owned hover & pin-wait session state machine (replaces ad-hoc replay/wait flags).
+        let mut session = HoverSession::new(current_hover_scales());
         // The return a put-away pin is owed once a file it can be shown is on the window: a pick
         // names a file nothing has read yet, and a window put up on the pick shows the file before it
         // for as long as the read and the decode take — the flash the user sees between the two
@@ -401,18 +366,12 @@ pub fn run_preview_window() {
         // static preview republishes at most twice a second plus on transitions.
         let mut last_hold_publish = Instant::now() - Duration::from_secs(10);
         let mut last_hold_key = (false, false, false, 0u64);
-        // **A window handed to this process by another one is opened here**, before the loop turns:
-        // the file is read on a thread of its own and put on the screen through the same message a
-        // pin key would have sent (see `detach_open`). A process that is not a detached window asks
-        // nothing and does nothing.
-        detach_open::begin();
-
         // **The tray app is waiting on this before it makes the rings the road** — the section is joined and
         // the loop is about to turn, which is the whole of what it asks before it publishes into the ring
         // this loop reads (see `app::viewer::begin_the_viewer`).
         crate::app::seam::note_the_preview_loop_is_up();
 
-        while RUNNING.load(Ordering::SeqCst) {
+        while RUNNING.load(Ordering::SeqCst) && !crate::app::seam::shutdown_requested() {
             // Every tick is noted, whether it does anything or not: what the note is
             // for is the Explorer hook telling a loop that is working from one that has
             // stopped, and a loop waiting on the channel is working (see
@@ -608,6 +567,7 @@ pub fn run_preview_window() {
             // Which of the three surfaces it is, as well as whether it is one: the hook dismisses a
             // preview the pointer arrives on, and a page that runs, a film and a picture are three
             // different answers to that (see `crate::app::seam::cursor_preview_hover`).
+            pin_lifecycle::poll_deferred_preview_hide(Instant::now());
             let preview_hover = cursor_preview_hover();
             crate::app::seam::publish_preview_under_the_pointer(preview_hover.any());
             crate::app::seam::publish_preview_cursor_hover(preview_hover);
@@ -706,7 +666,7 @@ pub fn run_preview_window() {
                     // model the preview is not showing in the engine's window, and a `Space` with
                     // the pointer away from it pins as it always did.
                 } else if let Some(request) =
-                    pin_what_is_on_screen(&current_show, pending_load.as_ref())
+                    pin_what_is_on_screen(session.current_show(), pending_load.as_ref())
                 {
                     pin_request = Some(request);
                 } else if let Some(path) = take_the_cold_pins_file() {
@@ -768,7 +728,7 @@ pub fn run_preview_window() {
                         || pin_load.is_some()
                         || pin_walk_wait.is_some()
                         || pin_swap_hold.is_some()
-                        || pin_awaiting_box.is_some()
+                        || session.has_pin_awaiting_box()
                         || pin_held_pick.is_some();
                     loop_ended_pinned_player(
                         pin_walk_anchor(&pin_walk),
@@ -828,7 +788,7 @@ pub fn run_preview_window() {
                     // hover from it, so it would only sit there being true about a file
                     // this tick has already dealt with.
                     video_player::mark_unplayable(&failing);
-                    engine_failed = None;
+                    session.clear_engine_failed();
 
                     pin_step_off(take_pin_walk(), &mut pin_walk);
 
@@ -898,7 +858,7 @@ pub fn run_preview_window() {
                     || pin_load.is_some()
                     || pin_walk_wait.is_some()
                     || pin_swap_hold.is_some()
-                    || pin_awaiting_box.is_some()
+                    || session.has_pin_awaiting_box()
                     || pin_held_pick.is_some();
 
                 if let Some(walk) = pin_command_request(
@@ -1164,12 +1124,6 @@ pub fn run_preview_window() {
                 {
                     last_pin_repaint = Instant::now();
                     render_layered_preview(hwnd);
-                }
-
-                // **A taken frame holds the pin's band until the host has the picture, and the pass
-                // that lets it go owes the paint that says so** (see `pin_film_host::BandStill`).
-                if pinned() {
-                    pin_film_host::settle_the_band_still();
                 }
 
                 // **A picture that has changed hands in the pin's host is the band painted again**,
@@ -1651,7 +1605,7 @@ pub fn run_preview_window() {
                             // handed to another engine. The replay is asked for where a
                             // replay can be started (see `video_player::mark_unplayable`).
                             video_player::mark_unplayable(&failing);
-                            engine_failed = Some(failing);
+                            session.on_engine_failed(failing);
                         }
                     }
                     // A film the media engine plays for the pin ends the way a sound the engine plays
@@ -1660,7 +1614,7 @@ pub fn run_preview_window() {
                     // where it pauses — both of them a tenth of a second before the end of the pass,
                     // off the engine's own clock (see `pinned_native_video_end`).
                     if media.media_type.is_native_video() {
-                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                        if let Some(path) = session.shown_path() {
                             answer_native_pass_end(
                                 pinned_native_video_end(path),
                                 path,
@@ -1698,7 +1652,7 @@ pub fn run_preview_window() {
                         // folder there, with the walk's own wait — and one whose end of file is
                         // `Pause` stops where it is, the card left held at the beginning with its
                         // play button up.
-                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                        if let Some(path) = session.shown_path() {
                             wrap_audio_player(
                                 media,
                                 path,
@@ -1795,20 +1749,13 @@ pub fn run_preview_window() {
                             let name_offset = step_the_marquee(&mut audio_name_scroll, cadence);
                             let facts_offset = step_the_marquee(&mut audio_facts_scroll, cadence);
 
-                            if let Some(path) = current_show.as_ref().and_then(self::show_path) {
+                            if let Some(path) = session.shown_path() {
                                 let (elapsed, duration) = audio_clock(
                                     path,
                                     audio_started,
                                     audio_start_offset,
                                     audio_paused,
                                 );
-
-                                // Where the sound on screen has got to, written down for the one
-                                // thing that has to carry it over a process boundary: the window
-                                // this one is handed to, which opens the file from nothing and
-                                // cannot ask a player it does not own (see
-                                // `pin_detach::note_the_sounds_position`).
-                                pin_detach::note_the_sounds_position(path, elapsed);
 
                                 // A start position that was a share of a length nothing had
                                 // read is asked for here, on the first tick a player says how
@@ -1971,6 +1918,7 @@ pub fn run_preview_window() {
                     }
 
                     if !IsWindowVisible(hwnd).as_bool() {
+                        pin_lifecycle::cancel_deferred_preview_hide();
                         let _ = SetWindowPos(
                             hwnd,
                             HWND_TOPMOST,
@@ -2048,13 +1996,11 @@ pub fn run_preview_window() {
                             &mut current_video_path,
                             &mut video_pos,
                         );
-                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
-                            office_render::hover_ended(path);
+                        if let Some(path) = session.on_hide() {
+                            office_render::hover_ended(&path);
                         }
 
-                        current_show = None;
                         page_render_pending = None;
-                        page_upgrade = None;
                     } else {
                         pending_load_cancel = None;
                     }
@@ -2183,19 +2129,9 @@ pub fn run_preview_window() {
                                 let seek = current_audio_seek();
                                 let length = audio_track::playable(&result.path)
                                     .and_then(|track| track.duration);
-                                // A sound this window was handed over is taken up where the pin it
-                                // came from had got to rather than where the way a *hover* drops
-                                // one in would have it: what the hand-off becomes is the window
-                                // that was standing, and a sound that came up at the second its
-                                // own settings alone would name is the one thing about it that
-                                // moved (see `crate::app::detach::the_sound_starts_at`).
-                                let handed = crate::app::detach::the_sound_starts_at(&result.path);
-                                let start = handed.unwrap_or_else(|| {
-                                    audio_seek::start_position(&result.path, seek, length)
-                                });
+                                let start = audio_seek::start_position(&result.path, seek, length);
 
-                                audio_share_seek = (handed.is_none()
-                                    && start == 0.0
+                                audio_share_seek = (start == 0.0
                                     && matches!(seek, AudioSeek::Middle | AudioSeek::Random)
                                     && length.is_none())
                                 .then_some(seek);
@@ -2374,6 +2310,7 @@ pub fn run_preview_window() {
                                     }
 
                                     if let Some(pl) = pending {
+                                        pin_lifecycle::cancel_deferred_preview_hide();
                                         let _ = SetWindowPos(
                                             hwnd,
                                             HWND_TOPMOST,
@@ -2731,6 +2668,14 @@ pub fn run_preview_window() {
             // layouts for files the cursor has already left.
             let mut latest_preview_msg: Option<PreviewMessage> = None;
             let mut refresh_requested = false;
+            // Fast atomic generation check so serving and detached viewers reload config.ini
+            // immediately without waiting for the 1s mtime poll.
+            let current_config_gen = crate::app::seam::config_generation();
+            if current_config_gen != seen_config_gen {
+                seen_config_gen = current_config_gen;
+                let diff = reload_config_for_event_loop();
+                apply_config_reload_diff(diff, hwnd, &mut latest_preview_msg, &mut session);
+            }
             // The newest file the user has picked while a preview was pinned, if any arrived this
             // tick: what the loop answers by showing the pin that file instead of the one it has
             // (see `PinUpdate`).
@@ -2797,7 +2742,11 @@ pub fn run_preview_window() {
                             // an archive listing alike — so a theme switch rebuilds
                             // it from the hover it came from; every other preview
                             // only needs the frame composited again.
-                            match (pinned(), current_media_is_painted(), current_show.clone()) {
+                            match (
+                                pinned(),
+                                current_media_is_painted(),
+                                session.current_show().clone(),
+                            ) {
                                 // A pin is not rebuilt from the hover it came from: what is on
                                 // screen is a window of this app's own, and what a setting
                                 // changed under it is owed is the repaint that composes its
@@ -2847,17 +2796,16 @@ pub fn run_preview_window() {
                         if pinned() {
                             let switched_off = current_media_kind()
                                 .is_some_and(|kind| !kind.enabled())
-                                || current_show
-                                    .as_ref()
-                                    .and_then(show_path)
-                                    .and_then(|path| engine_kind_of(path))
+                                || session
+                                    .shown_path()
+                                    .and_then(engine_kind_of)
                                     .is_some_and(|kind| !kind.enabled());
 
                             if switched_off {
                                 pin_request = Some(end_pin_state(Reason::SwitchedOff));
                             }
                         } else if latest_preview_msg.is_none() {
-                            match (current_media_kind(), current_show.clone()) {
+                            match (current_media_kind(), session.current_show().clone()) {
                                 (Some(kind), Some(show)) if !kind.enabled() => {
                                     latest_preview_msg = Some(show)
                                 }
@@ -2887,6 +2835,20 @@ pub fn run_preview_window() {
                     // neither what is wanted there nor what is showing is the page the switch was
                     // turned off under (see `hide_html_page`).
                     PreviewMessage::HideHtmlPage => hide_html_page(),
+                    // A setting the tray wrote that a hover reads when it begins — a `Scaling` row's
+                    // share is part of the placement a hover is opened with. This process's copy of
+                    // the file is brought up to date now rather than at its watch's next look, or a
+                    // hover arriving before that look is laid out by the value the row replaced: the
+                    // first preview after a change was drawn at the old share and the second at the
+                    // new one (see `PreviewMessage::ConfigChanged`). Nothing on screen is rebuilt.
+                    PreviewMessage::ConfigChanged => {
+                        seen_config_gen = crate::app::seam::config_generation();
+                        let diff = reload_config_for_event_loop();
+                        apply_config_reload_diff(diff, hwnd, &mut latest_preview_msg, &mut session);
+                    }
+                    PreviewMessage::ClosePdfPins => {
+                        crate::engines::pdf_viewer::close_the_pins();
+                    }
                     // A budget made smaller is trimmed here for the same reason: what a trim may
                     // not give up is this process's, and none of the tray's (see `trim_caches`).
                     PreviewMessage::TrimCaches => trim_caches(),
@@ -2901,51 +2863,13 @@ pub fn run_preview_window() {
                     // way its own close button takes it.
                     PreviewMessage::PinChanged => {
                         if pinned() {
-                            // A pin that is Always On Top owes the front to the setting, and one
-                            // whose row is off never owed it: the flag is what either setting
-                            // leaves behind otherwise, and it would be a pin holding a band its
-                            // own setting does not name.
                             if pin_always_on_top() || !pin_update_move_to_top() {
                                 PIN_FRONT_OWED.store(false, Ordering::SeqCst);
                             }
                             if !pin_enabled() {
                                 pin_request = Some(end_pin_state(Reason::SwitchedOff));
                             } else {
-                                // **The band the setting now names, on the windows that are in it**:
-                                // a pin that is a window of its own is not this window and neither is
-                                // the host that owns its chrome, and the row used to be answered by
-                                // placing the preview — a window the pin has put down — in the band.
-                                // What that left was a pin taken up with the setting off and then
-                                // told it was Always On Top, still ordinary and so behind the listing
-                                // it was asked for from (see `place_the_pin_where_the_setting_names`).
-                                place_the_pin_where_the_setting_names();
-                                // **And the button goes with it.** A pair whose button is the host's
-                                // is not the stand-in below, and a row that only answered the stand-in
-                                // left a pin with `Always On Top` on wearing the button it had
-                                // (see `the_button_follows_the_setting`).
-                                pin_film_host::the_button_follows_the_setting();
-                                if pin_always_on_top() {
-                                    if !pin_is_collapsed() {
-                                        hide_pin_taskbar();
-                                    }
-                                } else {
-                                    show_pin_taskbar();
-                                }
-                                place_pinned_siblings();
-                                // And the player is told the same thing where it is mpv's: a film
-                                // that held the topmost band for the pin's sake has to give it up
-                                // when the setting says so, or it is a topmost window over a pin
-                                // that is not (see `settle_pinned_mpv_ontop`).
-                                settle_pinned_mpv_ontop();
-                                AUDIO_CARD_DIRTY.store(true, Ordering::Release);
-                                render_layered_preview(hwnd);
-                                // **And the pin's place is settled last, because the button road above
-                                // is one that moves the caret.** Reading the Shell's bit back costs a
-                                // visible window a hide and a re-show, and a hidden window hands the
-                                // caret to the window next in the z-order — the listing raised over a
-                                // pin that has just left the topmost band (see
-                                // `settle_the_pin_after_the_setting_moved`).
-                                settle_the_pin_after_the_setting_moved();
+                                apply_pin_topmost_change(hwnd);
                             }
                         }
                     }
@@ -2980,7 +2904,7 @@ pub fn run_preview_window() {
                         // answer that comes for it is then no answer to this pick, and the file
                         // the user actually picked last is the one that is shown (see
                         // `pin_awaiting_box`).
-                        pin_awaiting_box = None;
+                        session.clear_pin_awaiting_box();
                         pin_pick = Some(path);
 
                         // And whatever the pin was behind, an update is the moment it comes
@@ -3065,17 +2989,20 @@ pub fn run_preview_window() {
                         // The newest hover wins otherwise, as it does over every other
                         // message: a page that lands in the same tick as a new
                         // hover is not the answer to it.
-                        if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
-                            && !take_a_cold_pins_answer(
-                                hwnd,
-                                &path,
-                                ok,
-                                current_generation,
-                                &mut pin_cold_wait,
-                                &mut pin_load,
-                                &mut pin_request,
-                            )
-                            && latest_preview_msg.is_none()
+                        if !take_pin_engine_answer(
+                            &path,
+                            ok,
+                            session.pin_awaiting_box_mut(),
+                            &mut pin_pick,
+                        ) && !take_a_cold_pins_answer(
+                            hwnd,
+                            &path,
+                            ok,
+                            current_generation,
+                            session.pin_cold_wait_mut(),
+                            &mut pin_load,
+                            &mut pin_request,
+                        ) && latest_preview_msg.is_none()
                             && page_ready.is_none()
                         {
                             page_ready = Some((path, generation, ok));
@@ -3087,12 +3014,11 @@ pub fn run_preview_window() {
                         // thing a pinned window is not (see `pin_awaiting_box`). A pin that has
                         // gone in the meantime is shown nothing: the wait was the pin's, and a
                         // window that is not up is not owed a file.
-                        if pin_awaiting_box.as_deref() == Some(path.as_path()) {
-                            pin_awaiting_box = None;
+                        if session.take_pin_awaiting_box_if(&path) {
                             if pinned() {
                                 pin_pick = Some(path.clone());
                             }
-                        } else if pin_cold_wait.as_deref() == Some(path.as_path()) {
+                        } else if session.pin_cold_wait() == Some(path.as_path()) {
                             // The cold pin's file has the box the probe owed it: the pin is taken up at it here, and
                             // the wait is over (see `take_a_cold_pins_answer`).
                             take_a_cold_pins_answer(
@@ -3100,7 +3026,7 @@ pub fn run_preview_window() {
                                 &path,
                                 true,
                                 current_generation,
-                                &mut pin_cold_wait,
+                                session.pin_cold_wait_mut(),
                                 &mut pin_load,
                                 &mut pin_request,
                             );
@@ -3205,12 +3131,11 @@ pub fn run_preview_window() {
                         // that a reader has no box for the file at all is no box to lay anything
                         // out with, so the pin keeps the file it is showing rather than picking
                         // one up again (see `PinPlan::Awaiting`).
-                        if pin_awaiting_box.as_deref() == Some(path.as_path()) {
-                            pin_awaiting_box = None;
+                        if session.take_pin_awaiting_box_if(&path) {
                             if size.is_some() && pinned() {
                                 pin_pick = Some(path.clone());
                             }
-                        } else if pin_cold_wait.as_deref() == Some(path.as_path()) {
+                        } else if session.pin_cold_wait() == Some(path.as_path()) {
                             // The measure a cold pin's file was owed has answered: a box is what the file is
                             // loaded for, and no box at all is a file nothing here will lay out (see
                             // `take_a_cold_pins_answer`).
@@ -3219,7 +3144,7 @@ pub fn run_preview_window() {
                                 &path,
                                 size.is_some(),
                                 current_generation,
-                                &mut pin_cold_wait,
+                                session.pin_cold_wait_mut(),
                                 &mut pin_load,
                                 &mut pin_request,
                             );
@@ -3243,17 +3168,20 @@ pub fn run_preview_window() {
                         // is: what the hover that asked is waiting for is a picture to be
                         // placed with, not another hover — and an engine that will not draw
                         // the file is the same wait answered, with nothing in it.
-                        if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
-                            && !take_a_cold_pins_answer(
-                                hwnd,
-                                &path,
-                                ok,
-                                current_generation,
-                                &mut pin_cold_wait,
-                                &mut pin_load,
-                                &mut pin_request,
-                            )
-                            && latest_preview_msg.is_none()
+                        if !take_pin_engine_answer(
+                            &path,
+                            ok,
+                            session.pin_awaiting_box_mut(),
+                            &mut pin_pick,
+                        ) && !take_a_cold_pins_answer(
+                            hwnd,
+                            &path,
+                            ok,
+                            current_generation,
+                            session.pin_cold_wait_mut(),
+                            &mut pin_load,
+                            &mut pin_request,
+                        ) && latest_preview_msg.is_none()
                             && page_ready.is_none()
                         {
                             page_ready = Some((path, generation, ok));
@@ -3268,17 +3196,20 @@ pub fn run_preview_window() {
                         // same way: what the hover is waiting for is a table of contents to draw
                         // a page from, and an archive the engine will not list is that wait
                         // answered with nothing.
-                        if !take_pin_engine_answer(&path, ok, &mut pin_awaiting_box, &mut pin_pick)
-                            && !take_a_cold_pins_answer(
-                                hwnd,
-                                &path,
-                                ok,
-                                current_generation,
-                                &mut pin_cold_wait,
-                                &mut pin_load,
-                                &mut pin_request,
-                            )
-                            && latest_preview_msg.is_none()
+                        if !take_pin_engine_answer(
+                            &path,
+                            ok,
+                            session.pin_awaiting_box_mut(),
+                            &mut pin_pick,
+                        ) && !take_a_cold_pins_answer(
+                            hwnd,
+                            &path,
+                            ok,
+                            current_generation,
+                            session.pin_cold_wait_mut(),
+                            &mut pin_load,
+                            &mut pin_request,
+                        ) && latest_preview_msg.is_none()
                             && page_ready.is_none()
                         {
                             page_ready = Some((path, generation, ok));
@@ -3375,28 +3306,33 @@ pub fn run_preview_window() {
             // what says a page is there is the page. The pin's wait is its own — what takes the
             // answer up is the swap rather than a hover replayed — so it is asked apart from the
             // request above, which is a hover's (see `take_pin_engine_answer` and `PinPlan::Awaiting`).
-            if let Some(path) = pin_awaiting_box.clone() {
+            if let Some(path) = session.pin_awaiting_box().map(Path::to_path_buf) {
                 // Either answer ends the wait: a page that has landed is picked up, and a refusal
                 // leaves the pin showing the file it has, as a refusal always does. Nothing to
                 // say at all — which is every Office document and every picture the image
                 // converter develops, those two answering by message instead — leaves the wait
                 // standing until its answer arrives.
                 if let Some(drawn) = engine_page_answer(&path) {
-                    take_pin_engine_answer(&path, drawn, &mut pin_awaiting_box, &mut pin_pick);
+                    take_pin_engine_answer(
+                        &path,
+                        drawn,
+                        session.pin_awaiting_box_mut(),
+                        &mut pin_pick,
+                    );
                 }
             }
 
             // A cold pin waiting on one of the two engines that answer by writing a page into the app's own
             // folder is watched for here for the same reason, and taken up by the pin's own plan rather than a
             // pick (see `take_a_cold_pins_answer`).
-            if let Some(path) = pin_cold_wait.clone() {
+            if let Some(path) = session.pin_cold_wait().map(Path::to_path_buf) {
                 if let Some(drawn) = engine_page_answer(&path) {
                     take_a_cold_pins_answer(
                         hwnd,
                         &path,
                         drawn,
                         current_generation,
-                        &mut pin_cold_wait,
+                        session.pin_cold_wait_mut(),
                         &mut pin_load,
                         &mut pin_request,
                     );
@@ -3409,9 +3345,9 @@ pub fn run_preview_window() {
             // older hover is dropped here — the page it wrote is kept as far as the
             // cache budget allows, and no further.
             if let Some((ready_path, ready_generation, ready_ok)) = page_ready {
-                let shown = current_show.as_ref().and_then(show_path);
-                let hovered = ready_generation == current_generation
-                    && shown.map(|path| path.as_path()) == Some(ready_path.as_path());
+                let shown = session.shown_path();
+                let hovered =
+                    ready_generation == current_generation && shown == Some(ready_path.as_path());
 
                 // Which request the answer belongs to, so that a page landing for a hover
                 // that has gone cannot clear a wait another hover is still in.
@@ -3430,7 +3366,7 @@ pub fn run_preview_window() {
                     && answer_belongs_to_the_wait(
                         &ready_path,
                         ready_ok,
-                        shown.map(|path| path.as_path()),
+                        shown,
                         pending_load.as_ref(),
                     );
 
@@ -3445,13 +3381,14 @@ pub fn run_preview_window() {
                         // is on screen stays while it happens — hiding the spinner for
                         // the second a large picture takes to decode is a blink the
                         // user sees and reads as the preview failing.
-                        page_upgrade = Some(ready_path.clone());
+                        session.mark_page_upgrade(ready_path.clone());
                         // A mouse hover is replayed where the pointer is now: the
                         // spinner it replaces was kept with the pointer while the
                         // render ran, and a page that jumped back to where the
                         // hover started would jump away from where it was waited
                         // for.
-                        latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                        latest_preview_msg =
+                            replay_where_the_pointer_is(session.current_show().clone());
                     }
                     // A newer message was in hand, so the page is not shown now. The
                     // wait it was rendered for is left standing rather than cleared
@@ -3522,8 +3459,9 @@ pub fn run_preview_window() {
                         // The hover is replayed where the pointer is now, the way a page
                         // landing on a spinner is: the wait was kept with the pointer
                         // while the probe ran, so the video should be too.
-                        video_replay = Some(probed_path);
-                        latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                        session.mark_video_replay(probed_path);
+                        latest_preview_msg =
+                            replay_where_the_pointer_is(session.current_show().clone());
                     }
                 }
             }
@@ -3536,12 +3474,13 @@ pub fn run_preview_window() {
             // is dropped: what the measure answered is held for the next hover of the file
             // either way.
             if let Some((measured_path, size)) = measure_probed {
-                let waiting = current_show.as_ref().and_then(show_path) == Some(&measured_path);
+                let waiting = session.shown_path() == Some(measured_path.as_path());
 
                 if waiting && latest_preview_msg.is_none() {
                     if size.is_some() {
-                        measure_replay = Some(measured_path);
-                        latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                        session.mark_measure_replay(measured_path);
+                        latest_preview_msg =
+                            replay_where_the_pointer_is(session.current_show().clone());
                     } else {
                         // The reader has nothing for this file, which is not a wait that can be
                         // answered: the wait ends as the mark every failed file ends as rather
@@ -3578,7 +3517,8 @@ pub fn run_preview_window() {
                     // to be on now, at the box that display can show of it.
                     pin_request = replace_pinned_window();
                 } else {
-                    latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+                    latest_preview_msg =
+                        replay_where_the_pointer_is(session.current_show().clone());
                 }
             }
 
@@ -3592,13 +3532,10 @@ pub fn run_preview_window() {
             // A pin is not replayed from a hover, so a file that fails under a pin keeps what it
             // has: the mark is what the *next* pin of that file takes, and what plays it from then
             // on is nothing at all.
-            let failed_file_is_shown = engine_failed.as_ref().is_some_and(|failed| {
-                !pinned() && current_show.as_ref().and_then(show_path) == Some(failed)
-            });
-
-            if latest_preview_msg.is_none() && failed_file_is_shown {
-                engine_failed = None;
-                latest_preview_msg = replay_where_the_pointer_is(current_show.clone());
+            if latest_preview_msg.is_none() {
+                if let Some(msg) = session.take_engine_failure_replay(pinned()) {
+                    latest_preview_msg = replay_where_the_pointer_is(Some(msg));
+                }
             }
 
             // The engine has something to answer for: it could not be had at all, or it
@@ -3657,13 +3594,7 @@ pub fn run_preview_window() {
             // the window it belongs to, and an entry left behind by a pin that has been closed
             // would take the landing of a hover's wait for its own (see `pin_awaiting_box`).
             if !pinned() {
-                pin_awaiting_box = None;
-                // A cold pin's wait is the window's too: the engine is writing a page for a pin that is
-                // not there, and the file it was owed is nobody's to load.
-                pin_cold_wait = None;
-                // And the page it was raised on belongs to the window that has gone: the next pin's own page
-                // is what the road below is owed.
-                pin_page_shown = None;
+                session.clear_pin_waits();
                 // A file a pin that is over was loading is not waited for: the window it was
                 // being shown in has gone, and the answer landing for it would be installed
                 // into a pin that is not there (see `PinLoad`).
@@ -3704,7 +3635,7 @@ pub fn run_preview_window() {
                 &mut pin_held_pick,
                 &mut pin_swap_requested,
                 &mut pin_walk,
-                pin_awaiting_box.is_some(),
+                session.has_pin_awaiting_box(),
             ) {
                 // A pinned window being shown a file it is not already showing is the other
                 // place a preview is built, so the engine choices are read here — before the
@@ -3722,11 +3653,7 @@ pub fn run_preview_window() {
                     latch_engines_for_the_preview();
                 }
 
-                pin_awaiting_box = None;
-                // And a cold pin's wait goes with the pick: the file it was standing on is not the one the
-                // user has picked, and a page landing for it would be a plan made for a window shown
-                // something else (see `pin_cold_wait`).
-                pin_cold_wait = None;
+                session.clear_pin_waits_for_pick();
                 // Whatever was loading is a load for a file nobody is asking for any more, and
                 // the answer it lands with is dropped with it: what the pin shows next is
                 // planned here, for this file, and taking up an answer for another one would
@@ -3839,7 +3766,7 @@ pub fn run_preview_window() {
                                         pin_trace::path_name(&path),
                                         video_probe_due(&hover) as u8
                                     );
-                                    pin_awaiting_box = Some(path.clone());
+                                    session.mark_pin_awaiting_box(path.clone());
                                     // The file the pin is waiting for a box of is the file it has
                                     // been asked for, so a second press on it is nobody's new pick
                                     // (see `THE_FILE_IN_FLIGHT`).
@@ -3999,7 +3926,7 @@ pub fn run_preview_window() {
                     &mut audio_facts_scroll,
                     &mut video_pos,
                     &mut current_video_path,
-                    &mut current_show,
+                    session.current_show_mut(),
                     &mut pin_request,
                 );
 
@@ -4065,15 +3992,14 @@ pub fn run_preview_window() {
             // both owed here, and the loop's own record is what keeps one page from being raised twice.
             match webview_preview::showing_path() {
                 Some(shown) if pinned_path().as_deref() == Some(shown.as_path()) => {
-                    if pin_page_shown.as_deref() != Some(shown.as_path()) {
-                        pin_page_shown = Some(shown);
+                    if session.note_pin_page_shown(shown) {
                         show_pinned_window(pinned_window());
                         place_pinned_siblings();
                     }
                 }
                 // A page that is not the pin's file is nobody's show, and the pin's next page is one to
                 // raise on all the same (see `a_walk_between_documents_keeps_the_viewer`).
-                _ => pin_page_shown = None,
+                _ => session.clear_pin_page_shown(),
             }
 
             // The pin's window is this app's own to keep on the screen, where Windows is not already
@@ -4302,6 +4228,7 @@ pub fn run_preview_window() {
                 // the file itself (see `measure_waiting`).
                 let mut show_measure_probe: bool = false;
                 let mut show_requested = false;
+                let mut show_bypass_placement = false;
                 let mut preview_scale = current_hover_scales().picture;
                 let mut show_dpi = 96u32;
                 // The room the display the hover is on has, which is what an engine that
@@ -4310,6 +4237,7 @@ pub fn run_preview_window() {
                 // out at, which for a hover waiting on an engine is the corner of the
                 // display the spinner was put in (see `PendingLoad::room`).
                 let mut show_room: Option<(u32, u32)> = None;
+                let mut show_facts: Option<Arc<HoverFacts>> = None;
                 // A hover is a preview built from nothing — the file is about to be laid out,
                 // loaded and played, or the wait for it is — so this is where the engine
                 // choices are read, and every question this hover asks after this is answered
@@ -4355,9 +4283,10 @@ pub fn run_preview_window() {
                         // of this arm: the six questions below are asked of what comes back
                         // rather than of the path, which is what took about twenty
                         // `fs::metadata` calls per hover down to one (see `HoverFacts`).
-                        let hover = HoverFacts::read(&path);
+                        let hover = Arc::new(HoverFacts::read(&path));
                         let follow_cursor = hover.follow_cursor;
-                        preview_scale = hover_preview_scale_of(&hover, hover.scales);
+                        let bypass_placement = hover.bypass_placement;
+                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         // A document with no page rendered for it yet has nothing to
                         // measure but the wait, so its preview is laid out as the
@@ -4388,6 +4317,7 @@ pub fn run_preview_window() {
                                 orig_dims,
                                 avoid,
                                 follow_cursor,
+                                bypass_placement,
                                 preview_scale,
                                 at_the_pointer_corner: waiting_spinner || probing || measuring,
                             };
@@ -4429,6 +4359,8 @@ pub fn run_preview_window() {
                                 audio_card_dpi = dpi;
                                 show_layout = Some(layout);
                                 show_placement = Some(placement);
+                                show_bypass_placement =
+                                    bypass_placement && !placement.at_the_pointer_corner;
                                 // The wait for this hover is the spinner's own box at
                                 // the pointer, whatever the preview's own place came
                                 // out at (see `waiting_placement`).
@@ -4442,6 +4374,7 @@ pub fn run_preview_window() {
                                 show_path = Some(path);
                                 show_dpi = dpi;
                                 show_room = Some(bounds.room());
+                                show_facts = Some(hover);
                             }
                         }
                     }
@@ -4468,9 +4401,10 @@ pub fn run_preview_window() {
                         let dpi = dpi_at(center.0, center.1);
                         // One reading of the file and one of the configuration for the whole of
                         // this arm, as the pointer's arm above does (see `HoverFacts`).
-                        let hover = HoverFacts::read(&path);
+                        let hover = Arc::new(HoverFacts::read(&path));
                         let follow_cursor = hover.follow_cursor;
-                        preview_scale = hover_preview_scale_of(&hover, hover.scales);
+                        let bypass_placement = hover.bypass_placement;
+                        preview_scale = effective_preview_scale_of(&hover, hover.scales);
 
                         if let Some(orig_dims) = media_dimensions_of(&hover, &path, bounds, dpi) {
                             show_is_model = hover.is_a_model();
@@ -4481,6 +4415,7 @@ pub fn run_preview_window() {
                                 columns,
                                 orig_dims,
                                 follow_cursor,
+                                bypass_placement,
                                 preview_scale,
                             };
                             if let Some(layout) = compute_keyboard_layout(placement, bounds, dpi) {
@@ -4506,6 +4441,7 @@ pub fn run_preview_window() {
                                 show_measure_probe = measure_waiting(&path);
                                 audio_card_dpi = dpi;
                                 show_layout = Some(layout);
+                                show_bypass_placement = bypass_placement;
                                 // A keyboard hover has no pointer for a wait to be
                                 // placed at, so its spinner is the arc's own box
                                 // beside the item, the way its preview is.
@@ -4515,6 +4451,7 @@ pub fn run_preview_window() {
                                             office_preview::WAITING_BOX,
                                             office_preview::WAITING_BOX,
                                         ),
+                                        bypass_placement: false,
                                         preview_scale: PreviewScale::Percent(100),
                                         ..placement
                                     },
@@ -4524,6 +4461,7 @@ pub fn run_preview_window() {
                                 show_path = Some(path);
                                 show_dpi = dpi;
                                 show_room = Some(bounds.room());
+                                show_facts = Some(hover);
                             }
                         }
                     }
@@ -4557,13 +4495,11 @@ pub fn run_preview_window() {
                         // rendered to make room for. What is on screen is read from
                         // the show this message takes down — the message itself is a
                         // hide, and `show_path` names this message's own path here.
-                        if let Some(path) = current_show.as_ref().and_then(self::show_path) {
-                            office_render::hover_ended(path);
+                        if let Some(path) = session.on_hide() {
+                            office_render::hover_ended(&path);
                         }
 
-                        current_show = None;
                         page_render_pending = None;
-                        page_upgrade = None;
                     }
                     PreviewMessage::Refresh => {
                         render_layered_preview(hwnd);
@@ -4596,9 +4532,14 @@ pub fn run_preview_window() {
                     // where the engines, the caches and the page are: none of them is a hover's,
                     // and none is a thing a layout is made for (see `PreviewMessage::StopEngines`,
                     // `HideHtmlPage`, `TrimCaches` and `KillStrayPlayer`).
+                    // A setting written to the file is answered above, where this process's copy of it
+                    // is reloaded: it is not a hover's and it is not a thing a layout is made for (see
+                    // `PreviewMessage::ConfigChanged`).
                     PreviewMessage::StopEngines
                     | PreviewMessage::HideHtmlPage
                     | PreviewMessage::TrimCaches
+                    | PreviewMessage::ConfigChanged
+                    | PreviewMessage::ClosePdfPins
                     | PreviewMessage::KillStrayPlayer => {}
                     // A preview that stopped being a hover: the media stays exactly where it
                     // is, and the window grows around it — the caption above it, and the
@@ -4634,14 +4575,14 @@ pub fn run_preview_window() {
                                 "pin install dropped: {} was installed with no pin standing",
                                 pin_trace::path_name(&path)
                             );
-                            pin_awaiting_box = None;
+                            session.clear_pin_awaiting_box();
                             continue;
                         }
 
                         // A window that has just been taken up is waiting for nothing: a file an
                         // earlier pin was still waiting for a box of is that pin's wait, and this
                         // window is not it (see `pin_awaiting_box`).
-                        pin_awaiting_box = None;
+                        session.clear_pin_awaiting_box();
 
                         // The press tracking starts with this pin rather than with the loop.
                         //
@@ -4740,7 +4681,8 @@ pub fn run_preview_window() {
                             );
                         }
                         let take_up_at = Instant::now();
-                        let pin = take_up_pinned_window(&path, rect);
+                        let pin =
+                            take_up_pinned_window_with_facts(&path, rect, session.facts_for(&path));
                         let content = pin.content;
                         if pin_trace::wanted() && tick_at.elapsed().as_millis() >= 100 {
                             note_pin_trace!(
@@ -5001,7 +4943,7 @@ pub fn run_preview_window() {
                             at,
                             current_generation,
                             room,
-                            &mut pin_cold_wait,
+                            session.pin_cold_wait_mut(),
                         )
                         .is_some()
                         {
@@ -5141,12 +5083,28 @@ pub fn run_preview_window() {
                     // is loaded, and is replaced when it lands. A hover replayed for a
                     // video's probe, or for a box measured off this thread, is the same thing
                     // reached another way: it is the wait it was already in, carried on.
-                    let upgrading = page_upgrade.as_deref() == Some(path.as_path())
-                        || video_replay.as_deref() == Some(path.as_path())
-                        || measure_replay.as_deref() == Some(path.as_path());
-                    page_upgrade = None;
-                    video_replay = None;
-                    measure_replay = None;
+                    //
+                    // **And the file already on screen is that same wait, whoever asked for it
+                    // again.** A replay is normally named by one of the three flags above, but a
+                    // `Show` can reach this arm without one — a second message for the file the
+                    // hand is on, an answer that landed after its flag was taken, a display asked
+                    // for the hover again — and rebuilt as a new preview it takes the window down
+                    // before it puts it back: the video's frame, or the spinner a player is being
+                    // waited behind, is gone for a frame or two and the hover reads as a blink.
+                    // What is on screen for this file stays on screen; only the place it is laid
+                    // out at, and the frame that lands, are this call's.
+                    let painted = show_facts
+                        .as_deref()
+                        .map_or_else(|| page_is_painted(&path), HoverFacts::is_painted_page);
+                    let upgrading = session
+                        .on_show(
+                            show_snapshot,
+                            show_facts,
+                            &path,
+                            pending_load.as_ref().map(|load| load.path.as_path()),
+                            current_media_type().is_some_and(|kind| !kind.is_loading()),
+                        )
+                        .is_upgrade();
 
                     // A text or archive preview is rendered at the size the
                     // layout planned for it: it is painted at a fixed font
@@ -5155,16 +5113,8 @@ pub fn run_preview_window() {
                     // is sized to is the frame that comes back. Every other
                     // format is loaded against the free space it may be
                     // scaled within.
-                    let painted = page_is_painted(&path);
-                    let (load_width, load_height) = if painted {
-                        (preview_w, preview_h)
-                    } else {
-                        (max_width, max_height)
-                    };
-
-                    if show_snapshot.is_some() {
-                        current_show = show_snapshot.clone();
-                    }
+                    let (load_width, load_height, load_preview_scale) =
+                        hover_load_target(&layout, preview_scale, painted, show_bypass_placement);
 
                     // Which road a video takes is the route, and it is asked at the fork below
                     // rather than here: this branch is the wait for its probe, and the probe is
@@ -5281,7 +5231,7 @@ pub fn run_preview_window() {
                             &path,
                             load_width,
                             load_height,
-                            preview_scale,
+                            load_preview_scale,
                             show_dpi,
                             // A hover's own load: no page's reader has sized this one, so what it is
                             // drawn at is what the configuration says (see `load_media`).
@@ -5512,7 +5462,7 @@ pub fn run_preview_window() {
                                 path,
                                 max_width: load_width,
                                 max_height: load_height,
-                                preview_scale,
+                                preview_scale: load_preview_scale,
                                 dpi: show_dpi,
                                 cancel: Arc::clone(&load_cancel),
                             },
@@ -5540,9 +5490,8 @@ pub fn run_preview_window() {
                     }
                     current_video_path = None;
                     video_pos = (0, 0, 0, 0);
-                    current_show = None;
+                    let _ = session.on_hide();
                     page_render_pending = None;
-                    page_upgrade = None;
                 }
             } else if refresh_requested {
                 render_layered_preview(hwnd);
@@ -5561,7 +5510,7 @@ pub fn run_preview_window() {
             // rather than remembered: a render that outlives its hover is dropped
             // here and its page left in the cache — for Office's tier as much as for
             // the render engine, whose conversion runs on and is kept the same way.
-            let shown_path = current_show.as_ref().and_then(show_path).cloned();
+            let shown_path = session.shown_path().map(Path::to_path_buf);
 
             // How long the hover on screen has been waiting, which is what the cap is
             // read of, and whether what it is waiting on is an engine at all.
@@ -5602,11 +5551,8 @@ pub fn run_preview_window() {
                 page_render_pending = None;
             }
 
-            // **A detached window's own two answers**, taken where the pin and its paints have just
-            // been looked at: whether the window it was handed is up — which is the moment the pin it
-            // came from may come down — and whether that window has ended, which is this process's
-            // own end (see `detach_open`). A process that is not a detached window answers at once.
-            detach_open::settle(current_show.as_ref(), pending_load.is_some());
+            // End a detached viewer process once its standalone pin closes.
+            detach_open::settle();
 
             // The preview has waited as long as it waits — a page that has not arrived by
             // now may still be coming, a very large document takes as long as it takes —
@@ -5641,7 +5587,7 @@ pub fn run_preview_window() {
             // transitions is the whole of what the hook needs, without the per-tick
             // locks and `GetWindowRect`.
             let hold_key = (
-                current_show.is_some(),
+                session.is_showing(),
                 pending_load.is_some(),
                 pinned(),
                 current_generation,
@@ -5654,7 +5600,10 @@ pub fn run_preview_window() {
                 last_hold_key = hold_key;
             }
 
-            if current_show.is_none() && pending_load.is_none() {
+            // Fire any 1-frame deferred hover-preview hide whose deadline has elapsed.
+            pin_lifecycle::poll_deferred_preview_hide(Instant::now());
+
+            if !session.is_showing() && pending_load.is_none() {
                 // Nothing is on screen, which is where this thread used to spend
                 // its whole life waking sixty times a second to drain a queue that
                 // was empty and publish a region that did not exist. There is
@@ -5665,8 +5614,12 @@ pub fn run_preview_window() {
                 // resume, a display change — waits to be noticed. The wait wakes
                 // on window input at once, so a drag never queues behind it (see
                 // `wait_preview_channel`).
-                carried_preview_msg =
-                    wait_preview_channel(&rx, wait_before_the_next_tick(true, false, pinned()));
+                let mut wait_ms = wait_before_the_next_tick(true, false, pinned());
+                if let Some(rem) = pin_lifecycle::deferred_preview_hide_remaining_ms(Instant::now())
+                {
+                    wait_ms = wait_ms.min(rem);
+                }
+                carried_preview_msg = wait_preview_channel(&rx, wait_ms);
             } else {
                 // Something is on screen, and which band of the cadence it lands in is
                 // `wait_before_the_next_tick`'s question — a tick that has something to
@@ -5705,7 +5658,7 @@ pub fn run_preview_window() {
                 // its flush are only as smooth as the ticks they land on, and the pin's own wait is
                 // four times the frame's (see `pin_volume_is_moving`). A pace is the same thing one
                 // control along, and for the same reason (see `pin_fps_is_moving`).
-                let wait_ms = wait_before_the_next_tick(
+                let mut wait_ms = wait_before_the_next_tick(
                     false,
                     media_dynamic_hint
                         || tick_has_wait
@@ -5715,6 +5668,10 @@ pub fn run_preview_window() {
                         || pin_fps_is_moving(),
                     pinned(),
                 );
+                if let Some(rem) = pin_lifecycle::deferred_preview_hide_remaining_ms(Instant::now())
+                {
+                    wait_ms = wait_ms.min(rem);
+                }
                 // And a travel is paced by the compositor rather than by that wait, because what its
                 // frames are worth is the display's own period and not a timer's: a sleep of
                 // `FRAME_WAIT_MS` comes back in 27.8 ms — 36 frames a second — where a flush of the
@@ -5730,6 +5687,10 @@ pub fn run_preview_window() {
                 };
             }
         }
+
+        // Tear down the bubble HWND before exiting the viewer loop so no popup HWND leaks.
+        pin_lifecycle::flush_deferred_preview_hide();
+        let _ = destroy_pin_bubble();
 
         // Signal the dedicated loader worker to stop and wait for shutdown.
         if let Some(cancel) = pending_load_cancel.take() {
@@ -5756,5 +5717,149 @@ fn step_the_marquee(scroll: &mut Option<audio_preview::NameScroll>, cadence: Dur
             scroll.offset()
         }
         None => 0,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConfigReloadDiff {
+    video_volume_changed: bool,
+    audio_volume_changed: bool,
+    text_font_scale_changed: Option<u32>,
+    pin_always_on_top_changed: bool,
+    pdf_full_mode_turned_off: bool,
+    scales_changed: bool,
+    after_scales: HoverScales,
+}
+
+/// Reload `CONFIG` from disk (recovering from a poisoned lock instead of dropping reload)
+/// and report live-applicable setting diffs.
+fn reload_config_for_event_loop() -> ConfigReloadDiff {
+    let mut config = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+    let before_text_font = config.text_font_scale_percent;
+    let before_topmost = config.pin_always_on_top;
+    let before_pdf_full = config.pdf_full_mode;
+    let before_scales = (
+        HoverScales::of(&config),
+        config.text_scale,
+        config.audio_scale,
+    );
+
+    let (video_volume_changed, audio_volume_changed) =
+        config.reload_from_disk_keeping_our_own_levels();
+
+    let after_text_font = config.text_font_scale_percent;
+    let after_topmost = config.pin_always_on_top;
+    let after_pdf_full = config.pdf_full_mode;
+    let after_hover_scales = HoverScales::of(&config);
+    let after_scales = (after_hover_scales, config.text_scale, config.audio_scale);
+
+    ConfigReloadDiff {
+        video_volume_changed,
+        audio_volume_changed,
+        text_font_scale_changed: (after_text_font != before_text_font).then_some(after_text_font),
+        pin_always_on_top_changed: after_topmost != before_topmost,
+        pdf_full_mode_turned_off: before_pdf_full && !after_pdf_full,
+        scales_changed: after_scales != before_scales,
+        after_scales: after_hover_scales,
+    }
+}
+
+unsafe fn apply_pin_topmost_change(hwnd: HWND) {
+    place_the_pin_where_the_setting_names();
+    pin_film_host::the_button_follows_the_setting();
+    if pin_always_on_top() {
+        if !pin_is_collapsed() {
+            hide_pin_taskbar();
+        }
+    } else {
+        show_pin_taskbar();
+    }
+    place_pinned_siblings();
+    settle_pinned_mpv_ontop();
+    AUDIO_CARD_DIRTY.store(true, Ordering::Release);
+    render_layered_preview(hwnd);
+    settle_the_pin_after_the_setting_moved();
+}
+
+unsafe fn apply_config_reload_diff(
+    diff: ConfigReloadDiff,
+    hwnd: HWND,
+    latest_preview_msg: &mut Option<PreviewMessage>,
+    session: &mut HoverSession,
+) {
+    if diff.video_volume_changed {
+        tray_volume_moved(false);
+    }
+    if diff.audio_volume_changed {
+        tray_volume_moved(true);
+    }
+    if let Some(percent) = diff.text_font_scale_changed {
+        redraw_pinned_page(hwnd, Some(percent));
+    }
+    if diff.pin_always_on_top_changed && pinned() {
+        if pin_always_on_top() || !pin_update_move_to_top() {
+            PIN_FRONT_OWED.store(false, Ordering::SeqCst);
+        }
+        apply_pin_topmost_change(hwnd);
+    }
+    if diff.pdf_full_mode_turned_off {
+        crate::engines::pdf_viewer::close_the_pins();
+    }
+    if let Some(replay) =
+        session.on_config_changed(diff.scales_changed, diff.after_scales, pinned())
+    {
+        if latest_preview_msg.is_none() {
+            *latest_preview_msg = Some(replay);
+        }
+    }
+}
+
+#[cfg(test)]
+mod config_reload_tests {
+    use super::*;
+    use crate::config::config::{ConfigFolderOfItsOwn, PreviewScale};
+
+    #[test]
+    fn reload_config_detects_live_diffs_and_recovers_from_poisoned_lock() {
+        let _folder = ConfigFolderOfItsOwn::take();
+
+        // Seed initial state on disk and in CONFIG.
+        {
+            let mut cfg = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+            cfg.text_font_scale_percent = 100;
+            cfg.pin_always_on_top = true;
+            cfg.pdf_full_mode = true;
+            cfg.preview_scale = PreviewScale::Percent(100);
+            cfg.save();
+        }
+
+        // Write updated values to disk without updating in-memory CONFIG (simulating another process).
+        let mut disk_cfg = crate::config::snapshot();
+        disk_cfg.text_font_scale_percent = 150;
+        disk_cfg.pin_always_on_top = false;
+        disk_cfg.pdf_full_mode = false;
+        disk_cfg.preview_scale = PreviewScale::Percent(50);
+        disk_cfg.save();
+
+        // Intentionally poison CONFIG mutex to verify recovery instead of silent drop.
+        let _ = std::thread::spawn(|| {
+            let _guard = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
+            panic!("intentional poison for reload recovery test");
+        })
+        .join();
+        assert!(CONFIG.is_poisoned(), "CONFIG mutex should be poisoned");
+
+        let diff = reload_config_for_event_loop();
+        assert_eq!(diff.text_font_scale_changed, Some(150));
+        assert!(diff.pin_always_on_top_changed);
+        assert!(diff.pdf_full_mode_turned_off);
+        assert!(diff.scales_changed);
+
+        // Verify CONFIG holds the reloaded values.
+        let reloaded = crate::config::snapshot();
+        assert_eq!(reloaded.text_font_scale_percent, 150);
+        assert!(!reloaded.pin_always_on_top);
+        assert!(!reloaded.pdf_full_mode);
+        assert_eq!(reloaded.preview_scale, PreviewScale::Percent(50));
     }
 }

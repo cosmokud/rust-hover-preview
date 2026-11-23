@@ -732,6 +732,7 @@ const ANOTHER_VALUE: &[(&str, &str)] = &[
     ("office_engine", "libreoffice"),
     ("office_engine_idle", "30"),
     ("pin_minimize_to", "taskbar"),
+    ("pin_scaling_mode", "use_scaling_settings"),
     ("pin_mode_audio_end_of_file", "pause"),
     ("pin_mode_audio_seek", "middle"),
     ("pin_mode_video_end_of_file", "pause"),

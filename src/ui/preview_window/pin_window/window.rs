@@ -80,6 +80,16 @@ pub(crate) trait PinWindow {
     /// ordinary message, and a bubble is not the pin's window and is not in that message.
     fn hide_pin_bubble(&self);
 
+    /// Show (creating if needed) the round bubble at `anchor`.
+    fn show_pin_bubble(&self, anchor: ScreenRegion);
+
+    /// Destroy the round bubble HWND and clear its state on teardown/shutdown.
+    fn destroy_pin_bubble(&self);
+
+    /// Install or update the pin surface at `box_` during install or media swap.
+    #[allow(dead_code)]
+    fn install_pin_surface(&self, box_: ScreenRegion);
+
     /// Paint the pin's own window as it stands.
     ///
     /// Named rather than being folded into `hide_pin_windows` because it is the one operation
@@ -123,6 +133,12 @@ pub(crate) enum PinWindowCall {
     HidePinWindows,
     /// The round bubble a collapsed pin left standing for it, taken down with the take-down.
     HidePinBubble,
+    /// The round bubble shown (and created if not yet alive) at the given anchor box.
+    ShowPinBubble(ScreenRegion),
+    /// The round bubble HWND destroyed on teardown/shutdown.
+    DestroyPinBubble,
+    /// Pin surface installed or updated at the given box during install/swap.
+    InstallPinSurface(ScreenRegion),
     /// The pin's own window drawn as it stands, which is what a drag's end owes after letting
     /// go of the pointer: the window is where the hand left it and the screen has to be told.
     Repaint,
@@ -153,6 +169,8 @@ pub(crate) struct RecordedPinWindow {
     /// The window this recorder says is in front on the desktop (see `PinWindow::foreground`), which
     /// is a fact a test process cannot stage: it cannot make a window of its own the foreground.
     front: isize,
+    /// Headless bubble HWND lifecycle tracking (created, destroyed, currently alive).
+    bubble_lifecycle: Mutex<(u32, u32, bool)>,
 }
 
 #[cfg(test)]
@@ -182,7 +200,16 @@ impl RecordedPinWindow {
             calls: Mutex::new(Vec::new()),
             foreground: Mutex::new(Vec::new()),
             front: 0,
+            bubble_lifecycle: Mutex::new((0, 0, false)),
         }
+    }
+
+    /// Bubble HWND lifecycle counts: `(created, destroyed, currently_alive)`.
+    pub(crate) fn bubble_lifecycle(&self) -> (u32, u32, bool) {
+        self.bubble_lifecycle
+            .lock()
+            .map(|state| *state)
+            .unwrap_or((0, 0, false))
     }
 
     /// The recorder, standing for a desktop whose window in front is `front`.
@@ -267,6 +294,30 @@ impl PinWindow for RecordedPinWindow {
 
     fn hide_pin_bubble(&self) {
         self.record(PinWindowCall::HidePinBubble);
+    }
+
+    fn show_pin_bubble(&self, anchor: ScreenRegion) {
+        if let Ok(mut state) = self.bubble_lifecycle.lock() {
+            if !state.2 {
+                state.0 += 1;
+                state.2 = true;
+            }
+        }
+        self.record(PinWindowCall::ShowPinBubble(anchor));
+    }
+
+    fn destroy_pin_bubble(&self) {
+        if let Ok(mut state) = self.bubble_lifecycle.lock() {
+            if state.2 {
+                state.1 += 1;
+                state.2 = false;
+            }
+        }
+        self.record(PinWindowCall::DestroyPinBubble);
+    }
+
+    fn install_pin_surface(&self, box_: ScreenRegion) {
+        self.record(PinWindowCall::InstallPinSurface(box_));
     }
 
     fn repaint(&self) {

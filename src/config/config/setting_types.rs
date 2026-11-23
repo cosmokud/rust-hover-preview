@@ -974,6 +974,9 @@ pub const DEFAULT_AVOID_MODE: AvoidMode = AvoidMode::Filename;
 /// wherever the pointer happens to be — and `Follow Cursor` is the other answer.
 pub const DEFAULT_FOLLOW_CURSOR: bool = false;
 
+/// Off by default; when on, hover sizing uses full work area and skips placement/Avoid cropping.
+pub const DEFAULT_BYPASS_PLACEMENT: bool = false;
+
 /// Whether the trigger key reaches a pinned preview unless the configuration says otherwise:
 /// off, which is where the app starts — a pin is a window the user put there, and the key that
 /// stops hovers is not read while one is up — and on, the key is what brings a pin down with the
@@ -1121,6 +1124,33 @@ impl PinMinimizeTo {
 /// bubble on the desktop, which is what this app has always done and is the answer that keeps
 /// the app out of the taskbar altogether.
 pub const DEFAULT_PIN_MINIMIZE_TO: PinMinimizeTo = PinMinimizeTo::Bubble;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PinScalingMode {
+    UntilResized,
+    UseScalingSettings,
+}
+
+impl PinScalingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UntilResized => "until_resized",
+            Self::UseScalingSettings => "use_scaling_settings",
+        }
+    }
+
+    pub(super) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "until_resized" | "until resized" | "keep" => Some(Self::UntilResized),
+            "use_scaling_settings" | "use scaling settings" | "scaling" => {
+                Some(Self::UseScalingSettings)
+            }
+            _ => None,
+        }
+    }
+}
+
+pub const DEFAULT_PIN_SCALING_MODE: PinScalingMode = PinScalingMode::UntilResized;
 
 /// What a *pinned* preview does at the end of its file: stop there, go round to the start of
 /// the same file, or step on to the next file. `Pause` is the file left where it ended, the

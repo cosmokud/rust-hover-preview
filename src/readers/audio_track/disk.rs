@@ -14,7 +14,6 @@
 
 use super::{Player, Track};
 use crate::formats::head;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -54,7 +53,7 @@ fn folder() -> PathBuf {
 /// again is a name nothing has written and the entry it had is left to the trim.
 fn entry_path(key: &head::Key) -> PathBuf {
     let (path, modified, len) = key.stamp();
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = crate::cache::StableHasher::new();
 
     path.to_string_lossy().to_lowercase().hash(&mut hasher);
     // `None` is a file whose entry could not be read, and it hashes like the answer it is: a

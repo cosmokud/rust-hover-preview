@@ -822,51 +822,41 @@ fn an_ffplay_hover_taken_up_is_moved_into_the_pin_not_begun() {
     );
 }
 
-/// **A take-up on a hover's film holds the pin's band with the frame the film had on the screen**,
-/// so the band is neither this app's black nor a hole onto whatever stands behind the pair (see
-/// `pin_film_host::BandStill`).
-///
-/// The fault this is a regression test for: the pin's band was painted while the take-up had no host
-/// at all, which left it opaque black, and the promotion then put the host at the pin's box with its
-/// client dropped — so every frame the compositor made before the registration landed was read as the
-/// pin appearing before it was ready. What the band carries instead is the film the user was already
-/// watching.
+/// Hover→pin promotion promotes the live host BEFORE painting the pin window so the band is
+/// directly hit-testable transparent (`[1, 1, 1, 1]`) over the live video host with zero hides.
 #[test]
-fn a_take_up_holds_the_pins_band_with_the_frame_the_film_was_showing() {
+fn a_promoted_take_up_paints_transparent_band_over_live_host_without_hiding() {
     let _room = the_room_to_itself();
     let film = StandingFilm::new();
+    let path = PathBuf::from("a-film.mkv");
+    let hover = unsafe { HostedHover::up(&film, &path, 3.0) };
     with_pin(|pin| pin.transport_bar = true);
-    unsafe { show_pinned_window(film.pin_hwnd) };
-    let pid = VIDEO_PID.load(Ordering::SeqCst);
+    pin_stands_in_its_own_window(true);
+    pin_real_window::forget_the_appwindow_shows();
 
-    // A frame of this app's own making, in the place a hover's player's would have been: one flat
-    // colour, so what the band carries is readable out of the pixels the paint wrote.
-    let a_frame = [70u8, 70, 70, 0].repeat(16 * 16);
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert_eq!(
+        pin_film_host::film_host(),
+        Some(hover.host),
+        "hover host promoted before first pin paint"
+    );
     assert!(
-        pin_film_host::keep_the_band_still(pid, (16, 16), a_frame),
-        "the take-up keeps the frame it was handed"
+        unsafe { IsWindowVisible(hover.host) }.as_bool(),
+        "promoted video host stays visible throughout hover->pin"
+    );
+    assert!(
+        pin_real_window::the_appwindow_shows().is_empty(),
+        "no SW_HIDE/SW_SHOWNOACTIVATE paid during hover->pin"
     );
     let (band, top, rows) = the_band_one_paint_left(&film);
     assert!(rows > 0, "the pin has a band to assert");
-    let carried = band
-        .iter()
-        .filter(|pixel| pixel[3] == 255 && (pixel[0] as i32 - 70).abs() <= 2)
-        .count();
     assert!(
-        carried > band.len() * 9 / 10,
-        "rows {top}..{} of the pin's bitmap are the taken frame, {} of {} pixels of it",
+        band.iter().all(|pixel| *pixel == [1, 1, 1, 1]),
+        "rows {top}..{} are hit-testable transparent over the live host (no black or frozen still)",
         top + rows,
-        carried,
-        band.len()
     );
-    assert!(
-        !band
-            .iter()
-            .any(|pixel| *pixel == [0, 0, 0, 255] || *pixel == [1, 1, 1, 1]),
-        "and neither the empty host's black nor a hole onto the listing behind the pair"
-    );
-
-    pin_film_host::the_band_still_gives_way();
+    drop(hover);
 }
 
 /// **A take-up on a hover's mpv film takes the hover's own host up as the pin's host**: the same
@@ -2866,12 +2856,14 @@ impl StandingHover {
     }
 
     fn shown(&self) -> bool {
-        unsafe { IsWindowVisible(self.hwnd).as_bool() }
+        !pin_lifecycle::is_deferred_preview_hide_pending()
+            && unsafe { IsWindowVisible(self.hwnd).as_bool() }
     }
 }
 
 impl Drop for StandingHover {
     fn drop(&mut self) {
+        pin_lifecycle::cancel_deferred_preview_hide();
         PREVIEW_HWND.store(self.previous, Ordering::SeqCst);
         // A window of the suite's own, put away down the road that also takes it out of the count the
         // room's tripwire reads: a hover left standing is a window of the desktop's in the next test's
@@ -9775,4 +9767,197 @@ fn a_models_band_is_the_hosts_scene_and_not_the_stand_in_frame() {
          the stand-in frame composited over it",
         top + rows
     );
+}
+
+#[test]
+fn deferred_preview_hide_lifecycle_on_hover_to_pin() {
+    let _room = the_room_to_itself();
+    let standing = pin_always_on_top();
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = false;
+    }
+
+    let preview = unsafe {
+        a_window_of_the_suite(
+            WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 200, NOWHERE + 120),
+        )
+    };
+    let prev_preview = PREVIEW_HWND.swap(preview.0 as isize, Ordering::SeqCst);
+    pin_lifecycle::cancel_deferred_preview_hide();
+
+    let film = StandingFilm::new();
+    unsafe { show_pinned_window(film.pin_hwnd) };
+
+    assert!(
+        pin_lifecycle::is_deferred_preview_hide_pending(),
+        "hover->pin schedules a 1-frame deferred hide instead of hiding synchronously"
+    );
+    assert!(
+        unsafe { IsWindowVisible(preview) }.as_bool(),
+        "PREVIEW_HWND remains visible for 1 frame so DWM commits REAL_PIN_HWND first"
+    );
+    assert!(
+        !unsafe { window_holds_the_topmost_band(preview) },
+        "PREVIEW_HWND drops topmost when pin is non-topmost during the 1-frame handoff"
+    );
+    assert!(
+        unsafe { stands_over(film.pin_hwnd, preview) },
+        "pin stands above PREVIEW_HWND during the 1-frame handoff"
+    );
+
+    let now = Instant::now();
+    let rem = pin_lifecycle::deferred_preview_hide_remaining_ms(now)
+        .expect("remaining ms reported for idle wake cap");
+    assert!(
+        (1..=FRAME_WAIT_MS).contains(&rem),
+        "remaining wait {rem}ms should be within 1..={FRAME_WAIT_MS}ms"
+    );
+    assert!(
+        !pin_lifecycle::poll_deferred_preview_hide(now),
+        "poll before deadline must not hide early"
+    );
+    assert!(
+        unsafe { IsWindowVisible(preview) }.as_bool(),
+        "PREVIEW_HWND stays visible before deadline"
+    );
+
+    let after = now + pin_lifecycle::DEFERRED_PREVIEW_HIDE_DELAY + Duration::from_millis(1);
+    assert!(
+        pin_lifecycle::poll_deferred_preview_hide(after),
+        "poll at/after deadline fires the deferred hide"
+    );
+    assert!(
+        !pin_lifecycle::is_deferred_preview_hide_pending(),
+        "pending flag clears once deferred hide fires"
+    );
+    assert!(
+        !unsafe { IsWindowVisible(preview) }.as_bool(),
+        "PREVIEW_HWND is hidden after 1-frame deadline elapses"
+    );
+
+    drop(film);
+    PREVIEW_HWND.store(prev_preview, Ordering::SeqCst);
+    unsafe { put_away_a_window_of_the_suite(preview) };
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = standing;
+    }
+}
+
+#[test]
+fn deferred_preview_hide_cancelled_on_reuse_and_flushed_on_teardown() {
+    let _room = the_room_to_itself();
+    let preview = unsafe {
+        a_window_of_the_suite(
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 160, NOWHERE + 100),
+        )
+    };
+    let pin = unsafe {
+        a_window_of_the_suite(
+            WS_EX_NOACTIVATE,
+            w!("STATIC"),
+            WS_POPUP,
+            (NOWHERE, NOWHERE, NOWHERE + 160, NOWHERE + 100),
+        )
+    };
+
+    let t0 = Instant::now();
+    unsafe { pin_lifecycle::schedule_deferred_preview_hide_at(preview, pin, t0) };
+    assert!(pin_lifecycle::is_deferred_preview_hide_pending());
+
+    // Reusing PREVIEW_HWND for a new hover cancels the stale timer.
+    pin_lifecycle::cancel_deferred_preview_hide();
+    assert!(!pin_lifecycle::is_deferred_preview_hide_pending());
+    assert!(
+        !pin_lifecycle::poll_deferred_preview_hide(
+            t0 + pin_lifecycle::DEFERRED_PREVIEW_HIDE_DELAY + Duration::from_millis(5)
+        ),
+        "cancelled deferred hide must never fire later"
+    );
+    assert!(
+        unsafe { IsWindowVisible(preview) }.as_bool(),
+        "reused PREVIEW_HWND stays visible after cancellation"
+    );
+
+    // Teardown / hide flushes a pending deferred hide immediately.
+    unsafe { pin_lifecycle::schedule_deferred_preview_hide_at(preview, pin, t0) };
+    assert!(pin_lifecycle::is_deferred_preview_hide_pending());
+    pin_lifecycle::flush_deferred_preview_hide();
+    assert!(!pin_lifecycle::is_deferred_preview_hide_pending());
+    assert!(
+        !unsafe { IsWindowVisible(preview) }.as_bool(),
+        "flush hides PREVIEW_HWND immediately"
+    );
+
+    unsafe {
+        put_away_a_window_of_the_suite(preview);
+        put_away_a_window_of_the_suite(pin);
+    }
+}
+
+#[test]
+fn atomic_host_and_pin_promotion_and_band_placement() {
+    let _room = the_room_to_itself();
+    let standing = pin_always_on_top();
+
+    for always_on_top in [true, false] {
+        if let Ok(mut config) = CONFIG.lock() {
+            config.pin_always_on_top = always_on_top;
+        }
+        let film = StandingFilm::new();
+        unsafe { show_pinned_window(film.pin_hwnd) };
+        let host = pin_film_host::film_host().expect("film host");
+        let pin = film.pin_hwnd;
+        unsafe { pin_film_host::set_the_pin_film_host_visible(true) };
+
+        let target = if always_on_top {
+            HWND_TOPMOST
+        } else {
+            HWND_NOTOPMOST
+        };
+        unsafe { pin_film_host::place_the_pin_in_the_band(pin, target) };
+
+        assert_eq!(
+            unsafe { window_holds_the_topmost_band(host) },
+            always_on_top,
+            "host topmost state matches Always On Top = {always_on_top}"
+        );
+        assert_eq!(
+            unsafe { window_holds_the_topmost_band(pin) },
+            always_on_top,
+            "pin topmost state matches Always On Top = {always_on_top}"
+        );
+        assert!(
+            unsafe { stands_over(pin, host) },
+            "pin stays immediately above host after atomic band placement (aot={always_on_top})"
+        );
+
+        if !always_on_top {
+            let cover = unsafe {
+                a_window_of_the_suite(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    WS_POPUP,
+                    (NOWHERE, NOWHERE, NOWHERE + 200, NOWHERE + 120),
+                )
+            };
+            unsafe { pin_film_host::place_the_pin_in_the_band(pin, cover) };
+            assert!(
+                unsafe { stands_over(cover, pin) } && unsafe { stands_over(pin, host) },
+                "atomic placement behind cover keeps cover > pin > host"
+            );
+            unsafe { put_away_a_window_of_the_suite(cover) };
+        }
+
+        drop(film);
+    }
+
+    if let Ok(mut config) = CONFIG.lock() {
+        config.pin_always_on_top = standing;
+    }
 }

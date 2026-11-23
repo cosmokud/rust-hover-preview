@@ -26,6 +26,10 @@ pub(super) struct ScreenBounds {
 }
 
 impl ScreenBounds {
+    pub(super) fn width(self) -> i32 {
+        self.right - self.left
+    }
+
     pub(super) fn height(self) -> i32 {
         self.bottom - self.top
     }
@@ -70,6 +74,11 @@ pub(super) fn cursor_position() -> Option<POINT> {
 pub(super) fn centered_top(center: i32, height: i32, bounds: ScreenBounds) -> i32 {
     let lowest = (bounds.bottom - height).max(bounds.top);
     (center - height / 2).clamp(bounds.top, lowest)
+}
+
+pub(super) fn centered_left(center: i32, width: i32, bounds: ScreenBounds) -> i32 {
+    let rightmost = (bounds.right - width).max(bounds.left);
+    (center - width / 2).clamp(bounds.left, rightmost)
 }
 
 /// The least room a way out of the text may leave before a preview is resized into
@@ -363,12 +372,115 @@ pub(super) fn compute_mouse_layout(
         orig_dims,
         avoid,
         follow_cursor,
+        bypass_placement,
         preview_scale,
         at_the_pointer_corner,
     } = placement;
 
     let offset = logical_px(dpi, POINTER_STANDOFF_PIXELS);
     let (orig_w, orig_h) = (orig_dims.0 as i32, orig_dims.1 as i32);
+
+    if bypass_placement && !at_the_pointer_corner {
+        let work_w = bounds.width();
+        let work_h = bounds.height();
+        if orig_w <= 0 || orig_h <= 0 || work_w <= 0 || work_h <= 0 {
+            return None;
+        }
+        let target_scale = scale_in_room(
+            work_w as f32,
+            work_h as f32,
+            orig_w as f32,
+            orig_h as f32,
+            preview_scale,
+        );
+        if target_scale <= 0.0 {
+            return None;
+        }
+
+        // 4 cursor-free half-planes inside rcWork, strictly >= offset from cursor.
+        let right_left = (cursor_x + offset).max(bounds.left);
+        let left_right = (cursor_x - offset).min(bounds.right);
+        let below_top = (cursor_y + offset).max(bounds.top);
+        let above_bottom = (cursor_y - offset).min(bounds.bottom);
+
+        let planes = [
+            (bounds.right - right_left, work_h, true, 0u8),
+            (left_right - bounds.left, work_h, true, 1u8),
+            (work_w, bounds.bottom - below_top, false, 2u8),
+            (work_w, above_bottom - bounds.top, false, 3u8),
+        ];
+
+        // Ties favor horizontal sides, then larger primary room, then Right/Below order.
+        struct Candidate {
+            rank: (u64, bool, i32),
+            kind: u8,
+            w: u32,
+            h: u32,
+            max_w: u32,
+            max_h: u32,
+        }
+        let mut best: Option<Candidate> = None;
+        for (avail_w, avail_h, is_horizontal, kind) in planes {
+            if avail_w <= 0 || avail_h <= 0 {
+                continue;
+            }
+            let plane_fit = (avail_w as f32 / orig_w as f32).min(avail_h as f32 / orig_h as f32);
+            let eff_scale = target_scale.min(plane_fit);
+            if eff_scale <= 0.0 {
+                continue;
+            }
+            let w = (orig_w as f32 * eff_scale)
+                .round()
+                .clamp(1.0, avail_w as f32) as u32;
+            let h = (orig_h as f32 * eff_scale)
+                .round()
+                .clamp(1.0, avail_h as f32) as u32;
+            let area = w as u64 * h as u64;
+            let primary_room = if is_horizontal { avail_w } else { avail_h };
+            let rank = (area, is_horizontal, primary_room);
+
+            if best.as_ref().is_none_or(|b| rank > b.rank) {
+                best = Some(Candidate {
+                    rank,
+                    kind,
+                    w,
+                    h,
+                    max_w: avail_w as u32,
+                    max_h: avail_h as u32,
+                });
+            }
+        }
+
+        let Candidate {
+            kind,
+            w: preview_w,
+            h: preview_h,
+            max_w: max_width,
+            max_h: max_height,
+            ..
+        } = best?;
+        let (pos_x, pos_y) = match kind {
+            0 => (right_left, centered_top(cursor_y, preview_h as i32, bounds)),
+            1 => (
+                left_right - preview_w as i32,
+                centered_top(cursor_y, preview_h as i32, bounds),
+            ),
+            2 => (centered_left(cursor_x, preview_w as i32, bounds), below_top),
+            _ => (
+                centered_left(cursor_x, preview_w as i32, bounds),
+                above_bottom - preview_h as i32,
+            ),
+        };
+
+        return Some(PreviewLayout {
+            pos_x,
+            pos_y,
+            max_width,
+            max_height,
+            preview_w,
+            preview_h,
+        });
+    }
 
     if follow_cursor || at_the_pointer_corner {
         let quadrants = [
@@ -601,8 +713,30 @@ pub(super) struct KeyboardPlacement {
     /// The position mode: whether the preview grows away from the item or is centred
     /// beside it.
     pub(super) follow_cursor: bool,
+    pub(super) bypass_placement: bool,
     /// The share of the media's own size the preview is drawn at.
     pub(super) preview_scale: PreviewScale,
+}
+
+// Bypass already sized to full rcWork and capped to the cursor-free half-plane; pass
+// FitToScreen so downstream scale_dimensions does not re-apply fit_share.
+pub(super) fn hover_load_target(
+    layout: &PreviewLayout,
+    preview_scale: PreviewScale,
+    painted: bool,
+    bypass_placement: bool,
+) -> (u32, u32, PreviewScale) {
+    if bypass_placement {
+        (
+            layout.preview_w,
+            layout.preview_h,
+            PreviewScale::FitToScreen,
+        )
+    } else if painted {
+        (layout.preview_w, layout.preview_h, preview_scale)
+    } else {
+        (layout.max_width, layout.max_height, preview_scale)
+    }
 }
 
 /// Compute preview layout for keyboard hover (relative to the focused item's box)
@@ -637,8 +771,39 @@ pub(super) fn compute_keyboard_layout(
         columns,
         orig_dims,
         follow_cursor,
+        bypass_placement,
         preview_scale,
     } = placement;
+
+    if bypass_placement {
+        let work_w = bounds.width();
+        let work_h = bounds.height();
+        if orig_dims.0 == 0 || orig_dims.1 == 0 || work_w <= 0 || work_h <= 0 {
+            return None;
+        }
+        let max_width = work_w as u32;
+        let max_height = work_h as u32;
+        let (preview_w, preview_h) = scale_dimensions(
+            orig_dims.0,
+            orig_dims.1,
+            max_width,
+            max_height,
+            preview_scale,
+        );
+        if preview_w == 0 || preview_h == 0 {
+            return None;
+        }
+        let pos_x = centered_left((bounds.left + bounds.right) / 2, preview_w as i32, bounds);
+        let pos_y = centered_top((bounds.top + bounds.bottom) / 2, preview_h as i32, bounds);
+        return Some(PreviewLayout {
+            pos_x,
+            pos_y,
+            max_width,
+            max_height,
+            preview_w,
+            preview_h,
+        });
+    }
 
     let (item_left, item_top, item_right, item_bottom) = item_rect;
     let gap = logical_px(dpi, KEYBOARD_GAP_PIXELS);

@@ -61,6 +61,8 @@ pub(crate) use playlist::{
     PlaylistEdge, PlaylistLayout, PlaylistRow, PlaylistSearch, WHEEL_ROWS as PLAYLIST_WHEEL_ROWS,
 };
 pub(crate) use primitives::{fill_disc, fill_ring, stroke_segment, surface_pixels, ChromePalette};
+#[allow(unused_imports)]
+pub(crate) use primitives::{DpiScale, GdiTextMeasurer, TextMeasurer};
 pub(crate) use transport::{
     clock_width, fps_at, fps_popup_from_button, paint_card_control, paint_fps_popup,
     paint_fps_popup_text, paint_transport, paint_volume_popup, transport_part_at,

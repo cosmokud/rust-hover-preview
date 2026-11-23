@@ -18,6 +18,7 @@
 
 use std::os::windows::io::IntoRawHandle;
 use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use once_cell::sync::Lazy;
@@ -45,6 +46,37 @@ const RESPITE: Duration = Duration::from_secs(1);
 /// handed out again.
 static THE_VIEWER: AtomicIsize = AtomicIsize::new(0);
 
+/// Monotonic generation guard over viewer spawn/commit/abort so a timed-out 3s readiness wait
+/// cannot clobber a newer viewer spawned after the 1s `RESPITE` elapsed.
+#[derive(Default)]
+struct ViewerCoordinator {
+    generation: u64,
+    active_pid: u32,
+}
+
+impl ViewerCoordinator {
+    fn claim_generation(&mut self, pid: u32) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        self.active_pid = pid;
+        self.generation
+    }
+
+    fn is_current(&self, generation: u64) -> bool {
+        self.generation == generation
+    }
+
+    fn clear_if_current(&mut self, generation: u64) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        self.active_pid = 0;
+        true
+    }
+}
+
+static VIEWER_COORDINATOR: Lazy<Mutex<ViewerCoordinator>> =
+    Lazy::new(|| Mutex::new(ViewerCoordinator::default()));
+
 /// The clock the pause between two attempts is measured on, and when the next one is due.
 static THE_CLOCK: Lazy<Instant> = Lazy::new(Instant::now);
 static NEXT_ATTEMPT: AtomicU64 = AtomicU64::new(0);
@@ -61,7 +93,7 @@ static NEXT_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 /// up, waited on for a bound: a viewer that does not answer is a process nothing here will ever talk to, and
 /// this run is the single-process app instead (see `main` and `seam::preview_ready_event`).
 pub(crate) fn begin_the_viewer() -> bool {
-    let Some(mut child) = begin_one() else {
+    let Some((mut child, generation)) = begin_one(false) else {
         return false;
     };
 
@@ -70,12 +102,11 @@ pub(crate) fn begin_the_viewer() -> bool {
         // process holding a preview loop of its own is one this run has no use for. And this process's own
         // windows are once again the ones the hook judges a press by (see `seam::window_is_a_viewers`).
         let _ = child.kill();
-        crate::app::seam::note_the_viewer_process(0);
+        abort_generation(generation, false);
         return false;
     }
 
-    keep_the_handle(child);
-    true
+    commit_generation(generation, child)
 }
 
 /// Wait for the viewer `viewer` to answer that its preview loop is running (see
@@ -136,12 +167,12 @@ fn begin_the_viewer_again() {
     // `begin_one` notes the new process as this run's viewer before it can answer, which is what makes the
     // retarget the first thing that happens: every hover that lands while the new one is starting is a
     // message in the preview ring, waiting for the one process that reads it.
-    let Some(mut child) = begin_one() else {
+    let Some((mut child, generation)) = begin_one(true) else {
         return;
     };
 
     if wait_for_a_viewer(child.id(), THE_VIEWER_ANSWERS_IN) {
-        keep_the_handle(child);
+        let _ = commit_generation(generation, child);
         return;
     }
 
@@ -151,12 +182,8 @@ fn begin_the_viewer_again() {
     // `note_the_road`).
     note_a_silent_replacement(child.id());
     let _ = child.kill();
-    crate::app::seam::note_the_viewer_process(0);
-    // **And the handle of the viewer that left the ring goes with it.** What is recorded there is the
-    // detached window's process, which stands alive with its own window for as long as the user keeps it: left
-    // answering for this run's viewer it would make every later hover read a viewer as standing when nothing
-    // reads the ring at all, and no hover would ever begin one again (see `the_viewer_is_standing`).
-    forget_the_handle();
+    // Only clear recorded PID/handle if no newer generation superseded this timed-out attempt.
+    abort_generation(generation, true);
 }
 
 /// Say which road this run took, on the trace a run asks for when what is under the seam is measured: the
@@ -190,19 +217,26 @@ pub(crate) fn make_sure_a_viewer_is_standing() {
         return;
     }
 
-    let Some(child) = begin_one() else {
+    let Some((child, generation)) = begin_one(true) else {
         return;
     };
 
     note_a_replacement(child.id());
-    keep_the_handle(child);
+    let _ = commit_generation(generation, child);
 }
 
 /// One viewer, begun and recorded as the process this run's previews are drawn in.
 ///
 /// Answers nothing where an attempt was taken less than `RESPITE` ago, which is what keeps two roads that
 /// both find no viewer standing — a hover and the notice a detach sends — to one process between them.
-fn begin_one() -> Option<std::process::Child> {
+fn begin_one(recheck_standing: bool) -> Option<(std::process::Child, u64)> {
+    let mut coord = VIEWER_COORDINATOR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if recheck_standing && the_viewer_is_standing() && !crate::app::seam::the_viewer_has_left() {
+        return None;
+    }
+
     let now = THE_CLOCK.elapsed().as_millis() as u64;
     let due = NEXT_ATTEMPT.load(Ordering::Acquire);
     let claim = now + RESPITE.as_millis() as u64;
@@ -226,10 +260,38 @@ fn begin_one() -> Option<std::process::Child> {
     // The job every process of this app's is in, which ends the viewer with the tray app: a viewer left
     // standing with no tray to ask it for anything is a window nothing would ever close.
     crate::app::engine_processes::adopt(child.id());
+    let generation = coord.claim_generation(child.id());
     // And the one fact about it the tray's own windows are judged by (see `seam::window_is_a_viewers`).
     crate::app::seam::note_the_viewer_process(child.id());
 
-    Some(child)
+    Some((child, generation))
+}
+
+/// Install `child`'s handle if `generation` is still current; otherwise kill the superseded child.
+fn commit_generation(generation: u64, mut child: std::process::Child) -> bool {
+    let coord = VIEWER_COORDINATOR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !coord.is_current(generation) {
+        let _ = child.kill();
+        return false;
+    }
+    keep_the_handle(child);
+    true
+}
+
+/// Clear the recorded viewer PID (and optionally handle) only if `generation` is still current.
+fn abort_generation(generation: u64, forget_handle: bool) {
+    let mut coord = VIEWER_COORDINATOR
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !coord.clear_if_current(generation) {
+        return;
+    }
+    crate::app::seam::note_the_viewer_process(0);
+    if forget_handle {
+        forget_the_handle();
+    }
 }
 
 /// Keep the viewer's process handle, and close the one a viewer that has gone left behind.
@@ -291,5 +353,35 @@ fn note_a_replacement(pid: u32) {
 fn note_a_silent_replacement(pid: u32) {
     if std::env::var_os("RHP_SEAM_TRACE").is_some() {
         eprintln!("seam: {pid} begun in the viewer's place answered nothing, killed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timed_out_respawn_cannot_clobber_newer_viewer_generation() {
+        let mut coord = ViewerCoordinator::default();
+
+        // Thread A spawns viewer 101 (gen 1) and enters 3s readiness wait.
+        let gen1 = coord.claim_generation(101);
+        assert!(coord.is_current(gen1));
+        assert_eq!(coord.active_pid, 101);
+
+        // After 1s RESPITE, hover spawns viewer 202 (gen 2) and commits it.
+        let gen2 = coord.claim_generation(202);
+        assert!(coord.is_current(gen2));
+        assert!(!coord.is_current(gen1));
+        assert_eq!(coord.active_pid, 202);
+
+        // At 3s, Thread A's gen 1 times out and tries to abort: must be rejected.
+        assert!(!coord.clear_if_current(gen1));
+        assert_eq!(coord.active_pid, 202);
+        assert!(coord.is_current(gen2));
+
+        // Only gen 2 itself may clear active_pid.
+        assert!(coord.clear_if_current(gen2));
+        assert_eq!(coord.active_pid, 0);
     }
 }

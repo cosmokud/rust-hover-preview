@@ -970,6 +970,9 @@ pub(super) unsafe extern "system" fn window_proc(
         windows::Win32::UI::WindowsAndMessaging::WM_DWMSENDICONICTHUMBNAIL => {
             pin_taskbar_mirror::answer_a_thumbnail_ask(hwnd, lparam)
         }
+        windows::Win32::UI::WindowsAndMessaging::WM_DWMSENDICONICLIVEPREVIEWBITMAP => {
+            pin_taskbar_mirror::answer_a_live_preview_ask(hwnd)
+        }
         windows::Win32::UI::WindowsAndMessaging::WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }

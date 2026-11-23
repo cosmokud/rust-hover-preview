@@ -529,6 +529,15 @@ fn follow_cursor() -> bool {
         .unwrap_or(true)
 }
 
+/// Whether the tray's `Scaling → Bypass Placement` is on: the box then takes the whole room on
+/// the cursor's free side, whatever the preset's own scale asks, as every other preview's does.
+fn bypass_placement() -> bool {
+    CONFIG
+        .lock()
+        .map(|config| config.bypass_placement)
+        .unwrap_or(false)
+}
+
 /// The program as the desktop's own loader wants it: **a full path**.
 ///
 /// `CreateProcessW` is handed the program as `lpApplicationName`, and a name there is a place and
@@ -789,7 +798,7 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         };
         lingering = None;
 
-        let Some(layout) = layout_for(at, own, scale, follow_cursor()) else {
+        let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
             hide_the_host();
             std::thread::sleep(KEEP_POLL);
             continue;
@@ -908,6 +917,7 @@ fn layout_for(
     own: (u32, u32),
     scale: PreviewScale,
     follow_cursor: bool,
+    bypass_placement: bool,
 ) -> Option<PreviewLayout> {
     let scale = fit_reduced(scale);
     match at {
@@ -921,6 +931,7 @@ fn layout_for(
                     orig_dims: own,
                     avoid,
                     follow_cursor,
+                    bypass_placement,
                     preview_scale: scale,
                     at_the_pointer_corner: false,
                 },
@@ -944,6 +955,7 @@ fn layout_for(
                     columns,
                     orig_dims: own,
                     follow_cursor,
+                    bypass_placement,
                     preview_scale: scale,
                 },
                 bounds,
@@ -1455,6 +1467,7 @@ mod tests {
             (600, 400),
             PreviewScale::Percent(100),
             true,
+            false,
         )
         .expect("a display has room for a preview");
 
@@ -1483,10 +1496,17 @@ mod tests {
             (600, 400),
             PreviewScale::Percent(100),
             true,
+            false,
         )
         .expect("a display has room for a preview");
-        let half = layout_for(pointer((0, 0)), (600, 400), PreviewScale::Percent(50), true)
-            .expect("half of a room is a preview a display can hold");
+        let half = layout_for(
+            pointer((0, 0)),
+            (600, 400),
+            PreviewScale::Percent(50),
+            true,
+            false,
+        )
+        .expect("half of a room is a preview a display can hold");
 
         assert!(
             (half.preview_w as f32 - whole.preview_w as f32 / 2.0).abs() <= 2.0
@@ -1506,6 +1526,7 @@ mod tests {
             pointer((0, 0)),
             (600, 400),
             PreviewScale::FitToScreen,
+            false,
             false,
         )
         .expect("a display has room for a preview");
@@ -1527,6 +1548,7 @@ mod tests {
             (600, 400),
             PreviewScale::Percent(100),
             true,
+            false,
         )
         .expect("a display has room for a preview");
         assert!(
@@ -1546,16 +1568,28 @@ mod tests {
             "and the box it comes out at is one the display holds"
         );
 
-        let fitted = layout_for(pointer((0, 0)), (600, 400), PreviewScale::FitToScreen, true)
-            .expect("a display has room for a preview");
+        let fitted = layout_for(
+            pointer((0, 0)),
+            (600, 400),
+            PreviewScale::FitToScreen,
+            true,
+            false,
+        )
+        .expect("a display has room for a preview");
         assert_eq!(
             (fitted.preview_w, fitted.preview_h),
             (at_a_hundred.preview_w, at_a_hundred.preview_h),
             "a fit is the same whole of the room"
         );
 
-        let half = layout_for(pointer((0, 0)), (600, 400), PreviewScale::Percent(50), true)
-            .expect("half of a room is a preview a display can hold");
+        let half = layout_for(
+            pointer((0, 0)),
+            (600, 400),
+            PreviewScale::Percent(50),
+            true,
+            false,
+        )
+        .expect("half of a room is a preview a display can hold");
         assert!(
             (half.preview_w as f32 - at_a_hundred.preview_w as f32 / 2.0).abs() <= 2.0
                 && (half.preview_h as f32 - at_a_hundred.preview_h as f32 / 2.0).abs() <= 2.0,

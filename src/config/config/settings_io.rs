@@ -103,6 +103,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "pin_nav_image",
             "pin_nav_others",
             "pin_nav_video",
+            "pin_scaling_mode",
             "pin_update_enabled",
             "pin_update_move_to_top",
             "pin_update_on_hover",
@@ -162,6 +163,7 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
         &[
             "animated_scale",
             "audio_scale",
+            "bypass_placement",
             "design_scale",
             "document_scale",
             "ebook_scale",

@@ -1293,6 +1293,37 @@ fn the_pin_minimize_setting_survives_a_write_and_a_read() {
     );
 }
 
+#[test]
+fn pin_scaling_mode_defaults_and_round_trips_through_ini() {
+    assert_eq!(
+        AppConfig::default().pin_scaling_mode,
+        PinScalingMode::UntilResized
+    );
+
+    let mut unknown = Ini::new();
+    unknown.set(CONFIG_SECTION, "pin_scaling_mode", Some("nope".to_string()));
+    assert_eq!(
+        read_file(&mut unknown).pin_scaling_mode,
+        DEFAULT_PIN_SCALING_MODE
+    );
+
+    let config = AppConfig {
+        pin_scaling_mode: PinScalingMode::UseScalingSettings,
+        ..AppConfig::default()
+    };
+    let text = ordered_text(&config.to_ini());
+    let mut read_back = Ini::new();
+    read_back.read(text).expect("valid ini");
+    assert_eq!(
+        read_back.get(CONFIG_SECTION, "pin_scaling_mode"),
+        Some("use_scaling_settings".to_string())
+    );
+    assert_eq!(
+        read_file(&mut read_back).pin_scaling_mode,
+        PinScalingMode::UseScalingSettings
+    );
+}
+
 /// What a pin collapsed into its bubble does with what it is playing is two settings, each
 /// read from its own key: a video behind one and a sound behind the other, so a file that
 /// turns one off leaves the other where it was. Both hold what is playing unless the file

@@ -349,8 +349,8 @@ pub(super) fn stand_the_drawn_probe_in(answer: Option<bool>) {
     }
     // The pace is a cost on the machine's own sample, and a test that changes the answer is not made to
     // wait it out: the answer it stood in is the next sample the pass would have taken.
-    if let Ok(mut pending) = PENDING_SOURCE.lock() {
-        if let Some(waiting) = pending.as_mut() {
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        if let Some(waiting) = adoption.pending_source.as_mut() {
             waiting.sampled = None;
         }
     }
@@ -361,8 +361,8 @@ pub(super) fn stand_the_drawn_probe_in(answer: Option<bool>) {
 /// start bound itself (see `hand_the_picture_over`).
 #[cfg(test)]
 pub(super) fn stand_the_pending_source_since(since: Option<Instant>) {
-    if let Ok(mut pending) = PENDING_SOURCE.lock() {
-        if let Some(waiting) = pending.as_mut() {
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        if let Some(waiting) = adoption.pending_source.as_mut() {
             waiting.since = since.unwrap_or_else(Instant::now);
         }
     }
@@ -506,10 +506,10 @@ pub(super) fn the_standing_source_is_the_current_one() -> bool {
 /// `PendingSource`).
 #[cfg(test)]
 pub(super) fn a_source_is_waiting_to_take_the_picture() -> bool {
-    PENDING_SOURCE
+    THUMBNAIL_ADOPTION
         .lock()
         .ok()
-        .is_some_and(|pending| pending.is_some())
+        .is_some_and(|adoption| adoption.pending_source.is_some())
 }
 
 /// The client the one placement asked the source for — the box it was put at, and the client the pair
@@ -642,13 +642,67 @@ struct LatePlacement {
     asked: Option<Instant>,
 }
 
-/// The film the road is still waiting to place, or nothing while none is.
-static LATE_PLACEMENT: Mutex<Option<LatePlacement>> = Mutex::new(None);
+/// Cohesive adoption/handover state for pending thumbnail sources and late placements.
+#[derive(Default)]
+struct ThumbnailAdoption {
+    late_placement: Option<LatePlacement>,
+    pending_source: Option<PendingSource>,
+}
+
+static THUMBNAIL_ADOPTION: Mutex<ThumbnailAdoption> = Mutex::new(ThumbnailAdoption {
+    late_placement: None,
+    pending_source: None,
+});
+
+/// Cohesive per-thumbnail tracking state (show cache, picture area, crop trace, held frames).
+#[derive(Default)]
+struct ThumbnailTracking {
+    source_show: Option<(isize, bool)>,
+    picture_area: Option<PictureArea>,
+    last_crop_area: Option<CropState>,
+    held_frames: HeldFrames,
+}
+
+static THUMBNAIL_TRACKING: Mutex<ThumbnailTracking> = Mutex::new(ThumbnailTracking {
+    source_show: None,
+    picture_area: None,
+    last_crop_area: None,
+    held_frames: HeldFrames {
+        heartbeat: None,
+        in_the_second: 0,
+        since_summary: 0,
+        disagrees: false,
+    },
+});
+
+/// Deterministic test reset for all pin film thumbnail state.
+#[cfg(test)]
+#[allow(dead_code)]
+pub(super) fn reset_thumbnail_state() {
+    SOURCE.store(0, Ordering::SeqCst);
+    SOURCE_PROCESS.store(0, Ordering::SeqCst);
+    REGISTERED_HOST.store(0, Ordering::SeqCst);
+    STILL_HOST.store(0, Ordering::SeqCst);
+    STILL_PID.store(0, Ordering::SeqCst);
+    SOURCE_PLACEMENTS.store(0, Ordering::SeqCst);
+    SOURCE_REPLACEMENTS.store(0, Ordering::SeqCst);
+    REGISTRATIONS.store(0, Ordering::SeqCst);
+    UNREGISTRATIONS.store(0, Ordering::SeqCst);
+    if let Ok(mut thumb) = THUMBNAIL.lock() {
+        *thumb = Thumbnail::NOTHING;
+    }
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        *adoption = ThumbnailAdoption::default();
+    }
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
+        *tracking = ThumbnailTracking::default();
+    }
+}
 
 /// Wait for the size of a film this adoption could not size (see `LatePlacement`).
 fn arm_the_late_placement(source: HWND, process: u32) {
-    if let Ok(mut armed) = LATE_PLACEMENT.lock() {
-        *armed = Some(LatePlacement {
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        adoption.late_placement = Some(LatePlacement {
             source: source.0 as isize,
             process,
             since: Instant::now(),
@@ -659,8 +713,8 @@ fn arm_the_late_placement(source: HWND, process: u32) {
 
 /// Give up waiting for a size: the film was placed, or there is no film of this one left.
 fn forget_the_late_placement() {
-    if let Ok(mut armed) = LATE_PLACEMENT.lock() {
-        *armed = None;
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        adoption.late_placement = None;
     }
 }
 
@@ -691,13 +745,10 @@ struct PendingSource {
     drew: bool,
 }
 
-/// The source adopted and not yet the picture, if one is (see `PendingSource`).
-static PENDING_SOURCE: Mutex<Option<PendingSource>> = Mutex::new(None);
-
 /// Wait for a source to be ready to take the picture over (see `PendingSource`).
 fn arm_the_pending_source(source: HWND, process: u32) {
-    if let Ok(mut pending) = PENDING_SOURCE.lock() {
-        *pending = Some(PendingSource {
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        adoption.pending_source = Some(PendingSource {
             source: source.0 as isize,
             process,
             placed: None,
@@ -711,17 +762,17 @@ fn arm_the_pending_source(source: HWND, process: u32) {
 
 /// The source this road is waiting on, where it is the one named.
 fn the_pending_source_for(source: isize, process: u32) -> Option<PendingSource> {
-    PENDING_SOURCE
+    THUMBNAIL_ADOPTION
         .lock()
         .ok()
-        .and_then(|pending| *pending)
+        .and_then(|adoption| adoption.pending_source)
         .filter(|pending| pending.source == source && pending.process == process)
 }
 
 /// Give up waiting for a source: the picture changed hands, or there is nothing left to hand it to.
 fn forget_the_pending_source() {
-    if let Ok(mut pending) = PENDING_SOURCE.lock() {
-        *pending = None;
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        adoption.pending_source = None;
     }
 }
 
@@ -729,17 +780,21 @@ fn forget_the_pending_source() {
 /// was being handed over is the next wait, and it is not this call's to give up (see
 /// `hand_the_picture_over`).
 fn forget_the_pending_source_of(source: isize, process: u32) {
-    if let Ok(mut pending) = PENDING_SOURCE.lock() {
-        if pending.is_some_and(|pending| pending.source == source && pending.process == process) {
-            *pending = None;
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        if adoption
+            .pending_source
+            .is_some_and(|pending| pending.source == source && pending.process == process)
+        {
+            adoption.pending_source = None;
         }
     }
 }
 
 /// Keep the one placement a source that is waiting to take the picture over was given.
 fn note_the_placement_of_a_pending_source(source: isize, process: u32, placed: SourceShape) {
-    if let Ok(mut pending) = PENDING_SOURCE.lock() {
-        if let Some(waiting) = pending
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        if let Some(waiting) = adoption
+            .pending_source
             .as_mut()
             .filter(|waiting| waiting.source == source && waiting.process == process)
         {
@@ -781,7 +836,11 @@ fn the_source_is_taking_the_picture_over(source: isize, process: u32) -> bool {
 /// **It is the same question the swap asks**, so a record nothing is waiting on any more — a source
 /// this road has moved off, or one a registration already draws — is not a wait and answers no.
 pub(super) fn a_handover_is_pending_for(process: u32) -> bool {
-    let Some(pending) = PENDING_SOURCE.lock().ok().and_then(|pending| *pending) else {
+    let Some(pending) = THUMBNAIL_ADOPTION
+        .lock()
+        .ok()
+        .and_then(|adoption| adoption.pending_source)
+    else {
         return false;
     };
     process != 0
@@ -1154,8 +1213,8 @@ fn note_where_the_source_stands(source: HWND) {
     // Safety: the handle is one a player made and this module has just recorded, and the question is
     // about the window rather than a change to it.
     let up = unsafe { IsWindowVisible(source) }.as_bool();
-    if let Ok(mut held) = THE_SOURCE_SHOW.lock() {
-        *held = Some((source.0 as isize, up));
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
+        tracking.source_show = Some((source.0 as isize, up));
     }
 }
 
@@ -1536,11 +1595,12 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
         }
         return;
     }
-    let Ok(mut armed) = LATE_PLACEMENT.lock() else {
+    let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() else {
         return;
     };
-    let Some(waiting) =
-        (*armed).filter(|waiting| waiting.source == number && waiting.process == process)
+    let Some(waiting) = adoption
+        .late_placement
+        .filter(|waiting| waiting.source == number && waiting.process == process)
     else {
         return;
     };
@@ -1548,10 +1608,10 @@ pub(super) fn place_the_source_when_the_player_answers(host: HWND) {
     if !a_late_placement_is_due(waited, waiting.asked.map(|asked| asked.elapsed())) {
         return;
     }
-    if let Some(waiting) = armed.as_mut() {
+    if let Some(waiting) = adoption.late_placement.as_mut() {
         waiting.asked = Some(Instant::now());
     }
-    drop(armed);
+    drop(adoption);
 
     let source = HWND(number as *mut _);
     let native = match the_players_picture_size(process).or_else(|| the_films_own_size(process)) {
@@ -1605,7 +1665,11 @@ pub(super) fn hand_the_picture_over(host: HWND) {
     if pin_film_host::a_resize_drag_is_live() {
         return;
     }
-    let Some(pending) = PENDING_SOURCE.lock().ok().and_then(|pending| *pending) else {
+    let Some(pending) = THUMBNAIL_ADOPTION
+        .lock()
+        .ok()
+        .and_then(|adoption| adoption.pending_source)
+    else {
         return;
     };
     let current = SOURCE.load(Ordering::SeqCst);
@@ -1804,8 +1868,8 @@ fn the_source_drew(pending: PendingSource, source: HWND, client: (i32, i32)) -> 
             }
         }
     };
-    if let Ok(mut record) = PENDING_SOURCE.lock() {
-        if let Some(waiting) = record.as_mut().filter(|waiting| {
+    if let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() {
+        if let Some(waiting) = adoption.pending_source.as_mut().filter(|waiting| {
             waiting.source == pending.source && waiting.process == pending.process
         }) {
             waiting.sampled = Some(now);
@@ -1989,10 +2053,10 @@ fn note_the_source_not_ready(pending: PendingSource, live: Option<(i32, i32)>) {
     let asked = pending.placed.map_or((0, 0), |shape| shape.client);
     let now = Instant::now();
     let due = {
-        let Ok(mut record) = PENDING_SOURCE.lock() else {
+        let Ok(mut adoption) = THUMBNAIL_ADOPTION.lock() else {
             return;
         };
-        let Some(waiting) = record.as_mut().filter(|waiting| {
+        let Some(waiting) = adoption.pending_source.as_mut().filter(|waiting| {
             waiting.source == pending.source && waiting.process == pending.process
         }) else {
             return;
@@ -2367,25 +2431,20 @@ pub(super) fn set_the_source_visible(visible: bool) {
         return;
     };
     let number = source.0 as isize;
-    let asked = THE_SOURCE_SHOW.lock().ok().and_then(|held| *held);
+    let asked = THUMBNAIL_TRACKING
+        .lock()
+        .ok()
+        .and_then(|tracking| tracking.source_show);
     if asked == Some((number, visible)) {
         return;
     }
-    if let Ok(mut held) = THE_SOURCE_SHOW.lock() {
-        *held = Some((number, visible));
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
+        tracking.source_show = Some((number, visible));
     }
     // Safety: the handle is a window this module adopted, and the form asked for is the one the pin's
     // own state wants.
     let _ = unsafe { ShowWindowAsync(source, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE }) };
 }
-
-/// The source this road last asked a show or a hide for, and which of the two: the record that keeps a
-/// hide still in flight from being read as "already hidden" by the restore that follows it (see
-/// `set_the_source_visible`).
-///
-/// It is written where the source is recorded — a player's window is up when it is adopted, and it is
-/// that window the next ask is about — and cleared with the source it names.
-static THE_SOURCE_SHOW: Mutex<Option<(isize, bool)>> = Mutex::new(None);
 
 /// Take the registration down: the host it was drawn in is going, and a registration left behind a
 /// window that is gone is a leak of the Shell's own resources.
@@ -2400,9 +2459,9 @@ pub(super) fn forget_the_thumbnail_because(reason: &str) {
     STILL_PID.store(0, Ordering::SeqCst);
     // The measurement of what the pin was left showing goes with the pin (see `still_probe`).
     super::still_probe::forget("the pin is going");
-    if let Ok(mut held) = HELD_FRAMES.lock() {
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
         // The pin that counted these is gone, so the next one opens its own first second.
-        *held = HeldFrames::default();
+        tracking.held_frames = HeldFrames::default();
     }
     // **A registration standing is a picture, and letting it go is a band that has changed**: the
     // fill that follows this is the pin's own claim, and it must be painted rather than left over
@@ -2439,9 +2498,9 @@ fn let_the_picture_go() {
     REGISTERED_HOST.store(0, Ordering::SeqCst);
     SOURCE.store(0, Ordering::SeqCst);
     SOURCE_PROCESS.store(0, Ordering::SeqCst);
-    if let Ok(mut held) = THE_SOURCE_SHOW.lock() {
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
         // The window this was an ask about is nobody's source now (see `set_the_source_visible`).
-        *held = None;
+        tracking.source_show = None;
     }
 }
 
@@ -2462,7 +2521,10 @@ fn let_the_registration_go_for_a_still() {
     }
     forget_the_late_placement();
     REGISTERED_HOST.store(0, Ordering::SeqCst);
-    if !PENDING_SOURCE.lock().is_ok_and(|pending| pending.is_some()) {
+    if !THUMBNAIL_ADOPTION
+        .lock()
+        .is_ok_and(|adoption| adoption.pending_source.is_some())
+    {
         forget_the_pending_source();
         SOURCE.store(0, Ordering::SeqCst);
         SOURCE_PROCESS.store(0, Ordering::SeqCst);
@@ -2545,20 +2607,6 @@ const THE_DC_STILL_PNG: &str = "rhp-pin-dc-still.png";
 /// here: a stale or garbage surface can hold one bright pixel, and a cover painted from one is a black
 /// band with a speck in it.
 const THE_DC_STILL_MIN_LIT_SHARE: u32 = 2;
-
-/// **A frame of the player's own picture, as it is on the screen right now**: what a take-up holds
-/// the pin's band with while the host catches up with the film (see `pin_film_host::BandStill`).
-///
-/// It is the same capture a relaunch's cover takes, and for the same reason: the source window wears
-/// `WS_EX_LAYERED` at alpha 1 so nothing of it reaches the screen, so the screen has no frame of it
-/// and the player's own device context is the one surface that does (see
-/// `stand_the_outgoing_picture_from_its_dc`).
-///
-/// Nothing is ended, frozen or read back here: the frame is a copy out of a context that is already
-/// drawing, so the film goes on playing in the window it is drawn in.
-pub(super) fn a_frame_of_the_players_picture(pid: u32) -> Option<((u32, u32), Vec<u8>)> {
-    capture_the_sources_dc(pid)
-}
 
 /// The frame in the source's own window as the BGRA pixels and the size a still is painted from, or
 /// nothing where the window holds no picture (see `stand_the_outgoing_picture_from_its_dc`).
@@ -2970,14 +3018,12 @@ struct PictureArea {
     asked: Instant,
 }
 
-static PICTURE_AREA: Mutex<Option<PictureArea>> = Mutex::new(None);
-
 /// **Forget the area a film's player reported drawing.** The answer is one film's, like the shape it is
 /// asked for, so it goes where the shape goes: with the teardown, and with the adoption of another
 /// window (see `forget_the_shape_of_another_film`).
 fn forget_the_pictures_area() {
-    if let Ok(mut held) = PICTURE_AREA.lock() {
-        *held = None;
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
+        tracking.picture_area = None;
     }
 }
 
@@ -3018,7 +3064,10 @@ fn the_pictures_area(source: HWND, process: u32, live: (i32, i32)) -> (i32, i32)
     }
     let number = source.0 as isize;
     let now = Instant::now();
-    let standing = PICTURE_AREA.lock().ok().and_then(|held| *held);
+    let standing = THUMBNAIL_TRACKING
+        .lock()
+        .ok()
+        .and_then(|tracking| tracking.picture_area);
     if let Some(asked) = standing.filter(|asked| asked.is_about(number, process, live)) {
         if asked.area_is_the_client(live) {
             // **The answer is what the player is drawing, and it is the window**: nothing more is owed.
@@ -3047,8 +3096,8 @@ fn the_pictures_area(source: HWND, process: u32, live: (i32, i32)) -> (i32, i32)
     let Some(area) = the_outputs_area(source, process, live) else {
         return live;
     };
-    if let Ok(mut held) = PICTURE_AREA.lock() {
-        *held = Some(PictureArea {
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
+        tracking.picture_area = Some(PictureArea {
             source: number,
             process,
             client: live,
@@ -3097,10 +3146,10 @@ impl PictureArea {
 /// waiting for its window is — because the answer arrives in a millisecond or two of the carry (see
 /// `ffplay_window::ensure_noactivate_monitor`).
 pub(super) fn a_picture_is_owed_its_answer() -> bool {
-    PICTURE_AREA
+    THUMBNAIL_TRACKING
         .try_lock()
         .ok()
-        .and_then(|held| *held)
+        .and_then(|tracking| tracking.picture_area)
         .is_some_and(|asked| {
             !asked.area_is_the_client(asked.client) && asked.since.elapsed() < PICTURE_AREA_SETTLE
         })
@@ -3176,7 +3225,9 @@ fn let_the_registration_go(registration: isize) {
     if registration == 0 {
         return;
     }
-    let _ = unsafe { DwmUnregisterThumbnail(registration) };
+    if let Err(err) = unsafe { DwmUnregisterThumbnail(registration) } {
+        note_pin_trace!("thumbnail DwmUnregisterThumbnail failed reg {registration:#x}: {err:?}");
+    }
     #[cfg(test)]
     UNREGISTRATIONS.fetch_add(1, Ordering::SeqCst);
 }
@@ -3373,13 +3424,13 @@ fn note_the_crop_area(area: (i32, i32), client: (i32, i32), placed: Option<(i32,
         client,
         placed,
     };
-    let Ok(mut last) = LAST_CROP_AREA.lock() else {
+    let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() else {
         return;
     };
-    if *last == Some(state) {
+    if tracking.last_crop_area == Some(state) {
         return;
     }
-    *last = Some(state);
+    tracking.last_crop_area = Some(state);
     let (placed_width, placed_height) = placed.unwrap_or(client);
     note_pin_trace!(
         "thumbnail crop area {}x{} of cli {}x{} placed {}x{}: the film is cropped where its player draws it",
@@ -3399,9 +3450,6 @@ struct CropState {
     client: (i32, i32),
     placed: Option<(i32, i32)>,
 }
-
-/// The last state `note_the_crop_area` wrote a line for (see there).
-static LAST_CROP_AREA: Mutex<Option<CropState>> = Mutex::new(None);
 /// The one line that makes a hole visible at a glance: the host the Shell is drawing into (its own box
 /// and where it stands), the host client the pair was built from, the source's live client (`cli`), the
 /// client the crop was built from (`pic`) and the exact rectangles handed over. **`host` and `box`
@@ -3496,15 +3544,6 @@ impl HeldFrames {
     }
 }
 
-/// The held frames this pin has seen (see [`HeldFrames`]), which is one pin's at a time: a registration
-/// belongs to the pin that took it up, and its teardown settles what it counted.
-static HELD_FRAMES: Mutex<HeldFrames> = Mutex::new(HeldFrames {
-    heartbeat: None,
-    in_the_second: 0,
-    since_summary: 0,
-    disagrees: false,
-});
-
 /// Count one held frame, and write the heartbeat it is owed where a second of them has passed.
 ///
 /// **Nothing is counted while the trace is off**: this is a trace's own bookkeeping rather than a fact
@@ -3513,8 +3552,8 @@ fn note_a_held_frame(disagrees: bool) {
     if !super::pin_trace::asked() {
         return;
     }
-    if let Ok(mut held) = HELD_FRAMES.lock() {
-        if let Some(line) = held.a_frame(Instant::now(), disagrees) {
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
+        if let Some(line) = tracking.held_frames.a_frame(Instant::now(), disagrees) {
             note_pin_trace!("{}", line);
         }
     }
@@ -3526,8 +3565,8 @@ fn note_a_held_frame(disagrees: bool) {
 /// this road has — and a pin's teardown is the last of them: what a pin held before it went is still
 /// worth one line, and a pin's own life is a settle of its own.
 pub(super) fn settle_the_held_frames() {
-    if let Ok(mut held) = HELD_FRAMES.lock() {
-        if let Some(line) = held.a_summary() {
+    if let Ok(mut tracking) = THUMBNAIL_TRACKING.lock() {
+        if let Some(line) = tracking.held_frames.a_summary() {
             note_pin_trace!("{}", line);
         }
     }

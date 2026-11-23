@@ -593,6 +593,7 @@ pub(super) struct HoverPlacement {
     /// in — which is what the placement is kept off (see `AvoidRegion`).
     pub(super) avoid: Option<AvoidRegion>,
     pub(super) follow_cursor: bool,
+    pub(super) bypass_placement: bool,
     pub(super) preview_scale: PreviewScale,
     /// Whether this placement is the waiting spinner's own box rather than a
     /// preview's: it is then placed at the pointer's own corner — a pointer gap off

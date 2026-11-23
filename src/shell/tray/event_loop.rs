@@ -21,21 +21,22 @@ use super::commands::{
     set_image_cache_mb, set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode,
     set_model_scale, set_mpv_engine_idle, set_mpv_path, set_office_engine, set_office_engine_idle,
     set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek, set_pin_nav_audio,
-    set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_preview_scale,
-    set_same_file_rehover_delay, set_settling_delay, set_text_font_scale, set_text_scale,
-    set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode, set_vector_background,
-    set_vector_scale, set_video_engine, set_video_scale, set_video_volume, set_webview_idle,
-    set_zoom_background, toggle_browse_dialog_preview, toggle_check_for_updates,
-    toggle_everything_previews, toggle_loop, toggle_normalize_video_volume,
-    toggle_normalize_volume, toggle_pdf_autofocus, toggle_pdf_full_mode, toggle_pin_always_on_top,
-    toggle_pin_camera_follows, toggle_pin_enabled, toggle_pin_pause_audio, toggle_pin_pause_video,
-    toggle_pin_playlist_always_open, toggle_pin_shuffle, toggle_pin_update_enabled,
-    toggle_pin_update_move_to_top, toggle_pin_update_on_hover, toggle_preview_enabled,
-    toggle_preview_type, toggle_prioritize_keyboard, toggle_q_dir_previews,
-    toggle_remember_audio_volume, toggle_remember_video_volume, toggle_render_html,
-    toggle_silent_auto_update, toggle_startup, toggle_text_dont_preview_secrets,
-    toggle_text_show_extensionless, toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled,
-    toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
+    set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_pin_scaling_mode,
+    set_preview_scale, set_same_file_rehover_delay, set_settling_delay, set_text_font_scale,
+    set_text_scale, set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode,
+    set_vector_background, set_vector_scale, set_video_engine, set_video_scale, set_video_volume,
+    set_webview_idle, set_zoom_background, toggle_browse_dialog_preview, toggle_bypass_placement,
+    toggle_check_for_updates, toggle_everything_previews, toggle_loop,
+    toggle_normalize_video_volume, toggle_normalize_volume, toggle_pdf_autofocus,
+    toggle_pdf_full_mode, toggle_pin_always_on_top, toggle_pin_camera_follows, toggle_pin_enabled,
+    toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_playlist_always_open,
+    toggle_pin_shuffle, toggle_pin_update_enabled, toggle_pin_update_move_to_top,
+    toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
+    toggle_prioritize_keyboard, toggle_q_dir_previews, toggle_remember_audio_volume,
+    toggle_remember_video_volume, toggle_render_html, toggle_silent_auto_update, toggle_startup,
+    toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
+    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
+    toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, ANIMATED_WEBP_BUDGET_CHOICES_MB, AUDIO_SCALE_CHOICES,
@@ -45,19 +46,19 @@ use super::ids::{
     ID_TRAY_AFK_TIMER_BASE, ID_TRAY_ANIMATED_SCALE_BASE, ID_TRAY_ANIMATED_WEBP_BUDGET_BASE,
     ID_TRAY_AUDIO_LOOP, ID_TRAY_AUDIO_SCALE_BASE, ID_TRAY_AUDIO_SEEK_BASE, ID_TRAY_AUDIO_SHUFFLE,
     ID_TRAY_AUDIO_VOLUME_BASE, ID_TRAY_AVOID_BASE, ID_TRAY_BROWSE_DIALOG_PREVIEW_ENABLED,
-    ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE, ID_TRAY_CUSTOM_PREVIEW, ID_TRAY_DDS_BACKGROUND_BASE,
-    ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
-    ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
-    ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
-    ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_EVERYTHING_PREVIEWS,
-    ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE, ID_TRAY_FONT_100, ID_TRAY_FONT_110, ID_TRAY_FONT_125,
-    ID_TRAY_FONT_150, ID_TRAY_FONT_175, ID_TRAY_FONT_200, ID_TRAY_FONT_250, ID_TRAY_FONT_300,
-    ID_TRAY_FONT_400, ID_TRAY_FONT_70, ID_TRAY_FONT_80, ID_TRAY_FONT_90,
-    ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
-    ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
-    ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_INSTALL_BASE,
-    ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
-    ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
+    ID_TRAY_BYPASS_PLACEMENT, ID_TRAY_CHECK_UPDATES, ID_TRAY_CODEC_BASE, ID_TRAY_CUSTOM_PREVIEW,
+    ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE,
+    ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
+    ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
+    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS,
+    ID_TRAY_EVERYTHING_PREVIEWS, ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE, ID_TRAY_FONT_100,
+    ID_TRAY_FONT_110, ID_TRAY_FONT_125, ID_TRAY_FONT_150, ID_TRAY_FONT_175, ID_TRAY_FONT_200,
+    ID_TRAY_FONT_250, ID_TRAY_FONT_300, ID_TRAY_FONT_400, ID_TRAY_FONT_70, ID_TRAY_FONT_80,
+    ID_TRAY_FONT_90, ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE,
+    ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE,
+    ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE,
+    ID_TRAY_INSTALL_BASE, ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED,
+    ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG,
     ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
     ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
@@ -67,11 +68,12 @@ use super::ids::{
     ID_TRAY_PIN_NAV_AUDIO_CATEGORY, ID_TRAY_PIN_NAV_IMAGE_ALL, ID_TRAY_PIN_NAV_IMAGE_CATEGORY,
     ID_TRAY_PIN_NAV_OTHERS_ALL, ID_TRAY_PIN_NAV_OTHERS_CATEGORY, ID_TRAY_PIN_NAV_VIDEO_ALL,
     ID_TRAY_PIN_NAV_VIDEO_CATEGORY, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
-    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP,
-    ID_TRAY_POSITION_BEST, ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD,
-    ID_TRAY_Q_DIR_PREVIEWS, ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME,
-    ID_TRAY_REMEMBER_VOLUME, ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_SCALING_UNTIL_RESIZED, ID_TRAY_PIN_SCALING_USE_SETTINGS,
+    ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
+    ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
+    ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
+    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
+    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -82,18 +84,18 @@ use super::ids::{
     ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
     ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
-    IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MPV_COMMANDS, PIN_END_OF_FILE_CHOICES,
-    TASKBAR_CREATED, TICK_CHOICES_MS, TIMER_CHECK, TIMER_DUE, TIMING_DELAY_CHOICES_MS, TRAY_CLASS,
-    TRAY_HWND, VIDEO_ENGINE_CHOICES, WM_TRAYICON, WM_TRAY_INSTALL_FINISHED,
-    WM_TRAY_UPDATE_INSTALLED, ZOOM_BACKGROUND_CHOICES,
+    IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MAX_TRAY_CUSTOM_THEMES, MPV_COMMANDS,
+    PIN_END_OF_FILE_CHOICES, TASKBAR_CREATED, TICK_CHOICES_MS, TIMER_CHECK, TIMER_DUE,
+    TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND, VIDEO_ENGINE_CHOICES, WM_TRAYICON,
+    WM_TRAY_INSTALL_FINISHED, WM_TRAY_UPDATE_INSTALLED, ZOOM_BACKGROUND_CHOICES,
 };
 use super::menus::show_context_menu;
 use super::submenus::{install_engine, open_codec_page};
 
 use crate::app::{dialogs, updates, winget};
 use crate::config::config::{
-    MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PreviewType, TextTheme,
-    TriggerKeyMode, VOLUME_CHOICES,
+    MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PinScalingMode, PreviewType,
+    TextTheme, TriggerKeyMode, VOLUME_CHOICES,
 };
 use crate::shell::explorer_hook;
 use crate::{StartupTrace, RUNNING};
@@ -144,8 +146,9 @@ unsafe extern "system" fn tray_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     catch_unwind(|| {
+        let taskbar_created = TASKBAR_CREATED.load(Ordering::Acquire);
         match msg {
-            _ if TASKBAR_CREATED != 0 && msg == TASKBAR_CREATED => {
+            _ if taskbar_created != 0 && msg == taskbar_created => {
                 // Explorer (taskbar) restarted; re-add tray icon
                 remove_tray_icon(hwnd);
                 let _ = add_tray_icon(hwnd);
@@ -300,6 +303,12 @@ unsafe extern "system" fn tray_window_proc(
                     }
                     ID_TRAY_PIN_MINIMIZE_BUBBLE => set_pin_minimize_to(PinMinimizeTo::Bubble),
                     ID_TRAY_PIN_MINIMIZE_TASKBAR => set_pin_minimize_to(PinMinimizeTo::Taskbar),
+                    ID_TRAY_PIN_SCALING_UNTIL_RESIZED => {
+                        set_pin_scaling_mode(PinScalingMode::UntilResized)
+                    }
+                    ID_TRAY_PIN_SCALING_USE_SETTINGS => {
+                        set_pin_scaling_mode(PinScalingMode::UseScalingSettings)
+                    }
                     ID_TRAY_PIN_NAV_IMAGE_ALL => set_pin_nav_image(PinNavFileTypes::All),
                     ID_TRAY_PIN_NAV_IMAGE_CATEGORY => set_pin_nav_image(PinNavFileTypes::Category),
                     ID_TRAY_PIN_NAV_VIDEO_ALL => set_pin_nav_video(PinNavFileTypes::All),
@@ -463,6 +472,7 @@ unsafe extern "system" fn tray_window_proc(
                     }
                     ID_TRAY_POSITION_FOLLOW => set_follow_cursor(true),
                     ID_TRAY_POSITION_BEST => set_follow_cursor(false),
+                    ID_TRAY_BYPASS_PLACEMENT => toggle_bypass_placement(),
                     // A way of keeping a preview off the hovered item, by the position it
                     // was listed at.
                     cmd if (ID_TRAY_AVOID_BASE
@@ -540,7 +550,10 @@ unsafe extern "system" fn tray_window_proc(
                     ID_TRAY_THEME_DARK => set_theme(TextTheme::Dark),
                     // The `theme` folder's items, by the position the submenu gave
                     // them rather than any position in the folder.
-                    cmd if (ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_IMAGE_CACHE_BASE).contains(&cmd) => {
+                    cmd if (ID_TRAY_THEME_CUSTOM_BASE
+                        ..ID_TRAY_THEME_CUSTOM_BASE + MAX_TRAY_CUSTOM_THEMES as u16)
+                        .contains(&cmd) =>
+                    {
                         set_theme_from_menu((cmd - ID_TRAY_THEME_CUSTOM_BASE) as usize)
                     }
                     ID_TRAY_MARKDOWN_RENDERED => set_markdown_mode(MarkdownMode::Rendered),
@@ -821,7 +834,7 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
 /// thread the menu is built on, and the worker's job ends with the message. A tray window that is
 /// gone — the app on its way out — leaves the slot set, which nothing reads again.
 pub(crate) fn note_install_finished() {
-    let hwnd = unsafe { TRAY_HWND };
+    let hwnd = HWND(TRAY_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
 
     if !hwnd.is_invalid() {
         let _ = unsafe { PostMessageW(hwnd, WM_TRAY_INSTALL_FINISHED, WPARAM(0), LPARAM(0)) };
@@ -840,7 +853,7 @@ pub(crate) fn note_update_installed() {
     let deadline = Instant::now() + Duration::from_secs(20);
 
     loop {
-        let hwnd = unsafe { TRAY_HWND };
+        let hwnd = HWND(TRAY_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
 
         if !hwnd.is_invalid() {
             let _ = unsafe { PostMessageW(hwnd, WM_TRAY_UPDATE_INSTALLED, WPARAM(0), LPARAM(0)) };
@@ -865,7 +878,10 @@ pub(crate) fn note_update_installed() {
 /// the time this is called (see `main`).
 pub fn run_tray(trace: &mut StartupTrace) {
     unsafe {
-        let hinstance = GetModuleHandleW(None).unwrap();
+        let Ok(hinstance) = GetModuleHandleW(None) else {
+            eprintln!("Failed to get module handle for tray window.");
+            return;
+        };
 
         // Register window class
         let wc = WNDCLASSEXW {
@@ -880,7 +896,10 @@ pub fn run_tray(trace: &mut StartupTrace) {
         RegisterClassExW(&wc);
 
         // Register TaskbarCreated message to detect Explorer restarts
-        TASKBAR_CREATED = RegisterWindowMessageW(w!("TaskbarCreated"));
+        TASKBAR_CREATED.store(
+            RegisterWindowMessageW(w!("TaskbarCreated")),
+            Ordering::Release,
+        );
 
         // Create hidden window for tray messages
         let hwnd = CreateWindowExW(
@@ -906,7 +925,7 @@ pub fn run_tray(trace: &mut StartupTrace) {
             }
         };
 
-        TRAY_HWND = hwnd;
+        TRAY_HWND.store(hwnd.0 as isize, Ordering::Release);
         trace.step("tray window");
 
         // Add tray icon (retry briefly in case Explorer isn't ready yet)

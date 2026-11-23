@@ -182,10 +182,8 @@ pub(crate) fn listing_for(path: &Path, cancel: Option<&AtomicBool>) -> Option<Ar
     let key = ListingKey::of(path, &metadata);
 
     if let Ok(mut cache) = LISTINGS.lock() {
-        if let Some(index) = cache.iter().position(|(cached, _)| *cached == key) {
-            let (_, listing) = cache.remove(index);
-            cache.insert(0, (key, Arc::clone(&listing)));
-            return Some(listing);
+        if let Some(listing) = cache.get(&key) {
+            return Some(Arc::clone(listing));
         }
     }
 
@@ -194,10 +192,7 @@ pub(crate) fn listing_for(path: &Path, cancel: Option<&AtomicBool>) -> Option<Ar
     let listing = Arc::new(listing);
 
     if let Ok(mut cache) = LISTINGS.lock() {
-        if cache.len() >= LISTING_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
-        cache.insert(0, (key, Arc::clone(&listing)));
+        cache.insert(key, Arc::clone(&listing));
     }
 
     Some(listing)
@@ -217,7 +212,7 @@ pub(crate) fn is_listed(path: &Path) -> bool {
 
     LISTINGS
         .lock()
-        .map(|cache| cache.iter().any(|(cached, _)| *cached == key))
+        .map(|cache| cache.contains_key(&key))
         .unwrap_or(false)
 }
 
@@ -342,12 +337,7 @@ pub(crate) fn remember_engine_listing(path: &Path, listing: Listing) {
         return;
     };
 
-    if cache.len() >= LISTING_CACHE_MAX_ENTRIES {
-        cache.clear();
-    }
-
-    cache.retain(|(cached, _)| *cached != key);
-    cache.insert(0, (key, Arc::new(listing)));
+    cache.insert(key, Arc::new(listing));
 }
 
 /// The listing as the archive itself states it, read once per file version.
@@ -668,7 +658,7 @@ fn normalize_name(raw: &str) -> Option<String> {
 
 // ---------------------------------------------------------------------- cache
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct ListingKey {
     path: PathBuf,
     modified: Option<SystemTime>,
@@ -687,11 +677,12 @@ impl ListingKey {
     }
 }
 
-/// Listings, newest first. Small: it is here so that the measure pass, the render
+/// Listings, LRU-evicted. Small: it is here so that the measure pass, the render
 /// pass and a second hover read the archive once between them.
-type ListingCache = Vec<(ListingKey, Arc<Listing>)>;
+type ListingCache = crate::cache::BoundedCache<ListingKey, Arc<Listing>>;
 
-static LISTINGS: Lazy<Mutex<ListingCache>> = Lazy::new(|| Mutex::new(Vec::new()));
+static LISTINGS: Lazy<Mutex<ListingCache>> =
+    Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(LISTING_CACHE_MAX_ENTRIES)));
 
 #[cfg(test)]
 mod tests;

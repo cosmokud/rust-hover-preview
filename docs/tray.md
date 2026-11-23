@@ -63,6 +63,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **To Taskbar** — The window leaves the screen and the app appears in the taskbar as its own button, named for the pinned file and wearing this app's icon; its hover holds the pin — the live picture while the window is up, the frame it went down on once it is away, and **Previous**, **Play/Pause** and **Next** for a film or a sound. Clicking the button brings the pinned window back where it stood, and a right-click closes the window. A pin that is not **Always On Top** wears this button while it is up as well.
     - A window is away either way, so previews stay held back until it is brought back, whichever place the setting names.
     - What a window put away holds where it is is **Pause on Minimize** at the top of each kind's own **Pin Mode** — one under **Preview Settings → Video**, one under **Preview Settings → Audio** — because what should go quiet while a pin is away is a question about one kind of file.
+  - **Scaling** — What a pin's window does with its size when it swaps files, rather than when it is taken up.
+    - **Until Resized** (Default) — The window keeps the bound it has, so a window pulled to a size stays that size however many files it walks.
+    - **Use Scaling Settings** — The bound is dropped and every swap is laid out afresh at the size the incoming file's kind's scaling setting names.
   - **Navigation** — What **Previous** and **Next** on the caption step through: four anchors — **Image**, **Video**, **Audio**, **Others**, in that order — each with **All Files** / **Same Category**. The walk is anchored on the first file pinned, so a picture walks pictures while a document walks end to end.
     - The walk is the pin's own: one playlist spawned when the pin is taken up and stepped along, so a **Previous** is the file the walk came from and the **Next** after it is the file it was interrupted on. A file picked in the listing inside that folder carries the playlist on; one anywhere else starts fresh.
     - Image, Video and Audio start at **Same Category**, Others at **All Files**.
@@ -155,8 +158,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - Keeps a preview off the item it is about.
     - Keyboard previews have no cursor, so **Nothing** acts like **Filename**.
 - **Scaling**
+  - **Bypass Placement** — off by default. On, a hover preview is sized against the whole work area and lands in the largest half of the screen clear of the pointer, ignoring **Position** and **Avoid** — so `By Screen 75%` is 75% of the screen rather than 75% of a quadrant of it. A keyboard hover is centred in the work area at its full share; a pin is untouched.
   - **Image** — **Fit to Screen**, a share of the display's fitted size (`75%`, `50%`, `25%`, `10%`), or a share of the image's own size (`400%`–`25%`). The two groups are listed under **By Screen** and **By Own Size**. Default `100%`.
-  - **Video** — Same shares for a video, except that **Fit to Screen** is the display's room: a film smaller than the screen fills it, as a pinned window and a maximize already do. Default `100%`.
+  - **Video** — Same shares for a video, and every one of the **By Screen** shares is of the display's fitted room — **Fit to Screen** included, so a film smaller than the screen fills it, as a pinned window and a maximize already do. Default `100%`.
   - **Animated** — Same shares for an animated GIF, WebP, or PNG — and for an animated JPEG XL, which plays through the same machinery.
     - A still GIF or PNG uses **Image**.
     - Default `100%`.

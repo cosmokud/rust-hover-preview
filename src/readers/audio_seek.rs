@@ -389,7 +389,7 @@ fn line_rest(entry: &Entry) -> String {
 /// re-encoded where it stands is the same sound with a position in a file that may now be a
 /// different length (which `planned` is what brings back into the file).
 fn key(path: &Path) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = crate::cache::StableHasher::new();
     path.to_string_lossy().to_lowercase().hash(&mut hasher);
 
     format!("{:016x}", hasher.finish())
@@ -415,7 +415,7 @@ fn anywhere() -> f64 {
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_mul(0x9E37_79B9_7F4A_7C15);
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = crate::cache::StableHasher::new();
     roll.hash(&mut hasher);
 
     // The top fifty-three bits of the hash are a number that fits a `double` exactly, which is

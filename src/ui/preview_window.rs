@@ -106,8 +106,10 @@ mod event_loop;
 mod f3d_load;
 mod f3d_player;
 mod ffplay_window;
+mod film_surface;
 mod hover_facts;
 mod hover_film_host;
+mod hover_session;
 mod image_cache;
 mod layout;
 mod load;
@@ -178,8 +180,8 @@ use crate::config::config::{
     frame_bytes_within_budget, image_decode_limits, read_within_budget, sanitize_animated_fps_max,
     sanitize_general_disk_cache_mb, sanitize_image_cache_mb, sanitize_spinner_delay_ms,
     sanitize_webp_playback_fps, AppConfig, AudioSeek, MarkdownMode, OfficeEngine, PinEndOfFile,
-    PinMinimizeTo, PreviewScale, PreviewType, TextTheme, TransparentBackground, VideoEngine,
-    DEFAULT_ANIMATED_FPS_MAX, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_LOOP,
+    PinMinimizeTo, PinScalingMode, PreviewScale, PreviewType, TextTheme, TransparentBackground,
+    VideoEngine, DEFAULT_ANIMATED_FPS_MAX, DEFAULT_ANIMATED_SCALE_PERCENT, DEFAULT_AUDIO_LOOP,
     DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_SCALE_PERCENT, DEFAULT_AUDIO_SEEK, DEFAULT_BEAT_HZ,
     DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
     DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
@@ -190,12 +192,12 @@ use crate::config::config::{
     DEFAULT_PIN_MODE_AUDIO_CAMERA_FOLLOWS, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
     DEFAULT_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, DEFAULT_PIN_MODE_AUDIO_SEEK,
     DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_PAUSE_AUDIO,
-    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_UPDATE_ENABLED, DEFAULT_PIN_UPDATE_MOVE_TO_TOP,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
-    DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
-    DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP, DEFAULT_VIDEO_SCALE_PERCENT,
-    DEFAULT_VIDEO_SUBTITLES, DEFAULT_WEBP_PLAYBACK_FPS, DEFAULT_ZOOM_BACKGROUND, MIN_BEAT_HZ,
-    VIDEO_FFMPEG_ABOVE_PIXELS,
+    DEFAULT_PIN_PAUSE_VIDEO, DEFAULT_PIN_SCALING_MODE, DEFAULT_PIN_UPDATE_ENABLED,
+    DEFAULT_PIN_UPDATE_MOVE_TO_TOP, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_SPINNER_DELAY_MS,
+    DEFAULT_TEXT_FONT_SCALE_PERCENT, DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS,
+    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_LOOP,
+    DEFAULT_VIDEO_SCALE_PERCENT, DEFAULT_VIDEO_SUBTITLES, DEFAULT_WEBP_PLAYBACK_FPS,
+    DEFAULT_ZOOM_BACKGROUND, MIN_BEAT_HZ, VIDEO_FFMPEG_ABOVE_PIXELS,
 };
 use crate::engines::calibre_render;
 use crate::engines::imagemagick_render;
@@ -463,7 +465,6 @@ pub(crate) fn note_a_playback_trace_line(line: &str) {
 }
 pub(crate) use pin_window::take_pin_handed_off;
 pub(crate) use requests::is_preview_window;
-pub(crate) use requests::note_the_pin_was_handed_off;
 pub(crate) use requests::notify_magick_ready;
 pub(crate) use requests::notify_office_render;
 pub(crate) use requests::notify_peazip_ready;
@@ -504,6 +505,7 @@ use dimensions::*;
 use engine_render::*;
 use ffplay_window::*;
 use hover_facts::*;
+use hover_session::*;
 use image_cache::*;
 use layout::*;
 use load::*;

@@ -166,6 +166,7 @@ pub(crate) fn playlist_shown(rows: &[PlaylistRow], query: &str) -> Vec<usize> {
 /// How tall a row is, in the display's own pixels: two lines of text and the pad above and below
 /// them.
 pub(crate) fn playlist_row_height(scale: f32) -> i32 {
+    let scale = super::primitives::DpiScale::from_factor(scale).factor();
     text_paint::scaled(ROW_PIXELS as i32, scale).max(1)
 }
 
@@ -179,6 +180,7 @@ pub(crate) fn playlist_row_height(scale: f32) -> i32 {
 /// This is that shortfall: the reach the field answers to, and nothing else — the row a name travels
 /// for is still only ever the pointer's inside the band's own rect (see `pin_playlist::set_the_hover`).
 pub(crate) fn playlist_reach(scale: f32) -> i32 {
+    let scale = super::primitives::DpiScale::from_factor(scale).factor();
     text_paint::scaled(REACH_PIXELS as i32, scale).max(0)
 }
 
@@ -190,6 +192,7 @@ pub(crate) fn playlist_reach(scale: f32) -> i32 {
 /// before there is a band to lay one out for — a hand asks for the field at the field's own rows, and
 /// never at a row of the list above it (see `pin_playlist::hover_at_the_band`).
 pub(crate) fn search_field_top(height: i32, scale: f32) -> i32 {
+    let scale = super::primitives::DpiScale::from_factor(scale).factor();
     let pad = text_paint::scaled(PAD_PIXELS as i32, scale).max(0);
     let search = text_paint::scaled(SEARCH_PIXELS as i32, scale).max(0);
 
@@ -204,6 +207,7 @@ pub(crate) fn search_field_top(height: i32, scale: f32) -> i32 {
 /// cut in half — a row of nothing at the bottom of the window. The height a band opens at and every
 /// height a drag gives it are snapped here, which is the one place the two are counted.
 pub(crate) fn snapped_playlist_height(height: i32, scale: f32) -> i32 {
+    let scale = super::primitives::DpiScale::from_factor(scale).factor();
     let pad = text_paint::scaled(PAD_PIXELS as i32, scale).max(0);
     let row = playlist_row_height(scale);
     let room = (height - 2 * pad).max(0);
@@ -253,6 +257,7 @@ fn line_boxes(layout: &PlaylistLayout, row_top: i32, scale: f32) -> (RECT, RECT)
 /// the two columns a row is drawn in — with the scrollbar's own room taken off the right of the
 /// width whenever there is anything to scroll.
 pub(crate) fn playlist_layout(width: i32, height: i32, scale: f32, rows: usize) -> PlaylistLayout {
+    let scale = super::primitives::DpiScale::from_factor(scale).factor();
     let pad = text_paint::scaled(PAD_PIXELS as i32, scale).max(0);
     let row_height = playlist_row_height(scale);
     let stripe = text_paint::scaled(STRIPE_PIXELS as i32, scale).max(0);
@@ -519,16 +524,31 @@ fn search_text_left(layout: &PlaylistLayout) -> i32 {
 /// The place in the query a point of the field names: a press puts the caret between the characters
 /// it landed between, measured from the column the query is drawn at rather than from the box's edge.
 pub(crate) fn search_index_at(layout: &PlaylistLayout, text: &str, x: i32, scale: f32) -> usize {
+    search_index_at_with(
+        layout,
+        text,
+        x,
+        super::primitives::DpiScale::from_factor(scale),
+        &super::primitives::GdiTextMeasurer,
+    )
+}
+
+pub(super) fn search_index_at_with(
+    layout: &PlaylistLayout,
+    text: &str,
+    x: i32,
+    scale: super::primitives::DpiScale,
+    measurer: &impl super::primitives::TextMeasurer,
+) -> usize {
     if text.is_empty() {
         return 0;
     }
 
-    // shortcut: a query too wide for the field is cut at its right edge rather than scrolled under
-    // its caret; upgrade if a query long enough to lose its own caret shows up.
-    let Some(surface) = DibSurface::create(1, 1) else {
-        return text.len();
-    };
-    let columns = measure_run(&surface, &facts_style(), text, facts_scale(scale));
+    let columns = measurer.measure_run(
+        &facts_style(),
+        text,
+        super::primitives::DpiScale::from_factor(facts_scale(scale.factor())),
+    );
     let character = super::find_bar::index_at_column(&columns, layout.search_text_left, x);
 
     text.char_indices()
@@ -557,12 +577,25 @@ pub(crate) fn playlist_track_holds(layout: &PlaylistLayout, x: i32, y: i32) -> b
 ///
 /// Nothing for a name the column has room for, which is a name drawn once and held.
 pub(crate) fn name_travel(name: &str, room: i32, scale: f32) -> Option<(i32, i32)> {
+    name_travel_with(
+        name,
+        room,
+        super::primitives::DpiScale::from_factor(scale),
+        &super::primitives::GdiTextMeasurer,
+    )
+}
+
+pub(super) fn name_travel_with(
+    name: &str,
+    room: i32,
+    scale: super::primitives::DpiScale,
+    measurer: &impl super::primitives::TextMeasurer,
+) -> Option<(i32, i32)> {
     if room <= 0 || name.is_empty() {
         return None;
     }
 
-    let surface = DibSurface::create(1, 1)?;
-    let total = measure(&surface, &name_style(), name, scale);
+    let total = measurer.measure_width(&name_style(), name, scale);
     let travel = total - room;
     if travel <= 0 {
         return None;
@@ -1238,9 +1271,13 @@ pub(crate) fn clock_origin(right: i32, left: i32, measured: i32) -> i32 {
 /// The width the widest length is drawn at, at a band's own scale: what the name column is cut
 /// against (see `CLOCK_REFERENCE`). Nothing where there is no DC to measure on.
 fn widest_clock(scale: f32) -> Option<i32> {
-    let surface = DibSurface::create(1, 1)?;
-
-    Some(measure(&surface, &facts_style(), CLOCK_REFERENCE, scale))
+    let width = super::primitives::TextMeasurer::measure_width(
+        &super::primitives::GdiTextMeasurer,
+        &facts_style(),
+        CLOCK_REFERENCE,
+        super::primitives::DpiScale::from_factor(scale),
+    );
+    (width > 0).then_some(width)
 }
 
 /// The style a row's name is set in: the card's own header level, on the face a caption is set in

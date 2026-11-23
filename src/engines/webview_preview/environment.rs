@@ -1,71 +1,43 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use webview2_com::Microsoft::Web::WebView2::Win32::{
-    CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
-    ICoreWebView2Environment, ICoreWebView2EnvironmentOptions, COREWEBVIEW2_COLOR,
-};
-use webview2_com::{
-    CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler,
-};
-use windows::core::{w, Interface, PCWSTR};
-use windows::Win32::Foundation::{E_POINTER, HWND, LPARAM, LRESULT, WPARAM};
+use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2, COREWEBVIEW2_COLOR};
+use windows::core::{w, Interface};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, PeekMessageW, RegisterClassW,
-    TranslateMessage, MSG, PM_REMOVE, WM_MOUSEACTIVATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    DefWindowProcW, WM_MOUSEACTIVATE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT,
 };
 
 use super::api::{RUNNING_DOCUMENT, WEBVIEW_CLASS};
-use super::engine::trace;
 
 use crate::app::engine_processes;
 use crate::config::config::TransparentBackground;
-use crate::paths::plain_path;
+use crate::engines::webview_host::{self, Area};
 
 /// The window the engine draws into: a popup of its own, topmost, tool-windowed and
 /// refusing activation to begin with. The refusal is put on here rather than answered here
 /// alone because it is the style that makes a click refuse as well, and it comes off for the
 /// one document that runs (see `ex_style_for`).
 pub(super) fn create_host_window() -> Option<HWND> {
-    unsafe {
-        CreateWindowExW(
-            WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-            WEBVIEW_CLASS,
-            w!("Rust Hover Preview"),
-            WS_POPUP,
-            0,
-            0,
-            1,
-            1,
-            None,
-            None,
-            None,
-            None,
-        )
-        .ok()
-    }
+    webview_host::create_host_window(
+        WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        WEBVIEW_CLASS,
+        w!("Rust Hover Preview"),
+        Area {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        },
+        None,
+    )
 }
 
 pub(super) fn register_class() {
     static REGISTERED: AtomicBool = AtomicBool::new(false);
-
-    if REGISTERED.swap(true, Ordering::AcqRel) {
-        return;
-    }
-
-    let class = WNDCLASSW {
-        lpfnWndProc: Some(window_proc),
-        lpszClassName: WEBVIEW_CLASS,
-        ..Default::default()
-    };
-
-    unsafe {
-        RegisterClassW(&class);
-    }
+    webview_host::register_host_class(&REGISTERED, WEBVIEW_CLASS, Some(window_proc));
 }
 
 /// A preview never takes the keyboard by itself: the pointer may be over it, but what is
@@ -144,18 +116,6 @@ pub(super) fn ex_style_for(style: isize, runs: bool, source: bool) -> isize {
 /// while nothing of it reaches the screen itself (see `ex_style_for`, and
 /// `pin_film_thumbnail::INVISIBLE_ALPHA`, which is the same number for the same reason).
 pub(super) const SOURCE_ALPHA: u8 = 1;
-
-/// Retrieve and dispatch whatever is waiting, without blocking.
-pub(super) fn pump_messages() {
-    let mut message = MSG::default();
-
-    unsafe {
-        while PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-    }
-}
 
 /// The folder the engine keeps its own state in — under the local profile, because a
 /// browser profile is not something to synchronize between machines.
@@ -257,96 +217,13 @@ pub(crate) fn clear_stale_profiles() {
     }
 }
 
-pub(crate) fn create_environment(
-    user_data_folder: &Path,
-    deadline: Instant,
-    arguments: &str,
-) -> Option<ICoreWebView2Environment> {
-    let folder = wide(&user_data_folder.to_string_lossy());
-    let (sender, receiver) = mpsc::channel();
-
-    // What a document names is never fetched: the engine is given a resolver rule that
-    // answers for no host at all, so an `<image href="http://…">` is a picture that
-    // does not arrive rather than a request this app made. That is the promise the rest
-    // of it keeps — a hover reads the file under the pointer and nothing else — and a
-    // browser would otherwise break it without a line of anything being written.
-    let options = CoreWebView2EnvironmentOptions::default();
-    unsafe {
-        options.set_additional_browser_arguments(arguments.to_string());
-    }
-    let options: ICoreWebView2EnvironmentOptions = options.into();
-
-    CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
-        Box::new(move |handler| unsafe {
-            CreateCoreWebView2EnvironmentWithOptions(
-                PCWSTR::null(),
-                PCWSTR(folder.as_ptr()),
-                Some(&options),
-                &handler,
-            )
-            .map_err(webview2_com::Error::WindowsError)
-        }),
-        Box::new(move |error_code, environment| {
-            error_code?;
-            sender
-                .send(environment.ok_or_else(|| windows::core::Error::from(E_POINTER)))
-                .expect("the waiting thread is gone");
-            Ok(())
-        }),
-    )
-    .ok()?;
-
-    receiver.recv_timeout(remaining(deadline)).ok()?.ok()
-}
-
 /// How long the engine may take to be had at all — the environment and the controller
 /// together — before the attempt is read as one that will not answer.
-///
-/// Both calls are asynchronous and both of them were waited on without a bound: the
-/// completion handlers this thread parks on are the runtime's to fire, and one that never
-/// fires leaves this thread waiting for the rest of the run — with every document after it
-/// queued behind a wait nobody ends, and no failure notice to take a hover's spinner down
-/// with, because the thread that would post one is the thread that is waiting. Twenty
-/// seconds is far past what having an engine costs (a quarter of a second measured warm,
-/// and the retries a held profile folder asks for are inside it), so what is past it is
-/// silence rather than work.
 pub(super) const HOST_CREATION_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// What is left of a deadline, as a wait: `recv_timeout` given nothing waits nothing and
-/// answers `Timeout` at once, which is the answer a wait past its deadline wants.
-pub(super) fn remaining(deadline: Instant) -> Duration {
-    deadline.saturating_duration_since(Instant::now())
-}
-
-pub(crate) fn create_controller(
-    environment: ICoreWebView2Environment,
-    hwnd: HWND,
-    deadline: Instant,
-) -> Option<ICoreWebView2Controller> {
-    let (sender, receiver) = mpsc::channel();
-
-    CreateCoreWebView2ControllerCompletedHandler::wait_for_async_operation(
-        Box::new(move |handler| unsafe {
-            environment
-                .CreateCoreWebView2Controller(hwnd, &handler)
-                .map_err(webview2_com::Error::WindowsError)
-        }),
-        Box::new(move |error_code, controller| {
-            trace(&format!(
-                "controller callback: error={error_code:?} controller={}",
-                controller.is_some()
-            ));
-            error_code?;
-            sender
-                .send(controller.ok_or_else(|| windows::core::Error::from(E_POINTER)))
-                .expect("the waiting thread is gone");
-            Ok(())
-        }),
-    )
-    .ok()?;
-
-    receiver.recv_timeout(remaining(deadline)).ok()?.ok()
-}
+pub(crate) use crate::engines::webview_host::{
+    create_controller, create_environment, file_url, remaining, wide,
+};
 
 /// The browser's own furniture, all of it taken away: the context menu, the tools, the zoom,
 /// the status bar, the web messages a page could reach this app's threads through, and the
@@ -436,42 +313,4 @@ pub(super) fn background_color(background: TransparentBackground) -> COREWEBVIEW
             B: 184,
         },
     }
-}
-
-/// A local file as a URL, which is what the engine is pointed at.
-///
-/// A verbatim path is not something a URL may contain: a browser pointed at one fails at
-/// once, silently, and what a hover shows is nothing. So the Shell's prefix comes off
-/// first (`crate::paths::plain_path`), and a share keeps its server: `\\?\UNC\server\share`
-/// becomes `file://server/share`, a drive becomes `file:///C:/…`. The characters that
-/// would end the path early — a space, a hash, a question mark, a percent — are escaped;
-/// anything else is left as it is written.
-pub(crate) fn file_url(path: &Path) -> Option<String> {
-    if !path.is_absolute() {
-        return None;
-    }
-
-    let local = plain_path(path);
-
-    let (mut url, rest) = match local.strip_prefix(r"\\") {
-        Some(share) => (String::from("file://"), share.to_string()),
-        None => (String::from("file:///"), local),
-    };
-
-    for character in rest.chars() {
-        match character {
-            '\\' => url.push('/'),
-            ' ' => url.push_str("%20"),
-            '#' => url.push_str("%23"),
-            '?' => url.push_str("%3F"),
-            '%' => url.push_str("%25"),
-            other => url.push(other),
-        }
-    }
-
-    Some(url)
-}
-
-pub(crate) fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(std::iter::once(0)).collect()
 }

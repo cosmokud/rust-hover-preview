@@ -38,8 +38,10 @@
 use crate::app::engine_processes;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitStatus};
+use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -314,6 +316,51 @@ fn outran(started: Instant, give_up: Duration) -> bool {
 /// The bound and how often the wait looks are each adapter's own numbers, for the reasons each of
 /// them gives: they are a question about a run rather than about a file, and the four do not
 /// measure the same run.
+/// Start a child command with `CREATE_NO_WINDOW` via `engine_processes::hidden_command`.
+pub fn hidden_command(program: impl AsRef<OsStr>) -> Command {
+    engine_processes::hidden_command(program)
+}
+
+/// Strictly read up to `budget` bytes; returns `None` on I/O error or overflow (`budget + 1` bytes).
+pub fn read_stdout_within_budget<R: Read>(reader: R, budget: u64) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let limit = budget.saturating_add(1);
+    reader.take(limit).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > budget {
+        return None;
+    }
+    Some(bytes)
+}
+
+/// Strictly read a file within `budget`; checks metadata first and rejects `budget + 1` bytes.
+pub fn read_file_within_budget(path: &Path, budget: u64) -> Option<Vec<u8>> {
+    let size = std::fs::metadata(path).map_or(u64::MAX, |meta| meta.len());
+    if size > budget {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    read_stdout_within_budget(file, budget)
+}
+
+/// RAII temp-file guard: removes `path` on drop so early returns/errors never leak staged files.
+pub struct TempFileGuard(PathBuf);
+
+impl TempFileGuard {
+    pub fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 pub fn wait(child: &mut Child, give_up: Duration, poll: Duration) -> Option<ExitStatus> {
     let deadline = Instant::now() + give_up;
 
@@ -749,5 +796,53 @@ mod tests {
             "the engine is gone with it"
         );
         let _ = engine.wait();
+    }
+
+    #[test]
+    fn read_stdout_within_budget_accepts_exact_and_rejects_overflow() {
+        let exact = vec![b'a'; 8];
+        assert_eq!(
+            read_stdout_within_budget(std::io::Cursor::new(&exact), 8),
+            Some(exact)
+        );
+
+        let over = vec![b'a'; 9];
+        assert_eq!(
+            read_stdout_within_budget(std::io::Cursor::new(&over), 8),
+            None,
+            "budget + 1 must fail explicitly instead of silently truncating"
+        );
+    }
+
+    #[test]
+    fn read_file_within_budget_and_temp_file_guard_cleanup_on_early_return() {
+        let dir = std::env::temp_dir().join("rhp-supervisor-guard-tests");
+        let _ = std::fs::create_dir_all(&dir);
+        let ok_path = dir.join("ok.bin");
+        let over_path = dir.join("over.bin");
+        let guarded_path = dir.join("guarded.bin");
+
+        std::fs::write(&ok_path, [1u8, 2, 3, 4]).expect("write ok");
+        std::fs::write(&over_path, [1u8, 2, 3, 4, 5]).expect("write over");
+        std::fs::write(&guarded_path, b"not-a-pdf").expect("write guarded");
+
+        assert_eq!(read_file_within_budget(&ok_path, 4), Some(vec![1, 2, 3, 4]));
+        assert_eq!(read_file_within_budget(&over_path, 4), None);
+
+        let early_return = || -> Option<Vec<u8>> {
+            let guard = TempFileGuard::new(guarded_path.clone());
+            let bytes = read_file_within_budget(guard.path(), 64)?;
+            if !bytes.starts_with(b"%PDF-") {
+                return None;
+            }
+            Some(bytes)
+        };
+        assert!(early_return().is_none());
+        assert!(
+            !guarded_path.exists(),
+            "TempFileGuard must remove staged file on early return"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

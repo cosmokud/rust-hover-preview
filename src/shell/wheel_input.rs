@@ -43,9 +43,8 @@ use crate::app::seam::{post_a_notch_to_the_model, wake_preview_loop};
 use crate::engines::pdf_viewer::a_documents_window;
 use crate::shell::explorer_hook::{
     a_press_puts_us_behind, a_window_of_ours_stands, our_window_stands_over_everything,
-    press_is_inside_ours, the_pick_road_answers, window_class_of,
+    press_is_inside_ours, the_pick_road_answers,
 };
-use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicU32, Ordering};
 use windows::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL};
@@ -91,11 +90,6 @@ fn control_is_down() -> bool {
 
 /// Starts the hook thread; `main` joins the returned handle after `request_stop`.
 pub fn spawn_wheel_watcher() -> std::thread::JoinHandle<()> {
-    // The press road's trace is read here rather than on a press: a low-level callback may not read the
-    // environment, which allocates, while every mouse message on the desktop waits for it (see
-    // `note_a_press`).
-    Lazy::force(&PRESS_TRACE);
-
     super::hook_thread::spawn(
         &WHEEL_THREAD_ID,
         WH_MOUSE_LL,
@@ -104,8 +98,18 @@ pub fn spawn_wheel_watcher() -> std::thread::JoinHandle<()> {
     )
 }
 
-/// Whether the press road says what it decided, read once (see `RHP_SEAM_TRACE`).
-static PRESS_TRACE: Lazy<bool> = Lazy::new(|| std::env::var_os("RHP_SEAM_TRACE").is_some());
+/// Zero-alloc stack `[u16; 64]` class-name equality check for low-level hook callbacks.
+#[cfg(test)]
+pub(crate) fn stack_class_matches_ascii_ignore_case(raw_utf16: &[u16], expected: &[u8]) -> bool {
+    let mut buf = [0u16; 64];
+    let len = raw_utf16.len().min(buf.len());
+    buf[..len].copy_from_slice(&raw_utf16[..len]);
+    len == expected.len()
+        && buf[..len]
+            .iter()
+            .zip(expected)
+            .all(|(ch, byte)| *ch < 0x80 && (*ch as u8).eq_ignore_ascii_case(byte))
+}
 
 /// Put the standing window of ours behind the window a press landed in, or ask for nothing.
 ///
@@ -157,19 +161,6 @@ fn note_a_press(point: POINT) {
     let the_listing_answers = !ours && the_pick_road_answers(window);
 
     if !a_press_puts_us_behind(true, ours, true, always_on_top, the_listing_answers) {
-        if *PRESS_TRACE {
-            eprintln!(
-                "seam: press at {},{} on {} ({}), ours {} -> nothing asked (always on top {}, the \
-                 listing answers {})",
-                point.x,
-                point.y,
-                window.0 as isize,
-                window_class_of(window),
-                ours as u8,
-                always_on_top as u8,
-                the_listing_answers as u8,
-            );
-        }
         return;
     }
 
@@ -180,18 +171,6 @@ fn note_a_press(point: POINT) {
     // The ask is an atomic and nothing else, so the loop that reads it is woken for it: the press is a
     // window being put over ours, and a lowering one tick late is the listing flashing over the pin.
     wake_preview_loop();
-
-    if *PRESS_TRACE {
-        eprintln!(
-            "seam: press at {},{} on {} ({}) is not ours -> asked behind {} ({})",
-            point.x,
-            point.y,
-            window.0 as isize,
-            window_class_of(window),
-            behind.0 as isize,
-            window_class_of(behind),
-        );
-    }
 }
 
 /// Wakes the hook thread's message pump so `main` can join it.
@@ -341,9 +320,11 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
         if wparam.0 == WM_MOUSEWHEEL as usize && control_is_down() {
             if let Some(block) = TEXT_SIZE_REGION.the_block_over((info.pt.x, info.pt.y)) {
                 if preview_takes_the_wheel(block) {
-                    PIN_TEXT_SIZE_DELTA
-                        .in_block(block)
-                        .fetch_add(notches, Ordering::AcqRel);
+                    apply_text_size_notch(
+                        PIN_TEXT_SIZE_DELTA.in_block(block),
+                        notches,
+                        wake_preview_loop,
+                    );
                     return LRESULT(1);
                 }
             }
@@ -424,4 +405,54 @@ pub(crate) unsafe extern "system" fn wheel_hook_proc(
     }
 
     CallNextHookEx(None, code, wparam, lparam)
+}
+
+/// Apply a `Ctrl`+wheel text-size notch and wake the preview loop when non-zero.
+fn apply_text_size_notch(delta: &std::sync::atomic::AtomicI32, notches: i32, wake: impl FnOnce()) {
+    delta.fetch_add(notches, Ordering::AcqRel);
+    if notches != 0 {
+        wake();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stack_class_name_check_matches_without_heap_allocation() {
+        let tooltips: Vec<u16> = "tooltips_class32".encode_utf16().collect();
+        let upper: Vec<u16> = "CABINETWCLASS".encode_utf16().collect();
+        let non_ascii: Vec<u16> = "tooltips_\u{00E9}".encode_utf16().collect();
+
+        assert!(stack_class_matches_ascii_ignore_case(
+            &tooltips,
+            b"tooltips_class32"
+        ));
+        assert!(stack_class_matches_ascii_ignore_case(
+            &upper,
+            b"cabinetwclass"
+        ));
+        assert!(!stack_class_matches_ascii_ignore_case(
+            &tooltips,
+            b"tooltips_class3"
+        ));
+        assert!(!stack_class_matches_ascii_ignore_case(
+            &non_ascii,
+            b"tooltips_e"
+        ));
+    }
+
+    #[test]
+    fn text_size_region_notch_wakes_preview_loop_only_when_nonzero() {
+        let delta = std::sync::atomic::AtomicI32::new(0);
+
+        let mut woke = 0u32;
+        apply_text_size_notch(&delta, 0, || woke += 1);
+        assert_eq!(woke, 0, "zero-delta notch must not wake preview loop");
+
+        apply_text_size_notch(&delta, 120, || woke += 1);
+        assert_eq!(woke, 1, "non-zero text-size notch must wake preview loop");
+        assert_eq!(delta.load(Ordering::Acquire), 120);
+    }
 }

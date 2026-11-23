@@ -218,7 +218,7 @@ pub(crate) struct MenuRow {
 /// width, and the main menu's own placement asks for the
 /// row height, the pad and the gap only.
 fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
-    let scale = dpi as f32 / 96.0;
+    let scale = super::primitives::DpiScale::from_dpi(dpi).factor();
     (
         text_paint::scaled(MENU_PANEL_WIDTH_PIXELS as i32, scale)
             .max(8)
@@ -249,27 +249,32 @@ fn menu_panel_sizes(width: i32, dpi: u32) -> (i32, i32, i32, i32) {
 /// window's own width, which is the holding the placement clamps
 /// to (`menu_popup_from_point`).
 fn menu_main_panel_width(rows: &[MenuRow], dpi: u32, width: i32) -> i32 {
-    let scale = dpi as f32 / 96.0;
+    menu_main_panel_width_with(
+        rows,
+        super::primitives::DpiScale::from_dpi(dpi),
+        width,
+        &super::primitives::GdiTextMeasurer,
+    )
+}
 
-    // The throwaway context the measurement is made on: a memory
-    // DC with a single pixel of nothing drawn on it, created for
-    // this one pass and released when it ends, the way the card's
-    // layout measures for the window buttons' band.
-    let longest = DibSurface::create(1, 1).map(|surface| {
-        let style = caption_style([0, 0, 0]);
-        rows.iter()
-            .map(|row| measure_text(&surface, &style, &row.label, scale))
-            .max()
-            .unwrap_or(0)
-    });
-
-    let label = longest.unwrap_or(0);
-    let marker_room = text_paint::scaled(MENU_MARKER_ROOM_PIXELS as i32, scale).max(0);
-    let pad = text_paint::scaled(MENU_PAD_PIXELS as i32, scale).max(0);
-    let right_room = text_paint::scaled(MENU_PANEL_RIGHT_ROOM_PIXELS as i32, scale).max(0);
+pub(super) fn menu_main_panel_width_with(
+    rows: &[MenuRow],
+    dpi: super::primitives::DpiScale,
+    width: i32,
+    measurer: &impl super::primitives::TextMeasurer,
+) -> i32 {
+    let style = caption_style([0, 0, 0]);
+    let label = rows
+        .iter()
+        .map(|row| measurer.measure_width(&style, &row.label, dpi))
+        .max()
+        .unwrap_or(0);
+    let marker_room = dpi.scaled(MENU_MARKER_ROOM_PIXELS as i32).max(0);
+    let pad = dpi.scaled(MENU_PAD_PIXELS as i32).max(0);
+    let right_room = dpi.scaled(MENU_PANEL_RIGHT_ROOM_PIXELS as i32).max(0);
 
     (label + marker_room + pad + right_room)
-        .max(text_paint::scaled(MENU_PANEL_MIN_PIXELS as i32, scale))
+        .max(dpi.scaled(MENU_PANEL_MIN_PIXELS as i32))
         .min(width.max(8))
 }
 
@@ -508,7 +513,7 @@ fn menu_flyout_tier(menu: &MenuPopup, width: i32, dpi: u32) -> (i32, i32, i32, M
     // The narrowest a flyout's own panel is ever held to, the floor every
     // panel keeps (see `menu_main_panel_width`): a side leaving less than it
     // would narrow the flyout past the floor rather than beside the menu.
-    let floor = text_paint::scaled(MENU_PANEL_MIN_PIXELS as i32, dpi as f32 / 96.0);
+    let floor = super::primitives::DpiScale::from_dpi(dpi).scaled(MENU_PANEL_MIN_PIXELS as i32);
 
     if right_room >= panel_width {
         (
