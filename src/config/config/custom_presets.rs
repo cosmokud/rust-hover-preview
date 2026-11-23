@@ -41,10 +41,7 @@ use configparser::ini::Ini;
 use crate::formats::lists::sanitize_extension_list;
 
 use super::app_config::AppConfig;
-use super::defaults::{
-    sanitize_preview_scale_percent, sanitize_volume, DEFAULT_AUDIO_VOLUME,
-    DEFAULT_PREVIEW_SCALE_PERCENT,
-};
+use super::defaults::{sanitize_preview_scale_percent, sanitize_volume, DEFAULT_AUDIO_VOLUME};
 use super::setting_types::{PreviewScale, TransparentBackground, DEFAULT_IMAGE_BACKGROUND};
 
 /// The prefix every preset's section carries: `[custom:<name>]`.
@@ -57,7 +54,76 @@ pub const MAX_PRESETS: usize = 100;
 /// name is written from it.
 pub const MAX_NAME_CHARS: usize = 48;
 
-/// One custom preview: the program, the names it claims, and the three settings a preview of it
+/// How a custom preview's target window is captured and framed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomWindowMode {
+    /// Leave the target window's chrome/styles intact and capture the full window.
+    #[default]
+    Normal,
+    /// Strip standard frame chrome and capture client area only.
+    Borderless,
+}
+
+impl CustomWindowMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Borderless => "borderless",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "borderless" => Some(Self::Borderless),
+            _ => None,
+        }
+    }
+}
+
+/// How a custom preview is sized: either following `Tray -> Scaling` for the hovered file's kind,
+/// or an explicit per-preset override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomScaling {
+    #[default]
+    FollowTray,
+    Override(PreviewScale),
+}
+
+impl CustomScaling {
+    pub fn as_str(self) -> String {
+        match self {
+            Self::FollowTray => "tray".to_string(),
+            Self::Override(scale) => scale.as_str(),
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "tray" | "follow tray" | "follow_tray" | "follow-tray" | "default" | "auto" => {
+                Some(Self::FollowTray)
+            }
+            _ => PreviewScale::from_str(value).map(Self::Override),
+        }
+    }
+
+    pub fn sanitized(self) -> Self {
+        match self {
+            Self::FollowTray => Self::FollowTray,
+            Self::Override(scale) => Self::Override(match scale {
+                PreviewScale::FitToScreen => PreviewScale::FitToScreen,
+                PreviewScale::FitToScreenReduced(percent) => {
+                    PreviewScale::FitToScreenReduced(sanitize_preview_scale_percent(percent))
+                }
+                PreviewScale::Percent(percent) => {
+                    PreviewScale::Percent(sanitize_preview_scale_percent(percent))
+                }
+            }),
+        }
+    }
+}
+
+/// One custom preview: the program, the names it claims, and the settings a preview of it
 /// is drawn with.
 ///
 /// It is a plain value rather than something with a lock of its own: the configuration holds the
@@ -73,10 +139,11 @@ pub struct CustomPreset {
     /// The extensions it claims, each a bare extension without its dot, lowercased — the same
     /// shape `formats::lists` keeps its own entries in.
     pub extensions: Vec<String>,
-    /// How large the preview is drawn in the hover: a share of the room the display leaves beside
-    /// the item, `100%` being the whole of it, with the box cut to the shape the file declares —
-    /// or to the program's window's where it declares none.
-    pub scaling: PreviewScale,
+    /// Whether the target window keeps its normal frame or is captured borderless.
+    pub window_mode: CustomWindowMode,
+    /// How large the preview is drawn in the hover: following `Tray -> Scaling` by default, or an
+    /// explicit per-preset share of the room.
+    pub scaling: CustomScaling,
     /// What stands behind it where the window is smaller than the band.
     pub background: TransparentBackground,
     /// The level a preview of it is played at, a percentage.
@@ -89,7 +156,8 @@ impl Default for CustomPreset {
             name: String::new(),
             exe: String::new(),
             extensions: Vec::new(),
-            scaling: PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT),
+            window_mode: CustomWindowMode::default(),
+            scaling: CustomScaling::default(),
             background: DEFAULT_IMAGE_BACKGROUND,
             volume: DEFAULT_AUDIO_VOLUME,
         }
@@ -153,15 +221,7 @@ impl CustomPreset {
         self.name = sanitize_name(&self.name)?;
         self.exe = sanitize_exe(&self.exe);
         self.extensions = sanitize_extension_list(&self.extensions.join(","));
-        self.scaling = match self.scaling {
-            PreviewScale::FitToScreen => PreviewScale::FitToScreen,
-            PreviewScale::FitToScreenReduced(percent) => {
-                PreviewScale::FitToScreenReduced(sanitize_preview_scale_percent(percent))
-            }
-            PreviewScale::Percent(percent) => {
-                PreviewScale::Percent(sanitize_preview_scale_percent(percent))
-            }
-        };
+        self.scaling = self.scaling.sanitized();
         self.volume = sanitize_volume(self.volume);
         Some(self)
     }
@@ -218,6 +278,11 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
         ini.set(&section, "name", Some(preset.name.clone()));
         ini.set(&section, "exe", Some(preset.exe.clone()));
         ini.set(&section, "extensions", Some(preset.extensions_text()));
+        ini.set(
+            &section,
+            "window_mode",
+            Some(preset.window_mode.as_str().to_string()),
+        );
         ini.set(&section, "scaling", Some(preset.scaling.as_str()));
         ini.set(
             &section,
@@ -271,8 +336,13 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         if let Some(extensions) = ini.get(section, "extensions") {
             preset.set_extensions_text(&extensions);
         }
+        if let Some(window_mode) = ini.get(section, "window_mode") {
+            if let Some(mode) = CustomWindowMode::from_str(&window_mode) {
+                preset.window_mode = mode;
+            }
+        }
         if let Some(scaling) = ini.get(section, "scaling") {
-            if let Some(scale) = PreviewScale::from_str(&scaling) {
+            if let Some(scale) = CustomScaling::from_str(&scaling) {
                 preset.scaling = scale;
             }
         }
@@ -361,9 +431,10 @@ mod tests {
     #[test]
     fn the_file_writes_a_section_per_preset_and_reads_it_back() {
         let mut preset = CustomPreset::named("Stress Test");
-        preset.exe = "\"C:/Program Files/AMD/Stress.exe\"".into();
+        preset.exe = "\"tools/Stress.exe\"".into();
         preset.set_extensions_text("rmc, rmp");
-        preset.scaling = PreviewScale::FitToScreenReduced(40);
+        preset.window_mode = CustomWindowMode::Borderless;
+        preset.scaling = CustomScaling::Override(PreviewScale::FitToScreenReduced(40));
         preset.background = TransparentBackground::Black;
         preset.volume = 35;
 
@@ -377,11 +448,15 @@ mod tests {
         );
         assert_eq!(
             ini.get("custom:stress test", "exe").as_deref(),
-            Some("C:/Program Files/AMD/Stress.exe")
+            Some("tools/Stress.exe")
         );
         assert_eq!(
             ini.get("custom:stress test", "extensions").as_deref(),
             Some("rmc, rmp")
+        );
+        assert_eq!(
+            ini.get("custom:stress test", "window_mode").as_deref(),
+            Some("borderless")
         );
         assert_eq!(
             ini.get("custom:stress test", "scaling").as_deref(),
@@ -398,8 +473,12 @@ mod tests {
         assert_eq!(read.custom_presets[0].name, "Stress Test");
         assert_eq!(read.custom_presets[0].extensions, vec!["rmc", "rmp"]);
         assert_eq!(
+            read.custom_presets[0].window_mode,
+            CustomWindowMode::Borderless
+        );
+        assert_eq!(
             read.custom_presets[0].scaling,
-            PreviewScale::FitToScreenReduced(40)
+            CustomScaling::Override(PreviewScale::FitToScreenReduced(40))
         );
         assert_eq!(
             read.custom_presets[0].background,
@@ -409,11 +488,52 @@ mod tests {
     }
 
     #[test]
+    fn follow_tray_and_normal_window_mode_are_defaults_and_backward_compatible() {
+        let mut preset = CustomPreset::named("Viewer");
+        preset.exe = "viewer.exe".into();
+        preset.set_extensions_text("png");
+        assert_eq!(preset.window_mode, CustomWindowMode::Normal);
+        assert_eq!(preset.scaling, CustomScaling::FollowTray);
+
+        let config = config_with(vec![preset]);
+        let mut ini = Ini::new();
+        write_all(&config, &mut ini);
+        assert_eq!(
+            ini.get("custom:viewer", "window_mode").as_deref(),
+            Some("normal")
+        );
+        assert_eq!(ini.get("custom:viewer", "scaling").as_deref(), Some("tray"));
+
+        let mut read = AppConfig::default();
+        read_all(&ini, &mut read);
+        assert_eq!(read.custom_presets[0].window_mode, CustomWindowMode::Normal);
+        assert_eq!(read.custom_presets[0].scaling, CustomScaling::FollowTray);
+
+        // Legacy ini without `window_mode` and with `fit` / numeric `scaling` still loads cleanly.
+        let mut legacy = Ini::new();
+        legacy.set("custom:old", "name", Some("Old".into()));
+        legacy.set("custom:old", "exe", Some("old.exe".into()));
+        legacy.set("custom:old", "extensions", Some("jpg".into()));
+        legacy.set("custom:old", "scaling", Some("fit".into()));
+        let mut read_legacy = AppConfig::default();
+        read_all(&legacy, &mut read_legacy);
+        assert_eq!(
+            read_legacy.custom_presets[0].window_mode,
+            CustomWindowMode::Normal
+        );
+        assert_eq!(
+            read_legacy.custom_presets[0].scaling,
+            CustomScaling::Override(PreviewScale::FitToScreen)
+        );
+    }
+
+    #[test]
     fn a_file_that_names_nothing_readable_leaves_a_fresh_preset() {
         let mut ini = Ini::new();
         ini.set("custom:Loose", "volume", Some("900".into()));
         ini.set("custom:Loose", "scaling", Some("enormous".into()));
-        ini.set("custom:", "exe", Some("C:/x.exe".into()));
+        ini.set("custom:Loose", "window_mode", Some("unknown".into()));
+        ini.set("custom:", "exe", Some("x.exe".into()));
 
         let mut config = AppConfig::default();
         read_all(&ini, &mut config);
@@ -424,9 +544,10 @@ mod tests {
         assert_eq!(config.custom_presets[0].name, "loose");
         assert_eq!(config.custom_presets[0].volume, 100);
         assert_eq!(
-            config.custom_presets[0].scaling,
-            PreviewScale::Percent(DEFAULT_PREVIEW_SCALE_PERCENT)
+            config.custom_presets[0].window_mode,
+            CustomWindowMode::Normal
         );
+        assert_eq!(config.custom_presets[0].scaling, CustomScaling::FollowTray);
         assert!(!config.custom_presets[0].is_usable());
     }
 }

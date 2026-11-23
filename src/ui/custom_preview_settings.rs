@@ -65,7 +65,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::config::MAX_PRESETS;
-use crate::config::config::{CustomPreset, PreviewScale, TextTheme, TransparentBackground};
+use crate::config::config::{
+    CustomPreset, CustomScaling, CustomWindowMode, PreviewScale, TextTheme, TransparentBackground,
+};
 use crate::text::text_theme;
 use crate::CONFIG;
 
@@ -98,22 +100,42 @@ const ID_SCALING_PERCENT: i32 = 115;
 const ID_BACKGROUND: i32 = 116;
 const ID_VOLUME: i32 = 117;
 const ID_VOLUME_VALUE: i32 = 118;
+const ID_WINDOW_MODE: i32 = 119;
 const ID_SAVE: i32 = 120;
 const ID_DELETE: i32 = 121;
 const ID_CLOSE_BUTTON: i32 = 122;
 const ID_STATUS: i32 = 130;
 const ID_LABEL_BASE: i32 = 140;
 
-/// The scale a preset's combo lists, in the order it lists them: the fit first, then the three
-/// shares this app's own scaling menu offers — every one of them of the room beside the item, the
-/// box being cut to the shape the file declares. The fourth entry is `Custom…`, chosen by the
-/// window itself for a percentage none of the three is.
-const SCALE_CHOICES: [(&str, Option<u32>); 4] = [
-    ("Fit to screen", None),
-    ("Screen 100%", Some(100)),
-    ("Screen 75%", Some(75)),
-    ("Screen 50%", Some(50)),
+const SCALE_CHOICES: [(&str, CustomScaling); 5] = [
+    ("Follow Tray -> Scaling", CustomScaling::FollowTray),
+    (
+        "Fit to screen",
+        CustomScaling::Override(PreviewScale::FitToScreen),
+    ),
+    (
+        "Screen 100%",
+        CustomScaling::Override(PreviewScale::FitToScreenReduced(100)),
+    ),
+    (
+        "Screen 75%",
+        CustomScaling::Override(PreviewScale::FitToScreenReduced(75)),
+    ),
+    (
+        "Screen 50%",
+        CustomScaling::Override(PreviewScale::FitToScreenReduced(50)),
+    ),
 ];
+
+const WINDOW_MODES: [CustomWindowMode; 2] =
+    [CustomWindowMode::Normal, CustomWindowMode::Borderless];
+
+fn window_mode_label(mode: CustomWindowMode) -> &'static str {
+    match mode {
+        CustomWindowMode::Normal => "Normal",
+        CustomWindowMode::Borderless => "Borderless",
+    }
+}
 
 const BACKGROUNDS: [TransparentBackground; 4] = [
     TransparentBackground::Transparent,
@@ -571,7 +593,7 @@ unsafe fn build(hwnd: HWND) -> State {
     });
 
     // The right pane: one label and one field per thing a preset holds.
-    for index in 0..6 {
+    for index in 0..7 {
         controls.push(unsafe {
             child(
                 hwnd,
@@ -610,6 +632,21 @@ unsafe fn build(hwnd: HWND) -> State {
         )
     });
     controls.push(unsafe { button(hwnd, "Browse…", ID_BROWSE) });
+    controls.push(unsafe {
+        child(
+            hwnd,
+            w!("COMBOBOX"),
+            "",
+            child_style(
+                WS_TABSTOP.0
+                    | WS_VSCROLL.0
+                    | CBS_DROPDOWNLIST as u32
+                    | CBS_OWNERDRAWFIXED as u32
+                    | CBS_HASSTRINGS as u32,
+            ),
+            ID_WINDOW_MODE,
+        )
+    });
     controls.push(unsafe {
         child(
             hwnd,
@@ -685,6 +722,11 @@ unsafe fn build(hwnd: HWND) -> State {
                 )
             };
         }
+    }
+
+    let window_mode_combo = unsafe { GetDlgItem(hwnd, ID_WINDOW_MODE) }.unwrap_or_default();
+    for mode in WINDOW_MODES {
+        unsafe { combo_add(window_mode_combo, window_mode_label(mode)) };
     }
 
     let scaling = unsafe { GetDlgItem(hwnd, ID_SCALING) }.unwrap_or_default();
@@ -765,7 +807,7 @@ unsafe fn combo_add(combo: HWND, text: &str) {
 
 /// The dropdown room a combo needs below its own field, in this window's pixels.
 fn combo_drop_height(dpi: i32) -> i32 {
-    scale(22, dpi) * 5
+    scale(22, dpi) * 6
 }
 
 /// Place every control for the window's current client area: the tabs on the left, the fields on
@@ -816,6 +858,7 @@ unsafe fn lay_out(state: &State) {
         "Name",
         "Extensions",
         "Program",
+        "Window",
         "Scaling",
         "Background",
         "Volume",
@@ -851,6 +894,14 @@ unsafe fn lay_out(state: &State) {
         y,
         scale(84, dpi),
         row,
+    );
+    y += row + gap;
+    place(
+        ID_WINDOW_MODE,
+        field_left,
+        y,
+        field_width,
+        row + combo_drop_height(dpi),
     );
     y += row + gap;
     // **A combo's window height is its dropdown's, not its field's**: Windows fits the field to one
@@ -949,6 +1000,11 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                 unsafe { fields_changed(state) };
             }
         }
+        ID_WINDOW_MODE => {
+            if notice == windows::Win32::UI::WindowsAndMessaging::CBN_SELCHANGE {
+                unsafe { window_mode_chosen(state) };
+            }
+        }
         ID_SCALING => {
             if notice == windows::Win32::UI::WindowsAndMessaging::CBN_SELCHANGE {
                 unsafe { scaling_chosen(state) };
@@ -1004,7 +1060,7 @@ unsafe fn fill_fields(state: &mut State) {
         ] {
             unsafe { set_text(state.hwnd, id, "") };
         }
-        for id in [ID_SCALING, ID_BACKGROUND] {
+        for id in [ID_WINDOW_MODE, ID_SCALING, ID_BACKGROUND] {
             let combo = unsafe { GetDlgItem(state.hwnd, id) }.unwrap_or_default();
             unsafe { SendMessageW(combo, CB_SETCURSEL, WPARAM(usize::MAX), LPARAM(0)) };
         }
@@ -1015,6 +1071,7 @@ unsafe fn fill_fields(state: &mut State) {
     let name = preset.name.clone();
     let extensions = preset.extensions_text();
     let exe = preset.exe.clone();
+    let window_mode = preset.window_mode;
     let scaling = preset.scaling;
     let background = preset.background;
     let volume = preset.volume;
@@ -1025,23 +1082,35 @@ unsafe fn fill_fields(state: &mut State) {
         set_text(state.hwnd, ID_EXTENSIONS, &extensions);
         set_text(state.hwnd, ID_EXE, &exe);
 
+        let mode_combo = GetDlgItem(state.hwnd, ID_WINDOW_MODE).unwrap_or_default();
+        let mode_index = WINDOW_MODES
+            .iter()
+            .position(|held| *held == window_mode)
+            .unwrap_or(0) as i32;
+        SendMessageW(
+            mode_combo,
+            CB_SETCURSEL,
+            WPARAM(mode_index as usize),
+            LPARAM(0),
+        );
+
         let combo = GetDlgItem(state.hwnd, ID_SCALING).unwrap_or_default();
-        let choice = match scaling {
-            PreviewScale::FitToScreen => 0,
-            PreviewScale::FitToScreenReduced(100) => 1,
-            PreviewScale::FitToScreenReduced(75) => 2,
-            PreviewScale::FitToScreenReduced(50) => 3,
-            _ => SCALE_CHOICES.len() as i32,
-        };
+        let choice = SCALE_CHOICES
+            .iter()
+            .position(|(_, value)| *value == scaling)
+            .unwrap_or(SCALE_CHOICES.len()) as i32;
         SendMessageW(combo, CB_SETCURSEL, WPARAM(choice as usize), LPARAM(0));
 
-        let percent = match scaling {
-            PreviewScale::FitToScreen => 100,
-            PreviewScale::FitToScreenReduced(percent) | PreviewScale::Percent(percent) => percent,
+        let (percent_text, percent_enabled) = match scaling {
+            CustomScaling::FollowTray => (String::new(), false),
+            CustomScaling::Override(PreviewScale::FitToScreen) => ("100".to_string(), false),
+            CustomScaling::Override(
+                PreviewScale::FitToScreenReduced(percent) | PreviewScale::Percent(percent),
+            ) => (percent.to_string(), true),
         };
-        set_text(state.hwnd, ID_SCALING_PERCENT, &percent.to_string());
+        set_text(state.hwnd, ID_SCALING_PERCENT, &percent_text);
         if let Ok(edit) = GetDlgItem(state.hwnd, ID_SCALING_PERCENT) {
-            let _ = EnableWindow(edit, !matches!(scaling, PreviewScale::FitToScreen));
+            let _ = EnableWindow(edit, percent_enabled);
         }
 
         let background_combo = GetDlgItem(state.hwnd, ID_BACKGROUND).unwrap_or_default();
@@ -1072,6 +1141,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_EXTENSIONS,
         ID_EXE,
         ID_BROWSE,
+        ID_WINDOW_MODE,
         ID_SCALING,
         ID_BACKGROUND,
         ID_VOLUME,
@@ -1206,6 +1276,26 @@ unsafe fn fields_changed(state: &mut State) {
     unsafe { rebuild_list(state) };
 }
 
+unsafe fn window_mode_chosen(state: &mut State) {
+    if state.loading {
+        return;
+    }
+    let Some(index) = state.selected else {
+        return;
+    };
+    let combo = unsafe { GetDlgItem(state.hwnd, ID_WINDOW_MODE) }.unwrap_or_default();
+    let choice = unsafe { SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+    let Some(mode) = usize::try_from(choice)
+        .ok()
+        .and_then(|choice| WINDOW_MODES.get(choice).copied())
+    else {
+        return;
+    };
+    if let Some(preset) = state.presets.get_mut(index) {
+        preset.window_mode = mode;
+    }
+}
+
 unsafe fn scaling_chosen(state: &mut State) {
     if state.loading {
         return;
@@ -1219,8 +1309,8 @@ unsafe fn scaling_chosen(state: &mut State) {
         return;
     }
 
-    let Some((_, percent)) = SCALE_CHOICES.get(choice as usize).copied() else {
-        // `Custom…`: the percentage field is the one that answers, and it already does.
+    let Some((_, chosen)) = SCALE_CHOICES.get(choice as usize).copied() else {
+        // `Custom…`: enable percentage field and let `percent_typed` update the preset.
         if let Ok(edit) = unsafe { GetDlgItem(state.hwnd, ID_SCALING_PERCENT) } {
             let _ = unsafe { EnableWindow(edit, true) };
             let _ = unsafe { SetFocus(edit) };
@@ -1229,23 +1319,21 @@ unsafe fn scaling_chosen(state: &mut State) {
     };
 
     if let Some(preset) = state.presets.get_mut(index) {
-        preset.scaling = match percent {
-            None => PreviewScale::FitToScreen,
-            Some(percent) => PreviewScale::FitToScreenReduced(percent),
-        };
+        preset.scaling = chosen;
     }
 
+    let (percent_text, percent_enabled) = match chosen {
+        CustomScaling::FollowTray => (String::new(), false),
+        CustomScaling::Override(PreviewScale::FitToScreen) => ("100".to_string(), false),
+        CustomScaling::Override(
+            PreviewScale::FitToScreenReduced(percent) | PreviewScale::Percent(percent),
+        ) => (percent.to_string(), true),
+    };
     state.loading = true;
-    unsafe {
-        set_text(
-            state.hwnd,
-            ID_SCALING_PERCENT,
-            &percent.unwrap_or(100).to_string(),
-        );
-    }
+    unsafe { set_text(state.hwnd, ID_SCALING_PERCENT, &percent_text) };
     state.loading = false;
     if let Ok(edit) = unsafe { GetDlgItem(state.hwnd, ID_SCALING_PERCENT) } {
-        let _ = unsafe { EnableWindow(edit, percent.is_some()) };
+        let _ = unsafe { EnableWindow(edit, percent_enabled) };
     }
 }
 
@@ -1261,7 +1349,7 @@ unsafe fn percent_typed(state: &mut State) {
         return;
     };
     if let Some(preset) = state.presets.get_mut(index) {
-        preset.scaling = PreviewScale::Percent(percent.clamp(1, 1000));
+        preset.scaling = CustomScaling::Override(PreviewScale::Percent(percent.clamp(1, 1000)));
     }
 }
 
@@ -1469,7 +1557,10 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
                 );
                 String::from_utf16_lossy(&buffer[..length])
             }
-            id if id == ID_SCALING as u32 || id == ID_BACKGROUND as u32 => {
+            id if id == ID_WINDOW_MODE as u32
+                || id == ID_SCALING as u32
+                || id == ID_BACKGROUND as u32 =>
+            {
                 let combo = item.hwndItem;
                 let index = if item.itemID == u32::MAX {
                     SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0
@@ -1642,6 +1733,7 @@ mod tests {
                 ID_NAME,
                 ID_EXTENSIONS,
                 ID_EXE,
+                ID_WINDOW_MODE,
                 ID_SCALING,
                 ID_BACKGROUND,
                 ID_DELETE,
