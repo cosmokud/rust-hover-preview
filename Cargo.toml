@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/custom-preview-hook"]
+default-members = [".", "crates/custom-preview-hook"]
+
 [package]
 name = "rust-hover-preview"
 version = "0.6.0"

@@ -105,6 +105,8 @@ pub enum CustomCaptureTechnique {
     DirectWindow,
     /// Staged at `(-10000, -10000)` until settled, then revealed on-monitor with zero flash.
     OffscreenStaged,
+    /// In-process `WH_CBT` + `WH_CALLWNDPROC` hook with `DWMWA_CLOAK` + synchronous rect lock.
+    InProcessHook,
 }
 
 impl CustomCaptureTechnique {
@@ -115,6 +117,7 @@ impl CustomCaptureTechnique {
             Self::OffScreen => "off_screen",
             Self::DirectWindow => "direct_window",
             Self::OffscreenStaged => "offscreen_staged",
+            Self::InProcessHook => "in_process_hook",
         }
     }
 
@@ -126,6 +129,9 @@ impl CustomCaptureTechnique {
             "direct_window" | "direct-window" => Some(Self::DirectWindow),
             "offscreen_staged" | "offscreen-staged" | "off_screen_staged" | "off-screen-staged" => {
                 Some(Self::OffscreenStaged)
+            }
+            "in_process_hook" | "in-process-hook" | "inprocess_hook" | "inprocess-hook" => {
+                Some(Self::InProcessHook)
             }
             _ => None,
         }
@@ -761,6 +767,7 @@ mod tests {
             (CustomCaptureTechnique::OffScreen, "off_screen"),
             (CustomCaptureTechnique::DirectWindow, "direct_window"),
             (CustomCaptureTechnique::OffscreenStaged, "offscreen_staged"),
+            (CustomCaptureTechnique::InProcessHook, "in_process_hook"),
         ];
         for (tech, expected_str) in cases {
             let mut preset = CustomPreset::named("TechTest");

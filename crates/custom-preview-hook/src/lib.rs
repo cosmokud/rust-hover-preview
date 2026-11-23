@@ -1,0 +1,362 @@
+//! Companion Win32 hook DLL for `CustomCaptureTechnique::InProcessHook`.
+//!
+//! Runs inside the target preview process via thread-specific `WH_CBT` + `WH_CALLWNDPROC` hooks,
+//! applying legal in-process `DWMWA_CLOAK` and synchronous `WM_WINDOWPOSCHANGING` rect locking.
+//! Zero third-party dependencies; 100% MIT-licensed.
+
+#![allow(clippy::missing_safety_doc)]
+
+use core::ffi::c_void;
+use core::ptr;
+use core::sync::atomic::{AtomicI32, AtomicIsize, AtomicPtr, AtomicU32, Ordering};
+
+pub const HOOK_MAGIC: u32 = 0x5248_5048;
+pub const HOOK_VERSION: u32 = 1;
+pub const CMD_UNCLOAK: usize = 1;
+pub const CMD_CLOAK: usize = 2;
+
+const DLL_PROCESS_DETACH: u32 = 0;
+
+const FILE_MAP_ALL_ACCESS: u32 = 0x000F_001F;
+
+const HCBT_CREATEWND: i32 = 3;
+const HCBT_ACTIVATE: i32 = 5;
+
+const WM_CREATE: u32 = 0x0001;
+const WM_SHOWWINDOW: u32 = 0x0018;
+const WM_WINDOWPOSCHANGING: u32 = 0x0046;
+const WM_NCCREATE: u32 = 0x0081;
+
+const GWL_STYLE: i32 = -16;
+const GWL_EXSTYLE: i32 = -20;
+
+const WS_CHILD: u32 = 0x4000_0000;
+const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+
+const HWND_BOTTOM: isize = 1;
+const SWP_NOSIZE: u32 = 0x0001;
+const SWP_NOMOVE: u32 = 0x0002;
+const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
+
+const DWMWA_CLOAK: u32 = 13;
+
+#[repr(C)]
+pub struct HookSharedState {
+    pub magic: u32,
+    pub version: u32,
+    pub target_pid: u32,
+    pub uncloak_msg: u32,
+    pub cloak_enabled: AtomicU32,
+    pub rect_locked: AtomicU32,
+    pub x: AtomicI32,
+    pub y: AtomicI32,
+    pub w: AtomicI32,
+    pub h: AtomicI32,
+    pub captured_hwnd: AtomicIsize,
+    pub hook_hits: AtomicU32,
+}
+
+#[repr(C)]
+struct CreateStructW {
+    lp_create_params: *mut c_void,
+    h_instance: isize,
+    h_menu: isize,
+    hwnd_parent: isize,
+    cy: i32,
+    cx: i32,
+    y: i32,
+    x: i32,
+    style: i32,
+    lpsz_name: *const u16,
+    lpsz_class: *const u16,
+    dw_ex_style: u32,
+}
+
+#[repr(C)]
+struct CbtCreateWndW {
+    lpcs: *mut CreateStructW,
+    hwnd_insert_after: isize,
+}
+
+#[repr(C)]
+struct CwpStruct {
+    lparam: isize,
+    wparam: usize,
+    message: u32,
+    hwnd: isize,
+}
+
+#[repr(C)]
+struct WindowPos {
+    hwnd: isize,
+    hwnd_insert_after: isize,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    flags: u32,
+}
+
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetCurrentProcessId() -> u32;
+    fn OpenFileMappingW(
+        dw_desired_access: u32,
+        b_inherit_handle: i32,
+        lp_name: *const u16,
+    ) -> isize;
+    fn MapViewOfFile(
+        h_file_mapping_object: isize,
+        dw_desired_access: u32,
+        dw_file_offset_high: u32,
+        dw_file_offset_low: u32,
+        dw_number_of_bytes_to_map: usize,
+    ) -> *mut c_void;
+    fn UnmapViewOfFile(lp_base_address: *const c_void) -> i32;
+    fn CloseHandle(h_object: isize) -> i32;
+}
+
+#[link(name = "user32")]
+extern "system" {
+    fn CallNextHookEx(hhk: isize, n_code: i32, wparam: usize, lparam: isize) -> isize;
+    fn GetParent(hwnd: isize) -> isize;
+    fn GetWindowLongPtrW(hwnd: isize, n_index: i32) -> isize;
+}
+
+#[link(name = "dwmapi")]
+extern "system" {
+    fn DwmSetWindowAttribute(
+        hwnd: isize,
+        dw_attribute: u32,
+        pv_attribute: *const c_void,
+        cb_attribute: u32,
+    ) -> i32;
+}
+
+// 0 = uninit, 1 = initializing, 2 = initialized
+static SHM_INIT: AtomicU32 = AtomicU32::new(0);
+static SHM_HANDLE: AtomicIsize = AtomicIsize::new(0);
+static SHM_PTR: AtomicPtr<HookSharedState> = AtomicPtr::new(ptr::null_mut());
+
+/// Format `Local\RhpCustomPreviewHook_<pid>\0` into a stack UTF-16 buffer (no heap alloc).
+fn format_shm_name(pid: u32, buf: &mut [u16; 64]) {
+    const PREFIX: &[u8] = b"Local\\RhpCustomPreviewHook_";
+    let mut idx = 0usize;
+    for &b in PREFIX {
+        buf[idx] = u16::from(b);
+        idx += 1;
+    }
+    let mut digits = [0u8; 10];
+    let mut n = pid;
+    let mut dlen = 0usize;
+    if n == 0 {
+        digits[0] = b'0';
+        dlen = 1;
+    } else {
+        while n > 0 {
+            digits[dlen] = b'0' + (n % 10) as u8;
+            n /= 10;
+            dlen += 1;
+        }
+    }
+    while dlen > 0 {
+        dlen -= 1;
+        buf[idx] = u16::from(digits[dlen]);
+        idx += 1;
+    }
+    buf[idx] = 0;
+}
+
+/// Map per-PID shared state once; returns `None` immediately for any non-target process.
+#[inline]
+unsafe fn shared_state() -> Option<&'static HookSharedState> {
+    let state = SHM_INIT.load(Ordering::Acquire);
+    if state == 2 {
+        let ptr = SHM_PTR.load(Ordering::Acquire);
+        return (!ptr.is_null()).then(|| unsafe { &*ptr });
+    }
+    if SHM_INIT
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let pid = unsafe { GetCurrentProcessId() };
+        let mut name = [0u16; 64];
+        format_shm_name(pid, &mut name);
+        let handle = unsafe { OpenFileMappingW(FILE_MAP_ALL_ACCESS, 0, name.as_ptr()) };
+        if handle != 0 {
+            let view = unsafe {
+                MapViewOfFile(
+                    handle,
+                    FILE_MAP_ALL_ACCESS,
+                    0,
+                    0,
+                    core::mem::size_of::<HookSharedState>(),
+                )
+            } as *mut HookSharedState;
+            if !view.is_null() {
+                let s = unsafe { &*view };
+                if s.magic == HOOK_MAGIC && s.version == HOOK_VERSION && s.target_pid == pid {
+                    SHM_HANDLE.store(handle, Ordering::Release);
+                    SHM_PTR.store(view, Ordering::Release);
+                } else {
+                    let _ = unsafe { UnmapViewOfFile(view as *const c_void) };
+                    let _ = unsafe { CloseHandle(handle) };
+                }
+            } else {
+                let _ = unsafe { CloseHandle(handle) };
+            }
+        }
+        SHM_INIT.store(2, Ordering::Release);
+    }
+    if SHM_INIT.load(Ordering::Acquire) == 2 {
+        let ptr = SHM_PTR.load(Ordering::Acquire);
+        return (!ptr.is_null()).then(|| unsafe { &*ptr });
+    }
+    None
+}
+
+#[inline]
+unsafe fn is_top_level_non_tool(hwnd: isize) -> bool {
+    if hwnd == 0 || unsafe { GetParent(hwnd) } != 0 {
+        return false;
+    }
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    (style & WS_CHILD) == 0 && (ex_style & WS_EX_TOOLWINDOW) == 0
+}
+
+#[inline]
+unsafe fn set_cloak(hwnd: isize, cloak: bool) {
+    let val: u32 = u32::from(cloak);
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            &val as *const u32 as *const c_void,
+            core::mem::size_of::<u32>() as u32,
+        )
+    };
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn rhp_cbt_proc(code: i32, wparam: usize, lparam: isize) -> isize {
+    if code >= 0 {
+        if let Some(state) = unsafe { shared_state() } {
+            if code == HCBT_CREATEWND {
+                let cbt = lparam as *const CbtCreateWndW;
+                if !cbt.is_null() {
+                    let lpcs = unsafe { (*cbt).lpcs };
+                    if !lpcs.is_null() {
+                        let style = unsafe { (*lpcs).style } as u32;
+                        let ex_style = unsafe { (*lpcs).dw_ex_style };
+                        let parent = unsafe { (*lpcs).hwnd_parent };
+                        if (style & WS_CHILD) == 0
+                            && (ex_style & WS_EX_TOOLWINDOW) == 0
+                            && parent == 0
+                            && state.rect_locked.load(Ordering::Acquire) == 1
+                        {
+                            let w = state.w.load(Ordering::Acquire);
+                            let h = state.h.load(Ordering::Acquire);
+                            if w > 0 && h > 0 {
+                                unsafe {
+                                    (*lpcs).x = state.x.load(Ordering::Acquire);
+                                    (*lpcs).y = state.y.load(Ordering::Acquire);
+                                    (*lpcs).cx = w;
+                                    (*lpcs).cy = h;
+                                }
+                                state.hook_hits.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+            } else if code == HCBT_ACTIVATE && state.cloak_enabled.load(Ordering::Acquire) == 1 {
+                return 1;
+            }
+        }
+    }
+    unsafe { CallNextHookEx(0, code, wparam, lparam) }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn rhp_callwnd_proc(code: i32, wparam: usize, lparam: isize) -> isize {
+    if code >= 0 {
+        if let Some(state) = unsafe { shared_state() } {
+            let cwp = lparam as *const CwpStruct;
+            if !cwp.is_null() {
+                let hwnd = unsafe { (*cwp).hwnd };
+                let msg = unsafe { (*cwp).message };
+                if hwnd != 0 {
+                    // Handle cloak control message even if Borderless mode added WS_EX_TOOLWINDOW.
+                    if msg == state.uncloak_msg && state.uncloak_msg != 0 {
+                        let cmd = unsafe { (*cwp).wparam };
+                        if cmd == CMD_UNCLOAK {
+                            unsafe { set_cloak(hwnd, false) };
+                        } else if cmd == CMD_CLOAK {
+                            unsafe { set_cloak(hwnd, true) };
+                        }
+                    } else if matches!(
+                        msg,
+                        WM_NCCREATE | WM_CREATE | WM_SHOWWINDOW | WM_WINDOWPOSCHANGING
+                    ) {
+                        let is_captured = state.captured_hwnd.load(Ordering::Acquire) == hwnd;
+                        if is_captured || unsafe { is_top_level_non_tool(hwnd) } {
+                            if state.cloak_enabled.load(Ordering::Acquire) == 1 {
+                                unsafe { set_cloak(hwnd, true) };
+                                let _ = state.captured_hwnd.compare_exchange(
+                                    0,
+                                    hwnd,
+                                    Ordering::AcqRel,
+                                    Ordering::Acquire,
+                                );
+                                state.hook_hits.fetch_add(1, Ordering::Relaxed);
+                            }
+                            if msg == WM_WINDOWPOSCHANGING
+                                && state.rect_locked.load(Ordering::Acquire) == 1
+                            {
+                                let wp = unsafe { (*cwp).lparam } as *mut WindowPos;
+                                if !wp.is_null() {
+                                    unsafe {
+                                        (*wp).hwnd_insert_after = HWND_BOTTOM;
+                                        (*wp).flags =
+                                            ((*wp).flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
+                                        let w = state.w.load(Ordering::Acquire);
+                                        let h = state.h.load(Ordering::Acquire);
+                                        if w > 0 && h > 0 {
+                                            (*wp).x = state.x.load(Ordering::Acquire);
+                                            (*wp).y = state.y.load(Ordering::Acquire);
+                                            (*wp).cx = w;
+                                            (*wp).cy = h;
+                                            (*wp).flags &= !(SWP_NOMOVE | SWP_NOSIZE);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    unsafe { CallNextHookEx(0, code, wparam, lparam) }
+}
+
+#[no_mangle]
+pub unsafe extern "system" fn DllMain(
+    _hinst_dll: isize,
+    fdw_reason: u32,
+    lpv_reserved: *mut c_void,
+) -> i32 {
+    if fdw_reason == DLL_PROCESS_DETACH && lpv_reserved.is_null() {
+        let view = SHM_PTR.swap(ptr::null_mut(), Ordering::AcqRel);
+        if !view.is_null() {
+            let _ = unsafe { UnmapViewOfFile(view as *const c_void) };
+        }
+        let handle = SHM_HANDLE.swap(0, Ordering::AcqRel);
+        if handle != 0 {
+            let _ = unsafe { CloseHandle(handle) };
+        }
+        SHM_INIT.store(0, Ordering::Release);
+    }
+    1
+}
