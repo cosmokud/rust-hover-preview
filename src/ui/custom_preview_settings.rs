@@ -1,93 +1,98 @@
-//! The `Custom Preview` window: the one place a custom preview preset is made and edited.
+//! The `Custom Preview` window: frameless audio-card-styled editor for custom preview presets.
 //!
-//! **What it is for.** A preset is the user naming a program for an extension (see
-//! `config::config::custom_presets`), and this window is the list of them: a column of tabs on
-//! the left, one tab a preset, a search box and an `Add` above it, and the preset's own fields on
-//! the right. Every field is one of the five things the section holds — the program, the names it
-//! claims, the scale its window is drawn at, the backdrop behind it, and the level it is heard at
-//! — so the window and the file say the same five things and nothing else.
-//!
-//! **Why the controls are the platform's.** A text field with a caret, a selection, an IME and a
-//! keyboard is a window's own work, and this app's preview window draws every pixel of itself
-//! because a preview must composite over Explorer. A settings window has no such constraint: it
-//! is an ordinary top-level window of its own, so the fields are `EDIT`, `BUTTON`, `COMBOBOX` and
-//! a trackbar, and what this file owns is the theme they are painted in — the same `TextTheme`
-//! the text preview and the audio card use (`Tray → System → Theme`), so a preset reads as the
-//! rest of the app does. The two lists — the tabs and the combo boxes — and the buttons are
-//! owner-drawn, because those are the ones a system-drawn control would paint light over a dark
-//! page.
-//!
-//! **Why it runs on a thread of its own.** The window is opened from a tray menu, and the tray's
-//! own thread is the one pumping the menu that opened it: a modal loop there would hold the tray's
-//! own `WM_COMMAND` open. So the window is made, pumped and destroyed on a thread of its own, and
-//! the tray is free the moment the thread is begun. One window at a time (`OPEN`): a second click
-//! brings the first one forward rather than making another.
-//!
-//! **What a save writes.** The whole list, in the order the tabs are in, into the running
-//! configuration, which is then written to `config.ini` — the file is what the watcher and the
-//! next hover read, and a preset that was not written is a preset no preview uses. The window
-//! also saves as it closes, so a field typed into and left is not lost.
+//! Runs on its own thread (opened from tray `WM_COMMAND`), single instance via `OPEN`/`WINDOW`.
+//! Uses native Win32 child controls (`EDIT`, `LISTBOX`, `COMBOBOX`, `msctls_trackbar32`,
+//! owner-drawn `BUTTON`) painted with the active `TextTheme` palette and live theme switching.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{
+    DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint, FillRect,
-    GetStockObject, InvalidateRect, SelectObject, SetBkColor, SetBkMode, SetTextColor,
-    UpdateWindow, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DT_CENTER, DT_LEFT,
-    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_NORMAL, HBRUSH, HDC, HFONT, HGDIOBJ, NULL_BRUSH,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PROOF_QUALITY, TRANSPARENT,
+    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint,
+    FillRect, GetStockObject, InvalidateRect, LineTo, MoveToEx, RedrawWindow, RoundRect,
+    ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow,
+    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DT_CENTER, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, HGDIOBJ, NULL_BRUSH,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, RDW_ALLCHILDREN, RDW_ERASE,
+    RDW_INVALIDATE, RDW_UPDATENOW, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
-use windows::Win32::UI::Controls::{DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_DISABLED, ODS_SELECTED};
-use windows::Win32::UI::Controls::{EM_SETSEL, TBM_SETPOS, TBM_SETRANGE};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows::Win32::UI::Controls::{
+    DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETLIMITTEXT, EM_SETMARGINS, EM_SETSEL, MARGINS,
+    MEASUREITEMSTRUCT, ODS_DISABLED, ODS_SELECTED, TBM_SETPOS, TBM_SETRANGE,
+};
+use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, GetDoubleClickTime, GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus,
+    TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_A, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE,
+    VK_MENU, VK_RETURN, VK_SHIFT, VK_TAB, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetDlgItem,
-    GetMessageW, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, LoadCursorW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW,
-    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_GETLBTEXT,
-    CB_GETLBTEXTLEN, CB_SETCURSEL, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, EN_CHANGE, GWLP_USERDATA,
-    HMENU, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING,
-    LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG,
-    SWP_NOZORDER, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_MEASUREITEM,
-    WM_NCDESTROY, WM_PAINT, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE, WS_VSCROLL,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    GetClientRect, GetDlgItem, GetMessageTime, GetMessageW, GetNextDlgTabItem, GetSystemMetrics,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsWindow, IsZoomed,
+    KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
+    SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+    TranslateMessage, BS_OWNERDRAW, CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED,
+    CB_ADDSTRING, CB_GETCURSEL, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CS_HREDRAW,
+    CS_VREDRAW, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU,
+    HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
+    HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOTIFY, LBS_OWNERDRAWFIXED,
+    LB_ADDSTRING, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL,
+    MINMAXINFO, MSG, NCCALCSIZE_PARAMS, SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME,
+    SM_CYDOUBLECLK, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE,
+    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_NCCALCSIZE,
+    WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+    WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED,
+    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
-use crate::config::config::MAX_PRESETS;
 use crate::config::config::{
     CustomPreset, CustomScaling, CustomWindowMode, PreviewScale, TextTheme, TransparentBackground,
+    MAX_PRESETS,
 };
-use crate::text::text_theme;
+use crate::text::{text_paint, text_theme};
 use crate::CONFIG;
 
-/// The window class this window is made from.
-const CLASS_NAME: windows::core::PCWSTR = w!("RustHoverPreviewCustomPreview");
+const CLASS_NAME: PCWSTR = w!("RustHoverPreviewCustomPreview");
 
-/// How many of these windows may be open at once, which is one.
 static OPEN: AtomicBool = AtomicBool::new(false);
-/// The window of the one that is open, so that a second click brings it forward.
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 
-/// `TBM_GETPOS`: the trackbar's own position, which this binding does not name — the one message
-/// of the four the window sends it that is missing from `Win32::UI::Controls`.
 const TBM_GETPOS: u32 = 0x0408;
+const WM_MOUSELEAVE: u32 = 0x02A3;
+const EC_LEFTMARGIN: usize = 0x0001;
+const EC_RIGHTMARGIN: usize = 0x0002;
 
-/// A message of this window's own: bring it forward (a second click on the tray row).
 const WM_BRING_FORWARD: u32 = WM_APP + 17;
+const WM_THEME_CHANGED: u32 = WM_APP + 18;
+const WM_STEP_NUMERIC: u32 = WM_APP + 19;
 
-// The controls' ids. The two lists and the fields are told apart by these, and `WM_COMMAND` and
-// `WM_DRAWITEM` both read them.
+const TITLEBAR_LOGICAL_H: i32 = 40;
+const TITLEBAR_BTN_W: i32 = 44;
+const RESIZE_BORDER_LOGICAL: i32 = 6;
+const STEP_DELAY_MS: u32 = 380;
+const STEP_REPEAT_MS: u32 = 55;
+const STEP_TIMER_INITIAL: usize = 1;
+const STEP_TIMER_REPEAT: usize = 2;
+
+const SCALING_MIN: u32 = 1;
+const SCALING_MAX: u32 = 1000;
+const VOLUME_MIN: u32 = 0;
+const VOLUME_MAX: u32 = 100;
+
 const ID_SEARCH: i32 = 100;
 const ID_ADD: i32 = 101;
 const ID_LIST: i32 = 102;
@@ -104,8 +109,21 @@ const ID_WINDOW_MODE: i32 = 119;
 const ID_SAVE: i32 = 120;
 const ID_DELETE: i32 = 121;
 const ID_CLOSE_BUTTON: i32 = 122;
+const ID_SCALING_UP: i32 = 123;
+const ID_SCALING_DOWN: i32 = 124;
+const ID_VOLUME_UP: i32 = 125;
+const ID_VOLUME_DOWN: i32 = 126;
 const ID_STATUS: i32 = 130;
 const ID_LABEL_BASE: i32 = 140;
+
+const EDIT_IDS: [i32; 6] = [
+    ID_SEARCH,
+    ID_NAME,
+    ID_EXTENSIONS,
+    ID_EXE,
+    ID_SCALING_PERCENT,
+    ID_VOLUME_VALUE,
+];
 
 const SCALE_CHOICES: [(&str, CustomScaling); 5] = [
     ("Follow Tray -> Scaling", CustomScaling::FollowTray),
@@ -153,18 +171,40 @@ fn background_label(background: TransparentBackground) -> &'static str {
     }
 }
 
-/// The window's colours, read from the configured theme.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TitlebarButton {
+    Minimize,
+    Maximize,
+    Close,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Palette {
     page: COLORREF,
-    panel: COLORREF,
+    titlebar: COLORREF,
+    card: COLORREF,
     field: COLORREF,
+    border: COLORREF,
     ink: COLORREF,
+    muted: COLORREF,
     accent: COLORREF,
+    accent_text: COLORREF,
+    number: COLORREF,
+    button_bg: COLORREF,
+    button_hover: COLORREF,
+    button_press: COLORREF,
+    danger: COLORREF,
+    danger_bg: COLORREF,
+    danger_hover: COLORREF,
+    dark: bool,
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     COLORREF(u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16))
+}
+
+fn rgb_arr(c: [u8; 3]) -> COLORREF {
+    rgb(c[0], c[1], c[2])
 }
 
 fn mix(a: COLORREF, b: COLORREF, share: u32) -> COLORREF {
@@ -177,70 +217,168 @@ fn mix(a: COLORREF, b: COLORREF, share: u32) -> COLORREF {
 }
 
 impl Palette {
-    /// The palette of `theme`: its page and its ink, and the shades the window is made of — a
-    /// panel a shade off the page, a field a shade off that, and an accent the theme's own.
+    /// Matches audio-card / `ChromePalette` tokens from the active `TextTheme`.
     fn of(theme: TextTheme) -> Self {
-        let (page, ink, accent) = match text_theme::loaded(theme) {
+        let (bg, fg, accent_arr, number_arr) = match text_theme::loaded(theme) {
             Some(loaded) => {
-                let page = loaded.background();
-                let ink = loaded.foreground();
-                let accent = loaded
-                    .style_for_scopes(&["keyword.control", "keyword"])
-                    .foreground;
-                (
-                    rgb(page.r, page.g, page.b),
-                    rgb(ink.r, ink.g, ink.b),
-                    rgb(accent.r, accent.g, accent.b),
-                )
+                let bg = text_paint::rgb(loaded.background());
+                let fg = text_paint::rgb(loaded.foreground());
+                let accent =
+                    text_paint::rgb(loaded.style_for_scopes(&["support.function"]).foreground);
+                let number = text_paint::readable(
+                    text_paint::rgb(loaded.style_for_scopes(&["constant.numeric"]).foreground),
+                    bg,
+                );
+                (bg, fg, accent, number)
             }
-            None => (rgb(250, 250, 250), rgb(30, 30, 30), rgb(0, 90, 180)),
+            None => ([250, 250, 250], [56, 58, 66], [1, 132, 188], [152, 104, 1]),
+        };
+
+        let dark = text_paint::luminance(bg) <= 0.5;
+        let page = rgb_arr(bg);
+        let ink = rgb_arr(fg);
+        let accent = rgb_arr(accent_arr);
+        let number = rgb_arr(number_arr);
+
+        let (titlebar, card, field, border, button_bg, button_hover, button_press) = if dark {
+            let card = mix(page, rgb(255, 255, 255), 4);
+            (
+                mix(page, rgb(0, 0, 0), 10),
+                card,
+                mix(page, rgb(0, 0, 0), 18),
+                mix(page, ink, 18),
+                mix(card, ink, 9),
+                mix(card, ink, 16),
+                mix(card, ink, 24),
+            )
+        } else {
+            let card = mix(page, rgb(0, 0, 0), 3);
+            (
+                mix(page, rgb(0, 0, 0), 4),
+                card,
+                rgb(255, 255, 255),
+                mix(page, ink, 16),
+                mix(card, ink, 5),
+                mix(card, ink, 11),
+                mix(card, ink, 18),
+            )
+        };
+
+        let danger = if dark {
+            rgb(224, 108, 117)
+        } else {
+            rgb(201, 59, 69)
+        };
+        let danger_bg = mix(card, danger, if dark { 16 } else { 12 });
+        let danger_hover = rgb(212, 47, 58);
+        let accent_text = if text_paint::luminance(accent_arr) > 0.52 {
+            rgb(24, 28, 34)
+        } else {
+            rgb(255, 255, 255)
         };
 
         Self {
             page,
-            panel: mix(page, ink, 7),
-            field: mix(page, ink, 12),
+            titlebar,
+            card,
+            field,
+            border,
             ink,
+            muted: mix(ink, page, 45),
             accent,
+            accent_text,
+            number,
+            button_bg,
+            button_hover,
+            button_press,
+            danger,
+            danger_bg,
+            danger_hover,
+            dark,
         }
     }
 }
 
-/// Everything the window owns while it is up: the presets being edited, which one is showing,
-/// and the controls.
+struct LayoutRects {
+    titlebar: RECT,
+    sidebar_card: RECT,
+    editor_card: RECT,
+    btn_min: RECT,
+    btn_max: RECT,
+    btn_close: RECT,
+}
+
+impl LayoutRects {
+    fn titlebar_button_at(&self, x: i32, y: i32) -> Option<TitlebarButton> {
+        if pt_in_rect(self.btn_close, x, y) {
+            Some(TitlebarButton::Close)
+        } else if pt_in_rect(self.btn_max, x, y) {
+            Some(TitlebarButton::Maximize)
+        } else if pt_in_rect(self.btn_min, x, y) {
+            Some(TitlebarButton::Minimize)
+        } else {
+            None
+        }
+    }
+}
+
+fn pt_in_rect(r: RECT, x: i32, y: i32) -> bool {
+    x >= r.left && x < r.right && y >= r.top && y < r.bottom
+}
+
 struct State {
     hwnd: HWND,
     presets: Vec<CustomPreset>,
-    /// The preset the fields are showing, as an index into `presets`.
     selected: Option<usize>,
-    /// The presets the list is showing, as indexes into `presets` — the search's answer.
     shown: Vec<usize>,
-    /// Whether the fields are being filled by the window itself, which is what keeps a
-    /// programmatic `SetWindowTextW` from being read back as a keystroke.
     loading: bool,
     palette: Palette,
     font: HFONT,
+    font_bold: HFONT,
+    font_small: HFONT,
     brush_page: HBRUSH,
+    brush_card: HBRUSH,
     brush_field: HBRUSH,
-    brush_panel: HBRUSH,
     dpi: i32,
+    hovered_tb: Option<TitlebarButton>,
+    pressed_tb: Option<TitlebarButton>,
+    tracking_mouse: bool,
+    rects: LayoutRects,
 }
 
 impl Drop for State {
     fn drop(&mut self) {
         unsafe {
             let _ = DeleteObject(HGDIOBJ(self.font.0));
+            let _ = DeleteObject(HGDIOBJ(self.font_bold.0));
+            let _ = DeleteObject(HGDIOBJ(self.font_small.0));
             let _ = DeleteObject(HGDIOBJ(self.brush_page.0));
+            let _ = DeleteObject(HGDIOBJ(self.brush_card.0));
             let _ = DeleteObject(HGDIOBJ(self.brush_field.0));
-            let _ = DeleteObject(HGDIOBJ(self.brush_panel.0));
         }
     }
 }
 
-/// Open the window, or bring the one that is open forward.
-///
-/// The tray calls this from its own `WM_COMMAND`, so the window is made on a thread of its own
-/// and this returns at once (see the module doc).
+struct EditSubclass {
+    orig_proc: WNDPROC,
+    parent: HWND,
+    id: i32,
+    last_click_time: u32,
+    last_click_pos: (i32, i32),
+    click_count: u8,
+}
+
+struct StepperSubclass {
+    orig_proc: WNDPROC,
+    parent: HWND,
+    target_id: i32,
+    delta: i32,
+    hovered: bool,
+    pressed: bool,
+    tracking: bool,
+}
+
+/// Open the settings window, or bring the existing one forward.
 pub(crate) fn open() {
     let existing = WINDOW.load(Ordering::SeqCst);
     if existing != 0 && OPEN.load(Ordering::SeqCst) {
@@ -264,7 +402,17 @@ pub(crate) fn open() {
     });
 }
 
-/// The presets the running configuration holds, in the order the window lists them.
+/// Notify the open settings window (if any) to rebuild its palette and repaint immediately.
+pub(crate) fn notify_theme_changed() {
+    let existing = WINDOW.load(Ordering::SeqCst);
+    if existing != 0 {
+        let hwnd = HWND(existing as *mut _);
+        if unsafe { IsWindow(hwnd) }.as_bool() {
+            let _ = unsafe { PostMessageW(hwnd, WM_THEME_CHANGED, WPARAM(0), LPARAM(0)) };
+        }
+    }
+}
+
 fn presets_now() -> Vec<CustomPreset> {
     CONFIG
         .lock()
@@ -272,7 +420,6 @@ fn presets_now() -> Vec<CustomPreset> {
         .unwrap_or_default()
 }
 
-/// The theme the window is painted in: the one `Tray → System → Theme` names.
 fn theme_now() -> TextTheme {
     CONFIG
         .lock()
@@ -280,11 +427,6 @@ fn theme_now() -> TextTheme {
         .unwrap_or(TextTheme::Light)
 }
 
-/// Write the window's list into the configuration and save it: what `Save`, `Delete` and the
-/// window closing all do.
-///
-/// A name that cannot be a section, or one that repeats another, is refused rather than written
-/// — the status line says which — and nothing of the file changes.
 fn persist(state: &State) -> Result<(), String> {
     let mut cleaned: Vec<CustomPreset> = Vec::new();
     for preset in state.presets.iter() {
@@ -320,20 +462,30 @@ fn run() {
 
         let mut message = MSG::default();
         while GetMessageW(&mut message, HWND::default(), 0, 0).as_bool() {
+            // Handle Tab / Shift+Tab cleanly without breaking edit shortcuts or triggering beeps.
+            if message.message == WM_KEYDOWN && message.wParam.0 == VK_TAB.0 as usize {
+                let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
+                let alt = GetKeyState(VK_MENU.0 as i32) < 0;
+                if !ctrl && !alt {
+                    let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
+                    let focused = GetFocus();
+                    if let Ok(next) = GetNextDlgTabItem(hwnd, focused, shift) {
+                        if !next.0.is_null() {
+                            let _ = SetFocus(next);
+                            continue;
+                        }
+                    }
+                }
+            }
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
         }
     }
 }
 
-/// Make the window and its controls, without showing it: what `run` shows and pumps.
 fn create_window() -> Option<HWND> {
     unsafe {
-        let hinstance = match GetModuleHandleW(None) {
-            Ok(instance) => instance,
-            Err(_) => return None,
-        };
-
+        let hinstance = GetModuleHandleW(None).ok()?;
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
@@ -352,25 +504,72 @@ fn create_window() -> Option<HWND> {
             | WS_SYSMENU
             | WS_THICKFRAME
             | WS_MINIMIZEBOX
-            | WS_MAXIMIZEBOX;
-        let Ok(hwnd) = CreateWindowExW(
+            | WS_MAXIMIZEBOX
+            | WS_CLIPCHILDREN;
+        CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             CLASS_NAME,
             PCWSTR(title.as_ptr()),
             style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            900,
+            920,
             620,
             None,
             None,
             HINSTANCE(hinstance.0),
             None,
-        ) else {
-            return None;
-        };
+        )
+        .ok()
+    }
+}
 
-        Some(hwnd)
+unsafe fn apply_dwm_chrome(hwnd: HWND, dark: bool) {
+    let dark_val: i32 = if dark { 1 } else { 0 };
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark_val as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    let corner = DWMWCP_ROUND;
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const _ as *const _,
+            std::mem::size_of_val(&corner) as u32,
+        )
+    };
+    // 1px top DWM glass margin preserves native Win11 drop shadow & rounded corners on frameless windows.
+    let margins = MARGINS {
+        cxLeftWidth: 0,
+        cxRightWidth: 0,
+        cyTopHeight: 1,
+        cyBottomHeight: 0,
+    };
+    let _ = unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) };
+}
+
+unsafe fn apply_theme(state: &mut State) {
+    let palette = Palette::of(theme_now());
+    state.palette = palette;
+    unsafe {
+        let _ = DeleteObject(HGDIOBJ(state.brush_page.0));
+        let _ = DeleteObject(HGDIOBJ(state.brush_card.0));
+        let _ = DeleteObject(HGDIOBJ(state.brush_field.0));
+        state.brush_page = CreateSolidBrush(palette.page);
+        state.brush_card = CreateSolidBrush(palette.card);
+        state.brush_field = CreateSolidBrush(palette.field);
+        apply_dwm_chrome(state.hwnd, palette.dark);
+        let _ = RedrawWindow(
+            state.hwnd,
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+        );
     }
 }
 
@@ -383,8 +582,187 @@ unsafe extern "system" fn window_proc(
     match msg {
         WM_CREATE => {
             let state = unsafe { build(hwnd) };
+            let dark = state.palette.dark;
             let raw = Box::into_raw(Box::new(state));
-            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize) };
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, raw as isize);
+                apply_dwm_chrome(hwnd, dark);
+                let _ = SetWindowPos(
+                    hwnd,
+                    HWND::default(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+            LRESULT(0)
+        }
+        WM_NCCALCSIZE => {
+            if wparam.0 == 0 {
+                return LRESULT(0);
+            }
+            if unsafe { IsZoomed(hwnd) }.as_bool() {
+                let params = unsafe { &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS) };
+                let dpi = (unsafe { GetDpiForWindow(hwnd) }).max(96);
+                let frame = unsafe {
+                    GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                        + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+                };
+                params.rgrc[0].left += frame;
+                params.rgrc[0].top += frame;
+                params.rgrc[0].right -= frame;
+                params.rgrc[0].bottom -= frame;
+            }
+            LRESULT(0)
+        }
+        WM_NCHITTEST => {
+            let Some(state) = (unsafe { state_of(hwnd) }) else {
+                return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+            };
+            let mut pt = POINT {
+                x: (lparam.0 & 0xFFFF) as i16 as i32,
+                y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+            };
+            let _ = unsafe { ScreenToClient(hwnd, &mut pt) };
+            let mut client = RECT::default();
+            let _ = unsafe { GetClientRect(hwnd, &mut client) };
+            let zoomed = unsafe { IsZoomed(hwnd) }.as_bool();
+            let border = scale(RESIZE_BORDER_LOGICAL, state.dpi);
+
+            if !zoomed {
+                let left = pt.x < border;
+                let right = pt.x >= client.right - border;
+                let top = pt.y < border;
+                let bottom = pt.y >= client.bottom - border;
+                if top && left {
+                    return LRESULT(HTTOPLEFT as isize);
+                }
+                if top && right {
+                    return LRESULT(HTTOPRIGHT as isize);
+                }
+                if bottom && left {
+                    return LRESULT(HTBOTTOMLEFT as isize);
+                }
+                if bottom && right {
+                    return LRESULT(HTBOTTOMRIGHT as isize);
+                }
+                if left {
+                    return LRESULT(HTLEFT as isize);
+                }
+                if right {
+                    return LRESULT(HTRIGHT as isize);
+                }
+                if top {
+                    return LRESULT(HTTOP as isize);
+                }
+                if bottom {
+                    return LRESULT(HTBOTTOM as isize);
+                }
+            }
+
+            if pt.y < state.rects.titlebar.bottom {
+                if state.rects.titlebar_button_at(pt.x, pt.y).is_some() {
+                    return LRESULT(HTCLIENT as isize);
+                }
+                return LRESULT(HTCAPTION as isize);
+            }
+            LRESULT(HTCLIENT as isize)
+        }
+        WM_MOUSEMOVE => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                let next = state.rects.titlebar_button_at(x, y);
+                if next != state.hovered_tb {
+                    state.hovered_tb = next;
+                    unsafe {
+                        let _ = InvalidateRect(hwnd, Some(&state.rects.titlebar), false);
+                    }
+                }
+                if !state.tracking_mouse {
+                    state.tracking_mouse = true;
+                    let mut tme = TRACKMOUSEEVENT {
+                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    let _ = unsafe { TrackMouseEvent(&mut tme) };
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                state.tracking_mouse = false;
+                if state.hovered_tb.is_some() || state.pressed_tb.is_some() {
+                    state.hovered_tb = None;
+                    state.pressed_tb = None;
+                    unsafe {
+                        let _ = InvalidateRect(hwnd, Some(&state.rects.titlebar), false);
+                    }
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                if let Some(btn) = state.rects.titlebar_button_at(x, y) {
+                    state.pressed_tb = Some(btn);
+                    unsafe {
+                        SetCapture(hwnd);
+                        let _ = InvalidateRect(hwnd, Some(&state.rects.titlebar), false);
+                    }
+                    return LRESULT(0);
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        WM_LBUTTONUP => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                if let Some(pressed) = state.pressed_tb.take() {
+                    let _ = unsafe { ReleaseCapture() };
+                    let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                    let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                    unsafe {
+                        let _ = InvalidateRect(hwnd, Some(&state.rects.titlebar), false);
+                    }
+                    if state.rects.titlebar_button_at(x, y) == Some(pressed) {
+                        match pressed {
+                            TitlebarButton::Minimize => {
+                                let _ = unsafe { ShowWindow(hwnd, SW_MINIMIZE) };
+                            }
+                            TitlebarButton::Maximize => {
+                                let cmd = if unsafe { IsZoomed(hwnd) }.as_bool() {
+                                    SW_RESTORE
+                                } else {
+                                    SW_MAXIMIZE
+                                };
+                                let _ = unsafe { ShowWindow(hwnd, cmd) };
+                            }
+                            TitlebarButton::Close => {
+                                let _ =
+                                    unsafe { PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) };
+                            }
+                        }
+                    }
+                    return LRESULT(0);
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        WM_CAPTURECHANGED | WM_CANCELMODE => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                if state.pressed_tb.take().is_some() {
+                    unsafe {
+                        let _ = InvalidateRect(hwnd, Some(&state.rects.titlebar), false);
+                    }
+                }
+            }
             LRESULT(0)
         }
         WM_SIZE => {
@@ -396,8 +774,8 @@ unsafe extern "system" fn window_proc(
         WM_GETMINMAXINFO => {
             let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
             let dpi = (unsafe { GetDpiForWindow(hwnd) } as i32).max(96);
-            info.ptMinTrackSize.x = scale(640, dpi);
-            info.ptMinTrackSize.y = scale(420, dpi);
+            info.ptMinTrackSize.x = scale(680, dpi);
+            info.ptMinTrackSize.y = scale(460, dpi);
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -405,6 +783,14 @@ unsafe extern "system" fn window_proc(
             let notice = ((wparam.0 >> 16) & 0xFFFF) as u32;
             if let Some(state) = unsafe { state_of(hwnd) } {
                 unsafe { command(state, id, notice) };
+            }
+            LRESULT(0)
+        }
+        WM_STEP_NUMERIC => {
+            let target_id = wparam.0 as i32;
+            let delta = lparam.0 as i32;
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                unsafe { step_numeric_field(state, target_id, delta) };
             }
             LRESULT(0)
         }
@@ -417,7 +803,7 @@ unsafe extern "system" fn window_proc(
         WM_MEASUREITEM => {
             let item = unsafe { &mut *(lparam.0 as *mut MEASUREITEMSTRUCT) };
             let dpi = unsafe { state_of(hwnd) }.map_or(96, |state| state.dpi);
-            item.itemHeight = scale(22, dpi) as u32;
+            item.itemHeight = scale(26, dpi) as u32;
             LRESULT(1)
         }
         WM_DRAWITEM => {
@@ -430,11 +816,18 @@ unsafe extern "system" fn window_proc(
                 return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
             };
             let hdc = HDC(wparam.0 as *mut _);
+            let ctl = HWND(lparam.0 as *mut _);
+            let status_hwnd = unsafe { GetDlgItem(hwnd, ID_STATUS) }.unwrap_or_default();
+            let (bg, brush, ink) = if ctl == status_hwnd {
+                (state.palette.page, state.brush_page, state.palette.muted)
+            } else {
+                (state.palette.card, state.brush_card, state.palette.muted)
+            };
             unsafe {
-                SetTextColor(hdc, state.palette.ink);
-                SetBkColor(hdc, state.palette.page);
+                SetTextColor(hdc, ink);
+                SetBkColor(hdc, bg);
             }
-            LRESULT(state.brush_page.0 as isize)
+            LRESULT(brush.0 as isize)
         }
         WM_CTLCOLOREDIT => {
             let Some(state) = (unsafe { state_of(hwnd) }) else {
@@ -458,23 +851,20 @@ unsafe extern "system" fn window_proc(
             }
             LRESULT(state.brush_field.0 as isize)
         }
-        WM_ERASEBKGND => {
-            let Some(state) = (unsafe { state_of(hwnd) }) else {
-                return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-            };
-            let hdc = HDC(wparam.0 as *mut _);
-            unsafe {
-                let mut client = RECT::default();
-                let _ = GetClientRect(hwnd, &mut client);
-                FillRect(hdc, &client, state.brush_page);
-            }
-            LRESULT(1)
-        }
+        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             let mut paint = PAINTSTRUCT::default();
             let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
-            let _ = hdc;
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                unsafe { paint_window(state, hdc) };
+            }
             let _ = unsafe { EndPaint(hwnd, &paint) };
+            LRESULT(0)
+        }
+        WM_THEME_CHANGED => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                unsafe { apply_theme(state) };
+            }
             LRESULT(0)
         }
         WM_BRING_FORWARD => {
@@ -497,6 +887,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_NCDESTROY => {
+            WINDOW.store(0, Ordering::SeqCst);
             let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut State;
             if !raw.is_null() {
                 unsafe {
@@ -510,6 +901,207 @@ unsafe extern "system" fn window_proc(
     }
 }
 
+unsafe fn paint_window(state: &State, hdc: HDC) {
+    let mut client = RECT::default();
+    let _ = unsafe { GetClientRect(state.hwnd, &mut client) };
+    let p = state.palette;
+    let dpi = state.dpi;
+
+    unsafe {
+        // Page background.
+        FillRect(hdc, &client, state.brush_page);
+
+        // Titlebar band + bottom hairline.
+        let tb_brush = CreateSolidBrush(p.titlebar);
+        FillRect(hdc, &state.rects.titlebar, tb_brush);
+        let _ = DeleteObject(HGDIOBJ(tb_brush.0));
+
+        let border_pen = CreatePen(PS_SOLID, 1, p.border);
+        let old_pen = SelectObject(hdc, HGDIOBJ(border_pen.0));
+        let _ = MoveToEx(hdc, 0, state.rects.titlebar.bottom - 1, None);
+        let _ = LineTo(hdc, client.right, state.rects.titlebar.bottom - 1);
+
+        // Accent dot + title on left (audio-card motif).
+        let dot_d = scale(8, dpi);
+        let dot_x = scale(16, dpi);
+        let dot_y = (state.rects.titlebar.bottom - dot_d) / 2;
+        let accent_brush = CreateSolidBrush(p.accent);
+        let accent_pen = CreatePen(PS_SOLID, 1, p.accent);
+        let _ = SelectObject(hdc, HGDIOBJ(accent_pen.0));
+        let old_brush = SelectObject(hdc, HGDIOBJ(accent_brush.0));
+        let _ = RoundRect(
+            hdc,
+            dot_x,
+            dot_y,
+            dot_x + dot_d,
+            dot_y + dot_d,
+            dot_d,
+            dot_d,
+        );
+        let _ = SelectObject(hdc, old_brush);
+        let _ = SelectObject(hdc, HGDIOBJ(border_pen.0));
+        let _ = DeleteObject(HGDIOBJ(accent_brush.0));
+        let _ = DeleteObject(HGDIOBJ(accent_pen.0));
+
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, p.ink);
+        let old_font = SelectObject(hdc, HGDIOBJ(state.font_bold.0));
+        let mut title_rc = RECT {
+            left: dot_x + dot_d + scale(10, dpi),
+            top: 0,
+            right: state.rects.btn_min.left - scale(8, dpi),
+            bottom: state.rects.titlebar.bottom - 1,
+        };
+        let mut title_w: Vec<u16> = "Custom Preview".encode_utf16().collect();
+        DrawTextW(
+            hdc,
+            &mut title_w,
+            &mut title_rc,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        let _ = SelectObject(hdc, old_font);
+
+        // Titlebar window buttons (Minimize, Maximize/Restore, Close).
+        paint_titlebar_button(state, hdc, state.rects.btn_min, TitlebarButton::Minimize);
+        paint_titlebar_button(state, hdc, state.rects.btn_max, TitlebarButton::Maximize);
+        paint_titlebar_button(state, hdc, state.rects.btn_close, TitlebarButton::Close);
+
+        // Elevated sidebar & editor cards with 1px theme border.
+        let radius = scale(8, dpi);
+        let _ = SelectObject(hdc, HGDIOBJ(border_pen.0));
+        let _ = SelectObject(hdc, HGDIOBJ(state.brush_card.0));
+        let sc = state.rects.sidebar_card;
+        let _ = RoundRect(hdc, sc.left, sc.top, sc.right, sc.bottom, radius, radius);
+        let ec = state.rects.editor_card;
+        let _ = RoundRect(hdc, ec.left, ec.top, ec.right, ec.bottom, radius, radius);
+
+        // Border & focus accent ring around each EDIT control and LISTBOX.
+        let focused = GetFocus();
+        let focus_pen = CreatePen(PS_SOLID, 1, p.accent);
+        for id in EDIT_IDS.into_iter().chain(std::iter::once(ID_LIST)) {
+            let Ok(ctrl) = GetDlgItem(state.hwnd, id) else {
+                continue;
+            };
+            let mut r = RECT::default();
+            if GetWindowRect(ctrl, &mut r).is_err() {
+                continue;
+            }
+            let mut tl = POINT {
+                x: r.left,
+                y: r.top,
+            };
+            let mut br = POINT {
+                x: r.right,
+                y: r.bottom,
+            };
+            let _ = ScreenToClient(state.hwnd, &mut tl);
+            let _ = ScreenToClient(state.hwnd, &mut br);
+            let is_focused = ctrl == focused;
+            let _ = SelectObject(
+                hdc,
+                HGDIOBJ(if is_focused {
+                    focus_pen.0
+                } else {
+                    border_pen.0
+                }),
+            );
+            let _ = SelectObject(hdc, HGDIOBJ(state.brush_field.0));
+            let _ = RoundRect(
+                hdc,
+                tl.x - 1,
+                tl.y - 1,
+                br.x + 1,
+                br.y + 1,
+                scale(4, dpi),
+                scale(4, dpi),
+            );
+        }
+
+        let _ = SelectObject(hdc, old_pen);
+        let _ = DeleteObject(HGDIOBJ(border_pen.0));
+        let _ = DeleteObject(HGDIOBJ(focus_pen.0));
+    }
+}
+
+unsafe fn paint_titlebar_button(state: &State, hdc: HDC, rect: RECT, kind: TitlebarButton) {
+    let p = state.palette;
+    let hovered = state.hovered_tb == Some(kind);
+    let pressed = state.pressed_tb == Some(kind);
+
+    let bg = match (kind, pressed, hovered) {
+        (TitlebarButton::Close, true, _) => mix(p.danger_hover, rgb(0, 0, 0), 18),
+        (TitlebarButton::Close, false, true) => p.danger_hover,
+        (_, true, _) => p.button_press,
+        (_, false, true) => p.button_hover,
+        _ => p.titlebar,
+    };
+    let fg = if kind == TitlebarButton::Close && (hovered || pressed) {
+        rgb(255, 255, 255)
+    } else if hovered || pressed {
+        p.ink
+    } else {
+        p.muted
+    };
+
+    unsafe {
+        let fill_rc = RECT {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom - 1,
+        };
+        let brush = CreateSolidBrush(bg);
+        FillRect(hdc, &fill_rc, brush);
+        let _ = DeleteObject(HGDIOBJ(brush.0));
+
+        let pen = CreatePen(PS_SOLID, 1, fg);
+        let old_pen = SelectObject(hdc, HGDIOBJ(pen.0));
+        let old_brush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+
+        let cx = (rect.left + rect.right) / 2;
+        let cy = (rect.top + rect.bottom - 1) / 2;
+        let half = scale(5, state.dpi);
+
+        match kind {
+            TitlebarButton::Minimize => {
+                let _ = MoveToEx(hdc, cx - half, cy, None);
+                let _ = LineTo(hdc, cx + half + 1, cy);
+            }
+            TitlebarButton::Maximize => {
+                if IsZoomed(state.hwnd).as_bool() {
+                    let s = half - 1;
+                    // Back square (top-right offset).
+                    let _ = MoveToEx(hdc, cx - s + 2, cy - s - 2, None);
+                    let _ = LineTo(hdc, cx + s + 2, cy - s - 2);
+                    let _ = LineTo(hdc, cx + s + 2, cy + s - 2);
+                    // Front square.
+                    let _ = MoveToEx(hdc, cx - s, cy - s, None);
+                    let _ = LineTo(hdc, cx + s, cy - s);
+                    let _ = LineTo(hdc, cx + s, cy + s);
+                    let _ = LineTo(hdc, cx - s, cy + s);
+                    let _ = LineTo(hdc, cx - s, cy - s);
+                } else {
+                    let _ = MoveToEx(hdc, cx - half, cy - half, None);
+                    let _ = LineTo(hdc, cx + half, cy - half);
+                    let _ = LineTo(hdc, cx + half, cy + half);
+                    let _ = LineTo(hdc, cx - half, cy + half);
+                    let _ = LineTo(hdc, cx - half, cy - half);
+                }
+            }
+            TitlebarButton::Close => {
+                let _ = MoveToEx(hdc, cx - half, cy - half, None);
+                let _ = LineTo(hdc, cx + half + 1, cy + half + 1);
+                let _ = MoveToEx(hdc, cx + half, cy - half, None);
+                let _ = LineTo(hdc, cx - half - 1, cy + half + 1);
+            }
+        }
+
+        let _ = SelectObject(hdc, old_brush);
+        let _ = SelectObject(hdc, old_pen);
+        let _ = DeleteObject(HGDIOBJ(pen.0));
+    }
+}
+
 unsafe fn state_of(hwnd: HWND) -> Option<&'static mut State> {
     let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut State;
     unsafe { raw.as_mut() }
@@ -519,23 +1111,19 @@ fn scale(value: i32, dpi: i32) -> i32 {
     (value * dpi + 48) / 96
 }
 
-/// A control's style: the window bits every child wears, plus what the caller asked for.
 fn child_style(extra: u32) -> WINDOW_STYLE {
     WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | extra)
 }
 
-unsafe fn build(hwnd: HWND) -> State {
-    let dpi = (unsafe { GetDpiForWindow(hwnd) } as i32).max(96);
-    let palette = Palette::of(theme_now());
-
-    let font = unsafe {
-        let face = wide("Segoe UI");
+unsafe fn make_font(dpi: i32, size: i32, weight: i32) -> HFONT {
+    let face = wide("Segoe UI");
+    unsafe {
         CreateFontW(
-            -scale(15, dpi),
+            -scale(size, dpi),
             0,
             0,
             0,
-            FW_NORMAL.0 as i32,
+            weight,
             0,
             0,
             0,
@@ -546,7 +1134,16 @@ unsafe fn build(hwnd: HWND) -> State {
             DEFAULT_PITCH.0 as u32,
             PCWSTR(face.as_ptr()),
         )
-    };
+    }
+}
+
+unsafe fn build(hwnd: HWND) -> State {
+    let dpi = (unsafe { GetDpiForWindow(hwnd) } as i32).max(96);
+    let palette = Palette::of(theme_now());
+
+    let font = unsafe { make_font(dpi, 14, FW_NORMAL.0 as i32) };
+    let font_bold = unsafe { make_font(dpi, 14, FW_SEMIBOLD.0 as i32) };
+    let font_small = unsafe { make_font(dpi, 10, FW_NORMAL.0 as i32) };
 
     let mut state = State {
         hwnd,
@@ -556,24 +1153,30 @@ unsafe fn build(hwnd: HWND) -> State {
         loading: false,
         palette,
         font,
+        font_bold,
+        font_small,
         brush_page: unsafe { CreateSolidBrush(palette.page) },
+        brush_card: unsafe { CreateSolidBrush(palette.card) },
         brush_field: unsafe { CreateSolidBrush(palette.field) },
-        brush_panel: unsafe { CreateSolidBrush(palette.panel) },
         dpi,
+        hovered_tb: None,
+        pressed_tb: None,
+        tracking_mouse: false,
+        rects: LayoutRects {
+            titlebar: RECT::default(),
+            sidebar_card: RECT::default(),
+            editor_card: RECT::default(),
+            btn_min: RECT::default(),
+            btn_max: RECT::default(),
+            btn_close: RECT::default(),
+        },
     };
 
     let mut controls: Vec<HWND> = Vec::new();
+    let edit_style = child_style(WS_TABSTOP.0 | ES_AUTOHSCROLL as u32);
 
-    // The left column: the search, the `Add` beside it, and the tabs below them.
-    controls.push(unsafe {
-        child(
-            hwnd,
-            w!("EDIT"),
-            "",
-            child_style(WS_BORDER.0 | WS_TABSTOP.0),
-            ID_SEARCH,
-        )
-    });
+    // Sidebar: search, Add, preset list.
+    controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_SEARCH) });
     controls.push(unsafe { button(hwnd, "Add", ID_ADD) });
     controls.push(unsafe {
         child(
@@ -581,8 +1184,7 @@ unsafe fn build(hwnd: HWND) -> State {
             w!("LISTBOX"),
             "",
             child_style(
-                WS_BORDER.0
-                    | WS_TABSTOP.0
+                WS_TABSTOP.0
                     | WS_VSCROLL.0
                     | LBS_NOTIFY as u32
                     | LBS_OWNERDRAWFIXED as u32
@@ -592,7 +1194,7 @@ unsafe fn build(hwnd: HWND) -> State {
         )
     });
 
-    // The right pane: one label and one field per thing a preset holds.
+    // Editor pane: labels & inputs.
     for index in 0..7 {
         controls.push(unsafe {
             child(
@@ -604,33 +1206,9 @@ unsafe fn build(hwnd: HWND) -> State {
             )
         });
     }
-    controls.push(unsafe {
-        child(
-            hwnd,
-            w!("EDIT"),
-            "",
-            child_style(WS_BORDER.0 | WS_TABSTOP.0),
-            ID_NAME,
-        )
-    });
-    controls.push(unsafe {
-        child(
-            hwnd,
-            w!("EDIT"),
-            "",
-            child_style(WS_BORDER.0 | WS_TABSTOP.0),
-            ID_EXTENSIONS,
-        )
-    });
-    controls.push(unsafe {
-        child(
-            hwnd,
-            w!("EDIT"),
-            "",
-            child_style(WS_BORDER.0 | WS_TABSTOP.0),
-            ID_EXE,
-        )
-    });
+    controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_NAME) });
+    controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_EXTENSIONS) });
+    controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_EXE) });
     controls.push(unsafe { button(hwnd, "Browse…", ID_BROWSE) });
     controls.push(unsafe {
         child(
@@ -662,15 +1240,10 @@ unsafe fn build(hwnd: HWND) -> State {
             ID_SCALING,
         )
     });
-    controls.push(unsafe {
-        child(
-            hwnd,
-            w!("EDIT"),
-            "",
-            child_style(WS_BORDER.0 | WS_TABSTOP.0),
-            ID_SCALING_PERCENT,
-        )
-    });
+    controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_SCALING_PERCENT) });
+    let scaling_up = unsafe { stepper_button(hwnd, "▲", ID_SCALING_UP, ID_SCALING_PERCENT, 1) };
+    let scaling_dn =
+        unsafe { stepper_button(hwnd, "▼", ID_SCALING_DOWN, ID_SCALING_PERCENT, -1) };
     controls.push(unsafe {
         child(
             hwnd,
@@ -695,17 +1268,11 @@ unsafe fn build(hwnd: HWND) -> State {
             ID_VOLUME,
         )
     });
-    controls.push(unsafe {
-        child(
-            hwnd,
-            w!("EDIT"),
-            "",
-            child_style(WS_BORDER.0 | WS_TABSTOP.0),
-            ID_VOLUME_VALUE,
-        )
-    });
+    controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_VOLUME_VALUE) });
+    let vol_up = unsafe { stepper_button(hwnd, "▲", ID_VOLUME_UP, ID_VOLUME_VALUE, 1) };
+    let vol_dn = unsafe { stepper_button(hwnd, "▼", ID_VOLUME_DOWN, ID_VOLUME_VALUE, -1) };
 
-    // The bottom row: the status line, and the three buttons.
+    // Footer: status & actions.
     controls.push(unsafe { child(hwnd, w!("STATIC"), "", child_style(0), ID_STATUS) });
     controls.push(unsafe { button(hwnd, "Save", ID_SAVE) });
     controls.push(unsafe { button(hwnd, "Delete", ID_DELETE) });
@@ -719,8 +1286,46 @@ unsafe fn build(hwnd: HWND) -> State {
                     WM_SETFONT,
                     WPARAM(state.font.0 as usize),
                     LPARAM(1),
-                )
-            };
+                );
+            }
+        }
+    }
+    for stepper in [scaling_up, scaling_dn, vol_up, vol_dn] {
+        if !stepper.0.is_null() {
+            unsafe {
+                SendMessageW(
+                    stepper,
+                    WM_SETFONT,
+                    WPARAM(state.font_small.0 as usize),
+                    LPARAM(1),
+                );
+            }
+        }
+    }
+
+    // Configure every EDIT: generous text limits, inner margins, and keyboard/triple-click subclass.
+    let edit_limits = [
+        (ID_SEARCH, 32767usize),
+        (ID_NAME, 48),
+        (ID_EXTENSIONS, 32767),
+        (ID_EXE, 32767),
+        (ID_SCALING_PERCENT, 4),
+        (ID_VOLUME_VALUE, 3),
+    ];
+    let margin = scale(6, dpi) as usize;
+    let margin_lparam = LPARAM(((margin << 16) | (margin & 0xFFFF)) as isize);
+    for (id, limit) in edit_limits {
+        if let Ok(edit) = unsafe { GetDlgItem(hwnd, id) } {
+            unsafe {
+                SendMessageW(edit, EM_SETLIMITTEXT, WPARAM(limit), LPARAM(0));
+                SendMessageW(
+                    edit,
+                    EM_SETMARGINS,
+                    WPARAM(EC_LEFTMARGIN | EC_RIGHTMARGIN),
+                    margin_lparam,
+                );
+                install_edit_subclass(edit, hwnd, id);
+            }
         }
     }
 
@@ -748,17 +1353,397 @@ unsafe fn build(hwnd: HWND) -> State {
     if !state.presets.is_empty() {
         state.selected = Some(0);
     }
-    unsafe { lay_out(&state) };
+    unsafe { lay_out(&mut state) };
     unsafe { rebuild_list(&mut state) };
     unsafe { fill_fields(&mut state) };
-
-    // Everything the right pane holds waits for a preset to show: there is none the first time
-    // the window is opened on a machine with none, and a field typed into then would be written
-    // to no preset at all.
     state
 }
 
-/// One child control of the window, in the theme's own font later.
+unsafe fn install_edit_subclass(edit: HWND, parent: HWND, id: i32) {
+    let orig = unsafe {
+        SetWindowLongPtrW(
+            edit,
+            GWLP_WNDPROC,
+            edit_subclass_proc as *const () as usize as isize,
+        )
+    };
+    let orig_proc: WNDPROC = unsafe { std::mem::transmute(orig) };
+    let data = Box::into_raw(Box::new(EditSubclass {
+        orig_proc,
+        parent,
+        id,
+        last_click_time: 0,
+        last_click_pos: (0, 0),
+        click_count: 0,
+    }));
+    unsafe { SetWindowLongPtrW(edit, GWLP_USERDATA, data as isize) };
+}
+
+unsafe extern "system" fn edit_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut EditSubclass;
+    let Some(sub) = (unsafe { raw.as_mut() }) else {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+    let orig_proc = sub.orig_proc;
+
+    match msg {
+        WM_KEYDOWN => {
+            let vk = wparam.0 as u16;
+            let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
+            let alt = unsafe { GetKeyState(VK_MENU.0 as i32) } < 0;
+
+            if ctrl && !alt && vk == VK_A.0 {
+                unsafe { SendMessageW(hwnd, EM_SETSEL, WPARAM(0), LPARAM(-1)) };
+                return LRESULT(0);
+            }
+            if ctrl && !alt && vk == VK_BACK.0 {
+                unsafe { edit_delete_prev_word(hwnd) };
+                return LRESULT(0);
+            }
+            if !ctrl && !alt && (sub.id == ID_SCALING_PERCENT || sub.id == ID_VOLUME_VALUE) {
+                if vk == VK_UP.0 {
+                    unsafe {
+                        SendMessageW(
+                            sub.parent,
+                            WM_STEP_NUMERIC,
+                            WPARAM(sub.id as usize),
+                            LPARAM(1),
+                        );
+                    }
+                    return LRESULT(0);
+                }
+                if vk == VK_DOWN.0 {
+                    unsafe {
+                        SendMessageW(
+                            sub.parent,
+                            WM_STEP_NUMERIC,
+                            WPARAM(sub.id as usize),
+                            LPARAM(-1),
+                        );
+                    }
+                    return LRESULT(0);
+                }
+            }
+            if vk == VK_RETURN.0 || vk == VK_ESCAPE.0 {
+                return LRESULT(0);
+            }
+        }
+        WM_CHAR => {
+            // Suppress single-line EDIT control beeps for Ctrl+A (0x01), Ctrl+BS (0x7F), Tab, Enter, Esc.
+            let ch = wparam.0 as u32;
+            if matches!(ch, 0x01 | 0x09 | 0x0D | 0x1B | 0x7F) {
+                return LRESULT(0);
+            }
+        }
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            let now = unsafe { GetMessageTime() } as u32;
+            let x = (lparam.0 & 0xFFFF) as i16 as i32;
+            let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+            let dbl_time = unsafe { GetDoubleClickTime() };
+            let dx_max = unsafe { GetSystemMetrics(SM_CXDOUBLECLK) }.max(4);
+            let dy_max = unsafe { GetSystemMetrics(SM_CYDOUBLECLK) }.max(4);
+
+            let within = sub.click_count > 0
+                && now.wrapping_sub(sub.last_click_time) <= dbl_time
+                && (x - sub.last_click_pos.0).abs() <= dx_max
+                && (y - sub.last_click_pos.1).abs() <= dy_max;
+
+            sub.click_count = if within { sub.click_count + 1 } else { 1 };
+            sub.last_click_time = now;
+            sub.last_click_pos = (x, y);
+
+            if sub.click_count >= 3 {
+                sub.click_count = 0;
+                unsafe {
+                    let _ = SetFocus(hwnd);
+                    SendMessageW(hwnd, EM_SETSEL, WPARAM(0), LPARAM(-1));
+                }
+                return LRESULT(0);
+            }
+        }
+        WM_SETFOCUS | WM_KILLFOCUS => {
+            let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+            unsafe {
+                let _ = InvalidateRect(sub.parent, None, false);
+            }
+            return res;
+        }
+        WM_NCDESTROY => {
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(raw));
+            }
+            return unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+        }
+        _ => {}
+    }
+
+    unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
+}
+
+unsafe fn edit_delete_prev_word(edit: HWND) {
+    let mut start = 0u32;
+    let mut end = 0u32;
+    unsafe {
+        SendMessageW(
+            edit,
+            EM_GETSEL,
+            WPARAM(&mut start as *mut u32 as usize),
+            LPARAM(&mut end as *mut u32 as isize),
+        );
+    }
+    let length = unsafe { GetWindowTextLengthW(edit) }.max(0) as usize;
+    let mut buf = vec![0u16; length + 1];
+    let read = unsafe { GetWindowTextW(edit, &mut buf) }.max(0) as usize;
+    let units = &buf[..read];
+    let (del_start, del_end) = prev_word_delete_range_utf16(units, start as usize, end as usize);
+    if del_start < del_end {
+        let empty = [0u16];
+        unsafe {
+            SendMessageW(edit, EM_SETSEL, WPARAM(del_start), LPARAM(del_end as isize));
+            SendMessageW(
+                edit,
+                EM_REPLACESEL,
+                WPARAM(1),
+                LPARAM(empty.as_ptr() as isize),
+            );
+        }
+    }
+}
+
+/// Computes UTF-16 `[start, end)` range to delete on `Ctrl+Backspace`.
+fn prev_word_delete_range_utf16(units: &[u16], sel_start: usize, sel_end: usize) -> (usize, usize) {
+    let len = units.len();
+    let s = sel_start.min(len);
+    let e = sel_end.min(len);
+    if s < e {
+        return (s, e);
+    }
+    if s == 0 {
+        return (0, 0);
+    }
+    let is_space = |u: u16| matches!(u, 0x20 | 0x09);
+    let is_word =
+        |u: u16| char::from_u32(u as u32).is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let mut i = s;
+    while i > 0 && is_space(units[i - 1]) {
+        i -= 1;
+    }
+    if i > 0 {
+        let word = is_word(units[i - 1]);
+        while i > 0 && !is_space(units[i - 1]) && is_word(units[i - 1]) == word {
+            i -= 1;
+        }
+    }
+    (i, s)
+}
+
+unsafe fn stepper_button(hwnd: HWND, glyph: &str, id: i32, target_id: i32, delta: i32) -> HWND {
+    let btn = unsafe {
+        child(
+            hwnd,
+            w!("BUTTON"),
+            glyph,
+            child_style(BS_OWNERDRAW as u32),
+            id,
+        )
+    };
+    if !btn.0.is_null() {
+        let orig = unsafe {
+            SetWindowLongPtrW(
+                btn,
+                GWLP_WNDPROC,
+                stepper_subclass_proc as *const () as usize as isize,
+            )
+        };
+        let orig_proc: WNDPROC = unsafe { std::mem::transmute(orig) };
+        let data = Box::into_raw(Box::new(StepperSubclass {
+            orig_proc,
+            parent: hwnd,
+            target_id,
+            delta,
+            hovered: false,
+            pressed: false,
+            tracking: false,
+        }));
+        unsafe { SetWindowLongPtrW(btn, GWLP_USERDATA, data as isize) };
+    }
+    btn
+}
+
+unsafe extern "system" fn stepper_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut StepperSubclass;
+    let Some(sub) = (unsafe { raw.as_mut() }) else {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+    let orig_proc = sub.orig_proc;
+
+    match msg {
+        WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
+            sub.pressed = true;
+            unsafe {
+                SetCapture(hwnd);
+                SendMessageW(
+                    sub.parent,
+                    WM_STEP_NUMERIC,
+                    WPARAM(sub.target_id as usize),
+                    LPARAM(sub.delta as isize),
+                );
+                let _ = KillTimer(hwnd, STEP_TIMER_INITIAL);
+                let _ = KillTimer(hwnd, STEP_TIMER_REPEAT);
+                let _ = SetTimer(hwnd, STEP_TIMER_INITIAL, STEP_DELAY_MS, None);
+                let _ = InvalidateRect(hwnd, None, false);
+            }
+            return LRESULT(0);
+        }
+        WM_TIMER => {
+            if wparam.0 == STEP_TIMER_INITIAL {
+                unsafe {
+                    let _ = KillTimer(hwnd, STEP_TIMER_INITIAL);
+                    SendMessageW(
+                        sub.parent,
+                        WM_STEP_NUMERIC,
+                        WPARAM(sub.target_id as usize),
+                        LPARAM(sub.delta as isize),
+                    );
+                    let _ = SetTimer(hwnd, STEP_TIMER_REPEAT, STEP_REPEAT_MS, None);
+                }
+                return LRESULT(0);
+            }
+            if wparam.0 == STEP_TIMER_REPEAT {
+                unsafe {
+                    SendMessageW(
+                        sub.parent,
+                        WM_STEP_NUMERIC,
+                        WPARAM(sub.target_id as usize),
+                        LPARAM(sub.delta as isize),
+                    );
+                }
+                return LRESULT(0);
+            }
+        }
+        WM_LBUTTONUP => {
+            sub.pressed = false;
+            unsafe {
+                let _ = KillTimer(hwnd, STEP_TIMER_INITIAL);
+                let _ = KillTimer(hwnd, STEP_TIMER_REPEAT);
+                let _ = ReleaseCapture();
+                let _ = InvalidateRect(hwnd, None, false);
+            }
+            return LRESULT(0);
+        }
+        WM_CAPTURECHANGED | WM_CANCELMODE => {
+            sub.pressed = false;
+            unsafe {
+                let _ = KillTimer(hwnd, STEP_TIMER_INITIAL);
+                let _ = KillTimer(hwnd, STEP_TIMER_REPEAT);
+                let _ = InvalidateRect(hwnd, None, false);
+            }
+            return LRESULT(0);
+        }
+        WM_MOUSEMOVE => {
+            if !sub.hovered {
+                sub.hovered = true;
+                unsafe {
+                    let _ = InvalidateRect(hwnd, None, false);
+                }
+            }
+            if !sub.tracking {
+                sub.tracking = true;
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                let _ = unsafe { TrackMouseEvent(&mut tme) };
+            }
+        }
+        WM_MOUSELEAVE => {
+            sub.tracking = false;
+            if sub.hovered {
+                sub.hovered = false;
+                unsafe {
+                    let _ = InvalidateRect(hwnd, None, false);
+                }
+            }
+        }
+        WM_NCDESTROY => {
+            unsafe {
+                let _ = KillTimer(hwnd, STEP_TIMER_INITIAL);
+                let _ = KillTimer(hwnd, STEP_TIMER_REPEAT);
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(raw));
+            }
+            return unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+        }
+        _ => {}
+    }
+
+    unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
+}
+
+fn step_scaling_percent(current: u32, delta: i32) -> u32 {
+    (current as i64 + delta as i64).clamp(SCALING_MIN as i64, SCALING_MAX as i64) as u32
+}
+
+fn step_volume(current: u32, delta: i32) -> u32 {
+    (current as i64 + delta as i64).clamp(VOLUME_MIN as i64, VOLUME_MAX as i64) as u32
+}
+
+unsafe fn step_numeric_field(state: &mut State, target_id: i32, delta: i32) {
+    let Some(index) = state.selected else {
+        return;
+    };
+    match target_id {
+        ID_SCALING_PERCENT => {
+            let current = unsafe { text_of(state.hwnd, ID_SCALING_PERCENT) }
+                .trim()
+                .trim_end_matches('%')
+                .trim()
+                .parse::<u32>()
+                .unwrap_or(100);
+            let next = step_scaling_percent(current, delta);
+            if let Some(preset) = state.presets.get_mut(index) {
+                preset.scaling = CustomScaling::Override(PreviewScale::Percent(next));
+            }
+            state.loading = true;
+            unsafe { set_text(state.hwnd, ID_SCALING_PERCENT, &next.to_string()) };
+            state.loading = false;
+        }
+        ID_VOLUME_VALUE => {
+            let current = unsafe { text_of(state.hwnd, ID_VOLUME_VALUE) }
+                .trim()
+                .trim_end_matches('%')
+                .trim()
+                .parse::<u32>()
+                .unwrap_or_else(|_| state.presets.get(index).map_or(100, |p| p.volume));
+            let next = step_volume(current, delta);
+            if let Some(preset) = state.presets.get_mut(index) {
+                preset.volume = next;
+            }
+            state.loading = true;
+            unsafe {
+                set_text(state.hwnd, ID_VOLUME_VALUE, &next.to_string());
+                let trackbar = GetDlgItem(state.hwnd, ID_VOLUME).unwrap_or_default();
+                SendMessageW(trackbar, TBM_SETPOS, WPARAM(1), LPARAM(next as isize));
+            }
+            state.loading = false;
+        }
+        _ => {}
+    }
+}
+
 unsafe fn child(hwnd: HWND, class: PCWSTR, text: &str, style: WINDOW_STYLE, id: i32) -> HWND {
     let text = wide(text);
     unsafe {
@@ -780,7 +1765,6 @@ unsafe fn child(hwnd: HWND, class: PCWSTR, text: &str, style: WINDOW_STYLE, id: 
     .unwrap_or_default()
 }
 
-/// One owner-drawn button: the window paints it in the theme, so the id is its only text.
 unsafe fn button(hwnd: HWND, text: &str, id: i32) -> HWND {
     unsafe {
         child(
@@ -805,26 +1789,84 @@ unsafe fn combo_add(combo: HWND, text: &str) {
     }
 }
 
-/// The dropdown room a combo needs below its own field, in this window's pixels.
 fn combo_drop_height(dpi: i32) -> i32 {
-    scale(22, dpi) * 6
+    scale(26, dpi) * 6
 }
 
-/// Place every control for the window's current client area: the tabs on the left, the fields on
-/// the right, and the buttons along the bottom.
-unsafe fn lay_out(state: &State) {
+fn compute_layout_rects(width: i32, height: i32, dpi: i32) -> LayoutRects {
+    let tb_h = scale(TITLEBAR_LOGICAL_H, dpi);
+    let btn_w = scale(TITLEBAR_BTN_W, dpi);
+    let pad = scale(14, dpi);
+    let card_gap = scale(12, dpi);
+    let footer = scale(52, dpi);
+    let sidebar_w = scale(264, dpi);
+
+    let btn_close = RECT {
+        left: width - btn_w,
+        top: 0,
+        right: width,
+        bottom: tb_h,
+    };
+    let btn_max = RECT {
+        left: btn_close.left - btn_w,
+        top: 0,
+        right: btn_close.left,
+        bottom: tb_h,
+    };
+    let btn_min = RECT {
+        left: btn_max.left - btn_w,
+        top: 0,
+        right: btn_max.left,
+        bottom: tb_h,
+    };
+
+    let content_top = tb_h + pad;
+    let content_bottom = (height - footer).max(content_top + scale(120, dpi));
+
+    let sidebar_card = RECT {
+        left: pad,
+        top: content_top,
+        right: pad + sidebar_w,
+        bottom: content_bottom,
+    };
+    let editor_card = RECT {
+        left: sidebar_card.right + card_gap,
+        top: content_top,
+        right: (width - pad).max(sidebar_card.right + card_gap + scale(260, dpi)),
+        bottom: content_bottom,
+    };
+
+    LayoutRects {
+        titlebar: RECT {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: tb_h,
+        },
+        sidebar_card,
+        editor_card,
+        btn_min,
+        btn_max,
+        btn_close,
+    }
+}
+
+unsafe fn lay_out(state: &mut State) {
     let dpi = state.dpi;
     let mut client = RECT::default();
     let _ = unsafe { GetClientRect(state.hwnd, &mut client) };
     let width = client.right;
     let height = client.bottom;
 
+    state.rects = compute_layout_rects(width, height, dpi);
+
     let pad = scale(14, dpi);
+    let inner = scale(12, dpi);
     let row = scale(30, dpi);
-    let gap = scale(8, dpi);
-    let label_width = scale(96, dpi);
-    let column = scale(250, dpi);
-    let footer = scale(46, dpi);
+    let gap = scale(10, dpi);
+    let label_w = scale(92, dpi);
+    let stepper_w = scale(22, dpi);
+    let half_row = row / 2;
 
     let place = |id: i32, x: i32, y: i32, w: i32, h: i32| {
         if let Ok(control) = unsafe { GetDlgItem(state.hwnd, id) } {
@@ -832,27 +1874,28 @@ unsafe fn lay_out(state: &State) {
         }
     };
 
-    // The left column.
-    place(ID_SEARCH, pad, pad, column - scale(52, dpi), row);
-    place(
-        ID_ADD,
-        pad + column - scale(44, dpi),
-        pad,
-        scale(44, dpi),
-        row,
-    );
+    // Sidebar card interior.
+    let sc = state.rects.sidebar_card;
+    let s_left = sc.left + inner;
+    let s_top = sc.top + inner;
+    let s_w = (sc.right - sc.left - inner * 2).max(scale(100, dpi));
+    let add_w = scale(50, dpi);
+    let search_w = (s_w - add_w - scale(8, dpi)).max(scale(60, dpi));
+    place(ID_SEARCH, s_left, s_top, search_w, row);
+    place(ID_ADD, s_left + search_w + scale(8, dpi), s_top, add_w, row);
     place(
         ID_LIST,
-        pad,
-        pad + row + gap,
-        column,
-        (height - pad * 2 - row - gap - footer).max(row),
+        s_left,
+        s_top + row + gap,
+        s_w,
+        (sc.bottom - inner - (s_top + row + gap)).max(row),
     );
 
-    // The right pane, one row per field.
-    let left = pad * 2 + column;
-    let field_left = left + label_width;
-    let field_width = (width - field_left - pad).max(scale(120, dpi));
+    // Editor card interior.
+    let ec = state.rects.editor_card;
+    let e_left = ec.left + inner + scale(4, dpi);
+    let field_left = e_left + label_w;
+    let field_w = (ec.right - inner - scale(4, dpi) - field_left).max(scale(140, dpi));
 
     let labels = [
         "Name",
@@ -863,117 +1906,130 @@ unsafe fn lay_out(state: &State) {
         "Background",
         "Volume",
     ];
-    let mut y = pad;
+    let mut y = ec.top + inner + scale(4, dpi);
     for (index, label) in labels.iter().enumerate() {
         unsafe { set_text(state.hwnd, ID_LABEL_BASE + index as i32, label) };
         place(
             ID_LABEL_BASE + index as i32,
-            left,
+            e_left,
             y + scale(6, dpi),
-            label_width,
-            row,
+            label_w - scale(6, dpi),
+            row - scale(6, dpi),
         );
         y += row + gap;
     }
 
-    let mut y = pad;
-    place(ID_NAME, field_left, y, field_width, row);
+    let mut y = ec.top + inner + scale(4, dpi);
+    place(ID_NAME, field_left, y, field_w, row);
     y += row + gap;
-    place(ID_EXTENSIONS, field_left, y, field_width, row);
+    place(ID_EXTENSIONS, field_left, y, field_w, row);
     y += row + gap;
+
+    let browse_w = scale(86, dpi);
     place(
         ID_EXE,
         field_left,
         y,
-        (field_width - scale(88, dpi)).max(scale(80, dpi)),
+        (field_w - browse_w - scale(8, dpi)).max(scale(80, dpi)),
         row,
     );
-    place(
-        ID_BROWSE,
-        field_left + field_width - scale(84, dpi),
-        y,
-        scale(84, dpi),
-        row,
-    );
+    place(ID_BROWSE, field_left + field_w - browse_w, y, browse_w, row);
     y += row + gap;
+
     place(
         ID_WINDOW_MODE,
         field_left,
         y,
-        field_width,
+        field_w,
         row + combo_drop_height(dpi),
     );
     y += row + gap;
-    // **A combo's window height is its dropdown's, not its field's**: Windows fits the field to one
-    // item and drops a list as tall as the window it was given, so a combo given a row drops a
-    // one-item list — a click that opens nothing. The extra is the list's.
+
+    // Scaling dropdown + numeric percent edit + stacked ▲/▼ stepper buttons.
+    let pct_edit_w = scale(62, dpi);
+    let pct_group_w = pct_edit_w + scale(2, dpi) + stepper_w;
+    let scaling_combo_w = (field_w - pct_group_w - scale(8, dpi)).max(scale(80, dpi));
+    let pct_x = field_left + field_w - pct_group_w;
     place(
         ID_SCALING,
         field_left,
         y,
-        (field_width - scale(88, dpi)).max(scale(80, dpi)),
+        scaling_combo_w,
         row + combo_drop_height(dpi),
     );
+    place(ID_SCALING_PERCENT, pct_x, y, pct_edit_w, row);
     place(
-        ID_SCALING_PERCENT,
-        field_left + field_width - scale(84, dpi),
+        ID_SCALING_UP,
+        pct_x + pct_edit_w + scale(2, dpi),
         y,
-        scale(84, dpi),
-        row,
+        stepper_w,
+        half_row,
+    );
+    place(
+        ID_SCALING_DOWN,
+        pct_x + pct_edit_w + scale(2, dpi),
+        y + half_row,
+        stepper_w,
+        row - half_row,
     );
     y += row + gap;
+
     place(
         ID_BACKGROUND,
         field_left,
         y,
-        field_width,
+        field_w,
         row + combo_drop_height(dpi),
     );
     y += row + gap;
+
+    // Volume slider + numeric edit + stacked ▲/▼ stepper buttons.
+    let vol_edit_w = scale(54, dpi);
+    let vol_group_w = vol_edit_w + scale(2, dpi) + stepper_w;
+    let vol_slider_w = (field_w - vol_group_w - scale(8, dpi)).max(scale(80, dpi));
+    let vol_x = field_left + field_w - vol_group_w;
+    place(ID_VOLUME, field_left, y, vol_slider_w, row);
+    place(ID_VOLUME_VALUE, vol_x, y, vol_edit_w, row);
     place(
-        ID_VOLUME,
-        field_left,
+        ID_VOLUME_UP,
+        vol_x + vol_edit_w + scale(2, dpi),
         y,
-        (field_width - scale(70, dpi)).max(scale(80, dpi)),
-        row,
+        stepper_w,
+        half_row,
     );
     place(
-        ID_VOLUME_VALUE,
-        field_left + field_width - scale(66, dpi),
-        y,
-        scale(66, dpi),
-        row,
+        ID_VOLUME_DOWN,
+        vol_x + vol_edit_w + scale(2, dpi),
+        y + half_row,
+        stepper_w,
+        row - half_row,
     );
 
-    // The footer.
-    let buttons = scale(84, dpi);
-    place(
-        ID_CLOSE_BUTTON,
-        width - pad - buttons,
-        height - pad - row,
-        buttons,
-        row,
-    );
+    // Footer row.
+    let btn_w = scale(86, dpi);
+    let btn_h = scale(30, dpi);
+    let btn_y = height - pad - btn_h + scale(2, dpi);
+    place(ID_CLOSE_BUTTON, width - pad - btn_w, btn_y, btn_w, btn_h);
     place(
         ID_DELETE,
-        width - pad - buttons * 2 - gap,
-        height - pad - row,
-        buttons,
-        row,
+        width - pad - btn_w * 2 - scale(8, dpi),
+        btn_y,
+        btn_w,
+        btn_h,
     );
     place(
         ID_SAVE,
-        width - pad - buttons * 3 - gap * 2,
-        height - pad - row,
-        buttons,
-        row,
+        width - pad - btn_w * 3 - scale(16, dpi),
+        btn_y,
+        btn_w,
+        btn_h,
     );
     place(
         ID_STATUS,
-        pad,
-        height - pad - row + scale(8, dpi),
-        (width - pad * 2 - buttons * 3 - gap * 2 - scale(10, dpi)).max(scale(80, dpi)),
-        row,
+        pad + scale(4, dpi),
+        btn_y + scale(6, dpi),
+        (width - pad * 2 - btn_w * 3 - scale(28, dpi)).max(scale(80, dpi)),
+        btn_h - scale(6, dpi),
     );
 
     unsafe {
@@ -981,7 +2037,6 @@ unsafe fn lay_out(state: &State) {
     }
 }
 
-/// The window's own handling of a click or a keystroke, by the control it came from.
 unsafe fn command(state: &mut State, id: i32, notice: u32) {
     match id {
         ID_SEARCH => {
@@ -1046,8 +2101,14 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
     }
 }
 
-/// Fill the fields from the selected preset, and make the fields that need a preset to mean
-/// anything dead while there is none: an empty list leaves nothing for a keystroke to be read into.
+unsafe fn set_scaling_percent_enabled(hwnd: HWND, enabled: bool) {
+    for id in [ID_SCALING_PERCENT, ID_SCALING_UP, ID_SCALING_DOWN] {
+        if let Ok(ctrl) = unsafe { GetDlgItem(hwnd, id) } {
+            let _ = unsafe { EnableWindow(ctrl, enabled) };
+        }
+    }
+}
+
 unsafe fn fill_fields(state: &mut State) {
     let Some(preset) = state.selected.and_then(|index| state.presets.get(index)) else {
         state.loading = true;
@@ -1109,9 +2170,7 @@ unsafe fn fill_fields(state: &mut State) {
             ) => (percent.to_string(), true),
         };
         set_text(state.hwnd, ID_SCALING_PERCENT, &percent_text);
-        if let Ok(edit) = GetDlgItem(state.hwnd, ID_SCALING_PERCENT) {
-            let _ = EnableWindow(edit, percent_enabled);
-        }
+        set_scaling_percent_enabled(state.hwnd, percent_enabled);
 
         let background_combo = GetDlgItem(state.hwnd, ID_BACKGROUND).unwrap_or_default();
         let index = BACKGROUNDS
@@ -1133,8 +2192,6 @@ unsafe fn fill_fields(state: &mut State) {
     unsafe { set_fields_enabled(state, true) };
 }
 
-/// The preset fields, and the buttons that act on one, enabled or not. `Scaling`'s percentage is
-/// off whenever the fields are: with a preset it is its own rule, `Fit to screen` having none.
 unsafe fn set_fields_enabled(state: &State, enabled: bool) {
     for id in [
         ID_NAME,
@@ -1146,6 +2203,8 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_BACKGROUND,
         ID_VOLUME,
         ID_VOLUME_VALUE,
+        ID_VOLUME_UP,
+        ID_VOLUME_DOWN,
         ID_DELETE,
     ] {
         if let Ok(control) = unsafe { GetDlgItem(state.hwnd, id) } {
@@ -1153,13 +2212,10 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         }
     }
     if !enabled {
-        if let Ok(edit) = unsafe { GetDlgItem(state.hwnd, ID_SCALING_PERCENT) } {
-            let _ = unsafe { EnableWindow(edit, false) };
-        }
+        unsafe { set_scaling_percent_enabled(state.hwnd, false) };
     }
 }
 
-/// The tabs the search box asks for, as indexes into the preset list.
 fn shown_presets(presets: &[CustomPreset], search: &str) -> Vec<usize> {
     let needle = search.trim().to_lowercase();
     presets
@@ -1200,7 +2256,6 @@ unsafe fn rebuild_list(state: &mut State) {
     }
 }
 
-/// A tab was clicked: the fields become that preset's.
 unsafe fn select_from_list(state: &mut State) {
     let list = unsafe { GetDlgItem(state.hwnd, ID_LIST) }.unwrap_or_default();
     let choice = unsafe { SendMessageW(list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
@@ -1215,7 +2270,6 @@ unsafe fn select_from_list(state: &mut State) {
     unsafe { set_status(state, "") };
 }
 
-/// A new preset, named so that the list can hold it and selected so that it can be typed into.
 unsafe fn add_preset(state: &mut State) {
     if state.presets.len() >= MAX_PRESETS {
         unsafe {
@@ -1253,7 +2307,6 @@ unsafe fn add_preset(state: &mut State) {
     unsafe { set_status(state, "") };
 }
 
-/// What a keystroke in one of the text fields changes: the preset the fields are showing.
 unsafe fn fields_changed(state: &mut State) {
     if state.loading {
         return;
@@ -1310,9 +2363,8 @@ unsafe fn scaling_chosen(state: &mut State) {
     }
 
     let Some((_, chosen)) = SCALE_CHOICES.get(choice as usize).copied() else {
-        // `Custom…`: enable percentage field and let `percent_typed` update the preset.
+        unsafe { set_scaling_percent_enabled(state.hwnd, true) };
         if let Ok(edit) = unsafe { GetDlgItem(state.hwnd, ID_SCALING_PERCENT) } {
-            let _ = unsafe { EnableWindow(edit, true) };
             let _ = unsafe { SetFocus(edit) };
         }
         return;
@@ -1332,9 +2384,7 @@ unsafe fn scaling_chosen(state: &mut State) {
     state.loading = true;
     unsafe { set_text(state.hwnd, ID_SCALING_PERCENT, &percent_text) };
     state.loading = false;
-    if let Ok(edit) = unsafe { GetDlgItem(state.hwnd, ID_SCALING_PERCENT) } {
-        let _ = unsafe { EnableWindow(edit, percent_enabled) };
-    }
+    unsafe { set_scaling_percent_enabled(state.hwnd, percent_enabled) };
 }
 
 unsafe fn percent_typed(state: &mut State) {
@@ -1349,7 +2399,9 @@ unsafe fn percent_typed(state: &mut State) {
         return;
     };
     if let Some(preset) = state.presets.get_mut(index) {
-        preset.scaling = CustomScaling::Override(PreviewScale::Percent(percent.clamp(1, 1000)));
+        preset.scaling = CustomScaling::Override(PreviewScale::Percent(
+            percent.clamp(SCALING_MIN, SCALING_MAX),
+        ));
     }
 }
 
@@ -1378,8 +2430,8 @@ unsafe fn volume_moved(state: &mut State) {
         return;
     };
     let trackbar = unsafe { GetDlgItem(state.hwnd, ID_VOLUME) }.unwrap_or_default();
-    let position =
-        unsafe { SendMessageW(trackbar, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 }.clamp(0, 100) as u32;
+    let position = unsafe { SendMessageW(trackbar, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 }
+        .clamp(VOLUME_MIN as isize, VOLUME_MAX as isize) as u32;
 
     state.loading = true;
     unsafe { set_text(state.hwnd, ID_VOLUME_VALUE, &position.to_string()) };
@@ -1401,7 +2453,7 @@ unsafe fn volume_typed(state: &mut State) {
     let Ok(volume) = text.trim().trim_end_matches('%').trim().parse::<u32>() else {
         return;
     };
-    let volume = volume.min(100);
+    let volume = volume.min(VOLUME_MAX);
     if let Some(preset) = state.presets.get_mut(index) {
         preset.volume = volume;
     }
@@ -1432,8 +2484,6 @@ unsafe fn delete_selected(state: &mut State) {
     }
 }
 
-/// The `Browse…` button: the platform's own open dialog, which is the only way to name a program
-/// on a machine without typing its path.
 unsafe fn browse(state: &mut State) {
     let Some(index) = state.selected else {
         return;
@@ -1494,53 +2544,150 @@ unsafe fn set_status(state: &State, text: &str) {
     unsafe { set_text(state.hwnd, ID_STATUS, text) };
 }
 
+fn is_stepper(id: u32) -> bool {
+    id == ID_SCALING_UP as u32
+        || id == ID_SCALING_DOWN as u32
+        || id == ID_VOLUME_UP as u32
+        || id == ID_VOLUME_DOWN as u32
+}
+
 fn is_button(id: u32) -> bool {
     id == ID_ADD as u32
         || id == ID_SAVE as u32
         || id == ID_DELETE as u32
         || id == ID_BROWSE as u32
         || id == ID_CLOSE_BUTTON as u32
+        || is_stepper(id)
 }
 
-/// One owner-drawn control: a tab, a combo item, or a button, each in the theme's own colours.
 unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
     let hdc = item.hDC;
-    let palette = state.palette;
+    let p = state.palette;
     let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
     let disabled = item.itemState.0 & ODS_DISABLED.0 != 0;
+    let dpi = state.dpi;
 
-    let fill = if is_button(item.CtlID) {
-        if selected {
-            palette.accent
+    let (fill, border_col, text_col) = if is_stepper(item.CtlID) {
+        let raw =
+            unsafe { GetWindowLongPtrW(item.hwndItem, GWLP_USERDATA) } as *const StepperSubclass;
+        let (hov, prs) = unsafe { raw.as_ref() }.map_or((false, false), |s| (s.hovered, s.pressed));
+        let fill = if disabled {
+            p.card
+        } else if prs || selected {
+            p.accent
+        } else if hov {
+            p.button_hover
         } else {
-            palette.panel
-        }
+            p.button_bg
+        };
+        let fg = if disabled {
+            p.muted
+        } else if prs || selected {
+            p.accent_text
+        } else {
+            p.ink
+        };
+        (fill, p.border, fg)
+    } else if item.CtlID == ID_SAVE as u32 {
+        let fill = if disabled {
+            p.button_bg
+        } else if selected {
+            mix(p.accent, p.page, 20)
+        } else {
+            p.accent
+        };
+        (
+            fill,
+            if disabled { p.border } else { p.accent },
+            if disabled { p.muted } else { p.accent_text },
+        )
+    } else if item.CtlID == ID_DELETE as u32 {
+        let fill = if disabled {
+            p.button_bg
+        } else if selected {
+            p.danger
+        } else {
+            p.danger_bg
+        };
+        let fg = if disabled {
+            p.muted
+        } else if selected {
+            rgb(255, 255, 255)
+        } else {
+            p.danger
+        };
+        (fill, if disabled { p.border } else { p.danger }, fg)
+    } else if is_button(item.CtlID) {
+        let fill = if disabled {
+            p.card
+        } else if selected {
+            p.button_press
+        } else {
+            p.button_bg
+        };
+        (fill, p.border, if disabled { p.muted } else { p.ink })
     } else if item.CtlID == ID_LIST as u32 && selected {
-        palette.accent
+        (mix(p.field, p.accent, 22), p.accent, p.ink)
     } else {
-        palette.field
+        (p.field, p.border, if disabled { p.muted } else { p.ink })
     };
 
     unsafe {
-        let brush = CreateSolidBrush(fill);
-        FillRect(hdc, &item.rcItem, brush);
-        let _ = DeleteObject(HGDIOBJ(brush.0));
+        if is_button(item.CtlID) {
+            let parent_brush = if item.CtlID == ID_SAVE as u32
+                || item.CtlID == ID_DELETE as u32
+                || item.CtlID == ID_CLOSE_BUTTON as u32
+            {
+                state.brush_page
+            } else {
+                state.brush_card
+            };
+            FillRect(hdc, &item.rcItem, parent_brush);
+
+            let r = item.rcItem;
+            let radius = if is_stepper(item.CtlID) {
+                scale(3, dpi)
+            } else {
+                scale(6, dpi)
+            };
+            let brush = CreateSolidBrush(fill);
+            let pen = CreatePen(PS_SOLID, 1, border_col);
+            let old_b = SelectObject(hdc, HGDIOBJ(brush.0));
+            let old_p = SelectObject(hdc, HGDIOBJ(pen.0));
+            let _ = RoundRect(hdc, r.left, r.top, r.right, r.bottom, radius, radius);
+            let _ = SelectObject(hdc, old_b);
+            let _ = SelectObject(hdc, old_p);
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+            let _ = DeleteObject(HGDIOBJ(pen.0));
+        } else {
+            let brush = CreateSolidBrush(fill);
+            FillRect(hdc, &item.rcItem, brush);
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+            if item.CtlID == ID_LIST as u32 && selected {
+                // Left accent indicator bar on selected preset tab.
+                let bar = RECT {
+                    left: item.rcItem.left,
+                    top: item.rcItem.top + scale(3, dpi),
+                    right: item.rcItem.left + scale(3, dpi),
+                    bottom: item.rcItem.bottom - scale(3, dpi),
+                };
+                let bar_brush = CreateSolidBrush(p.accent);
+                FillRect(hdc, &bar, bar_brush);
+                let _ = DeleteObject(HGDIOBJ(bar_brush.0));
+            }
+        }
 
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(
-            hdc,
-            if disabled {
-                mix(palette.field, palette.ink, 45)
-            } else if fill == palette.accent {
-                mix(palette.page, palette.ink, 10)
-            } else {
-                palette.ink
-            },
-        );
-        let _ = SelectObject(hdc, HGDIOBJ(state.font.0));
+        SetTextColor(hdc, text_col);
+        let font = if is_stepper(item.CtlID) {
+            state.font_small
+        } else if item.CtlID == ID_SAVE as u32 {
+            state.font_bold
+        } else {
+            state.font
+        };
+        let _ = SelectObject(hdc, HGDIOBJ(font.0));
 
-        // The text is the control's own: a listbox or combo item by its index, a button by the
-        // text the control was made with.
         let text = match item.CtlID {
             id if id == ID_LIST as u32 => {
                 let list = item.hwndItem;
@@ -1593,12 +2740,7 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
             }
         };
 
-        // **A control with nothing to say is drawn as its colour and no more.** An empty
-        // `Vec<u16>` hands `DrawTextW` the pointer a zero-length allocation gives out — the
-        // alignment, not an address — and the call reads through it and takes the process down.
-        // It is reached the first time the window is shown with no preset chosen, which is a
-        // combo box with no item selected, and it is why the window has to be shown to be tested
-        // at all.
+        // Empty slice would hand DrawTextW a dangling alignment pointer; return early.
         if text.is_empty() {
             return 1;
         }
@@ -1608,7 +2750,7 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         let flags = if is_button(item.CtlID) {
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
         } else {
-            rect.left += scale(8, state.dpi);
+            rect.left += scale(10, dpi);
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
         };
         DrawTextW(hdc, &mut text, &mut rect, flags);
@@ -1621,13 +2763,6 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// **A control with nothing to say is drawn as its colour and no more.**
-///
-/// A combo box with no item selected has no text, and `DrawTextW` handed a zero-length slice reads
-/// through the pointer such a slice gives out — the alignment, not an address. That is what took
-/// the whole process down, tray and all, the first time this window was shown: the window starts
-/// with no preset chosen and the first paint draws both combos. So the selection is cleared here
-/// and the drawing asked for directly, on a window that is made but never shown.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1678,9 +2813,6 @@ mod tests {
         }
     }
 
-    /// `lay_out` gives a combo the height of its field plus its list, because that is what Windows
-    /// reads the list's height out of: a combo laid out at one row drops a list one row tall, which
-    /// is a click that opens nothing.
     #[test]
     fn a_combo_is_laid_out_with_a_list_to_drop() {
         let Some(hwnd) = create_window() else {
@@ -1712,8 +2844,6 @@ mod tests {
         }
     }
 
-    /// A window opened on a machine with no preset has nothing for the right pane to be showing,
-    /// so every field that would write to one is off.
     #[test]
     fn with_no_preset_the_fields_are_off() {
         let Some(hwnd) = create_window() else {
@@ -1735,7 +2865,11 @@ mod tests {
                 ID_EXE,
                 ID_WINDOW_MODE,
                 ID_SCALING,
+                ID_SCALING_UP,
+                ID_SCALING_DOWN,
                 ID_BACKGROUND,
+                ID_VOLUME_UP,
+                ID_VOLUME_DOWN,
                 ID_DELETE,
             ] {
                 let control = GetDlgItem(hwnd, id).unwrap_or_default();
@@ -1747,5 +2881,58 @@ mod tests {
 
             let _ = DestroyWindow(hwnd);
         }
+    }
+
+    #[test]
+    fn palette_matches_one_dark_pro_and_atom_one_light_tokens() {
+        let dark = Palette::of(TextTheme::Dark);
+        assert!(dark.dark);
+        assert_eq!(dark.page, rgb(0x28, 0x2C, 0x34));
+        assert_eq!(dark.ink, rgb(0xAB, 0xB2, 0xBF));
+        assert_eq!(dark.accent, rgb(0x56, 0xB6, 0xC2));
+
+        let light = Palette::of(TextTheme::Light);
+        assert!(!light.dark);
+        assert_eq!(light.page, rgb(0xFA, 0xFA, 0xFA));
+        assert_eq!(light.ink, rgb(0x38, 0x3A, 0x42));
+        assert_eq!(light.accent, rgb(0x01, 0x84, 0xBC));
+    }
+
+    #[test]
+    fn numeric_stepping_clamps_to_valid_bounds() {
+        assert_eq!(step_scaling_percent(100, 1), 101);
+        assert_eq!(step_scaling_percent(1, -1), 1);
+        assert_eq!(step_scaling_percent(1000, 1), 1000);
+
+        assert_eq!(step_volume(50, 1), 51);
+        assert_eq!(step_volume(0, -1), 0);
+        assert_eq!(step_volume(100, 1), 100);
+    }
+
+    #[test]
+    fn ctrl_backspace_deletes_previous_word_or_selection() {
+        let u: Vec<u16> = "foo bar   baz".encode_utf16().collect();
+        assert_eq!(prev_word_delete_range_utf16(&u, u.len(), u.len()), (10, 13));
+        assert_eq!(prev_word_delete_range_utf16(&u, 10, 10), (4, 10));
+        assert_eq!(prev_word_delete_range_utf16(&u, 2, 7), (2, 7));
+        assert_eq!(prev_word_delete_range_utf16(&u, 0, 0), (0, 0));
+    }
+
+    #[test]
+    fn titlebar_button_hit_test_matches_right_edge_buttons() {
+        let rects = compute_layout_rects(920, 620, 96);
+        assert_eq!(
+            rects.titlebar_button_at(rects.btn_close.left + 5, 10),
+            Some(TitlebarButton::Close)
+        );
+        assert_eq!(
+            rects.titlebar_button_at(rects.btn_max.left + 5, 10),
+            Some(TitlebarButton::Maximize)
+        );
+        assert_eq!(
+            rects.titlebar_button_at(rects.btn_min.left + 5, 10),
+            Some(TitlebarButton::Minimize)
+        );
+        assert_eq!(rects.titlebar_button_at(20, 10), None);
     }
 }

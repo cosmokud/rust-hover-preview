@@ -187,6 +187,7 @@ pub(in super::super) fn set_theme(theme: TextTheme) {
         },
         &[PreviewMessage::Refresh],
     );
+    crate::ui::custom_preview_settings::notify_theme_changed();
 }
 
 /// The theme a custom item named, by the position the submenu listed it at. A
@@ -247,6 +248,7 @@ pub(in super::super) fn reset_settings_from_tray() {
 
     refresh_preview_types();
     refresh_preview();
+    crate::ui::custom_preview_settings::notify_theme_changed();
 }
 
 /// Put every extension list back at the built-in one, with every other setting left alone.
