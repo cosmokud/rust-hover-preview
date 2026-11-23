@@ -30,7 +30,8 @@ use windows::Win32::UI::Controls::Dialogs::{
 };
 use windows::Win32::UI::Controls::{
     GetComboBoxInfo, SetWindowTheme, COMBOBOXINFO, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL,
-    EM_SETLIMITTEXT, EM_SETSEL, MARGINS, MEASUREITEMSTRUCT, ODS_DISABLED, ODS_SELECTED,
+    EM_SETLIMITTEXT, EM_SETMARGINS, EM_SETSEL, MARGINS, MEASUREITEMSTRUCT, ODS_DISABLED,
+    ODS_SELECTED,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -47,22 +48,22 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
     SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
     CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE, CB_GETLBTEXT,
-    CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA,
-    GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT,
-    HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS,
-    LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_GETTEXT,
-    LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS,
-    SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE,
-    SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CANCELMODE,
-    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND,
-    WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCDESTROY,
-    WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER,
-    WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE, WS_VSCROLL,
+    CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EC_LEFTMARGIN, EC_RIGHTMARGIN, EN_CHANGE,
+    ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
+    HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE,
+    LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING,
+    LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG,
+    NCCALCSIZE_PARAMS, SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE,
+    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT,
+    WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU,
+    WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::config::config::{
@@ -1509,10 +1510,21 @@ unsafe fn build(hwnd: HWND) -> State {
         (ID_SCALING_PERCENT, 4),
         (ID_VOLUME_VALUE, 3),
     ];
+    let text_inset = edit_text_inset((unsafe { GetDpiForWindow(hwnd) } as i32).max(96));
     for (id, limit) in edit_limits {
         if let Ok(edit) = unsafe { GetDlgItem(hwnd, id) } {
             unsafe {
                 SendMessageW(edit, EM_SETLIMITTEXT, WPARAM(limit), LPARAM(0));
+                // Text starts where a combo's label starts, so every field in the column reads
+                // from the same line: the EDIT's own 1px default inset put it short of the combos.
+                if id != ID_SEARCH {
+                    SendMessageW(
+                        edit,
+                        EM_SETMARGINS,
+                        WPARAM((EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize),
+                        LPARAM((text_inset | (text_inset << 16)) as isize),
+                    );
+                }
                 install_edit_subclass(edit, hwnd, id);
             }
         }
@@ -3092,7 +3104,7 @@ fn combo_drop_height(dpi: i32) -> i32 {
     scale(26, dpi) * 6
 }
 
-/// Where a closed combo's selected label is drawn, measured from the combo's own item box.
+/// Where a closed combo's label is drawn, measured from the combo's own item box.
 ///
 /// **Both paints of that label go through this** — the closed combo's own `WM_PAINT` and the
 /// item's `WM_DRAWITEM` — because they swap in and out on mouse-over, and measuring one from the
@@ -3105,6 +3117,13 @@ fn combo_label_rect(item: RECT, dpi: i32) -> RECT {
         right: (item.right - scale(26, dpi)).max(left),
         bottom: item.bottom,
     }
+}
+
+/// The left margin an `EDIT` needs so its text starts on the same line as a combo's label: the
+/// combo's inner margin (3) plus its label inset (10) less the `EDIT`'s own container inset (8),
+/// plus the 1px an `EDIT` keeps between its margin and its first glyph.
+fn edit_text_inset(dpi: i32) -> i32 {
+    scale(3, dpi) + scale(10, dpi) - scale(8, dpi) + 1
 }
 
 fn compute_layout_rects(width: i32, height: i32, dpi: i32) -> LayoutRects {
@@ -4307,6 +4326,15 @@ mod tests {
 
             let _ = DestroyWindow(hwnd);
         }
+    }
+
+    #[test]
+    fn an_edit_starts_its_text_where_a_combo_starts_its_label() {
+        // 3 (combo inner margin) + 10 (label inset) - 8 (edit container inset) + 1 (edit's own
+        // margin pixel). Measured on screen: both first glyphs land on the same column. Each term
+        // rounds on its own, so the doubled dpi lands 1px short of double the 96-dpi inset.
+        assert_eq!(edit_text_inset(96), 6);
+        assert_eq!(edit_text_inset(192), 11);
     }
 
     #[test]
