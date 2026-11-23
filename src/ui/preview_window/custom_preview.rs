@@ -112,9 +112,8 @@
 //! it (see [`open_fully`]).
 
 use std::collections::HashMap;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 use std::time::{Duration, Instant};
@@ -125,10 +124,12 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::{
     DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_VISIBLE,
+    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
+    DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FillRect, GetStockObject, HBRUSH, HGDIOBJ, NULL_BRUSH,
+    CreateSolidBrush, DeleteObject, FillRect, GetStockObject, RedrawWindow, HBRUSH, HGDIOBJ,
+    NULL_BRUSH, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
@@ -137,28 +138,37 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, EnumWindows, GetClientRect, GetWindow, GetWindowLongPtrW,
-    GetWindowPlacement, GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic,
-    IsWindow, IsWindowVisible, IsZoomed, PostMessageW, RegisterClassExW, SetWindowLongPtrW,
+    CreateWindowExW, DefWindowProcW, EnumWindows, GetClientRect, GetForegroundWindow,
+    GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
+    GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+    PostMessageW, RegisterClassExW, SendMessageTimeoutW, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
-    SW_SHOWNORMAL, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_ERASEBKGND,
-    WM_NCDESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP,
-    WS_SYSMENU, WS_THICKFRAME,
+    SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+    SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
+    WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 
-use super::dimensions::picture_dimensions;
+use super::dimensions::{design_dimensions, picture_dimensions, vector_dimensions};
 use super::displays::{dpi_at, work_area_at};
+use super::hover_facts::HoverFacts;
+use super::html_is_engine_drawn;
 use super::layout::{
     compute_keyboard_layout, compute_mouse_layout, KeyboardPlacement, PreviewLayout,
 };
 use super::load_dispatch::HoverPlacement;
-use super::never_shown::{self, NeverShown};
+use super::media_data::ProbedGeometry;
 use super::pointer::{AvoidRegion, ScreenRegion};
-use super::preview_scale::fit_reduced;
+use super::preview_scale::{animated_scale_for, fit_reduced, HoverScales};
+use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
-use crate::config::config::{custom_preset_for, CustomPreset, PreviewScale, TransparentBackground};
+use crate::config::config::{
+    custom_preset_for, CustomPreset, CustomScaling, CustomWindowMode, PreviewScale, PreviewType,
+    TransparentBackground, DEFAULT_AUDIO_SCALE,
+};
+use crate::readers::{pdf_preview, svg_preview, video_player};
 use crate::CONFIG;
 
 /// The class a custom preview's host is made from.
@@ -210,10 +220,9 @@ const KEEP_POLL: Duration = Duration::from_millis(40);
 /// user has stopped hovering is not left running.
 const LINGER: Duration = Duration::from_secs(2);
 
-/// Where a parked window is put: past the right edge of every display, at a coordinate Windows
-/// still accepts. The window is real, visible and drawing there — which is what the Shell needs
-/// to compose it — and no user can see it.
-const PARKING: i32 = -30000;
+/// Fallback off-screen parking coordinate when positive off-screen X is clamped by the target app.
+/// Kept well inside i16 (-32768..32767) so WM_MOVE lParam never wraps.
+const FALLBACK_PARKING: i32 = -20000;
 
 /// What a hover of a custom preview is asked to be drawn at: the pointer's own placement, or the
 /// focused item's.
@@ -252,7 +261,7 @@ struct Want {
 struct Program {
     path: PathBuf,
     exe: String,
-    child: NeverShown,
+    child: Child,
     pid: u32,
 }
 
@@ -268,6 +277,8 @@ struct Launch {
     /// The preset program's own file name, lowercased: what a process the program hands its file
     /// to is running, however it was begun.
     exe: String,
+    /// Foreground window before launch (e.g. Explorer), restored if the spawned app steals focus.
+    previous_foreground: isize,
     /// Every top-level window there was before the launch, so that the program's own are the ones
     /// that were not.
     windows_before: Vec<isize>,
@@ -355,10 +366,11 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 
     // **The desktop is read before the program is begun**, so that the windows it puts up are the
     // ones that were not there, and the process it hands the file to is one this app may end.
+    let previous_foreground = unsafe { GetForegroundWindow() }.0 as isize;
     let windows_before = top_level_windows();
     let processes_before = engine_processes::running().unwrap_or_default();
 
-    let Some(child) = launch(&exe, path) else {
+    let Some(mut child) = launch(&exe, path) else {
         return false;
     };
     let Some(host) = (unsafe { ensure_host() }) else {
@@ -367,8 +379,9 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     };
 
     BACKGROUND.store(color_of(preset.background).0 as isize, Ordering::SeqCst);
-    let pid = child.pid;
-    let scale = preset.scaling;
+    let pid = child.id();
+    let scaling = preset.scaling;
+    let window_mode = preset.window_mode;
     let exe_file = Path::new(&exe)
         .file_name()
         .map(|name| name.to_string_lossy().to_lowercase())
@@ -399,6 +412,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         path: path.to_path_buf(),
         pid,
         exe: exe_file,
+        previous_foreground,
         windows_before,
         processes_before,
         id,
@@ -406,7 +420,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     // The window is carried as a number: `HWND` is a pointer and a pointer is not `Send`, and
     // what the worker does with it is a placement the Shell answers for either way.
     let host = host.0 as isize;
-    std::thread::spawn(move || run_it(HWND(host as *mut _), launch, scale));
+    std::thread::spawn(move || run_it(HWND(host as *mut _), launch, scaling, window_mode));
     true
 }
 
@@ -456,7 +470,7 @@ fn end_the_program() {
 
     let program = PROGRAM.lock().ok().and_then(|mut held| held.take());
     let launched_pid = program.as_ref().map(|program| program.pid).unwrap_or(0);
-    if let Some(program) = program {
+    if let Some(mut program) = program {
         let _ = program.child.kill();
         engine_processes::forget(program.pid);
     }
@@ -566,28 +580,10 @@ fn resolved(exe: &str) -> Option<String> {
         .map(|candidate| candidate.to_string_lossy().into_owned())
 }
 
-/// Begin the program with its window never shown, and answer the process it is.
-///
-/// It is `CreateProcessW` and not `Command`'s spawn for the one field `Command` cannot carry:
-/// `STARTUPINFO.wShowWindow` of `SW_HIDE`, which is what keeps a window off every screen from its
-/// first instruction (see `never_shown`). A program that ignores it is one whose window is hidden
-/// again as soon as it is found, which is the same road a frame later.
-fn launch(exe: &str, path: &Path) -> Option<NeverShown> {
-    let mut command = Command::new(exe);
-    command.arg(path);
-    command.creation_flags(engine_processes::CREATE_NO_WINDOW);
-    let mut child = never_shown::spawn(&mut command)?;
-
-    // **A pipe nobody reads is a program blocked on its own writing.** What a program of the
-    // user's prints is emptied and dropped, so a chatty one is a preview rather than a hang.
-    if let Some(report) = child.report.take() {
-        std::thread::spawn(move || {
-            let mut report = report;
-            let _ = std::io::copy(&mut report, &mut std::io::sink());
-        });
-    }
-
-    Some(child)
+/// Spawn target normally (no SW_HIDE / CREATE_NO_WINDOW / stdio redirection) so GDI, WinUI,
+/// Electron, and UWP apps initialize and paint their surface properly.
+fn launch(exe: &str, path: &Path) -> Option<Child> {
+    Command::new(exe).arg(path).spawn().ok()
 }
 
 /// The colour a backdrop names, as a host window fills it.
@@ -707,7 +703,7 @@ fn is_current(id: u64) -> bool {
 ///
 /// **One worker per program**, not per hover: the hover can come and go while the program is
 /// starting, and what that must cost is a hidden host and a kept window rather than a launch.
-fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
+fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: CustomWindowMode) {
     let Some(source) = wait_for_a_window(&launch) else {
         // A program that made no window is a preview with nothing to show: it goes, and the host
         // is already off the screen.
@@ -720,10 +716,23 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         return;
     }
 
-    // **Hidden before anything else is done with it.** A program that showed its own window on
-    // the desktop is a window the hand is over, and a hover whose pointer left the file is a
-    // hover this app is asked to take down (see the module note).
-    let _ = unsafe { ShowWindow(source, SW_HIDE) };
+    // Wait briefly for target UI thread to finish initial WM_CREATE/WM_SHOWWINDOW/WM_PAINT
+    // before parking off-screen (avoids blank white surface in classic Win32 GDI apps).
+    let _ = unsafe {
+        SendMessageTimeoutW(
+            source,
+            WM_NULL,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG | SMTO_NORMAL,
+            250,
+            None,
+        )
+    };
+    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+        return;
+    }
+
     let source_pid = pid_of(source);
     SOURCE.store(source.0 as isize, Ordering::SeqCst);
     SOURCE_PID.store(source_pid, Ordering::SeqCst);
@@ -731,14 +740,15 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         !launch.processes_before.contains(&source_pid),
         Ordering::SeqCst,
     );
-    strip_the_frame(source);
 
-    // **The shape the box is cut to, read once and never again**: parking writes the parked box
-    // into the window's own placement, so a second reading would be the shape of the last preview
-    // rather than of the program (see the module note). It is the file's own where the file
-    // declares one, and the program's window's only where it does not (see `base_size`); the
-    // preset's scale is a share of the room the placement leaves either way (see `layout_for`).
+    // Read intrinsic shape once before parking mutates window placement.
     let own = base_size(&launch.path).unwrap_or_else(|| own_size(source));
+    let scale = resolve_scale(&launch.path, scaling);
+
+    // Normal mode keeps target chrome/styles untouched; Borderless strips frame chrome.
+    if window_mode == CustomWindowMode::Borderless {
+        strip_the_frame(source);
+    }
 
     let mut processes = process_tree(launch.pid);
     if !processes.contains(&source_pid) {
@@ -750,8 +760,6 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
     let mut lingering: Option<Instant> = None;
-    // The size the program's window was asked for once it had answered with the least it will take:
-    // the box's own shape, raised to that least (see `the_ask_for`).
     let mut the_ask: Option<(i32, i32)> = None;
 
     loop {
@@ -767,10 +775,8 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
             return;
         }
 
-        // **Every other window the program puts up is hidden at once.** A splash, a dialog or a
-        // second frame is not the picture, and a window of the program's on the desktop is a
-        // window under the hand.
-        census(&launch, &processes, &mut images, source.0 as isize).take();
+        // Hide secondary splash/dialog windows after source is adopted, never source itself.
+        census(&launch, &processes, &mut images, source.0 as isize, true).take();
         if tree_read.elapsed() >= Duration::from_secs(1) {
             processes = process_tree(launch.pid);
             if !processes.contains(&source_pid) {
@@ -806,17 +812,11 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         let (x, y) = (layout.pos_x, layout.pos_y);
         let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
 
-        // **The window is put back at the parking corner before it is drawn, and never drawn
-        // anywhere else**: a program that restored itself, showed itself again or resized itself is
-        // a window on the desktop rather than a picture, and it is hidden before it is moved.
-        //
-        // The first ask is the box itself, and the size the window answers it with is the least it
-        // will take there: the ask is then corrected to the box's own shape, once, off that answer
-        // (see `the_ask_for`). Both asks are off every display, so nothing of it is seen.
         if the_ask.is_none() {
             park(source, width, height);
+            restore_foreground(launch.previous_foreground, &processes);
             if parked(source) {
-                let ask = the_ask_for((width, height), the_size_it_took(source));
+                let ask = the_ask_for((width, height), source_size(source, window_mode));
                 the_ask = Some(ask);
                 if ask != (width, height) {
                     park(source, ask.0, ask.1);
@@ -826,12 +826,10 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         if !parked(source) {
             if let Some(ask) = the_ask {
                 park(source, ask.0, ask.1);
+                restore_foreground(launch.previous_foreground, &processes);
             }
         }
         if !parked(source) {
-            // **A window that would not stand off the desktop is a picture there is none of**: it
-            // is left hidden by `park`, and the hover waits on the next look with nothing up rather
-            // than a background card standing in for a picture that is not there.
             hide_the_host();
             std::thread::sleep(KEEP_POLL);
             continue;
@@ -852,8 +850,6 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
             box_of_the_host = Some((x, y, width, height));
         }
 
-        // The registration is the Shell's, and a program that has not presented yet is a window
-        // with nothing to compose: it is asked for again on the next look rather than given up on.
         if registered == 0 {
             if let Ok(registration) = unsafe { DwmRegisterThumbnail(host, source) } {
                 registered = registration;
@@ -865,30 +861,15 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
         if registered != 0 {
             let mut client = RECT::default();
             let _ = unsafe { GetClientRect(host, &mut client) };
-            let mut picture = RECT::default();
-            let _ = unsafe { GetClientRect(source, &mut picture) };
-            let properties = DWM_THUMBNAIL_PROPERTIES {
-                dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE,
-                // The box's whole client, the window having been asked for the box's own shape (see
-                // `the_ask_for`) — and its own shape fitted into the client where the placement's
-                // room is smaller than the window (see `the_picture_in`).
-                rcDestination: the_picture_in(
-                    client.right,
-                    client.bottom,
-                    (picture.right, picture.bottom),
-                ),
-                rcSource: RECT::default(),
-                opacity: 255,
-                fVisible: true.into(),
-                // The program's client area rather than its window: the frame has been stripped
-                // above, and a program that draws its own border keeps it — that is part of its
-                // picture.
-                fSourceClientAreaOnly: true.into(),
-            };
+            let picture = source_size(source, window_mode);
+            let properties = thumbnail_properties(
+                client.right,
+                client.bottom,
+                (picture.0 as i32, picture.1 as i32),
+                window_mode,
+            );
             let _ = unsafe { DwmUpdateThumbnailProperties(registered, &properties) };
 
-            // **The host is shown by its own thread, after the picture is in it**: a host shown
-            // before the Shell has composed anything is its own black rectangle over the listing.
             if !SHOWN.load(Ordering::SeqCst) {
                 SHOWN.store(true, Ordering::SeqCst);
                 let _ =
@@ -900,18 +881,67 @@ fn run_it(host: HWND, launch: Launch, scale: PreviewScale) {
     }
 }
 
-/// The box the preview is drawn in: the placement the tray's settings and the display ask for,
-/// cut to the shape the file declares — or to the program's window's where it declares none — at
-/// the share of the room the preset's `scaling` names.
-///
-/// **The share is a share of the room the placement leaves**, which is what the preset's own
-/// window calls it (`Screen 100%`, `Screen 75%`, …; see `custom_preview_settings`): `100%` is the
-/// whole of that room, a picture fitted into it as large as it goes — a 1024x1024 picture on a
-/// 1440-tall display is a 1440x1440 box, whatever program draws it — and `50%` is half of it. It
-/// is `fit_reduced`'s rule rather than a bitmap's, because what the hover draws is a program's
-/// window and not a picture this app paints: a box the size of a small file's own pixels is one a
-/// program may refuse to take (see `the_ask_for`), and a share of the room is one every program
-/// can be asked for.
+fn thumbnail_properties(
+    client_width: i32,
+    client_height: i32,
+    picture: (i32, i32),
+    window_mode: CustomWindowMode,
+) -> DWM_THUMBNAIL_PROPERTIES {
+    DWM_THUMBNAIL_PROPERTIES {
+        dwFlags: DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_SOURCECLIENTAREAONLY,
+        rcDestination: the_picture_in(client_width, client_height, picture),
+        rcSource: RECT::default(),
+        opacity: 255,
+        fVisible: true.into(),
+        fSourceClientAreaOnly: (window_mode == CustomWindowMode::Borderless).into(),
+    }
+}
+
+fn resolve_scale(path: &Path, scaling: CustomScaling) -> PreviewScale {
+    match scaling {
+        // Explicit preset overrides keep "share of room" semantics (Screen 100%/75%/50%, Fit, Custom %).
+        CustomScaling::Override(scale) => fit_reduced(scale),
+        CustomScaling::FollowTray => tray_scale_for(path),
+    }
+}
+
+fn tray_scale_for(path: &Path) -> PreviewScale {
+    let hover = HoverFacts::read(path);
+    let audio_scale = CONFIG
+        .lock()
+        .map(|cfg| cfg.audio_scale)
+        .unwrap_or(DEFAULT_AUDIO_SCALE);
+    let kind = match hover.route.content {
+        crate::formats::content_type::Content::Kind(kind) => kind,
+        _ => hover.route.named.unwrap_or(PreviewType::Images),
+    };
+    tray_scale_for_kind(kind, path, hover.scales, audio_scale)
+}
+
+fn tray_scale_for_kind(
+    kind: PreviewType,
+    path: &Path,
+    scales: HoverScales,
+    audio_scale: PreviewScale,
+) -> PreviewScale {
+    match kind {
+        PreviewType::Images => animated_scale_for(path, scales).unwrap_or(scales.picture),
+        PreviewType::Magick => scales.picture,
+        PreviewType::Videos => scales.video,
+        PreviewType::Audio => fit_reduced(audio_scale),
+        PreviewType::Ebook | PreviewType::Calibre => fit_reduced(scales.ebook),
+        PreviewType::Document | PreviewType::Libre => fit_reduced(scales.document),
+        PreviewType::Fonts => fit_reduced(scales.font),
+        PreviewType::Design => fit_reduced(scales.design),
+        PreviewType::Vector => fit_reduced(scales.vector),
+        PreviewType::Models => fit_reduced(scales.model),
+        PreviewType::Text if html_is_engine_drawn(path) => fit_reduced(scales.document),
+        PreviewType::Text | PreviewType::Archives | PreviewType::Peazip => {
+            PreviewScale::Percent(100)
+        }
+    }
+}
+
 fn layout_for(
     at: Where,
     own: (u32, u32),
@@ -919,7 +949,6 @@ fn layout_for(
     follow_cursor: bool,
     bypass_placement: bool,
 ) -> Option<PreviewLayout> {
-    let scale = fit_reduced(scale);
     match at {
         Where::Pointer { cursor, avoid } => {
             let bounds = work_area_at(cursor.0, cursor.1);
@@ -990,19 +1019,37 @@ fn the_ask_for(box_: (i32, i32), taken: (u32, u32)) -> (i32, i32) {
     (width, height)
 }
 
-/// The shape of the file itself, where the file declares one: the size a picture says it is in its
-/// own header.
-///
-/// **This is what a program's window cannot answer.** A program opens at the size it was last left
-/// at — the window Paint was left at yesterday is a wide window whatever the picture in it is — so
-/// a shape read off it is the shape of the last file somebody opened with the program, and a tall
-/// picture is shown in a wide box. A picture's own bytes say how wide and how tall it is before
-/// anything is decoded, and that is the shape the box is cut to (see `picture_dimensions`).
-///
-/// A file that is not a picture this app measures — a document, an archive, a sound — has no such
-/// answer, and the program's window is the only shape there is to go by (see `own_size`).
+/// Fast intrinsic dimensions of `path` (SVG, PDF, image, video, design, vector) without spawning
+/// external tools; returns `None` when the file declares no dimensions so `own_size` is used.
 fn base_size(path: &Path) -> Option<(u32, u32)> {
-    picture_dimensions(path).filter(|&(width, height)| width > 0 && height > 0)
+    let valid = |dims: (u32, u32)| dims.0 > 0 && dims.1 > 0;
+    if svg_preview::is_svg_file(path) {
+        if let Some(dims) = svg_preview::measure(path).filter(|&d| valid(d)) {
+            return Some(dims);
+        }
+    }
+    if pdf_preview::is_pdf_preview(path) {
+        if let Some(dims) = pdf_preview::page_dimensions(path).filter(|&d| valid(d)) {
+            return Some(dims);
+        }
+    }
+    if let Some(dims) = picture_dimensions(path).filter(|&d| valid(d)) {
+        return Some(dims);
+    }
+    if let Some(ProbedGeometry::Measured(geom)) = cached_video_geometry(path) {
+        if valid((geom.width, geom.height)) {
+            return Some((geom.width, geom.height));
+        }
+    }
+    if let Some(dims) = video_player::header(path)
+        .map(|h| video_player::displayed_shape(h.frame_width, h.frame_height, h.aspect))
+        .filter(|&d| valid(d))
+    {
+        return Some(dims);
+    }
+    design_dimensions(path)
+        .or_else(|| vector_dimensions(path))
+        .filter(|&d| valid(d))
 }
 
 /// The size the program's own window opens at: the shape of a file that declares none of its own.
@@ -1039,24 +1086,20 @@ fn own_size(window: HWND) -> (u32, u32) {
     (800, 600)
 }
 
-/// The size the program's window actually took: its client, which with the frame stripped is the
-/// picture the Shell composes into the host (see `strip_the_frame`).
-///
-/// **A program is not obliged to take the box a preview asks for.** Windows 11's Paint answers
-/// `WM_GETMINMAXINFO` with a floor of 704x500 and takes anything smaller as 704x500 — measured with
-/// its frame stripped, as it is here, and by a `SetWindowPlacement` as well as by a `SetWindowPos` —
-/// so the size to go by is the one the window stands at rather than the one it was asked for. It is
-/// read off the window itself rather than from a number written down for any one program, and it is
-/// read *after* the frame is stripped, because that is the window the preview draws. Nothing at all
-/// is answered where the window will not say, and it is then asked for the box itself (see
-/// `the_ask_for`).
-fn the_size_it_took(window: HWND) -> (u32, u32) {
-    let mut client = RECT::default();
-    if unsafe { GetClientRect(window, &mut client) }.is_err() {
+/// Captured size of `window`: full window rect in `Normal` mode, client rect in `Borderless` mode.
+fn source_size(window: HWND, window_mode: CustomWindowMode) -> (u32, u32) {
+    let mut rect = RECT::default();
+    let ok = match window_mode {
+        CustomWindowMode::Normal => unsafe { GetWindowRect(window, &mut rect) }.is_ok(),
+        CustomWindowMode::Borderless => unsafe { GetClientRect(window, &mut rect) }.is_ok(),
+    };
+    if !ok {
         return (0, 0);
     }
-
-    (client.right.max(0) as u32, client.bottom.max(0) as u32)
+    (
+        (rect.right - rect.left).max(0) as u32,
+        (rect.bottom - rect.top).max(0) as u32,
+    )
 }
 
 /// The rectangle in the host's client the program's window is drawn in: the window's own client at
@@ -1100,81 +1143,75 @@ fn the_picture_in(client_width: i32, client_height: i32, picture: (i32, i32)) ->
     }
 }
 
-/// The box a window parked at this size stands in.
-fn the_parked_box(width: i32, height: i32) -> RECT {
+fn virtual_screen() -> RECT {
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) }.max(1);
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) }.max(1);
     RECT {
-        left: PARKING - width,
-        top: PARKING,
-        right: PARKING,
-        bottom: PARKING + height,
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
     }
 }
 
-/// The corner a parked window's box is put at: its top-right, which is the one corner of that box
-/// that stands in the same place whatever size the window takes there.
-fn at_the_parking_corner(rect: &RECT) -> bool {
-    rect.right == PARKING && rect.top == PARKING
+/// Positive off-screen origin past the right edge of every monitor, clamped inside i16 range so
+/// classic Win32 WM_MOVE lParam coordinates never wrap.
+fn parking_origin(vscreen: RECT) -> (i32, i32) {
+    let x = (vscreen.right + 1000).clamp(10000, 26000);
+    let y = vscreen.top.clamp(-16000, 16000);
+    (x, y)
 }
 
-/// Whether a window stands off the desktop, visibly, at the parking corner — whatever size it took
-/// there.
-///
-/// **The corner is what says a window is parked, not the box it was asked for.** A window that keeps
-/// a size of its own keeps it however it is asked (see `the_size_it_took`), so the box the hover
-/// draws is the size it took — and where the two still do not agree, the window is one this app *did*
-/// move off every display, which is the whole of what parking is for,
-/// and `the_picture_in` composes it into the box. A window that is not at the corner is a window
-/// standing somewhere a display reaches.
+fn is_off_screen(rect: &RECT, vscreen: RECT) -> bool {
+    rect.left >= vscreen.right
+        || rect.right <= vscreen.left
+        || rect.top >= vscreen.bottom
+        || rect.bottom <= vscreen.top
+}
+
 fn parked(window: HWND) -> bool {
     let mut rect = RECT::default();
     if unsafe { GetWindowRect(window, &mut rect) }.is_err() {
         return false;
     }
 
-    at_the_parking_corner(&rect)
+    is_off_screen(&rect, virtual_screen())
         && unsafe { IsWindowVisible(window) }.as_bool()
         && !unsafe { IsZoomed(window) }.as_bool()
         && !unsafe { IsIconic(window) }.as_bool()
 }
 
-/// Restore the window out of any maximized or minimized state, put its top-right corner at the
-/// parking place, and show it where no display reaches — **only where it verifiably stands
-/// there**.
-///
-/// **`SetWindowPlacement` is what restores it**, and it is given the parked box as the box to
-/// restore to: a `SetWindowPos` on a maximized window only changes the size it *would* have been
-/// restored to and leaves the window covering the display it is maximized on, and a restore to the
-/// window's own rect would be a full screen for as long as it takes to hide it again. The window
-/// is hidden before the move and hidden again after it, so nothing of somebody's program is on a
-/// screen at any point of it, and a window that could not be moved is left hidden rather than
-/// shown where it stands — a program's frame over the listing is worse than no picture at all.
-///
-/// **And the corner is asked for again once the window has answered**, because the box is what the
-/// window is asked to *take*: one that keeps a size of its own takes it, and its right edge then
-/// stands past the parking place by the difference. The second ask moves it by the size it actually
-/// took and asks for no size at all (see `at_the_parking_corner`).
+/// Move `window` off-screen WITHOUT calling SW_HIDE (hiding destroys DWM's redirection surface and
+/// leaves classic Win32 GDI apps blank white). Falls back to negative off-screen coords if the app
+/// clamps positive X.
 fn park(window: HWND, width: i32, height: i32) {
-    let parked_box = the_parked_box(width, height);
-
-    let _ = unsafe { ShowWindow(window, SW_HIDE) };
+    let vscreen = virtual_screen();
+    let (px, py) = parking_origin(vscreen);
+    let target = RECT {
+        left: px,
+        top: py,
+        right: px + width,
+        bottom: py + height,
+    };
 
     if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
         let placement = WINDOWPLACEMENT {
             length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-            showCmd: SW_SHOWNORMAL.0 as u32,
-            rcNormalPosition: parked_box,
+            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+            rcNormalPosition: target,
             ..Default::default()
         };
         let _ = unsafe { SetWindowPlacement(window, &placement) };
-        let _ = unsafe { ShowWindow(window, SW_HIDE) };
     }
 
     let _ = unsafe {
         SetWindowPos(
             window,
             HWND::default(),
-            parked_box.left,
-            parked_box.top,
+            px,
+            py,
             width,
             height,
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
@@ -1182,13 +1219,13 @@ fn park(window: HWND, width: i32, height: i32) {
     };
 
     let mut rect = RECT::default();
-    if unsafe { GetWindowRect(window, &mut rect) }.is_ok() && !at_the_parking_corner(&rect) {
+    if unsafe { GetWindowRect(window, &mut rect) }.is_ok() && !is_off_screen(&rect, vscreen) {
         let _ = unsafe {
             SetWindowPos(
                 window,
                 HWND::default(),
-                PARKING - (rect.right - rect.left),
-                PARKING,
+                FALLBACK_PARKING,
+                FALLBACK_PARKING,
                 0,
                 0,
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
@@ -1196,14 +1233,37 @@ fn park(window: HWND, width: i32, height: i32) {
         };
     }
 
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(window, &mut rect) }.is_err() || !at_the_parking_corner(&rect) {
-        // **A window this app could not move is a window it must not show.** It is left hidden for
-        // the next look to try again, and a window that is not off the desktop stays off the screen.
-        let _ = unsafe { ShowWindow(window, SW_HIDE) };
+    if !unsafe { IsWindowVisible(window) }.as_bool() {
+        let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+    }
+
+    // Non-blocking repaint trigger so GDI apps redraw at the parked size.
+    let _ = unsafe {
+        RedrawWindow(
+            window,
+            None,
+            None,
+            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_FRAME,
+        )
+    };
+}
+
+/// Restore previous foreground window (e.g. Explorer) if the spawned app stole focus.
+fn restore_foreground(previous: isize, processes: &[u32]) {
+    if previous == 0 {
         return;
     }
-    let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+    let prev = HWND(previous as *mut _);
+    if !unsafe { IsWindow(prev) }.as_bool() {
+        return;
+    }
+    let current = unsafe { GetForegroundWindow() };
+    if current.0.is_null() || current == prev {
+        return;
+    }
+    if processes.contains(&pid_of(current)) {
+        let _ = unsafe { SetForegroundWindow(prev) };
+    }
 }
 
 /// Take the frame off the window, and keep it out of the taskbar and out of the focus: what the
@@ -1236,6 +1296,8 @@ struct Census<'a> {
     images: &'a mut HashMap<u32, Option<String>>,
     /// The window this app has already adopted, which is the picture and not to be hidden.
     keep: isize,
+    /// Hide visible non-`keep` windows only after `source` is adopted (never during discovery).
+    hide_others: bool,
     /// The program's document windows, by the desktop's order, with the area each one covers.
     found: Vec<(i64, HWND)>,
     /// The largest document window the program was showing, and how much of the display it
@@ -1249,6 +1311,7 @@ fn census<'a>(
     processes: &'a [u32],
     images: &'a mut HashMap<u32, Option<String>>,
     keep: isize,
+    hide_others: bool,
 ) -> Census<'a> {
     unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let census = unsafe { &mut *(lparam.0 as *mut Census<'_>) };
@@ -1261,6 +1324,7 @@ fn census<'a>(
         processes,
         images,
         keep,
+        hide_others,
         found: Vec::new(),
         shown: None,
     };
@@ -1300,9 +1364,9 @@ impl Census<'_> {
             if document && self.shown.is_none_or(|(best, _)| area > best) {
                 self.shown = Some((area, hwnd));
             }
-            // Hidden as it is found, and before anything is decided about it: a window the
-            // program showed is a window the hand may be over.
-            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+            if self.hide_others {
+                let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+            }
         }
 
         if document {
@@ -1344,7 +1408,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             return None;
         }
 
-        let look = census(launch, &processes, &mut images, 0);
+        let look = census(launch, &processes, &mut images, 0, false);
         if let Some((_, window)) = look.shown {
             return Some(window);
         }
@@ -1462,14 +1526,12 @@ mod tests {
     #[test]
     fn a_hundred_percent_of_a_program_window_is_the_room_cut_to_its_shape() {
         let room = work_area_at(0, 0);
-        let layout = layout_for(
-            pointer((0, 0)),
-            (600, 400),
-            PreviewScale::Percent(100),
-            true,
-            false,
-        )
-        .expect("a display has room for a preview");
+        let scale = resolve_scale(
+            Path::new("sample.png"),
+            CustomScaling::Override(PreviewScale::Percent(100)),
+        );
+        let layout = layout_for(pointer((0, 0)), (600, 400), scale, true, false)
+            .expect("a display has room for a preview");
 
         assert!(
             layout.preview_w as i32 > 600 || layout.preview_h as i32 > 400,
@@ -1491,22 +1553,18 @@ mod tests {
 
     #[test]
     fn a_percentage_is_that_share_of_the_room() {
-        let whole = layout_for(
-            pointer((0, 0)),
-            (600, 400),
-            PreviewScale::Percent(100),
-            true,
-            false,
-        )
-        .expect("a display has room for a preview");
-        let half = layout_for(
-            pointer((0, 0)),
-            (600, 400),
-            PreviewScale::Percent(50),
-            true,
-            false,
-        )
-        .expect("half of a room is a preview a display can hold");
+        let whole_scale = resolve_scale(
+            Path::new("sample.png"),
+            CustomScaling::Override(PreviewScale::Percent(100)),
+        );
+        let half_scale = resolve_scale(
+            Path::new("sample.png"),
+            CustomScaling::Override(PreviewScale::Percent(50)),
+        );
+        let whole = layout_for(pointer((0, 0)), (600, 400), whole_scale, true, false)
+            .expect("a display has room for a preview");
+        let half = layout_for(pointer((0, 0)), (600, 400), half_scale, true, false)
+            .expect("half of a room is a preview a display can hold");
 
         assert!(
             (half.preview_w as f32 - whole.preview_w as f32 / 2.0).abs() <= 2.0
@@ -1546,7 +1604,10 @@ mod tests {
         let at_a_hundred = layout_for(
             pointer((0, 0)),
             (600, 400),
-            PreviewScale::Percent(100),
+            resolve_scale(
+                Path::new("sample.png"),
+                CustomScaling::Override(PreviewScale::Percent(100)),
+            ),
             true,
             false,
         )
@@ -1585,7 +1646,10 @@ mod tests {
         let half = layout_for(
             pointer((0, 0)),
             (600, 400),
-            PreviewScale::Percent(50),
+            resolve_scale(
+                Path::new("sample.png"),
+                CustomScaling::Override(PreviewScale::Percent(50)),
+            ),
             true,
             false,
         )
@@ -1599,6 +1663,103 @@ mod tests {
             at_a_hundred.preview_w,
             at_a_hundred.preview_h
         );
+    }
+
+    #[test]
+    fn follow_tray_scale_maps_every_file_kind_to_its_tray_setting() {
+        let scales = HoverScales {
+            picture: PreviewScale::Percent(80),
+            video: PreviewScale::FitToScreenReduced(75),
+            animated: PreviewScale::Percent(60),
+            ebook: PreviewScale::Percent(70),
+            document: PreviewScale::Percent(65),
+            font: PreviewScale::Percent(55),
+            design: PreviewScale::Percent(85),
+            vector: PreviewScale::Percent(90),
+            model: PreviewScale::Percent(50),
+        };
+        let audio = PreviewScale::Percent(40);
+        let p = Path::new("sample.bin");
+
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Images, p, scales, audio),
+            PreviewScale::Percent(80)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Videos, p, scales, audio),
+            PreviewScale::FitToScreenReduced(75)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Audio, p, scales, audio),
+            PreviewScale::FitToScreenReduced(40)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Ebook, p, scales, audio),
+            PreviewScale::FitToScreenReduced(70)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Document, p, scales, audio),
+            PreviewScale::FitToScreenReduced(65)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Fonts, p, scales, audio),
+            PreviewScale::FitToScreenReduced(55)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Design, p, scales, audio),
+            PreviewScale::FitToScreenReduced(85)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Vector, p, scales, audio),
+            PreviewScale::FitToScreenReduced(90)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Models, p, scales, audio),
+            PreviewScale::FitToScreenReduced(50)
+        );
+        assert_eq!(
+            tray_scale_for_kind(PreviewType::Text, Path::new("notes.txt"), scales, audio),
+            PreviewScale::Percent(100)
+        );
+    }
+
+    #[test]
+    fn thumbnail_properties_sets_source_client_area_flag_for_both_modes() {
+        let normal = thumbnail_properties(400, 300, (400, 300), CustomWindowMode::Normal);
+        assert_ne!(normal.dwFlags & DWM_TNP_SOURCECLIENTAREAONLY, 0);
+        assert!(!normal.fSourceClientAreaOnly.as_bool());
+
+        let borderless = thumbnail_properties(400, 300, (400, 300), CustomWindowMode::Borderless);
+        assert_ne!(borderless.dwFlags & DWM_TNP_SOURCECLIENTAREAONLY, 0);
+        assert!(borderless.fSourceClientAreaOnly.as_bool());
+    }
+
+    #[test]
+    fn parking_origin_is_off_screen_and_within_i16_range() {
+        let vscreen = RECT {
+            left: -1920,
+            top: 0,
+            right: 3840,
+            bottom: 2160,
+        };
+        let (x, y) = parking_origin(vscreen);
+        assert!(x >= vscreen.right);
+        assert!(x <= i16::MAX as i32 - 4000);
+        assert!(y >= i16::MIN as i32 && y <= i16::MAX as i32);
+        let parked_rect = RECT {
+            left: x,
+            top: y,
+            right: x + 800,
+            bottom: y + 600,
+        };
+        assert!(is_off_screen(&parked_rect, vscreen));
+        let on_screen = RECT {
+            left: 100,
+            top: 100,
+            right: 900,
+            bottom: 700,
+        };
+        assert!(!is_off_screen(&on_screen, vscreen));
     }
 
     #[test]
@@ -1688,6 +1849,18 @@ mod tests {
             base_size(&tall),
             Some((40, 90)),
             "the shape is the picture's own rather than the window the program opens at"
+        );
+
+        let svg = folder.join("box.svg");
+        std::fs::write(
+            &svg,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"></svg>"#,
+        )
+        .expect("an svg to write");
+        assert_eq!(
+            base_size(&svg),
+            Some((320, 180)),
+            "an SVG declares its own intrinsic dimensions"
         );
 
         let words = folder.join("notes.txt");

@@ -29,7 +29,9 @@ mod setting_types;
 mod settings_io;
 
 pub use app_config::AppConfig;
-pub use custom_presets::{preset_for as custom_preset_for, CustomPreset, MAX_PRESETS};
+pub use custom_presets::{
+    preset_for as custom_preset_for, CustomPreset, CustomScaling, CustomWindowMode, MAX_PRESETS,
+};
 pub use engines_in_effect::{latch_engines, office_engine_in_effect, video_engine_in_effect};
 #[cfg(test)]
 pub(crate) use ini_mapping::KEYS_NOTHING_READS;
