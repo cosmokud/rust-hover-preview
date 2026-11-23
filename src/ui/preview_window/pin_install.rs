@@ -837,6 +837,8 @@ pub(super) fn install_pinned_media(install: PinInstall<'_>, file: PinInstallable
     if let Ok(mut current) = CURRENT_MEDIA.lock() {
         *current = Some(media);
     }
+    // Invalidate/refresh cached taskbar still so swaps while collapsed/minimized never keep stale aspect.
+    pin_taskbar_mirror::invalidate_or_refresh_pin_picture();
 
     // What the loop's own bookkeeping is about is the file on screen, and the pin is showing
     // another one now: the card a sound is drawn from, the render tier's own record, and the
