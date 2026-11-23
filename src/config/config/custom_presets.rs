@@ -9,10 +9,11 @@
 //!
 //! ```ini
 //! [custom:Stress Test]
+//! enabled=true
 //! exe=C:\Program Files\AMD\RyzenMaster\bin\Stress.exe
 //! extensions=rmc, rmp
+//! window_mode=normal
 //! scaling=fit
-//! background=black
 //! volume=35
 //! ```
 //!
@@ -42,7 +43,7 @@ use crate::formats::lists::sanitize_extension_list;
 
 use super::app_config::AppConfig;
 use super::defaults::{sanitize_preview_scale_percent, sanitize_volume, DEFAULT_AUDIO_VOLUME};
-use super::setting_types::{PreviewScale, TransparentBackground, DEFAULT_IMAGE_BACKGROUND};
+use super::setting_types::PreviewScale;
 
 /// The prefix every preset's section carries: `[custom:<name>]`.
 pub const SECTION_PREFIX: &str = "custom:";
@@ -133,6 +134,8 @@ impl CustomScaling {
 pub struct CustomPreset {
     /// The name the window lists it by, and the half of its section name after the prefix.
     pub name: String,
+    /// Whether this preset is active; disabled presets are skipped by `preset_for`.
+    pub enabled: bool,
     /// The program, as the user typed or browsed to it. Empty is a preset with nothing to run,
     /// which is a preset that claims nothing until one is given.
     pub exe: String,
@@ -144,8 +147,6 @@ pub struct CustomPreset {
     /// How large the preview is drawn in the hover: following `Tray -> Scaling` by default, or an
     /// explicit per-preset share of the room.
     pub scaling: CustomScaling,
-    /// What stands behind it where the window is smaller than the band.
-    pub background: TransparentBackground,
     /// The level a preview of it is played at, a percentage.
     pub volume: u32,
 }
@@ -154,11 +155,11 @@ impl Default for CustomPreset {
     fn default() -> Self {
         Self {
             name: String::new(),
+            enabled: true,
             exe: String::new(),
             extensions: Vec::new(),
             window_mode: CustomWindowMode::default(),
             scaling: CustomScaling::default(),
-            background: DEFAULT_IMAGE_BACKGROUND,
             volume: DEFAULT_AUDIO_VOLUME,
         }
     }
@@ -265,6 +266,14 @@ fn sanitize_exe(raw: &str) -> String {
         .to_string()
 }
 
+fn parse_enabled(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 /// Every preset written as its own section, in the order the window lists them.
 ///
 /// The order is the list's own rather than the map's, which is what makes a file the app writes
@@ -276,6 +285,11 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
         };
         let section = preset.section();
         ini.set(&section, "name", Some(preset.name.clone()));
+        ini.set(
+            &section,
+            "enabled",
+            Some(if preset.enabled { "true" } else { "false" }.to_string()),
+        );
         ini.set(&section, "exe", Some(preset.exe.clone()));
         ini.set(&section, "extensions", Some(preset.extensions_text()));
         ini.set(
@@ -284,11 +298,6 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
             Some(preset.window_mode.as_str().to_string()),
         );
         ini.set(&section, "scaling", Some(preset.scaling.as_str()));
-        ini.set(
-            &section,
-            "background",
-            Some(preset.background.as_str().to_string()),
-        );
         ini.set(&section, "volume", Some(preset.volume.to_string()));
     }
 }
@@ -330,6 +339,11 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         }
 
         let mut preset = CustomPreset::named(&name);
+        if let Some(enabled) = ini.get(section, "enabled") {
+            if let Some(val) = parse_enabled(&enabled) {
+                preset.enabled = val;
+            }
+        }
         if let Some(exe) = ini.get(section, "exe") {
             preset.exe = sanitize_exe(&exe);
         }
@@ -346,11 +360,7 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
                 preset.scaling = scale;
             }
         }
-        if let Some(background) = ini.get(section, "background") {
-            if let Some(background) = TransparentBackground::from_str(&background) {
-                preset.background = background;
-            }
-        }
+        // Legacy `background=` keys in existing config.ini files are silently ignored.
         if let Some(volume) = ini.get(section, "volume") {
             if let Ok(volume) = volume.trim().parse::<u32>() {
                 preset.volume = sanitize_volume(volume);
@@ -372,7 +382,7 @@ pub fn preset_for<'a>(config: &'a AppConfig, path: &Path) -> Option<&'a CustomPr
     config
         .custom_presets
         .iter()
-        .find(|preset| preset.is_usable() && preset.claims(path))
+        .find(|preset| preset.enabled && preset.is_usable() && preset.claims(path))
 }
 
 #[cfg(test)]
@@ -431,11 +441,11 @@ mod tests {
     #[test]
     fn the_file_writes_a_section_per_preset_and_reads_it_back() {
         let mut preset = CustomPreset::named("Stress Test");
+        preset.enabled = false;
         preset.exe = "\"tools/Stress.exe\"".into();
         preset.set_extensions_text("rmc, rmp");
         preset.window_mode = CustomWindowMode::Borderless;
         preset.scaling = CustomScaling::Override(PreviewScale::FitToScreenReduced(40));
-        preset.background = TransparentBackground::Black;
         preset.volume = 35;
 
         let config = config_with(vec![preset.clone()]);
@@ -445,6 +455,10 @@ mod tests {
         assert_eq!(
             ini.get("custom:stress test", "name").as_deref(),
             Some("Stress Test")
+        );
+        assert_eq!(
+            ini.get("custom:stress test", "enabled").as_deref(),
+            Some("false")
         );
         assert_eq!(
             ini.get("custom:stress test", "exe").as_deref(),
@@ -462,15 +476,13 @@ mod tests {
             ini.get("custom:stress test", "scaling").as_deref(),
             Some("screen 40")
         );
-        assert_eq!(
-            ini.get("custom:stress test", "background").as_deref(),
-            Some("black")
-        );
+        assert!(ini.get("custom:stress test", "background").is_none());
 
         let mut read = AppConfig::default();
         read_all(&ini, &mut read);
         assert_eq!(read.custom_presets.len(), 1);
         assert_eq!(read.custom_presets[0].name, "Stress Test");
+        assert!(!read.custom_presets[0].enabled);
         assert_eq!(read.custom_presets[0].extensions, vec!["rmc", "rmp"]);
         assert_eq!(
             read.custom_presets[0].window_mode,
@@ -480,11 +492,40 @@ mod tests {
             read.custom_presets[0].scaling,
             CustomScaling::Override(PreviewScale::FitToScreenReduced(40))
         );
-        assert_eq!(
-            read.custom_presets[0].background,
-            TransparentBackground::Black
-        );
         assert_eq!(read.custom_presets[0].volume, 35);
+    }
+
+    #[test]
+    fn enabled_defaults_true_skips_disabled_and_ignores_legacy_background() {
+        let mut ini = Ini::new();
+        ini.set("custom:legacy", "name", Some("Legacy".into()));
+        ini.set("custom:legacy", "exe", Some("viewer.exe".into()));
+        ini.set("custom:legacy", "extensions", Some("psd".into()));
+        ini.set("custom:legacy", "background", Some("black".into()));
+
+        let mut cfg = AppConfig::default();
+        read_all(&ini, &mut cfg);
+        assert_eq!(cfg.custom_presets.len(), 1);
+        assert!(cfg.custom_presets[0].enabled);
+
+        let mut off = CustomPreset::named("First");
+        off.enabled = false;
+        off.exe = "first.exe".into();
+        off.set_extensions_text("psd");
+
+        let mut on = CustomPreset::named("Second");
+        on.enabled = true;
+        on.exe = "second.exe".into();
+        on.set_extensions_text("psd");
+
+        let cfg = config_with(vec![off.clone(), on]);
+        assert_eq!(
+            preset_for(&cfg, Path::new("art.psd")).map(|p| p.name.as_str()),
+            Some("Second")
+        );
+
+        let cfg_only_off = config_with(vec![off]);
+        assert!(preset_for(&cfg_only_off, Path::new("art.psd")).is_none());
     }
 
     #[test]
