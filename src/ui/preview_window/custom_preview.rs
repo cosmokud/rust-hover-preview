@@ -123,9 +123,9 @@ use windows::Win32::Foundation::{
     CloseHandle, BOOL, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
-    DwmRegisterThumbnail, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY,
-    DWM_TNP_VISIBLE,
+    DwmQueryThumbnailSourceSize, DwmRegisterThumbnail, DwmUnregisterThumbnail,
+    DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES, DWM_TNP_RECTDESTINATION,
+    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteObject, FillRect, GetStockObject, RedrawWindow, HBRUSH, HGDIOBJ,
@@ -142,7 +142,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
     GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
     PostMessageW, RegisterClassExW, SendMessageTimeoutW, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER,
+    SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM,
     SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
     SM_YVIRTUALSCREEN, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
     SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
@@ -861,13 +861,23 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         if registered != 0 {
             let mut client = RECT::default();
             let _ = unsafe { GetClientRect(host, &mut client) };
-            let picture = source_size(source, window_mode);
-            let properties = thumbnail_properties(
-                client.right,
-                client.bottom,
-                (picture.0 as i32, picture.1 as i32),
-                window_mode,
-            );
+            // Prefer DWM's own reported source size in Normal mode (matches exact composited frame
+            // without Win11 invisible-border mismatch); fall back to window/client rect.
+            let picture = if window_mode == CustomWindowMode::Normal {
+                unsafe { DwmQueryThumbnailSourceSize(registered) }
+                    .ok()
+                    .filter(|s| s.cx > 0 && s.cy > 0)
+                    .map(|s| (s.cx, s.cy))
+                    .unwrap_or_else(|| {
+                        let (w, h) = source_size(source, window_mode);
+                        (w as i32, h as i32)
+                    })
+            } else {
+                let (w, h) = source_size(source, window_mode);
+                (w as i32, h as i32)
+            };
+            let properties =
+                thumbnail_properties(client.right, client.bottom, picture, window_mode);
             let _ = unsafe { DwmUpdateThumbnailProperties(registered, &properties) };
 
             if !SHOWN.load(Ordering::SeqCst) {
@@ -1209,12 +1219,12 @@ fn park(window: HWND, width: i32, height: i32) {
     let _ = unsafe {
         SetWindowPos(
             window,
-            HWND::default(),
+            HWND_BOTTOM,
             px,
             py,
             width,
             height,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            SWP_NOACTIVATE | SWP_FRAMECHANGED,
         )
     };
 
@@ -1223,12 +1233,12 @@ fn park(window: HWND, width: i32, height: i32) {
         let _ = unsafe {
             SetWindowPos(
                 window,
-                HWND::default(),
+                HWND_BOTTOM,
                 FALLBACK_PARKING,
                 FALLBACK_PARKING,
                 0,
                 0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                SWP_NOSIZE | SWP_NOACTIVATE,
             )
         };
     }
