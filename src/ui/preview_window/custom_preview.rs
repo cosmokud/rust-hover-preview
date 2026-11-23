@@ -111,22 +111,26 @@
 //! desktop, and this app's preview goes away — the user asked for the file, not for a picture of
 //! it (see [`open_fully`]).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, Once};
+use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
-use windows::core::w;
+use windows::core::{w, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, BOOL, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM,
+    CloseHandle, BOOL, COLORREF, HANDLE, HWND, LPARAM, LRESULT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
-    DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWMWA_EXTENDED_FRAME_BOUNDS,
-    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION,
-    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
+    DwmSetWindowAttribute, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
+    DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED, DWM_THUMBNAIL_PROPERTIES,
+    DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteObject, FillRect, GetStockObject, InvalidateRect, UpdateWindow, HBRUSH,
@@ -134,23 +138,28 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, TerminateProcess, WaitForInputIdle,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    CreateProcessW, OpenProcess, QueryFullProcessImageNameW, TerminateProcess, WaitForInputIdle,
+    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTF_USEPOSITION,
+    STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
 };
+use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, EnumWindows, GetClassNameW, GetClientRect,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, EnumWindows, GetClassNameW, GetClientRect,
     GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
     GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, PostMessageW, RegisterClassExW, SendMessageTimeoutW,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, ShowWindow,
-    GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM, SMTO_ABORTIFHUNG, SMTO_NORMAL,
+    IsWindowVisible, IsZoomed, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
+    RegisterClassExW, SendMessageTimeoutW, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage, CHILDID_SELF,
+    EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM, MSG,
+    MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
-    WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY,
-    WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP,
-    WS_SYSMENU, WS_THICKFRAME,
+    WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::dimensions::{design_dimensions, picture_dimensions, vector_dimensions};
@@ -189,7 +198,6 @@ const WM_THERE_IS_NOTHING_TO_SHOW: u32 = WM_APP + 42;
 /// nothing of this app's is held by it. The cadence is the one a window is *hidden* at: a program
 /// shows its own window the moment it has one, and every poll is a poll a window can be hidden on.
 const WINDOW_WAIT: Duration = Duration::from_secs(6);
-const WINDOW_POLL: Duration = Duration::from_millis(10);
 
 /// How long a program that never shows a window is given to show one before the window it has is
 /// taken as the picture anyway: a program that honours the hidden launch never shows one, and one
@@ -263,7 +271,7 @@ struct Want {
 struct Program {
     path: PathBuf,
     exe: String,
-    child: Child,
+    process: Arc<OwnedHandle>,
     pid: u32,
 }
 
@@ -274,6 +282,10 @@ struct Launch {
     /// The file the program was begun for: the size the box is cut to is the file's own, and it is
     /// read on the worker rather than here (see `base_size`).
     path: PathBuf,
+    /// Intrinsic file dimensions pre-read before launch when known, avoiding a duplicate header read.
+    initial_own: Option<(u32, u32)>,
+    /// Retained handle to the spawned child process for `WaitForInputIdle`.
+    process: Arc<OwnedHandle>,
     /// The process this app began.
     pid: u32,
     /// The preset program's own file name, lowercased: what a process the program hands its file
@@ -372,18 +384,24 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let windows_before = top_level_windows();
     let processes_before = engine_processes::running().unwrap_or_default();
 
-    let Some(mut child) = launch(&exe, path) else {
+    let scaling = preset.scaling;
+    let window_mode = preset.window_mode;
+    let initial_own = base_size(path);
+    let provisional = initial_own.and_then(|own| {
+        let scale = resolve_scale(path, scaling);
+        provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
+    });
+
+    let Some((process, pid)) = launch(&exe, path, provisional) else {
         return false;
     };
+    let process = Arc::new(process);
     let Some(host) = (unsafe { ensure_host() }) else {
-        let _ = child.kill();
+        let _ = unsafe { TerminateProcess(HANDLE(process.as_raw_handle()), 1) };
         return false;
     };
 
     BACKGROUND.store(color_of(preset.background).0 as isize, Ordering::SeqCst);
-    let pid = child.id();
-    let scaling = preset.scaling;
-    let window_mode = preset.window_mode;
     let exe_file = Path::new(&exe)
         .file_name()
         .map(|name| name.to_string_lossy().to_lowercase())
@@ -392,7 +410,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         *held = Some(Program {
             path: path.to_path_buf(),
             exe: exe.clone(),
-            child,
+            process: Arc::clone(&process),
             pid,
         });
     }
@@ -412,6 +430,8 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let id = LAUNCH.fetch_add(1, Ordering::SeqCst) + 1;
     let launch = Launch {
         path: path.to_path_buf(),
+        initial_own,
+        process,
         pid,
         exe: exe_file,
         previous_foreground,
@@ -474,8 +494,8 @@ fn end_the_program() {
 
     let program = PROGRAM.lock().ok().and_then(|mut held| held.take());
     let launched_pid = program.as_ref().map(|program| program.pid).unwrap_or(0);
-    if let Some(mut program) = program {
-        let _ = program.child.kill();
+    if let Some(program) = program {
+        let _ = unsafe { TerminateProcess(HANDLE(program.process.as_raw_handle()), 1) };
         engine_processes::forget(program.pid);
     }
 
@@ -584,17 +604,124 @@ fn resolved(exe: &str) -> Option<String> {
         .map(|candidate| candidate.to_string_lossy().into_owned())
 }
 
-/// Spawn target normally with its exe folder as cwd so relative plugin/DLL loads work.
-fn launch(exe: &str, path: &Path) -> Option<Child> {
-    let mut cmd = Command::new(exe);
-    cmd.arg(path);
-    if let Some(dir) = Path::new(exe)
+fn wide_null(s: &OsStr) -> Vec<u16> {
+    s.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+/// Quote one argument per Win32 CRT / `CommandLineToArgvW` rules (always wrapped in `"`).
+fn quote_win32_arg(arg: &OsStr, out: &mut Vec<u16>) {
+    const QUOTE: u16 = b'"' as u16;
+    const BACKSLASH: u16 = b'\\' as u16;
+
+    out.push(QUOTE);
+    let mut backslashes = 0usize;
+    for unit in arg.encode_wide() {
+        if unit == BACKSLASH {
+            backslashes += 1;
+        } else if unit == QUOTE {
+            // Double preceding backslashes + 1 to escape the embedded quote.
+            for _ in 0..(backslashes * 2 + 1) {
+                out.push(BACKSLASH);
+            }
+            out.push(QUOTE);
+            backslashes = 0;
+        } else {
+            for _ in 0..backslashes {
+                out.push(BACKSLASH);
+            }
+            backslashes = 0;
+            out.push(unit);
+        }
+    }
+    // Escape trailing backslashes so they do not escape the closing quote.
+    for _ in 0..(backslashes * 2) {
+        out.push(BACKSLASH);
+    }
+    out.push(QUOTE);
+}
+
+/// Build NUL-terminated UTF-16 command line `"exe" "path"` for `CreateProcessW`.
+fn build_command_line(exe: &OsStr, path: &OsStr) -> Vec<u16> {
+    let mut line = Vec::new();
+    quote_win32_arg(exe, &mut line);
+    line.push(b' ' as u16);
+    quote_win32_arg(path, &mut line);
+    line.push(0);
+    line
+}
+
+fn provisional_rect_for(
+    at: Where,
+    own: (u32, u32),
+    scale: PreviewScale,
+    follow_cursor: bool,
+    bypass_placement: bool,
+) -> Option<(i32, i32, i32, i32)> {
+    let layout = layout_for(at, own, scale, follow_cursor, bypass_placement)?;
+    Some((
+        layout.pos_x,
+        layout.pos_y,
+        layout.preview_w as i32,
+        layout.preview_h as i32,
+    ))
+}
+
+/// `STARTUPINFOW` hinting `SW_SHOWNOACTIVATE` and (when known) provisional preview rect.
+fn launch_startup_info(provisional: Option<(i32, i32, i32, i32)>) -> STARTUPINFOW {
+    let mut si = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        dwFlags: STARTF_USESHOWWINDOW,
+        wShowWindow: SW_SHOWNOACTIVATE.0 as u16,
+        ..Default::default()
+    };
+    if let Some((x, y, w, h)) = provisional {
+        si.dwFlags |= STARTF_USEPOSITION | STARTF_USESIZE;
+        si.dwX = x.max(0) as u32;
+        si.dwY = y.max(0) as u32;
+        si.dwXSize = w.max(1) as u32;
+        si.dwYSize = h.max(1) as u32;
+    }
+    si
+}
+
+/// Spawn target normally via `CreateProcessW` (no `SW_HIDE`, no `CREATE_NO_WINDOW`, no stdio
+/// redirection) with its exe folder as cwd and `STARTUPINFOW` position/size/no-activate hints.
+fn launch(
+    exe: &str,
+    path: &Path,
+    provisional: Option<(i32, i32, i32, i32)>,
+) -> Option<(OwnedHandle, u32)> {
+    let application = wide_null(OsStr::new(exe));
+    let mut cmdline = build_command_line(OsStr::new(exe), path.as_os_str());
+    let cwd_wide = Path::new(exe)
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
-    {
-        cmd.current_dir(dir);
+        .map(|dir| wide_null(dir.as_os_str()));
+    let cwd_ptr = cwd_wide
+        .as_ref()
+        .map_or(PCWSTR::null(), |buf| PCWSTR(buf.as_ptr()));
+    let si = launch_startup_info(provisional);
+    let mut pi = PROCESS_INFORMATION::default();
+
+    unsafe {
+        CreateProcessW(
+            PCWSTR(application.as_ptr()),
+            PWSTR(cmdline.as_mut_ptr()),
+            None,
+            None,
+            BOOL(0),
+            PROCESS_CREATION_FLAGS(0),
+            None,
+            cwd_ptr,
+            &si,
+            &mut pi,
+        )
     }
-    cmd.spawn().ok()
+    .ok()?;
+    let _ = unsafe { CloseHandle(pi.hThread) };
+    // SAFETY: `pi.hProcess` is uniquely owned by this call and closed on `OwnedHandle` drop.
+    let process = unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0) };
+    Some((process, pi.dwProcessId))
 }
 
 /// The colour a backdrop names, as a host window fills it.
@@ -699,6 +826,15 @@ unsafe fn ensure_host() -> Option<HWND> {
     }
     .ok()?;
 
+    let disable_transitions: u32 = 1;
+    let _ = unsafe {
+        DwmSetWindowAttribute(
+            host,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            &disable_transitions as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
     let _ = unsafe { EnableWindow(host, false) };
     HOST.store(host.0 as isize, Ordering::SeqCst);
     Some(host)
@@ -723,16 +859,95 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         }
         return;
     };
-    if !is_current(launch.id) {
+    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
         return;
     }
 
-    // Wait for initial UI startup + file load before parking (avoids frame-0 blank white GDI surface).
-    wait_for_input_idle(launch.pid, 500);
     let source_pid = pid_of(source);
+    SOURCE.store(source.0 as isize, Ordering::SeqCst);
+    SOURCE_PID.store(source_pid, Ordering::SeqCst);
+    SOURCE_IS_NEW.store(
+        !launch.processes_before.contains(&source_pid),
+        Ordering::SeqCst,
+    );
+
+    // Read intrinsic shape once before any placement mutates `rcNormalPosition`.
+    let own = launch.initial_own.unwrap_or_else(|| own_size(source));
+    let scale = resolve_scale(&launch.path, scaling);
+
+    // Normal mode keeps target chrome/styles untouched; Borderless strips frame chrome.
+    if window_mode == CustomWindowMode::Borderless {
+        strip_the_frame(source);
+    }
+
+    let mut processes = process_tree(launch.pid);
+    if source_pid != 0 && !processes.contains(&source_pid) {
+        processes.push(source_pid);
+    }
+
+    let mut placed_mode: Option<PlacementMode> = None;
+    let mut placed_host_rect: Option<(i32, i32, i32, i32)> = None;
+    let mut the_ask: Option<(i32, i32)> = None;
+
+    // Immediately sink `source` to target rect BEFORE `WaitForInputIdle` so it never flashes at
+    // its default position before frame-0 settles.
+    let current_target_rect = || -> Option<(i32, i32, i32, i32)> {
+        let at = WANT
+            .lock()
+            .ok()
+            .and_then(|want| want.as_ref().map(|want| want.at))?;
+        provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
+    };
+    if let Some(target_rect) = current_target_rect() {
+        let mode = if place_behind_host(source, target_rect, window_mode) {
+            PlacementMode::BehindHost
+        } else {
+            let ask = the_ask_for(
+                (target_rect.2, target_rect.3),
+                source_size(source, window_mode),
+            );
+            the_ask = Some(ask);
+            park_offscreen(source, ask.0, ask.1);
+            PlacementMode::OffScreen
+        };
+        restore_foreground(launch.previous_foreground, &processes);
+        placed_mode = Some(mode);
+        placed_host_rect = Some(target_rect);
+    }
+
+    // Wait for initial UI startup + file load/paint settle after immediate positioning.
+    wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 500);
     if source_pid != 0 && source_pid != launch.pid {
         wait_for_input_idle(source_pid, 250);
     }
+    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+        return;
+    }
+
+    // Re-apply if the app resized/recentered itself during startup before `WM_NULL` flush.
+    if let Some(target_rect) = current_target_rect() {
+        if placed_host_rect != Some(target_rect)
+            || (placed_mode == Some(PlacementMode::BehindHost)
+                && !aligned_behind_host(source, target_rect))
+            || (placed_mode == Some(PlacementMode::OffScreen) && !parked(source))
+        {
+            if place_behind_host(source, target_rect, window_mode) {
+                the_ask = None;
+                placed_mode = Some(PlacementMode::BehindHost);
+            } else {
+                let ask = the_ask_for(
+                    (target_rect.2, target_rect.3),
+                    source_size(source, window_mode),
+                );
+                the_ask = Some(ask);
+                park_offscreen(source, ask.0, ask.1);
+                placed_mode = Some(PlacementMode::OffScreen);
+            }
+            placed_host_rect = Some(target_rect);
+            restore_foreground(launch.previous_foreground, &processes);
+        }
+    }
+
     let _ = unsafe {
         SendMessageTimeoutW(
             source,
@@ -748,35 +963,12 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         return;
     }
 
-    SOURCE.store(source.0 as isize, Ordering::SeqCst);
-    SOURCE_PID.store(source_pid, Ordering::SeqCst);
-    SOURCE_IS_NEW.store(
-        !launch.processes_before.contains(&source_pid),
-        Ordering::SeqCst,
-    );
-
-    // Read intrinsic shape once before parking mutates window placement.
-    let own = base_size(&launch.path).unwrap_or_else(|| own_size(source));
-    let scale = resolve_scale(&launch.path, scaling);
-
-    // Normal mode keeps target chrome/styles untouched; Borderless strips frame chrome.
-    if window_mode == CustomWindowMode::Borderless {
-        strip_the_frame(source);
-    }
-
-    let mut processes = process_tree(launch.pid);
-    if !processes.contains(&source_pid) {
-        processes.push(source_pid);
-    }
     let mut tree_read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
 
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
     let mut lingering: Option<Instant> = None;
-    let mut placed_mode: Option<PlacementMode> = None;
-    let mut placed_host_rect: Option<(i32, i32, i32, i32)> = None;
-    let mut the_ask: Option<(i32, i32)> = None;
 
     loop {
         if !is_current(launch.id) {
@@ -838,25 +1030,9 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
         let host_rect = (x, y, width, height);
 
-        // Size & position host before placing source behind it so opaque topmost host covers source.
-        if box_of_the_host != Some(host_rect) {
-            let _ = unsafe {
-                SetWindowPos(
-                    host,
-                    HWND::default(),
-                    x,
-                    y,
-                    width,
-                    height,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                )
-            };
-            box_of_the_host = Some(host_rect);
-        }
-
         if placed_mode.is_none() || placed_host_rect != Some(host_rect) {
-            // Primary: keep source 100% on-monitor behind opaque topmost host (GDI apps like IrfanView
-            // repaint natively on-monitor). Fallback to off-screen only if min size exceeds host.
+            // Primary: keep source 100% on-monitor behind opaque topmost host (GDI apps repaint
+            // natively on-monitor). Fallback to off-screen only if min size exceeds host.
             let mode = if place_behind_host(source, host_rect, window_mode) {
                 the_ask = None;
                 PlacementMode::BehindHost
@@ -898,6 +1074,22 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             hide_the_host();
             std::thread::sleep(KEEP_POLL);
             continue;
+        }
+
+        // Only after `source` is settled and aligned: size `host`, bind thumbnail, and show `host`.
+        if box_of_the_host != Some(host_rect) {
+            let _ = unsafe {
+                SetWindowPos(
+                    host,
+                    HWND::default(),
+                    x,
+                    y,
+                    width,
+                    height,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            };
+            box_of_the_host = Some(host_rect);
         }
 
         if registered == 0 {
@@ -1468,6 +1660,10 @@ fn park_offscreen(window: HWND, width: i32, height: i32) {
     let _ = unsafe { UpdateWindow(window) };
 }
 
+fn wait_for_input_idle_handle(process: HANDLE, timeout_ms: u32) {
+    let _ = unsafe { WaitForInputIdle(process, timeout_ms) };
+}
+
 fn wait_for_input_idle(pid: u32, timeout_ms: u32) {
     let Ok(process) = (unsafe {
         OpenProcess(
@@ -1478,7 +1674,7 @@ fn wait_for_input_idle(pid: u32, timeout_ms: u32) {
     }) else {
         return;
     };
-    let _ = unsafe { WaitForInputIdle(process, timeout_ms) };
+    wait_for_input_idle_handle(process, timeout_ms);
     let _ = unsafe { CloseHandle(process) };
 }
 
@@ -1647,13 +1843,51 @@ impl Census<'_> {
     fn take(self) {}
 }
 
-/// The program's window, waited for within [`WINDOW_WAIT`].
-///
-/// The window is the one the program **shows** — the window the user would have seen, which is
-/// the only one a program can be assumed to draw its document in — and where it shows none (the
-/// launch asked it not to) the **largest** titled, top-level, unowned, non-tool window of a
-/// document's size that it has (see `THE_SMALLEST_PICTURE`): a program's helper windows are
-/// windows too, and the one it draws its file in is the one with a frame to draw in.
+thread_local! {
+    /// Top-level HWNDs reported by `EVENT_OBJECT_CREATE`/`EVENT_OBJECT_SHOW` on the worker thread.
+    static WINEVENT_HWNDS: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// RAII guard ensuring `UnhookWinEvent` always runs when `wait_for_a_window` exits.
+struct WinEventGuard(HWINEVENTHOOK);
+
+impl Drop for WinEventGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            let _ = unsafe { UnhookWinEvent(self.0) };
+        }
+        WINEVENT_HWNDS.with(|q| {
+            if let Ok(mut list) = q.try_borrow_mut() {
+                list.clear();
+            }
+        });
+    }
+}
+
+unsafe extern "system" fn win_event_proc(
+    _hook: HWINEVENTHOOK,
+    event: u32,
+    hwnd: HWND,
+    id_object: i32,
+    id_child: i32,
+    _event_thread: u32,
+    _event_time: u32,
+) {
+    if (event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW)
+        && id_object == OBJID_WINDOW.0
+        && id_child == CHILDID_SELF as i32
+        && !hwnd.0.is_null()
+    {
+        WINEVENT_HWNDS.with(|q| {
+            if let Ok(mut list) = q.try_borrow_mut() {
+                list.push(hwnd.0 as isize);
+            }
+        });
+    }
+}
+
+/// The program's window, waited for within [`WINDOW_WAIT`] via out-of-context WinEvent hook
+/// (`EVENT_OBJECT_CREATE`..`EVENT_OBJECT_SHOW`) with a 5ms `MsgWaitForMultipleObjectsEx` fallback.
 fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
     let began = Instant::now();
@@ -1661,12 +1895,24 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let mut read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
 
-    while Instant::now() < deadline {
-        if !is_current(launch.id) {
-            return None;
-        }
+    WINEVENT_HWNDS.with(|q| q.borrow_mut().clear());
+    let hook = unsafe {
+        SetWinEventHook(
+            EVENT_OBJECT_CREATE,
+            EVENT_OBJECT_SHOW,
+            None,
+            Some(win_event_proc),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+    };
+    let _guard = WinEventGuard(hook);
 
-        let look = census(launch, &processes, &mut images, 0, false);
+    let check_now = |processes: &[u32],
+                     images: &mut HashMap<u32, Option<String>>|
+     -> Option<HWND> {
+        let look = census(launch, processes, images, 0, false);
         if let Some((_, window)) = look.shown {
             return Some(window);
         }
@@ -1675,12 +1921,62 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                 return Some(window);
             }
         }
+        None
+    };
+
+    while Instant::now() < deadline {
+        if !is_current(launch.id) {
+            return None;
+        }
+
+        if let Some(window) = check_now(&processes, &mut images) {
+            return Some(window);
+        }
 
         if read.elapsed() >= TREE_POLL {
             processes = process_tree(launch.pid);
             read = Instant::now();
         }
-        std::thread::sleep(WINDOW_POLL);
+
+        let remaining_ms = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(5) as u32;
+        if remaining_ms > 0 {
+            let _ = unsafe {
+                MsgWaitForMultipleObjectsEx(None, remaining_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+            };
+        }
+
+        let mut msg = MSG::default();
+        while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+            let _ = unsafe { TranslateMessage(&msg) };
+            unsafe { DispatchMessageW(&msg) };
+
+            let mut matched = false;
+            WINEVENT_HWNDS.with(|q| {
+                for raw in q.borrow_mut().drain(..) {
+                    if launch.windows_before.contains(&raw) {
+                        continue;
+                    }
+                    let pid = pid_of(HWND(raw as *mut _));
+                    if pid == 0 {
+                        continue;
+                    }
+                    if processes.contains(&pid)
+                        || image_name_of(pid, &mut images).as_deref() == Some(launch.exe.as_str())
+                    {
+                        matched = true;
+                        break;
+                    }
+                }
+            });
+            if matched {
+                if let Some(window) = check_now(&processes, &mut images) {
+                    return Some(window);
+                }
+            }
+        }
     }
     None
 }
@@ -2210,5 +2506,71 @@ mod tests {
             resolved(r"C:\no such folder\no such program.exe").is_none(),
             "and a path that is not there is not a name to search for"
         );
+    }
+
+    #[test]
+    fn command_line_quoting_handles_spaces_quotes_and_trailing_backslashes() {
+        let decode = |exe: &str, path: &str| {
+            let wide = build_command_line(OsStr::new(exe), OsStr::new(path));
+            assert_eq!(wide.last(), Some(&0), "must be NUL-terminated");
+            String::from_utf16_lossy(&wide[..wide.len() - 1])
+        };
+
+        assert_eq!(
+            decode("viewer.exe", "photo.png"),
+            r#""viewer.exe" "photo.png""#
+        );
+        assert_eq!(
+            decode(r"Program Files\My Viewer\app.exe", r"my folder\pic 1.png"),
+            r#""Program Files\My Viewer\app.exe" "my folder\pic 1.png""#
+        );
+        assert_eq!(
+            decode("app.exe", r#"say "hi".txt"#),
+            r#""app.exe" "say \"hi\".txt""#
+        );
+        assert_eq!(
+            decode("app.exe", r#"dir\"quoted".png"#),
+            r#""app.exe" "dir\\\"quoted\".png""#
+        );
+        assert_eq!(
+            decode("app.exe", r"trailing\folder\\"),
+            r#""app.exe" "trailing\folder\\\\""#
+        );
+    }
+
+    #[test]
+    fn startup_info_sets_noactivate_and_clamps_provisional_rect() {
+        let none = launch_startup_info(None);
+        assert_eq!(none.cb, std::mem::size_of::<STARTUPINFOW>() as u32);
+        assert_eq!(none.dwFlags, STARTF_USESHOWWINDOW);
+        assert_eq!(none.wShowWindow, SW_SHOWNOACTIVATE.0 as u16);
+
+        let rect = provisional_rect_for(
+            pointer((0, 0)),
+            (800, 600),
+            PreviewScale::Percent(75),
+            true,
+            false,
+        )
+        .expect("provisional rect computed for known dims");
+        assert!(rect.2 > 0 && rect.3 > 0);
+
+        let with_rect = launch_startup_info(Some(rect));
+        assert_eq!(
+            with_rect.dwFlags,
+            STARTF_USESHOWWINDOW | STARTF_USEPOSITION | STARTF_USESIZE
+        );
+        assert_eq!(with_rect.wShowWindow, SW_SHOWNOACTIVATE.0 as u16);
+        assert_eq!(with_rect.dwX, rect.0.max(0) as u32);
+        assert_eq!(with_rect.dwY, rect.1.max(0) as u32);
+        assert_eq!(with_rect.dwXSize, rect.2 as u32);
+        assert_eq!(with_rect.dwYSize, rect.3 as u32);
+
+        // Negative multi-monitor coordinates and zero/negative sizes clamp safely.
+        let clamped = launch_startup_info(Some((-120, -40, 0, -10)));
+        assert_eq!(clamped.dwX, 0);
+        assert_eq!(clamped.dwY, 0);
+        assert_eq!(clamped.dwXSize, 1);
+        assert_eq!(clamped.dwYSize, 1);
     }
 }
