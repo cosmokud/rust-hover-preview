@@ -542,7 +542,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let scaling = preset.scaling;
     let window_mode = preset.window_mode;
     let capture_technique = preset.capture_technique;
-    let volume = preset.volume;
+    let volume = preset.volume_enabled.then_some(preset.volume);
     let initial_own = base_size(path);
     let provisional = initial_own.and_then(|own| {
         let scale = resolve_scale(path, scaling);
@@ -1542,7 +1542,7 @@ fn run_it(
     scaling: CustomScaling,
     window_mode: CustomWindowMode,
     capture_technique: CustomCaptureTechnique,
-    volume: u32,
+    volume: Option<u32>,
     hook_session: Option<InProcessHookSession>,
 ) {
     let Some(source) = (if let Some(ref session) = hook_session {
@@ -1585,7 +1585,9 @@ fn run_it(
 
     // Lock ownership strictly to our launched tree (+ adopted brokered tree if newly spawned).
     let mut processes = owned_pids_for(launch.pid, source_pid, source_is_new);
-    audio_session::apply_custom_preview_volume(processes.clone(), volume);
+    if let Some(vol) = volume {
+        audio_session::apply_custom_preview_volume(processes.clone(), vol);
+    }
     let mut last_volume_apply = Instant::now();
 
     // Visible app (ignored `SW_HIDE`): make 1/255 invisible BEFORE any style/size/move changes
@@ -2086,9 +2088,11 @@ fn run_it(
             processes = owned_pids_for(launch.pid, source_pid, source_is_new);
             tree_read = Instant::now();
         }
-        if last_volume_apply.elapsed() >= Duration::from_millis(500) {
-            audio_session::apply_custom_preview_volume(processes.clone(), volume);
-            last_volume_apply = Instant::now();
+        if let Some(vol) = volume {
+            if last_volume_apply.elapsed() >= Duration::from_millis(500) {
+                audio_session::apply_custom_preview_volume(processes.clone(), vol);
+                last_volume_apply = Instant::now();
+            }
         }
 
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
