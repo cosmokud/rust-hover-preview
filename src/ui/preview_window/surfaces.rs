@@ -240,3 +240,53 @@ pub(super) fn layered_surface_dc(window: isize) -> Option<HDC> {
             .map(|(_, surface)| surface.mem_dc)
     })
 }
+
+/// Copy our own in-memory BGRA layered surface for `window`, never reading the desktop DC.
+pub(super) fn layered_surface_pixels(window: isize) -> Option<(Vec<u8>, u32, u32)> {
+    LAYERED_SURFACES.with(|cell| {
+        let surfaces = cell.borrow();
+        let (_, surface) = surfaces.iter().find(|(key, _)| *key == window)?;
+        if surface.width == 0 || surface.height == 0 || surface.bits.is_null() {
+            return None;
+        }
+        let len = surface.width as usize * surface.height as usize * 4;
+        // SAFETY: `surface.bits` is valid for `width * height * 4` bytes while borrowed.
+        let pixels = unsafe { std::slice::from_raw_parts(surface.bits, len) }.to_vec();
+        Some((pixels, surface.width, surface.height))
+    })
+}
+
+/// Per-window offscreen capture via `PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT)`.
+/// Ignores overlapping windows (unlike `GetDC(NULL)` desktop `BitBlt`).
+pub(super) fn print_window_pixels(hwnd: HWND) -> Option<(Vec<u8>, u32, u32)> {
+    const PW_CLIENTONLY: u32 = 0x1;
+    const PW_RENDERFULLCONTENT: u32 = 0x2;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn PrintWindow(hwnd: HWND, hdc_blt: HDC, flags: u32) -> windows::Win32::Foundation::BOOL;
+    }
+
+    let mut area = RECT::default();
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut area) }.ok()?;
+    let width = (area.right - area.left).max(0) as u32;
+    let height = (area.bottom - area.top).max(0) as u32;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let surface = DibSurface::create(width, height)?;
+    // SAFETY: `surface.dc` is our own DIB section DC of `width * height` pixels.
+    unsafe {
+        let ok = PrintWindow(hwnd, surface.dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT).as_bool()
+            || PrintWindow(hwnd, surface.dc, PW_RENDERFULLCONTENT).as_bool();
+        let _ = GdiFlush();
+        if !ok {
+            return None;
+        }
+        let pixels =
+            std::slice::from_raw_parts(surface.bits(), width as usize * height as usize * 4)
+                .to_vec();
+        Some((pixels, width, height))
+    }
+}

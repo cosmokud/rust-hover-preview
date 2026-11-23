@@ -771,24 +771,15 @@ unsafe fn put_the_pins_window_in_the_taskbar() {
 /// picture of itself, and a frame taken after it would be a frame of nothing (see
 /// `keep_the_pin_for_the_taskbar` and `pin_taskbar_mirror::mirror_source`).
 pub(super) fn bubble_to_taskbar() {
-    // A pin that stands in a window of its own takes the same door: the row asks for the taskbar, and
-    // what wears a taskbar button for such a pin is the window it stands in, minimized — not a picture of
-    // the pin taken for a stand-in that is refused it (see `collapse_pin_to` and `a_button_is_owed`).
     let its_own = pin_is_its_own_window();
-    if !its_own {
-        unsafe {
-            keep_the_pin_for_the_taskbar();
-        }
-    }
+    // Hide bubble first so stand-in never mirrors or adopts bubble's square/menu rect.
     hide_pin_bubble();
     unsafe {
         if its_own {
-            // The window is behind the bubble rather than on the screen — a bubble stands where a window
-            // would be in the way — so minimizing it is also what puts it back: a window that is down
-            // wears no button, and the button is the whole of what this row asks for.
             put_the_pins_window_in_the_taskbar();
             return;
         }
+        pin_taskbar_mirror::prepare_stand_in_for_taskbar_from_bubble();
         show_pin_taskbar();
     }
 }
@@ -888,6 +879,9 @@ pub(super) fn collapse_pin_to_at(target: PinMinimizeTo, point: Option<(i32, i32)
             // taken off the screen is a picture of nothing: what the hover is to hold is taken while
             // the windows it is made of are still up (see `keep_the_pin_for_the_taskbar`).
             keep_the_pin_for_the_taskbar();
+        } else if !pin_is_its_own_window() {
+            // Capture preview picture & aspect before hiding windows so bubble -> taskbar keeps it.
+            pin_taskbar_mirror::capture_pin_picture_before_collapse();
         }
 
         // **And the film host's own picture is taken on every collapse, because this is the last moment
