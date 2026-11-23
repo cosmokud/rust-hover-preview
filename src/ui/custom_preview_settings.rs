@@ -92,6 +92,15 @@ const WM_SLIDER_GET_VALUE: u32 = WM_APP + 21;
 const WM_TOGGLE_SET_VALUE: u32 = WM_APP + 22;
 const WM_TOGGLE_GET_VALUE: u32 = WM_APP + 23;
 const WM_TOGGLE_CHANGED: u32 = WM_APP + 24;
+/// One step of a preset drag, posted by the list: `wparam` is the drawn row the pointer is over and
+/// `lparam` the drawn row the press landed on (read only on the first step of a drag).
+///
+/// Posted rather than handled in the list, because the reorder rebuilds the box — and doing that
+/// from inside the box's own `WM_MOUSEMOVE` is re-entrant mutation of its drag state: an access
+/// violation, which ends the process and the tray with it, not a panic.
+const WM_PRESET_DRAG_MOVE: u32 = WM_APP + 25;
+/// The end of that drag, on the drop or on a capture the list lost some other way.
+const WM_PRESET_DRAG_END: u32 = WM_APP + 26;
 
 const TITLEBAR_LOGICAL_H: i32 = 40;
 const TITLEBAR_BTN_W: i32 = 44;
@@ -377,6 +386,8 @@ struct State {
     presets: Vec<CustomPreset>,
     selected: Option<usize>,
     shown: Vec<usize>,
+    /// The drawn row holding the preset a drag is carrying, while one is in flight.
+    drag: Option<usize>,
     loading: bool,
     palette: Palette,
     font: HFONT,
@@ -447,6 +458,9 @@ struct ListSubclass {
     press: Option<usize>,
     /// Whether that press has become a drag of the row it landed on.
     dragging: bool,
+    /// The drawn row the drag was last posted for, so one row is one message rather than one a
+    /// mouse pixel.
+    posted: Option<usize>,
 }
 
 struct SliderState {
@@ -690,12 +704,24 @@ unsafe fn apply_theme(state: &mut State) {
     }
 }
 
+/// The editor window's own procedure.
+///
+/// The whole match runs under `catch_unwind` for the reason the tray's own proc does
+/// (`shell::tray::event_loop`): it is `extern "system"`, so a panic unwinding out of it cannot
+/// unwind and aborts the process instead — and this window is one thread of the process the tray
+/// lives in, so a bug in the editor would take the tray down with it. A panic answers `LRESULT(0)`
+/// and leaves the window up.
 unsafe extern "system" fn window_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    std::panic::catch_unwind(|| unsafe { editor_proc(hwnd, msg, wparam, lparam) })
+        .unwrap_or(LRESULT(0))
+}
+
+unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CREATE => {
             let state = unsafe { build(hwnd) };
@@ -929,6 +955,21 @@ unsafe extern "system" fn window_proc(
         WM_TOGGLE_CHANGED => {
             if let Some(state) = unsafe { state_of(hwnd) } {
                 unsafe { enabled_toggled(state, wparam.0 != 0) };
+            }
+            LRESULT(0)
+        }
+        WM_PRESET_DRAG_MOVE => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                unsafe { preset_drag_moved(state, wparam.0, lparam.0 as usize) };
+            }
+            LRESULT(0)
+        }
+        WM_PRESET_DRAG_END => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                state.drag = None;
+                // The list is the order a file is routed by, so a move is kept at once rather
+                // than at the next Save.
+                let _ = persist(state);
             }
             LRESULT(0)
         }
@@ -1352,6 +1393,7 @@ unsafe fn build(hwnd: HWND) -> State {
         presets: presets_now(),
         selected: None,
         shown: Vec::new(),
+        drag: None,
         loading: false,
         palette,
         font,
@@ -2254,6 +2296,7 @@ unsafe fn install_list_subclass(list: HWND, parent: HWND) {
         parent,
         press: None,
         dragging: false,
+        posted: None,
     }));
     unsafe { SetWindowLongPtrW(list, GWLP_USERDATA, data as isize) };
 }
@@ -2277,15 +2320,12 @@ unsafe extern "system" fn list_subclass_proc(
         WM_LBUTTONDOWN => {
             let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
             // The list's own selection runs first: a press on a row is one that may become a drag,
-            // and a press below the last row drags nothing.
+            // and a press below the last row drags nothing. No `SetCapture` here — the box takes
+            // its own on a press, and a second one hands this proc the `WM_CAPTURECHANGED` of the
+            // capture it just lost.
             let count = unsafe { SendMessageW(hwnd, LB_GETCOUNT, WPARAM(0), LPARAM(0)).0 };
             let (row, outside) = row_at_point(hwnd, lparam);
             sub.press = (!outside && row < count as usize).then_some(row);
-            if sub.press.is_some() {
-                // Held for the whole press so a drag is followed past the list's own edges; the
-                // list releases it itself on the press it thinks a click.
-                let _ = unsafe { SetCapture(hwnd) };
-            }
             res
         }
         WM_MOUSEMOVE => {
@@ -2293,9 +2333,15 @@ unsafe extern "system" fn list_subclass_proc(
             let Some(press) = sub.press else {
                 return res;
             };
-            let Some(state) = state_of(parent) else {
+            // A press whose button came up where this proc never saw it is no press at all: the
+            // move message carries the button state, and a drag is only a drag while it is down.
+            const MK_LBUTTON: usize = 0x0001;
+            if wparam.0 & MK_LBUTTON == 0 {
+                sub.press = None;
+                sub.dragging = false;
+                sub.posted = None;
                 return res;
-            };
+            }
             let count = unsafe { SendMessageW(hwnd, LB_GETCOUNT, WPARAM(0), LPARAM(0)).0 };
             if count <= 0 {
                 return res;
@@ -2310,57 +2356,42 @@ unsafe extern "system" fn list_subclass_proc(
                 sub.dragging = true;
                 let _ = unsafe { SetCursor(LoadCursorW(None, IDC_SIZEALL).unwrap_or_default()) };
             }
-            // Every row the drag passes over takes the preset of the row it left, so the list
-            // follows the pointer and the preset under it stays the one being moved. Rows are the
-            // drawn ones, so a search narrows which presets a drag can reach.
-            let (Some(from), Some(to)) = (
-                state.shown.get(press).copied(),
-                state.shown.get(row).copied(),
-            ) else {
-                return res;
-            };
-            if from == to {
+            if sub.posted == Some(row) {
                 return res;
             }
-            let preset = state.presets.remove(from);
-            state.presets.insert(to, preset);
-            state.selected = state
-                .selected
-                .map(|selected| if selected == from { to } else { selected });
-            let search = unsafe { text_of(state.hwnd, ID_SEARCH) };
-            state.shown = shown_presets(&state.presets, &search);
-            let drawn = state
-                .shown
-                .iter()
-                .position(|held| *held == to)
-                .unwrap_or(row);
-            sub.press = Some(drawn);
-            unsafe { rebuild_list(state) };
-            let _ = unsafe { SendMessageW(hwnd, LB_SETCURSEL, WPARAM(drawn), LPARAM(0)) };
+            sub.posted = Some(row);
+            // The reorder is the parent's, and it runs after this message has returned (see
+            // `WM_PRESET_DRAG_MOVE`).
+            let _ = unsafe {
+                PostMessageW(
+                    parent,
+                    WM_PRESET_DRAG_MOVE,
+                    WPARAM(row),
+                    LPARAM(press as isize),
+                )
+            };
             res
         }
         WM_LBUTTONUP => {
-            let was_dragging = sub.dragging;
+            let dragged = sub.dragging;
             sub.press = None;
             sub.dragging = false;
-            if was_dragging {
+            sub.posted = None;
+            if dragged {
                 let _ = unsafe { SetCursor(LoadCursorW(None, IDC_ARROW).unwrap_or_default()) };
-                // The list is the order a file is routed by, so a move is kept at once rather
-                // than at the next Save.
-                if let Some(state) = state_of(parent) {
-                    let _ = persist(state);
-                }
+                let _ = unsafe { PostMessageW(parent, WM_PRESET_DRAG_END, WPARAM(0), LPARAM(0)) };
             }
             unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
         }
         WM_CAPTURECHANGED => {
+            // The box captures the pointer on a press and gives it back on the release, and this
+            // message is the capture it takes handing this proc the one that was there — which is
+            // no reason to drop the press. Only a capture lost mid-drag ends the drag.
             if sub.dragging {
-                if let Some(state) = state_of(parent) {
-                    let _ = persist(state);
-                }
+                sub.dragging = false;
+                sub.posted = None;
+                let _ = unsafe { PostMessageW(parent, WM_PRESET_DRAG_END, WPARAM(0), LPARAM(0)) };
             }
-            sub.press = None;
-            sub.dragging = false;
             unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
         }
         WM_PAINT => {
@@ -3699,6 +3730,41 @@ fn row_at_point(list: HWND, lparam: LPARAM) -> (usize, bool) {
     ((answer & 0xFFFF) as usize, (answer >> 16) & 1 == 1)
 }
 
+/// One step of a preset drag: the row the pointer is over takes the preset of the row it left, so
+/// the list follows the pointer and the preset under it is the one being carried.
+///
+/// `press` is the drawn row the press landed on, read only on the first step — after that the row
+/// being carried is the one the last step left, which is the pointer's own. Rows are the drawn
+/// ones, so a search narrows which presets a drag can reach.
+unsafe fn preset_drag_moved(state: &mut State, row: usize, press: usize) {
+    let held = state.drag.unwrap_or(press);
+    let (Some(from), Some(to)) = (
+        state.shown.get(held).copied(),
+        state.shown.get(row).copied(),
+    ) else {
+        state.drag = Some(held);
+        return;
+    };
+    if from != to {
+        let preset = state.presets.remove(from);
+        state.presets.insert(to, preset);
+        state.selected = state
+            .selected
+            .map(|selected| if selected == from { to } else { selected });
+        let search = unsafe { text_of(state.hwnd, ID_SEARCH) };
+        state.shown = shown_presets(&state.presets, &search);
+        unsafe { rebuild_list(state) };
+    }
+    let drawn = state
+        .shown
+        .iter()
+        .position(|held| *held == to)
+        .unwrap_or(row);
+    state.drag = Some(drawn);
+    let list = unsafe { GetDlgItem(state.hwnd, ID_LIST) }.unwrap_or_default();
+    let _ = unsafe { SendMessageW(list, LB_SETCURSEL, WPARAM(drawn), LPARAM(0)) };
+}
+
 unsafe fn rebuild_list(state: &mut State) {
     let search = unsafe { text_of(state.hwnd, ID_SEARCH) };
     state.shown = shown_presets(&state.presets, &search);
@@ -4346,7 +4412,7 @@ mod tests {
     use windows::Win32::UI::Controls::{ODA_DRAWENTIRE, ODS_FLAGS, ODT_COMBOBOX};
     use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, CB_GETDROPPEDCONTROLRECT, CB_SHOWDROPDOWN,
+        GetWindowRect, PeekMessageW, CB_GETDROPPEDCONTROLRECT, CB_SHOWDROPDOWN, PM_REMOVE,
     };
 
     #[test]
@@ -4539,6 +4605,85 @@ mod tests {
             );
             assert!(state.presets[0].enabled);
 
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn a_drag_over_the_preset_list_reorders_it_and_is_survived() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.presets.clear();
+            for name in ["Alpha", "Bravo", "Charlie"] {
+                let mut preset = CustomPreset::named(name);
+                preset.exe = "C:/nope.exe".into();
+                preset.set_extensions_text("jpg");
+                state.presets.push(preset);
+            }
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
+
+            let list = GetDlgItem(hwnd, ID_LIST).unwrap_or_default();
+            let row_h = scale(26, 96);
+            let at =
+                |row: i32| -> LPARAM { LPARAM(((row * row_h + row_h / 2) << 16 | 5) as isize) };
+            let pump = || {
+                let mut message = MSG::default();
+                while PeekMessageW(&mut message, hwnd, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&message);
+                    let _ = DispatchMessageW(&message);
+                }
+            };
+            let order = || -> Vec<String> {
+                state_of(hwnd)
+                    .map(|state| {
+                        state
+                            .presets
+                            .iter()
+                            .map(|preset| preset.name.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+
+            SendMessageW(list, WM_LBUTTONDOWN, WPARAM(1), at(0));
+            SendMessageW(list, WM_MOUSEMOVE, WPARAM(1), at(1));
+            // The reorder is the parent's, and it is posted rather than run inside the box's own
+            // mouse message: only the queue makes it happen, and it must not have happened yet.
+            assert_eq!(
+                order(),
+                vec!["Alpha", "Bravo", "Charlie"],
+                "not before the queue"
+            );
+            pump();
+            assert_eq!(
+                order(),
+                vec!["Bravo", "Alpha", "Charlie"],
+                "the row was moved"
+            );
+            assert_eq!(
+                state_of(hwnd).map(|state| state.selected),
+                Some(Some(1)),
+                "the moved preset stays the one the editor is on"
+            );
+
+            SendMessageW(list, WM_MOUSEMOVE, WPARAM(1), at(2));
+            pump();
+            assert_eq!(order(), vec!["Bravo", "Charlie", "Alpha"]);
+            assert_eq!(
+                SendMessageW(list, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                2,
+                "the list follows the pointer"
+            );
+
+            SendMessageW(list, WM_LBUTTONUP, WPARAM(0), at(2));
+            pump();
             let _ = DestroyWindow(hwnd);
         }
     }
