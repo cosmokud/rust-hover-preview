@@ -156,13 +156,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement,
     SetWindowPos, ShowWindow, TranslateMessage, CHILDID_SELF, EVENT_OBJECT_CREATE,
     EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM,
-    LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE,
-    QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE,
-    WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE,
+    OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+    SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY,
+    WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
     WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
@@ -181,8 +181,8 @@ use super::preview_scale::{animated_scale_for, fit_reduced, HoverScales};
 use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
 use crate::config::config::{
-    custom_preset_for, CustomPreset, CustomScaling, CustomWindowMode, PreviewScale, PreviewType,
-    DEFAULT_AUDIO_SCALE,
+    custom_preset_for, CustomCaptureTechnique, CustomPreset, CustomScaling, CustomWindowMode,
+    PreviewScale, PreviewType, DEFAULT_AUDIO_SCALE,
 };
 use crate::readers::{pdf_preview, svg_preview, video_player};
 use crate::CONFIG;
@@ -246,8 +246,8 @@ const FALLBACK_PARKING: i32 = -20000;
 
 /// 1/255 alpha: keeps DWM compositing the source for `DwmRegisterThumbnail` while invisible on screen.
 const INVISIBLE_ALPHA: u8 = 1;
-const INVISIBLE_EX_STYLE: u32 =
-    WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0;
+const DIRECT_EX_STYLE: u32 = WS_EX_TRANSPARENT.0 | WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0;
+const INVISIBLE_EX_STYLE: u32 = WS_EX_LAYERED.0 | DIRECT_EX_STYLE;
 
 /// What a hover of a custom preview is asked to be drawn at: the pointer's own placement, or the
 /// focused item's.
@@ -409,6 +409,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 
     let scaling = preset.scaling;
     let window_mode = preset.window_mode;
+    let capture_technique = preset.capture_technique;
     let initial_own = base_size(path);
     let provisional = initial_own.and_then(|own| {
         let scale = resolve_scale(path, scaling);
@@ -471,7 +472,15 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     // The window is carried as a number: `HWND` is a pointer and a pointer is not `Send`, and
     // what the worker does with it is a placement the Shell answers for either way.
     let host = host.0 as isize;
-    std::thread::spawn(move || run_it(HWND(host as *mut _), launch, scaling, window_mode));
+    std::thread::spawn(move || {
+        run_it(
+            HWND(host as *mut _),
+            launch,
+            scaling,
+            window_mode,
+            capture_technique,
+        )
+    });
     true
 }
 
@@ -873,7 +882,13 @@ fn is_current(id: u64) -> bool {
 ///
 /// **One worker per program**, not per hover: the hover can come and go while the program is
 /// starting, and what that must cost is a hidden host and a kept window rather than a launch.
-fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: CustomWindowMode) {
+fn run_it(
+    host: HWND,
+    launch: Launch,
+    scaling: CustomScaling,
+    window_mode: CustomWindowMode,
+    capture_technique: CustomCaptureTechnique,
+) {
     let Some(source) = wait_for_a_window(&launch) else {
         // A program that made no window is a preview with nothing to show: it goes, and the host
         // is already off the screen.
@@ -896,9 +911,10 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
     // Lock ownership strictly to our launched tree (+ adopted brokered tree if newly spawned).
     let mut processes = owned_pids_for(launch.pid, source_pid, source_is_new);
 
-    // Visible app (ignored `SW_HIDE`): make 1/255 invisible BEFORE any style/size/move changes.
+    // Visible app (ignored `SW_HIDE`): make 1/255 invisible BEFORE any style/size/move changes
+    // when technique is `InvisibleLayered`.
     let was_hidden = !unsafe { IsWindowVisible(source) }.as_bool();
-    let mut invisible_layered = if !was_hidden {
+    let mut invisible_layered = if !was_hidden && tries_invisible_layered(capture_technique) {
         let ok = make_source_invisible(source.0 as isize);
         SOURCE_INVISIBLE_LAYERED.store(ok, Ordering::SeqCst);
         restore_foreground(launch.previous_foreground, &processes);
@@ -917,6 +933,9 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         if invisible_layered {
             keep_source_invisible(source.0 as isize);
         }
+    }
+    if capture_technique == CustomCaptureTechnique::DirectWindow {
+        apply_direct_window_style(source);
     }
 
     let mut placed_mode: Option<PlacementMode> = None;
@@ -953,62 +972,117 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
     let settle_guard = WinEventGuard(settle_hook);
 
     if was_hidden {
-        // App honored `SW_HIDE`: atomically position + reveal at target rect via `SetWindowPlacement`
-        // so it never flashes at its old saved coordinates.
+        // App honored `SW_HIDE`: atomically position + reveal via `SetWindowPlacement` so it never
+        // flashes at its old saved coordinates.
         if let Some(target_rect) = current_target_rect() {
-            let insets = if window_mode == CustomWindowMode::Normal {
-                dwm_frame_insets(source)
-            } else {
-                (0, 0, 0, 0)
-            };
-            let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
-            let workspace_rect = workspace_rect_for_screen(RECT {
-                left: wx,
-                top: wy,
-                right: wx + ww,
-                bottom: wy + wh,
-            });
-            let placement = WINDOWPLACEMENT {
-                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-                flags: WINDOWPLACEMENT_FLAGS(0),
-                showCmd: SW_SHOWNOACTIVATE.0 as u32,
-                rcNormalPosition: workspace_rect,
-                ..Default::default()
-            };
-            let _ = unsafe { SetWindowPlacement(source, &placement) };
-
-            invisible_layered = make_source_invisible(source.0 as isize);
-            SOURCE_INVISIBLE_LAYERED.store(invisible_layered, Ordering::SeqCst);
-            restore_foreground(launch.previous_foreground, &processes);
-
-            let mode = if invisible_layered {
-                place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
-                PlacementMode::InvisibleLayered
-            } else {
-                // Re-read DWM invisible border insets now that `source` is visible for exact alignment.
-                let insets2 = if window_mode == CustomWindowMode::Normal {
-                    dwm_frame_insets(source)
-                } else {
-                    (0, 0, 0, 0)
-                };
-                let (wx2, wy2, ww2, wh2) = behind_host_window_rect(target_rect, insets2);
-                let _ = unsafe {
-                    SetWindowPos(source, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE)
-                };
-                restore_foreground(launch.previous_foreground, &processes);
-                let _ = unsafe { InvalidateRect(source, None, false) };
-                let _ = unsafe { UpdateWindow(source) };
-
-                if aligned_behind_host(source, target_rect) {
-                    PlacementMode::BehindHost
-                } else {
+            let mode = match capture_technique {
+                CustomCaptureTechnique::OffScreen => {
+                    let vscreen = virtual_screen();
+                    let (px, py) = parking_origin(vscreen);
+                    let placement = WINDOWPLACEMENT {
+                        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                        flags: WINDOWPLACEMENT_FLAGS(0),
+                        showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                        rcNormalPosition: RECT {
+                            left: px,
+                            top: py,
+                            right: px + target_rect.2,
+                            bottom: py + target_rect.3,
+                        },
+                        ..Default::default()
+                    };
+                    let _ = unsafe { SetWindowPlacement(source, &placement) };
                     let ask = the_ask_for(
                         (target_rect.2, target_rect.3),
                         source_size(source, window_mode),
                     );
                     the_ask = Some(ask);
                     park_offscreen(source, ask.0, ask.1);
+                    restore_foreground(launch.previous_foreground, &processes);
                     PlacementMode::OffScreen
+                }
+                CustomCaptureTechnique::DirectWindow => {
+                    let insets = if window_mode == CustomWindowMode::Normal {
+                        dwm_frame_insets(source)
+                    } else {
+                        (0, 0, 0, 0)
+                    };
+                    let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+                    let placement = WINDOWPLACEMENT {
+                        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                        flags: WINDOWPLACEMENT_FLAGS(0),
+                        showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                        rcNormalPosition: workspace_rect_for_screen(RECT {
+                            left: wx,
+                            top: wy,
+                            right: wx + ww,
+                            bottom: wy + wh,
+                        }),
+                        ..Default::default()
+                    };
+                    let _ = unsafe { SetWindowPlacement(source, &placement) };
+                    place_direct_window(source, target_rect, window_mode);
+                    restore_foreground(launch.previous_foreground, &processes);
+                    PlacementMode::DirectWindow
+                }
+                CustomCaptureTechnique::InvisibleLayered | CustomCaptureTechnique::BehindHost => {
+                    let insets = if window_mode == CustomWindowMode::Normal {
+                        dwm_frame_insets(source)
+                    } else {
+                        (0, 0, 0, 0)
+                    };
+                    let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+                    let workspace_rect = workspace_rect_for_screen(RECT {
+                        left: wx,
+                        top: wy,
+                        right: wx + ww,
+                        bottom: wy + wh,
+                    });
+                    let placement = WINDOWPLACEMENT {
+                        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                        flags: WINDOWPLACEMENT_FLAGS(0),
+                        showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                        rcNormalPosition: workspace_rect,
+                        ..Default::default()
+                    };
+                    let _ = unsafe { SetWindowPlacement(source, &placement) };
+
+                    if tries_invisible_layered(capture_technique) {
+                        invisible_layered = make_source_invisible(source.0 as isize);
+                        SOURCE_INVISIBLE_LAYERED.store(invisible_layered, Ordering::SeqCst);
+                    }
+                    restore_foreground(launch.previous_foreground, &processes);
+
+                    if invisible_layered {
+                        place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+                        PlacementMode::InvisibleLayered
+                    } else {
+                        // Re-read DWM invisible border insets now that `source` is visible for exact alignment.
+                        let insets2 = if window_mode == CustomWindowMode::Normal {
+                            dwm_frame_insets(source)
+                        } else {
+                            (0, 0, 0, 0)
+                        };
+                        let (wx2, wy2, ww2, wh2) = behind_host_window_rect(target_rect, insets2);
+                        let _ = unsafe {
+                            SetWindowPos(source, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE)
+                        };
+                        restore_foreground(launch.previous_foreground, &processes);
+                        let _ = unsafe { InvalidateRect(source, None, false) };
+                        let _ = unsafe { UpdateWindow(source) };
+
+                        if aligned_behind_host(source, target_rect) {
+                            PlacementMode::BehindHost
+                        } else {
+                            let ask = the_ask_for(
+                                (target_rect.2, target_rect.3),
+                                source_size(source, window_mode),
+                            );
+                            the_ask = Some(ask);
+                            park_offscreen(source, ask.0, ask.1);
+                            PlacementMode::OffScreen
+                        }
+                    }
                 }
             };
             placed_mode = Some(mode);
@@ -1017,7 +1091,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             expected_rect = window_rect(source);
         }
     } else if let Some(target_rect) = current_target_rect() {
-        // App ignored `SW_HIDE`: keep on-monitor in InvisibleLayered, or fall back to BehindHost/OffScreen.
+        // App ignored `SW_HIDE`: apply the selected capture technique immediately.
         placed_mode = Some(if invisible_layered {
             place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
             restore_foreground(launch.previous_foreground, &processes);
@@ -1025,6 +1099,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         } else {
             snap_source(
                 source,
+                capture_technique,
                 target_rect,
                 window_mode,
                 launch.previous_foreground,
@@ -1072,6 +1147,8 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
 
         if invisible_layered {
             keep_source_invisible(source.0 as isize);
+        } else if capture_technique == CustomCaptureTechnique::DirectWindow {
+            apply_direct_window_style(source);
         }
 
         // Ignore self-triggered LOCATIONCHANGE from our own SetWindowPos.
@@ -1081,7 +1158,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
         let needs_resnap = source_moved
             || placed_host_rect != Some(target_rect)
             || match placed_mode {
-                Some(PlacementMode::InvisibleLayered) => false,
+                Some(PlacementMode::InvisibleLayered | PlacementMode::DirectWindow) => false,
                 Some(PlacementMode::BehindHost) => !aligned_behind_host(source, target_rect),
                 Some(PlacementMode::OffScreen) => !parked(source),
                 None => true,
@@ -1097,6 +1174,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             } else {
                 snap_source(
                     source,
+                    capture_technique,
                     target_rect,
                     window_mode,
                     launch.previous_foreground,
@@ -1128,6 +1206,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
                     || settle_start.elapsed() >= Duration::from_millis(150))
         } else {
             behind_host_ready
+                || placed_mode == Some(PlacementMode::DirectWindow)
                 || was_hidden
                 || (launch_idle && source_idle)
                 || settle_start.elapsed() >= Duration::from_millis(150)
@@ -1157,6 +1236,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
                             keep_source_invisible(source.0 as isize);
                             true
                         }
+                        Some(PlacementMode::DirectWindow) => true,
                         Some(PlacementMode::BehindHost) => aligned_behind_host(source, target_rect),
                         Some(PlacementMode::OffScreen) => parked(source),
                         None => false,
@@ -1268,6 +1348,7 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             } else {
                 snap_source(
                     source,
+                    capture_technique,
                     host_rect,
                     window_mode,
                     launch.previous_foreground,
@@ -1284,6 +1365,14 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
                     keep_source_invisible(source.0 as isize);
                     if window_rect(source) != expected_rect {
                         place_invisible_layered(source, host_rect, window_mode, &mut the_ask);
+                        restore_foreground(launch.previous_foreground, &processes);
+                        expected_rect = window_rect(source);
+                    }
+                }
+                Some(PlacementMode::DirectWindow) => {
+                    apply_direct_window_style(source);
+                    if window_rect(source) != expected_rect {
+                        place_direct_window(source, host_rect, window_mode);
                         restore_foreground(launch.previous_foreground, &processes);
                         expected_rect = window_rect(source);
                     }
@@ -1306,11 +1395,18 @@ fn run_it(host: HWND, launch: Launch, scaling: CustomScaling, window_mode: Custo
             }
         }
 
+        if !uses_dwm_host(capture_technique) {
+            // DirectWindow shows `source` directly as HWND_TOPMOST; never register thumbnail or show host.
+            std::thread::sleep(KEEP_POLL);
+            continue;
+        }
+
         let placement_ok = match placed_mode {
             Some(PlacementMode::InvisibleLayered) => {
                 keep_source_invisible(source.0 as isize);
                 true
             }
+            Some(PlacementMode::DirectWindow) => true,
             Some(PlacementMode::BehindHost) => aligned_behind_host(source, host_rect),
             Some(PlacementMode::OffScreen) => parked(source),
             None => false,
@@ -1648,6 +1744,72 @@ enum PlacementMode {
     InvisibleLayered,
     BehindHost,
     OffScreen,
+    DirectWindow,
+}
+
+fn tries_invisible_layered(technique: CustomCaptureTechnique) -> bool {
+    technique == CustomCaptureTechnique::InvisibleLayered
+}
+
+fn uses_dwm_host(technique: CustomCaptureTechnique) -> bool {
+    technique != CustomCaptureTechnique::DirectWindow
+}
+
+/// Ensure click-through, no-taskbar, non-activating extended styles for `DirectWindow` mode.
+fn apply_direct_window_style(window: HWND) {
+    let ex = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+    if (ex as u32 & DIRECT_EX_STYLE) != DIRECT_EX_STYLE {
+        let _ = unsafe { SetWindowLongPtrW(window, GWL_EXSTYLE, ex | (DIRECT_EX_STYLE as isize)) };
+        let _ = unsafe {
+            SetWindowPos(
+                window,
+                HWND::default(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
+    }
+}
+
+/// Place `window` directly at `host_rect` as `HWND_TOPMOST` click-through (no DWM host/thumbnail).
+fn place_direct_window(
+    window: HWND,
+    host_rect: (i32, i32, i32, i32),
+    window_mode: CustomWindowMode,
+) {
+    apply_direct_window_style(window);
+    let insets = if window_mode == CustomWindowMode::Normal {
+        dwm_frame_insets(window)
+    } else {
+        (0, 0, 0, 0)
+    };
+    let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
+
+    if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
+        let placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            flags: WINDOWPLACEMENT_FLAGS(0),
+            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+            rcNormalPosition: workspace_rect_for_screen(RECT {
+                left: wx,
+                top: wy,
+                right: wx + ww,
+                bottom: wy + wh,
+            }),
+            ..Default::default()
+        };
+        let _ = unsafe { SetWindowPlacement(window, &placement) };
+    }
+
+    let _ = unsafe { SetWindowPos(window, HWND_TOPMOST, wx, wy, ww, wh, SWP_NOACTIVATE) };
+    if !unsafe { IsWindowVisible(window) }.as_bool() {
+        let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+    }
+    let _ = unsafe { InvalidateRect(window, None, false) };
+    let _ = unsafe { UpdateWindow(window) };
 }
 
 /// True when `WS_EX_LAYERED` + `LWA_ALPHA = 1` is safe for a window with `ex_style`.
@@ -2179,37 +2341,53 @@ fn park_offscreen(window: HWND, width: i32, height: i32) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SnapAction {
     KeepInvisibleLayered,
+    PlaceDirectWindow,
     KeepOffScreen,
     ReparkOffScreen,
     TryBehindHost,
 }
 
-/// Never bounce an `InvisibleLayered` or `OffScreen` window back through `BehindHost` (unless `OffScreen` and `host_rect` grew).
+/// Decide placement action for `technique`; never bounce `InvisibleLayered` or `OffScreen` through `BehindHost`.
 fn decide_snap_action(
+    technique: CustomCaptureTechnique,
     current_mode: Option<PlacementMode>,
     is_parked: bool,
     prev_host_rect: Option<(i32, i32, i32, i32)>,
     target_rect: (i32, i32, i32, i32),
 ) -> SnapAction {
-    if current_mode == Some(PlacementMode::InvisibleLayered) {
-        return SnapAction::KeepInvisibleLayered;
-    }
-    let host_grew =
-        prev_host_rect.is_some_and(|(_, _, pw, ph)| target_rect.2 > pw || target_rect.3 > ph);
-    if current_mode == Some(PlacementMode::OffScreen) && !host_grew {
-        if is_parked {
-            SnapAction::KeepOffScreen
-        } else {
-            SnapAction::ReparkOffScreen
+    match technique {
+        CustomCaptureTechnique::DirectWindow => SnapAction::PlaceDirectWindow,
+        CustomCaptureTechnique::OffScreen => {
+            if is_parked {
+                SnapAction::KeepOffScreen
+            } else {
+                SnapAction::ReparkOffScreen
+            }
         }
-    } else {
-        SnapAction::TryBehindHost
+        CustomCaptureTechnique::InvisibleLayered | CustomCaptureTechnique::BehindHost => {
+            if current_mode == Some(PlacementMode::InvisibleLayered) {
+                return SnapAction::KeepInvisibleLayered;
+            }
+            let host_grew = prev_host_rect
+                .is_some_and(|(_, _, pw, ph)| target_rect.2 > pw || target_rect.3 > ph);
+            if current_mode == Some(PlacementMode::OffScreen) && !host_grew {
+                if is_parked {
+                    SnapAction::KeepOffScreen
+                } else {
+                    SnapAction::ReparkOffScreen
+                }
+            } else {
+                SnapAction::TryBehindHost
+            }
+        }
     }
 }
 
-/// Snap `source` behind `host` (or off-screen if min size exceeds `target_rect`) and restore focus.
+/// Snap `source` according to `technique` and restore focus.
+#[allow(clippy::too_many_arguments)]
 fn snap_source(
     source: HWND,
+    technique: CustomCaptureTechnique,
     target_rect: (i32, i32, i32, i32),
     window_mode: CustomWindowMode,
     previous_foreground: isize,
@@ -2218,11 +2396,22 @@ fn snap_source(
     prior: Option<(PlacementMode, (i32, i32, i32, i32))>,
 ) -> PlacementMode {
     let (current_mode, prev_host_rect) = prior.unzip();
-    match decide_snap_action(current_mode, parked(source), prev_host_rect, target_rect) {
+    match decide_snap_action(
+        technique,
+        current_mode,
+        parked(source),
+        prev_host_rect,
+        target_rect,
+    ) {
         SnapAction::KeepInvisibleLayered => {
             place_invisible_layered(source, target_rect, window_mode, the_ask);
             restore_foreground(previous_foreground, processes);
             PlacementMode::InvisibleLayered
+        }
+        SnapAction::PlaceDirectWindow => {
+            place_direct_window(source, target_rect, window_mode);
+            restore_foreground(previous_foreground, processes);
+            PlacementMode::DirectWindow
         }
         SnapAction::KeepOffScreen => PlacementMode::OffScreen,
         SnapAction::ReparkOffScreen => {
@@ -3252,17 +3441,30 @@ mod tests {
         let host = (200, 120, 640, 480);
         // Already parked OffScreen -> no-op.
         assert_eq!(
-            decide_snap_action(Some(PlacementMode::OffScreen), true, Some(host), host),
+            decide_snap_action(
+                CustomCaptureTechnique::BehindHost,
+                Some(PlacementMode::OffScreen),
+                true,
+                Some(host),
+                host
+            ),
             SnapAction::KeepOffScreen
         );
         // OffScreen drifted on-screen -> re-park directly, never bounce through BehindHost.
         assert_eq!(
-            decide_snap_action(Some(PlacementMode::OffScreen), false, Some(host), host),
+            decide_snap_action(
+                CustomCaptureTechnique::BehindHost,
+                Some(PlacementMode::OffScreen),
+                false,
+                Some(host),
+                host
+            ),
             SnapAction::ReparkOffScreen
         );
         // Host moved without growing -> stay OffScreen.
         assert_eq!(
             decide_snap_action(
+                CustomCaptureTechnique::BehindHost,
                 Some(PlacementMode::OffScreen),
                 true,
                 Some(host),
@@ -3273,6 +3475,7 @@ mod tests {
         // Host grew larger -> retry BehindHost.
         assert_eq!(
             decide_snap_action(
+                CustomCaptureTechnique::BehindHost,
                 Some(PlacementMode::OffScreen),
                 true,
                 Some(host),
@@ -3282,11 +3485,17 @@ mod tests {
         );
         // Initial or BehindHost -> try BehindHost.
         assert_eq!(
-            decide_snap_action(None, false, None, host),
+            decide_snap_action(CustomCaptureTechnique::BehindHost, None, false, None, host),
             SnapAction::TryBehindHost
         );
         assert_eq!(
-            decide_snap_action(Some(PlacementMode::BehindHost), false, Some(host), host),
+            decide_snap_action(
+                CustomCaptureTechnique::BehindHost,
+                Some(PlacementMode::BehindHost),
+                false,
+                Some(host),
+                host
+            ),
             SnapAction::TryBehindHost
         );
     }
@@ -3787,6 +3996,7 @@ mod tests {
         let host = (200, 120, 640, 480);
         assert_eq!(
             decide_snap_action(
+                CustomCaptureTechnique::InvisibleLayered,
                 Some(PlacementMode::InvisibleLayered),
                 false,
                 Some(host),
@@ -3796,6 +4006,7 @@ mod tests {
         );
         assert_eq!(
             decide_snap_action(
+                CustomCaptureTechnique::InvisibleLayered,
                 Some(PlacementMode::InvisibleLayered),
                 false,
                 Some(host),
@@ -3805,12 +4016,60 @@ mod tests {
         );
         assert_eq!(
             decide_snap_action(
+                CustomCaptureTechnique::InvisibleLayered,
                 Some(PlacementMode::InvisibleLayered),
                 true,
                 Some(host),
                 (100, 80, 320, 240)
             ),
             SnapAction::KeepInvisibleLayered
+        );
+    }
+
+    #[test]
+    fn capture_technique_dispatches_host_and_snap_actions_accurately() {
+        let host = (200, 120, 640, 480);
+        // Only InvisibleLayered attempts WS_EX_LAYERED; only DirectWindow skips DWM host.
+        assert!(tries_invisible_layered(
+            CustomCaptureTechnique::InvisibleLayered
+        ));
+        assert!(!tries_invisible_layered(CustomCaptureTechnique::BehindHost));
+        assert!(!tries_invisible_layered(CustomCaptureTechnique::OffScreen));
+        assert!(!tries_invisible_layered(
+            CustomCaptureTechnique::DirectWindow
+        ));
+
+        assert!(uses_dwm_host(CustomCaptureTechnique::InvisibleLayered));
+        assert!(uses_dwm_host(CustomCaptureTechnique::BehindHost));
+        assert!(uses_dwm_host(CustomCaptureTechnique::OffScreen));
+        assert!(!uses_dwm_host(CustomCaptureTechnique::DirectWindow));
+
+        // OffScreen technique always parks/keeps off-screen, even if host grew.
+        assert_eq!(
+            decide_snap_action(CustomCaptureTechnique::OffScreen, None, false, None, host),
+            SnapAction::ReparkOffScreen
+        );
+        assert_eq!(
+            decide_snap_action(
+                CustomCaptureTechnique::OffScreen,
+                Some(PlacementMode::OffScreen),
+                true,
+                Some(host),
+                (200, 120, 900, 700)
+            ),
+            SnapAction::KeepOffScreen
+        );
+
+        // DirectWindow always places directly without BehindHost/OffScreen.
+        assert_eq!(
+            decide_snap_action(
+                CustomCaptureTechnique::DirectWindow,
+                None,
+                false,
+                None,
+                host
+            ),
+            SnapAction::PlaceDirectWindow
         );
     }
 }

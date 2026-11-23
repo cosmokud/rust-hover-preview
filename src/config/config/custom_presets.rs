@@ -91,6 +91,41 @@ impl CustomWindowMode {
     }
 }
 
+/// How a custom preview captures and displays the target application's window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomCaptureTechnique {
+    /// On-monitor `WS_EX_LAYERED` + `LWA_ALPHA = 1` + DWM thumbnail (auto-falls back when unsupported).
+    #[default]
+    InvisibleLayered,
+    /// On-monitor behind opaque `host` at `HWND_BOTTOM` + DWM thumbnail.
+    BehindHost,
+    /// Parked off-screen + DWM thumbnail.
+    OffScreen,
+    /// Target window placed directly at preview rect (`HWND_TOPMOST`, click-through, no host/thumbnail).
+    DirectWindow,
+}
+
+impl CustomCaptureTechnique {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvisibleLayered => "invisible_layered",
+            Self::BehindHost => "behind_host",
+            Self::OffScreen => "off_screen",
+            Self::DirectWindow => "direct_window",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "invisible_layered" | "invisible-layered" => Some(Self::InvisibleLayered),
+            "behind_host" | "behind-host" => Some(Self::BehindHost),
+            "off_screen" | "off-screen" | "offscreen" => Some(Self::OffScreen),
+            "direct_window" | "direct-window" => Some(Self::DirectWindow),
+            _ => None,
+        }
+    }
+}
+
 /// How a custom preview is sized: either following `Tray -> Scaling` for the hovered file's kind,
 /// or an explicit per-preset override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -153,6 +188,8 @@ pub struct CustomPreset {
     pub extensions: Vec<String>,
     /// Whether the target window keeps its normal frame or is captured borderless.
     pub window_mode: CustomWindowMode,
+    /// Capture/display technique used for this preset's target window.
+    pub capture_technique: CustomCaptureTechnique,
     /// How large the preview is drawn in the hover: following `Tray -> Scaling` by default, or an
     /// explicit per-preset share of the room.
     pub scaling: CustomScaling,
@@ -168,6 +205,7 @@ impl Default for CustomPreset {
             exe: String::new(),
             extensions: Vec::new(),
             window_mode: CustomWindowMode::default(),
+            capture_technique: CustomCaptureTechnique::default(),
             scaling: CustomScaling::default(),
             volume: DEFAULT_AUDIO_VOLUME,
         }
@@ -313,6 +351,11 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
             "window_mode",
             Some(preset.window_mode.as_str().to_string()),
         );
+        ini.set(
+            &section,
+            "capture_technique",
+            Some(preset.capture_technique.as_str().to_string()),
+        );
         ini.set(&section, "scaling", Some(preset.scaling.as_str()));
         ini.set(&section, "volume", Some(preset.volume.to_string()));
     }
@@ -380,6 +423,11 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         if let Some(window_mode) = ini.get(section, "window_mode") {
             if let Some(mode) = CustomWindowMode::from_str(&window_mode) {
                 preset.window_mode = mode;
+            }
+        }
+        if let Some(technique) = ini.get(section, "capture_technique") {
+            if let Some(parsed) = CustomCaptureTechnique::from_str(&technique) {
+                preset.capture_technique = parsed;
             }
         }
         if let Some(scaling) = ini.get(section, "scaling") {
@@ -694,5 +742,56 @@ mod tests {
         );
         assert_eq!(config.custom_presets[0].scaling, CustomScaling::FollowTray);
         assert!(!config.custom_presets[0].is_usable());
+    }
+
+    #[test]
+    fn capture_technique_round_trips_and_defaults_to_invisible_layered() {
+        let cases = [
+            (
+                CustomCaptureTechnique::InvisibleLayered,
+                "invisible_layered",
+            ),
+            (CustomCaptureTechnique::BehindHost, "behind_host"),
+            (CustomCaptureTechnique::OffScreen, "off_screen"),
+            (CustomCaptureTechnique::DirectWindow, "direct_window"),
+        ];
+        for (tech, expected_str) in cases {
+            let mut preset = CustomPreset::named("TechTest");
+            preset.exe = "viewer.exe".into();
+            preset.set_extensions_text("png");
+            preset.capture_technique = tech;
+
+            let cfg = config_with(vec![preset]);
+            let mut ini = Ini::new();
+            write_all(&cfg, &mut ini);
+            assert_eq!(
+                ini.get("custom:techtest", "capture_technique").as_deref(),
+                Some(expected_str)
+            );
+
+            let mut read = AppConfig::default();
+            read_all(&ini, &mut read);
+            assert_eq!(read.custom_presets[0].capture_technique, tech);
+        }
+
+        // Missing or unknown value falls back to InvisibleLayered.
+        let mut legacy = Ini::new();
+        legacy.set("custom:missing", "name", Some("Missing".into()));
+        legacy.set("custom:missing", "exe", Some("a.exe".into()));
+        legacy.set("custom:missing", "extensions", Some("png".into()));
+        legacy.set("custom:unknown", "name", Some("Unknown".into()));
+        legacy.set("custom:unknown", "exe", Some("b.exe".into()));
+        legacy.set("custom:unknown", "extensions", Some("png".into()));
+        legacy.set("custom:unknown", "capture_technique", Some("bogus".into()));
+
+        let mut read = AppConfig::default();
+        read_all(&legacy, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        for p in &read.custom_presets {
+            assert_eq!(
+                p.capture_technique,
+                CustomCaptureTechnique::InvisibleLayered
+            );
+        }
     }
 }

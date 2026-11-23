@@ -67,8 +67,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::config::{
-    sanitize_program_input, CustomPreset, CustomScaling, CustomWindowMode, PreviewScale, TextTheme,
-    MAX_PRESETS,
+    sanitize_program_input, CustomCaptureTechnique, CustomPreset, CustomScaling, CustomWindowMode,
+    PreviewScale, TextTheme, MAX_PRESETS,
 };
 use crate::text::{text_paint, text_theme};
 use crate::CONFIG;
@@ -137,6 +137,7 @@ const ID_ENABLED: i32 = 116;
 const ID_VOLUME: i32 = 117;
 const ID_VOLUME_VALUE: i32 = 118;
 const ID_WINDOW_MODE: i32 = 119;
+const ID_CAPTURE_TECHNIQUE: i32 = 120;
 const ID_DELETE: i32 = 121;
 const ID_CLOSE_BUTTON: i32 = 122;
 const ID_SCALING_UP: i32 = 123;
@@ -183,6 +184,26 @@ fn window_mode_label(mode: CustomWindowMode) -> &'static str {
         CustomWindowMode::Normal => "Normal",
         CustomWindowMode::Borderless => "Borderless",
     }
+}
+
+const CAPTURE_TECHNIQUES: [CustomCaptureTechnique; 4] = [
+    CustomCaptureTechnique::InvisibleLayered,
+    CustomCaptureTechnique::BehindHost,
+    CustomCaptureTechnique::OffScreen,
+    CustomCaptureTechnique::DirectWindow,
+];
+
+fn capture_technique_label(technique: CustomCaptureTechnique) -> &'static str {
+    match technique {
+        CustomCaptureTechnique::InvisibleLayered => "Invisible Layered (Default)",
+        CustomCaptureTechnique::BehindHost => "Behind Host (On-Screen)",
+        CustomCaptureTechnique::OffScreen => "Off-Screen (DWM)",
+        CustomCaptureTechnique::DirectWindow => "Direct Window",
+    }
+}
+
+fn is_combo(id: u32) -> bool {
+    id == ID_WINDOW_MODE as u32 || id == ID_CAPTURE_TECHNIQUE as u32 || id == ID_SCALING as u32
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -688,7 +709,7 @@ unsafe fn apply_theme(state: &mut State) {
         state.brush_field = CreateSolidBrush(palette.field);
         state.brush_field_disabled = CreateSolidBrush(palette.field_disabled);
         apply_dwm_chrome(state.hwnd, palette.dark);
-        for id in [ID_WINDOW_MODE, ID_SCALING] {
+        for id in [ID_WINDOW_MODE, ID_CAPTURE_TECHNIQUE, ID_SCALING] {
             if let Ok(combo) = GetDlgItem(state.hwnd, id) {
                 apply_combo_list_theme(combo, palette.dark);
             }
@@ -933,7 +954,7 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
             let dpi = (unsafe { GetDpiForWindow(hwnd) } as i32).max(96);
             info.ptMinTrackSize.x = scale(680, dpi);
-            info.ptMinTrackSize.y = scale(460, dpi);
+            info.ptMinTrackSize.y = scale(500, dpi);
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -1477,6 +1498,7 @@ unsafe fn build(hwnd: HWND) -> State {
         "Extensions",
         "Program",
         "Window",
+        "Capture Technique",
         "Scaling",
         "Volume",
     ];
@@ -1523,6 +1545,21 @@ unsafe fn build(hwnd: HWND) -> State {
                     | CBS_OWNERDRAWFIXED as u32
                     | CBS_HASSTRINGS as u32,
             ),
+            ID_CAPTURE_TECHNIQUE,
+        )
+    });
+    controls.push(unsafe {
+        child(
+            hwnd,
+            w!("COMBOBOX"),
+            "",
+            child_style(
+                WS_TABSTOP.0
+                    | WS_VSCROLL.0
+                    | CBS_DROPDOWNLIST as u32
+                    | CBS_OWNERDRAWFIXED as u32
+                    | CBS_HASSTRINGS as u32,
+            ),
             ID_SCALING,
         )
     });
@@ -1553,7 +1590,7 @@ unsafe fn build(hwnd: HWND) -> State {
             }
         }
     }
-    for index in 0..7 {
+    for index in 0..8 {
         if let Ok(lbl) = unsafe { GetDlgItem(hwnd, ID_LABEL_BASE + index) } {
             unsafe {
                 SendMessageW(
@@ -1612,13 +1649,19 @@ unsafe fn build(hwnd: HWND) -> State {
         unsafe { combo_add(window_mode_combo, window_mode_label(mode)) };
     }
 
+    let capture_technique_combo =
+        unsafe { GetDlgItem(hwnd, ID_CAPTURE_TECHNIQUE) }.unwrap_or_default();
+    for technique in CAPTURE_TECHNIQUES {
+        unsafe { combo_add(capture_technique_combo, capture_technique_label(technique)) };
+    }
+
     let scaling = unsafe { GetDlgItem(hwnd, ID_SCALING) }.unwrap_or_default();
     for (label, _) in SCALE_CHOICES {
         unsafe { combo_add(scaling, label) };
     }
     unsafe { combo_add(scaling, "Custom…") };
 
-    for combo in [window_mode_combo, scaling] {
+    for combo in [window_mode_combo, capture_technique_combo, scaling] {
         if !combo.0.is_null() {
             unsafe {
                 install_combo_subclass(combo, hwnd);
@@ -3362,7 +3405,7 @@ unsafe fn lay_out(state: &mut State) {
     let inner = scale(12, dpi);
     let row = scale(30, dpi);
     let gap = scale(10, dpi);
-    let label_w = scale(92, dpi);
+    let label_w = scale(140, dpi);
     let stepper_w = scale(22, dpi);
     let half_row = row / 2;
     let text_h = unsafe { font_text_height(state.hwnd, state.font) };
@@ -3421,7 +3464,7 @@ unsafe fn lay_out(state: &mut State) {
     let field_w = (ec.right - inner - scale(4, dpi) - field_left).max(scale(140, dpi));
 
     let mut y = ec.top + inner + scale(4, dpi);
-    for index in 0..7 {
+    for index in 0..8 {
         place(
             ID_LABEL_BASE + index,
             e_left,
@@ -3453,6 +3496,15 @@ unsafe fn lay_out(state: &mut State) {
 
     place(
         ID_WINDOW_MODE,
+        field_left,
+        y,
+        field_w,
+        row + combo_drop_height(dpi),
+    );
+    y += row + gap;
+
+    place(
+        ID_CAPTURE_TECHNIQUE,
         field_left,
         y,
         field_w,
@@ -3590,10 +3642,12 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                 unsafe { exe_changed(state) };
             }
         }
-        ID_WINDOW_MODE | ID_SCALING => {
+        ID_WINDOW_MODE | ID_CAPTURE_TECHNIQUE | ID_SCALING => {
             if notice == CBN_SELCHANGE {
                 if id == ID_WINDOW_MODE {
                     unsafe { window_mode_chosen(state) };
+                } else if id == ID_CAPTURE_TECHNIQUE {
+                    unsafe { capture_technique_chosen(state) };
                 } else {
                     unsafe { scaling_chosen(state) };
                 }
@@ -3675,7 +3729,7 @@ unsafe fn fill_fields(state: &mut State) {
         ] {
             unsafe { set_text(state.hwnd, id, "") };
         }
-        for id in [ID_WINDOW_MODE, ID_SCALING] {
+        for id in [ID_WINDOW_MODE, ID_CAPTURE_TECHNIQUE, ID_SCALING] {
             let combo = unsafe { GetDlgItem(state.hwnd, id) }.unwrap_or_default();
             unsafe { SendMessageW(combo, CB_SETCURSEL, WPARAM(usize::MAX), LPARAM(0)) };
         }
@@ -3691,6 +3745,7 @@ unsafe fn fill_fields(state: &mut State) {
     let extensions = preset.extensions_text();
     let exe = preset.exe.clone();
     let window_mode = preset.window_mode;
+    let capture_technique = preset.capture_technique;
     let scaling = preset.scaling;
     let volume = preset.volume;
 
@@ -3717,6 +3772,18 @@ unsafe fn fill_fields(state: &mut State) {
             mode_combo,
             CB_SETCURSEL,
             WPARAM(mode_index as usize),
+            LPARAM(0),
+        );
+
+        let technique_combo = GetDlgItem(state.hwnd, ID_CAPTURE_TECHNIQUE).unwrap_or_default();
+        let technique_index = CAPTURE_TECHNIQUES
+            .iter()
+            .position(|held| *held == capture_technique)
+            .unwrap_or(0) as i32;
+        SendMessageW(
+            technique_combo,
+            CB_SETCURSEL,
+            WPARAM(technique_index as usize),
             LPARAM(0),
         );
 
@@ -3758,6 +3825,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_EXE,
         ID_BROWSE,
         ID_WINDOW_MODE,
+        ID_CAPTURE_TECHNIQUE,
         ID_SCALING,
         ID_VOLUME,
         ID_VOLUME_VALUE,
@@ -3972,6 +4040,27 @@ unsafe fn window_mode_chosen(state: &mut State) {
     };
     if let Some(preset) = state.presets.get_mut(index) {
         preset.window_mode = mode;
+    }
+    state.dirtied = true;
+}
+
+unsafe fn capture_technique_chosen(state: &mut State) {
+    if state.loading {
+        return;
+    }
+    let Some(index) = state.selected else {
+        return;
+    };
+    let combo = unsafe { GetDlgItem(state.hwnd, ID_CAPTURE_TECHNIQUE) }.unwrap_or_default();
+    let choice = unsafe { SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+    let Some(technique) = usize::try_from(choice)
+        .ok()
+        .and_then(|choice| CAPTURE_TECHNIQUES.get(choice).copied())
+    else {
+        return;
+    };
+    if let Some(preset) = state.presets.get_mut(index) {
+        preset.capture_technique = technique;
     }
     state.dirtied = true;
 }
@@ -4255,11 +4344,7 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
             p.button_bg
         };
         (fill, p.border, if disabled { p.muted } else { p.ink })
-    } else if (item.CtlID == ID_LIST as u32
-        || item.CtlID == ID_WINDOW_MODE as u32
-        || item.CtlID == ID_SCALING as u32)
-        && selected
-    {
+    } else if (item.CtlID == ID_LIST as u32 || is_combo(item.CtlID)) && selected {
         (mix(p.field, p.accent, 22), p.accent, p.ink)
     } else {
         (p.field, p.border, if disabled { p.muted } else { p.ink })
@@ -4349,7 +4434,7 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
                 );
                 String::from_utf16_lossy(&buffer[..length])
             }
-            id if id == ID_WINDOW_MODE as u32 || id == ID_SCALING as u32 => {
+            id if is_combo(id) => {
                 let combo = item.hwndItem;
                 let index = if item.itemID == u32::MAX {
                     SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0
@@ -4388,7 +4473,7 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         }
 
         let mut text: Vec<u16> = text.encode_utf16().collect();
-        let mut rect = if item.CtlID == ID_WINDOW_MODE as u32 || item.CtlID == ID_SCALING as u32 {
+        let mut rect = if is_combo(item.CtlID) {
             combo_label_rect(item.rcItem, dpi)
         } else {
             item.rcItem
@@ -4440,7 +4525,7 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         let flags = if is_button(item.CtlID) {
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX
         } else {
-            if item.CtlID != ID_WINDOW_MODE as u32 && item.CtlID != ID_SCALING as u32 {
+            if !is_combo(item.CtlID) {
                 rect.left += scale(10, dpi);
             }
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS
@@ -4597,6 +4682,7 @@ mod tests {
                 ID_EXTENSIONS,
                 ID_EXE,
                 ID_WINDOW_MODE,
+                ID_CAPTURE_TECHNIQUE,
                 ID_SCALING,
                 ID_SCALING_UP,
                 ID_SCALING_DOWN,
@@ -4978,6 +5064,55 @@ mod tests {
                 0,
                 "ID_LIST must have LBS_NOINTEGRALHEIGHT to prevent vertical resize bounce"
             );
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn capture_technique_combo_selects_and_updates_preset_technique() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.presets.clear();
+            state.presets.push(CustomPreset::named("CaptureTest"));
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
+
+            let combo = GetDlgItem(hwnd, ID_CAPTURE_TECHNIQUE).unwrap_or_default();
+            assert!(IsWindowEnabled(combo).as_bool());
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                0,
+                "defaults to InvisibleLayered (index 0)"
+            );
+            assert_eq!(
+                state.presets[0].capture_technique,
+                CustomCaptureTechnique::InvisibleLayered
+            );
+
+            for (idx, expected) in CAPTURE_TECHNIQUES.iter().copied().enumerate() {
+                SendMessageW(combo, CB_SETCURSEL, WPARAM(idx), LPARAM(0));
+                command(state, ID_CAPTURE_TECHNIQUE, CBN_SELCHANGE);
+                assert_eq!(state.presets[0].capture_technique, expected);
+                assert!(state.dirtied);
+                state.dirtied = false;
+            }
+
+            // Label width leaves ample room for "Capture Technique" without clipping.
+            let label = GetDlgItem(hwnd, ID_LABEL_BASE + 5).unwrap_or_default();
+            let mut lrc = RECT::default();
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(label, &mut lrc);
+            assert!(
+                lrc.right - lrc.left >= scale(125, state.dpi),
+                "Capture Technique label width {}px too narrow",
+                lrc.right - lrc.left
+            );
+
             let _ = DestroyWindow(hwnd);
         }
     }
