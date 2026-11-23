@@ -66,7 +66,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::config::{
-    CustomPreset, CustomScaling, CustomWindowMode, PreviewScale, TextTheme, MAX_PRESETS,
+    sanitize_program_input, CustomPreset, CustomScaling, CustomWindowMode, PreviewScale, TextTheme,
+    MAX_PRESETS,
 };
 use crate::text::{text_paint, text_theme};
 use crate::CONFIG;
@@ -3377,9 +3378,16 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
             }
         }
         ID_ADD => unsafe { add_preset(state) },
-        ID_NAME | ID_EXTENSIONS | ID_EXE => {
+        ID_NAME | ID_EXTENSIONS => {
             if notice == EN_CHANGE {
                 unsafe { fields_changed(state) };
+            }
+        }
+        ID_EXE => {
+            if notice == EN_CHANGE {
+                // **Cleaned here and not only on save**, so the box holds the program the preview
+                // runs: `Copy as path` pastes it quoted, which is not a path to anything.
+                unsafe { exe_changed(state) };
             }
         }
         ID_WINDOW_MODE => {
@@ -3656,6 +3664,28 @@ unsafe fn fields_changed(state: &mut State) {
     preset.set_extensions_text(&extensions);
 
     unsafe { rebuild_list(state) };
+}
+
+/// The program field as it is typed or pasted: cleaned of the quotes and line breaks a paste
+/// brings, put back in the box when it changed, then kept on the preset.
+unsafe fn exe_changed(state: &mut State) {
+    if state.loading {
+        return;
+    }
+    let typed = unsafe { text_of(state.hwnd, ID_EXE) };
+    let cleaned = sanitize_program_input(&typed);
+    if cleaned != typed {
+        let caret = cleaned.len() as isize;
+        state.loading = true;
+        unsafe {
+            set_text(state.hwnd, ID_EXE, &cleaned);
+            if let Ok(edit) = GetDlgItem(state.hwnd, ID_EXE) {
+                SendMessageW(edit, EM_SETSEL, WPARAM(caret as usize), LPARAM(caret));
+            }
+        }
+        state.loading = false;
+    }
+    unsafe { fields_changed(state) };
 }
 
 unsafe fn window_mode_chosen(state: &mut State) {

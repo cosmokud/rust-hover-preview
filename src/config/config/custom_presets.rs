@@ -259,9 +259,16 @@ pub fn sanitize_name(raw: &str) -> Option<String> {
 /// A program path reduced to what one `key=value` line may hold: trimmed, without the quotes a
 /// user copies around a path with spaces in it, and without a newline a paste may bring.
 fn sanitize_exe(raw: &str) -> String {
-    raw.trim()
+    sanitize_program_input(raw)
+}
+
+/// The program field as a paste hands it over: **Explorer's `Copy as path` (Ctrl+Shift+C) wraps the
+/// path in `"`**, so `"C:\Program Files\IrfanView\i_view64.exe"` is the program `C:\Program
+/// Files\IrfanView\i_view64.exe`, and a multi-line copy's line break is nobody's path.
+pub fn sanitize_program_input(raw: &str) -> String {
+    raw.replace(['\r', '\n'], "")
+        .trim()
         .trim_matches('"')
-        .replace(['\r', '\n'], "")
         .trim()
         .to_string()
 }
@@ -436,6 +443,19 @@ mod tests {
         let config = config_with(vec![preset]);
         assert!(preset_for(&config, Path::new("art.psd")).is_some());
         assert!(preset_for(&config, Path::new("art.png")).is_none());
+    }
+
+    #[test]
+    fn a_copied_as_path_program_loses_its_quotes() {
+        assert_eq!(
+            sanitize_program_input("\"C:\\Program Files\\IrfanView\\i_view64.exe\""),
+            "C:\\Program Files\\IrfanView\\i_view64.exe"
+        );
+        assert_eq!(
+            sanitize_program_input("  \"C:\\tools\\art.exe\"\r\n"),
+            "C:\\tools\\art.exe"
+        );
+        assert_eq!(sanitize_program_input("  "), "");
     }
 
     #[test]

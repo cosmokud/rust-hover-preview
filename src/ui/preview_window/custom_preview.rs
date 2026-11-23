@@ -595,6 +595,10 @@ fn bypass_placement() -> bool {
 /// a preview with nothing on screen. The search `Command` would have done is done here instead,
 /// so a preset that names a program is a preset that runs.
 fn resolved(exe: &str) -> Option<String> {
+    // **Trimmed of the quotes a paste brings.** The field is written as it was pasted — Ctrl+Shift+C
+    // hands over `"C:\Program Files\IrfanView\i_view64.exe"` — and nothing compared here is a path
+    // while the quotes are still around it.
+    let exe = exe.trim().trim_matches('"');
     let named = Path::new(exe);
     if named.is_file() {
         return Some(exe.to_string());
@@ -2826,6 +2830,10 @@ mod tests {
         assert!(
             resolved(r"C:\no such folder\no such program.exe").is_none(),
             "and a path that is not there is not a name to search for"
+        );
+        assert!(
+            resolved("\"cmd.exe\"").is_some(),
+            "the quotes `Copy as path` brings around a program are not part of it"
         );
     }
 
