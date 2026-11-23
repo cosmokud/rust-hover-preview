@@ -45,24 +45,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetNextDlgTabItem, GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW,
     GetWindowTextW, IsWindow, IsZoomed, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage,
     RegisterClassExW, SendMessageW, SetCursor, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW, CBS_DROPDOWNLIST,
-    CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE,
-    CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL,
-    GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
-    HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_SIZEALL, LBN_SELCHANGE,
-    LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING,
-    LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT,
-    LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS, SM_CXDOUBLECLK, SM_CXPADDEDBORDER,
-    SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN,
-    WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT,
-    WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED,
-    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW, CBN_SELCHANGE,
+    CBN_SELENDOK, CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL,
+    CB_GETDROPPEDSTATE, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE,
+    ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
+    HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_SIZEALL,
+    LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED,
+    LB_ADDSTRING, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT,
+    LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS, SM_CXDOUBLECLK,
+    SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOW, SW_SHOWNORMAL, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP,
+    WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN,
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ENABLE,
+    WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE,
+    WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE,
+    WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::config::config::{
@@ -101,6 +102,10 @@ const WM_TOGGLE_CHANGED: u32 = WM_APP + 24;
 const WM_PRESET_DRAG_MOVE: u32 = WM_APP + 25;
 /// The end of that drag, on the drop or on a capture the list lost some other way.
 const WM_PRESET_DRAG_END: u32 = WM_APP + 26;
+/// A field has been left, and what it holds is what the user meant: posted by a control when the
+/// focus or the pointer leaves it, so the save runs on the parent's own message rather than inside
+/// the control's (`WM_PRESET_DRAG_MOVE` says why that matters).
+const WM_AUTOSAVE: u32 = WM_APP + 27;
 
 const TITLEBAR_LOGICAL_H: i32 = 40;
 const TITLEBAR_BTN_W: i32 = 44;
@@ -132,7 +137,6 @@ const ID_ENABLED: i32 = 116;
 const ID_VOLUME: i32 = 117;
 const ID_VOLUME_VALUE: i32 = 118;
 const ID_WINDOW_MODE: i32 = 119;
-const ID_SAVE: i32 = 120;
 const ID_DELETE: i32 = 121;
 const ID_CLOSE_BUTTON: i32 = 122;
 const ID_SCALING_UP: i32 = 123;
@@ -388,6 +392,8 @@ struct State {
     shown: Vec<usize>,
     /// The drawn row holding the preset a drag is carrying, while one is in flight.
     drag: Option<usize>,
+    /// A field of the open preset has been edited and not yet written (see `autosave`).
+    dirtied: bool,
     loading: bool,
     palette: Palette,
     font: HFONT,
@@ -527,9 +533,15 @@ fn theme_now() -> TextTheme {
         .unwrap_or(TextTheme::Light)
 }
 
-fn persist(state: &State) -> Result<(), String> {
+/// The window's presets as the file may hold them, or the one thing wrong with them.
+///
+/// It is a plain value rather than a write: a preset with no name and two presets of one name are
+/// the two mistakes the window can be in, and either is refused before anything is written — a
+/// name being retyped passes through the first on its way to the second, and writing it would put
+/// a nameless section in the file.
+fn clean(presets: &[CustomPreset]) -> Result<Vec<CustomPreset>, String> {
     let mut cleaned: Vec<CustomPreset> = Vec::new();
-    for preset in state.presets.iter() {
+    for preset in presets {
         let Some(preset) = preset.clone().sanitized() else {
             return Err("A preset needs a name.".to_string());
         };
@@ -541,13 +553,7 @@ fn persist(state: &State) -> Result<(), String> {
         }
         cleaned.push(preset);
     }
-
-    let Ok(mut config) = CONFIG.lock() else {
-        return Err("The configuration is busy; try again.".to_string());
-    };
-    config.custom_presets = cleaned;
-    config.save();
-    Ok(())
+    Ok(cleaned)
 }
 
 fn run() {
@@ -967,9 +973,15 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
         WM_PRESET_DRAG_END => {
             if let Some(state) = unsafe { state_of(hwnd) } {
                 state.drag = None;
-                // The list is the order a file is routed by, so a move is kept at once rather
-                // than at the next Save.
-                let _ = persist(state);
+                // The list is the order a file is routed by, so a move is written at once.
+                state.dirtied = true;
+                unsafe { autosave(state) };
+            }
+            LRESULT(0)
+        }
+        WM_AUTOSAVE => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                unsafe { autosave(state) };
             }
             LRESULT(0)
         }
@@ -1062,6 +1074,16 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             }
             LRESULT(0)
         }
+        WM_ACTIVATE => {
+            // The window going inactive is the user done with whatever field held the focus — a
+            // control keeps its focus inside an inactive window, so no `WM_KILLFOCUS` comes.
+            if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
+                if let Some(state) = unsafe { state_of(hwnd) } {
+                    unsafe { autosave(state) };
+                }
+            }
+            LRESULT(0)
+        }
         WM_BRING_FORWARD => {
             unsafe {
                 let _ = SetForegroundWindow(hwnd);
@@ -1070,7 +1092,12 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
         }
         WM_CLOSE => {
             if let Some(state) = unsafe { state_of(hwnd) } {
-                let _ = persist(state);
+                unsafe { autosave(state) };
+                // Closing over a preset the file may not hold would lose it with nothing said:
+                // the reason is on the status line, and the window stays up to be put right.
+                if state.dirtied {
+                    return LRESULT(0);
+                }
             }
             unsafe {
                 let _ = DestroyWindow(hwnd);
@@ -1394,6 +1421,7 @@ unsafe fn build(hwnd: HWND) -> State {
         selected: None,
         shown: Vec::new(),
         drag: None,
+        dirtied: false,
         loading: false,
         palette,
         font,
@@ -1507,9 +1535,9 @@ unsafe fn build(hwnd: HWND) -> State {
     let vol_up = unsafe { stepper_button(hwnd, "▲", ID_VOLUME_UP, ID_VOLUME_VALUE, 1) };
     let vol_dn = unsafe { stepper_button(hwnd, "▼", ID_VOLUME_DOWN, ID_VOLUME_VALUE, -1) };
 
-    // Footer: status & actions.
+    // Footer: status & actions. There is no `Save` — every field is written when it is left
+    // (see `autosave`).
     controls.push(unsafe { child(hwnd, w!("STATIC"), "", child_style(0), ID_STATUS) });
-    controls.push(unsafe { button(hwnd, "Save", ID_SAVE) });
     controls.push(unsafe { button(hwnd, "Delete", ID_DELETE) });
     controls.push(unsafe { button(hwnd, "Close", ID_CLOSE_BUTTON) });
 
@@ -1720,6 +1748,11 @@ unsafe extern "system" fn edit_subclass_proc(
             unsafe {
                 let _ = InvalidateRect(sub.parent, None, false);
             }
+            // The user has moved on to something else, which is the moment the field is written
+            // (see `autosave`).
+            if msg == WM_KILLFOCUS && sub.id != ID_SEARCH {
+                let _ = unsafe { PostMessageW(sub.parent, WM_AUTOSAVE, WPARAM(0), LPARAM(0)) };
+            }
             return res;
         }
         WM_NCDESTROY => {
@@ -1888,6 +1921,9 @@ unsafe extern "system" fn stepper_subclass_proc(
                 let _ = KillTimer(hwnd, STEP_TIMER_REPEAT);
                 let _ = ReleaseCapture();
                 let _ = InvalidateRect(hwnd, None, false);
+                // The steps of one hold are one edit, written when the button comes up
+                // (see `autosave`).
+                let _ = PostMessageW(sub.parent, WM_AUTOSAVE, WPARAM(0), LPARAM(0));
             }
             return LRESULT(0);
         }
@@ -1897,6 +1933,7 @@ unsafe extern "system" fn stepper_subclass_proc(
                 let _ = KillTimer(hwnd, STEP_TIMER_INITIAL);
                 let _ = KillTimer(hwnd, STEP_TIMER_REPEAT);
                 let _ = InvalidateRect(hwnd, None, false);
+                let _ = PostMessageW(sub.parent, WM_AUTOSAVE, WPARAM(0), LPARAM(0));
             }
             return LRESULT(0);
         }
@@ -1954,6 +1991,7 @@ unsafe fn step_numeric_field(state: &mut State, target_id: i32, delta: i32) {
     let Some(index) = state.selected else {
         return;
     };
+    state.dirtied = true;
     match target_id {
         ID_SCALING_PERCENT => {
             let current = unsafe { text_of(state.hwnd, ID_SCALING_PERCENT) }
@@ -2267,6 +2305,9 @@ unsafe extern "system" fn combo_subclass_proc(
         WM_SETFOCUS | WM_KILLFOCUS | WM_ENABLE => {
             let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
             let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            if msg == WM_KILLFOCUS {
+                let _ = unsafe { PostMessageW(sub.parent, WM_AUTOSAVE, WPARAM(0), LPARAM(0)) };
+            }
             return res;
         }
         WM_NCDESTROY => {
@@ -2866,6 +2907,9 @@ unsafe extern "system" fn slider_proc(
                 sl.dragging = false;
                 let _ = unsafe { ReleaseCapture() };
                 let _ = unsafe { InvalidateRect(hwnd, None, false) };
+                // The thumb let go is the end of the drag, and the level it was left at is the
+                // one the user meant (see `autosave`).
+                let _ = unsafe { PostMessageW(sl.parent, WM_AUTOSAVE, WPARAM(0), LPARAM(0)) };
             }
             LRESULT(0)
         }
@@ -2873,6 +2917,7 @@ unsafe extern "system" fn slider_proc(
             if sl.dragging {
                 sl.dragging = false;
                 let _ = unsafe { InvalidateRect(hwnd, None, false) };
+                let _ = unsafe { PostMessageW(sl.parent, WM_AUTOSAVE, WPARAM(0), LPARAM(0)) };
             }
             LRESULT(0)
         }
@@ -2982,6 +3027,9 @@ unsafe extern "system" fn toggle_proc(
                 WPARAM(usize::from(tg.checked)),
                 LPARAM(0),
             );
+            // A switch has no half-typed state: the flip is the whole of what the user meant
+            // (see `autosave`).
+            let _ = PostMessageW(tg.parent, WM_AUTOSAVE, WPARAM(0), LPARAM(0));
         }
     };
 
@@ -3478,17 +3526,10 @@ unsafe fn lay_out(state: &mut State) {
         btn_h,
     );
     place(
-        ID_SAVE,
-        width - pad - btn_w * 3 - scale(16, dpi),
-        btn_y,
-        btn_w,
-        btn_h,
-    );
-    place(
         ID_STATUS,
         pad + scale(4, dpi),
         btn_y + (btn_h - text_h) / 2,
-        (width - pad * 2 - btn_w * 3 - scale(28, dpi)).max(scale(80, dpi)),
+        (width - pad * 2 - btn_w * 2 - scale(20, dpi)).max(scale(80, dpi)),
         text_h + scale(2, dpi),
     );
 
@@ -3549,14 +3590,18 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                 unsafe { exe_changed(state) };
             }
         }
-        ID_WINDOW_MODE => {
-            if notice == windows::Win32::UI::WindowsAndMessaging::CBN_SELCHANGE {
-                unsafe { window_mode_chosen(state) };
+        ID_WINDOW_MODE | ID_SCALING => {
+            if notice == CBN_SELCHANGE {
+                if id == ID_WINDOW_MODE {
+                    unsafe { window_mode_chosen(state) };
+                } else {
+                    unsafe { scaling_chosen(state) };
+                }
             }
-        }
-        ID_SCALING => {
-            if notice == windows::Win32::UI::WindowsAndMessaging::CBN_SELCHANGE {
-                unsafe { scaling_chosen(state) };
+            // A pick is confirmed by the pick, not by where the focus goes next: a combo keeps
+            // the focus after the list closes, so `WM_KILLFOCUS` may be a long way off.
+            if notice == CBN_SELENDOK {
+                unsafe { autosave(state) };
             }
         }
         ID_SCALING_PERCENT => {
@@ -3570,23 +3615,42 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
             }
         }
         ID_BROWSE => unsafe { browse(state) },
-        ID_SAVE => {
-            let answer = persist(state);
-            let line = answer
-                .as_ref()
-                .err()
-                .map(String::as_str)
-                .unwrap_or("Saved.");
-            unsafe { set_status(state, line) };
-        }
         ID_DELETE => unsafe { delete_selected(state) },
         ID_CLOSE_BUTTON => {
-            let _ = persist(state);
-            unsafe {
-                let _ = DestroyWindow(state.hwnd);
+            unsafe { autosave(state) };
+            if !state.dirtied {
+                unsafe {
+                    let _ = DestroyWindow(state.hwnd);
+                }
             }
         }
         _ => {}
+    }
+}
+
+/// Everything the window holds, written to the configuration and announced to the rest of the app
+/// — the tray's own rows, the hook, and every viewer — after the field the user was in has been
+/// left.
+///
+/// **Left, not typed.** A save per keystroke would be a file write, a generation bump and a
+/// `ConfigChanged` wake for every letter of a name, and a half-typed one written to the file that
+/// a hover is routed by. The triggers are the ones that mean the user is done with what they were
+/// editing: the focus leaving an `EDIT` or a `COMBOBOX`, the pointer released from the slider, the
+/// toggle clicked, the drop of a dragged row. A field that has not changed writes nothing.
+unsafe fn autosave(state: &mut State) {
+    if state.loading || !state.dirtied {
+        return;
+    }
+    match clean(&state.presets) {
+        Ok(presets) => {
+            // One write, and the announcement the rest of the app reads it on: the tray's rows,
+            // the hook's bindings, and every viewer, which reload the file there rather than wait
+            // out their watch (see `config::publish_config_change`).
+            crate::config::publish_config_change(|config| config.custom_presets = presets, &[]);
+            state.dirtied = false;
+            unsafe { set_status(state, "") };
+        }
+        Err(reason) => unsafe { set_status(state, &reason) },
     }
 }
 
@@ -3865,6 +3929,7 @@ unsafe fn fields_changed(state: &mut State) {
     preset.exe = exe;
     preset.set_extensions_text(&extensions);
 
+    state.dirtied = true;
     unsafe { rebuild_list(state) };
 }
 
@@ -3908,6 +3973,7 @@ unsafe fn window_mode_chosen(state: &mut State) {
     if let Some(preset) = state.presets.get_mut(index) {
         preset.window_mode = mode;
     }
+    state.dirtied = true;
 }
 
 unsafe fn scaling_chosen(state: &mut State) {
@@ -3934,6 +4000,7 @@ unsafe fn scaling_chosen(state: &mut State) {
     if let Some(preset) = state.presets.get_mut(index) {
         preset.scaling = chosen;
     }
+    state.dirtied = true;
 
     let (percent_text, percent_enabled) = match chosen {
         CustomScaling::FollowTray => (String::new(), false),
@@ -3964,6 +4031,7 @@ unsafe fn percent_typed(state: &mut State) {
             percent.clamp(SCALING_MIN, SCALING_MAX),
         ));
     }
+    state.dirtied = true;
 }
 
 unsafe fn enabled_toggled(state: &mut State, enabled: bool) {
@@ -3976,6 +4044,7 @@ unsafe fn enabled_toggled(state: &mut State, enabled: bool) {
     if let Some(preset) = state.presets.get_mut(index) {
         preset.enabled = enabled;
     }
+    state.dirtied = true;
     if let Ok(list) = unsafe { GetDlgItem(state.hwnd, ID_LIST) } {
         let _ = unsafe { InvalidateRect(list, None, false) };
     }
@@ -3996,6 +4065,7 @@ unsafe fn volume_moved(state: &mut State) {
     if let Some(preset) = state.presets.get_mut(index) {
         preset.volume = position;
     }
+    state.dirtied = true;
 }
 
 unsafe fn volume_typed(state: &mut State) {
@@ -4013,6 +4083,7 @@ unsafe fn volume_typed(state: &mut State) {
     if let Some(preset) = state.presets.get_mut(index) {
         preset.volume = volume;
     }
+    state.dirtied = true;
     let slider = unsafe { GetDlgItem(state.hwnd, ID_VOLUME) }.unwrap_or_default();
     unsafe {
         SendMessageW(
@@ -4039,10 +4110,8 @@ unsafe fn delete_selected(state: &mut State) {
     };
     unsafe { rebuild_list(state) };
     unsafe { fill_fields(state) };
-    match persist(state) {
-        Ok(()) => unsafe { set_status(state, "Deleted.") },
-        Err(reason) => unsafe { set_status(state, &reason) },
-    }
+    state.dirtied = true;
+    unsafe { autosave(state) };
 }
 
 unsafe fn browse(state: &mut State) {
@@ -4081,6 +4150,8 @@ unsafe fn browse(state: &mut State) {
         state.loading = true;
         unsafe { set_text(state.hwnd, ID_EXE, &chosen) };
         state.loading = false;
+        state.dirtied = true;
+        unsafe { autosave(state) };
     }
 }
 
@@ -4114,7 +4185,6 @@ fn is_stepper(id: u32) -> bool {
 
 fn is_button(id: u32) -> bool {
     id == ID_ADD as u32
-        || id == ID_SAVE as u32
         || id == ID_DELETE as u32
         || id == ID_BROWSE as u32
         || id == ID_CLOSE_BUTTON as u32
@@ -4154,22 +4224,6 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
             p.ink
         };
         (fill, p.border, fg)
-    } else if item.CtlID == ID_SAVE as u32 {
-        let hov = !disabled && btn_hovered(item.hwndItem);
-        let fill = if disabled {
-            p.button_disabled
-        } else if selected {
-            p.accent_press
-        } else if hov {
-            p.accent_hover
-        } else {
-            p.accent
-        };
-        (
-            fill,
-            if disabled { p.border } else { fill },
-            if disabled { p.muted } else { p.accent_text },
-        )
     } else if item.CtlID == ID_DELETE as u32 {
         let hov = !disabled && btn_hovered(item.hwndItem);
         let fill = if disabled {
@@ -4225,14 +4279,12 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
 
     unsafe {
         if is_button(item.CtlID) {
-            let parent_brush = if item.CtlID == ID_SAVE as u32
-                || item.CtlID == ID_DELETE as u32
-                || item.CtlID == ID_CLOSE_BUTTON as u32
-            {
-                state.brush_page
-            } else {
-                state.brush_card
-            };
+            let parent_brush =
+                if item.CtlID == ID_DELETE as u32 || item.CtlID == ID_CLOSE_BUTTON as u32 {
+                    state.brush_page
+                } else {
+                    state.brush_card
+                };
             FillRect(hdc, &item.rcItem, parent_brush);
 
             let r = item.rcItem;
@@ -4276,8 +4328,6 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         SetTextColor(hdc, text_col);
         let font = if is_stepper(item.CtlID) {
             state.font_small
-        } else if item.CtlID == ID_SAVE as u32 {
-            state.font_bold
         } else {
             state.font
         };
@@ -4563,6 +4613,81 @@ mod tests {
 
             let _ = DestroyWindow(hwnd);
         }
+    }
+
+    /// A field left is a save, and a save writes the configuration the rest of the app reads.
+    #[test]
+    fn a_field_left_writes_the_preset_and_announces_it() {
+        let folder = crate::config::config::ConfigFolderOfItsOwn::take();
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            let mut preset = CustomPreset::named("Painted");
+            preset.exe = "C:/mspaint.exe".into();
+            preset.set_extensions_text("jpg");
+            state.presets = vec![preset];
+            state.selected = Some(0);
+            state.dirtied = true;
+            autosave(state);
+
+            assert!(!state.dirtied, "a saved window has nothing left to write");
+            let stored = {
+                crate::CONFIG
+                    .lock()
+                    .map(|config| config.custom_presets.clone())
+                    .unwrap_or_default()
+            };
+            assert_eq!(stored.len(), 1);
+            assert_eq!(stored[0].name, "Painted");
+
+            // And it reaches the file, which is what the rest of the app reads.
+            let written = std::fs::read_to_string(folder.config_file()).unwrap_or_default();
+            assert!(
+                written.contains("[custom:painted]"),
+                "the preset reached the file: {written}"
+            );
+            let mut read_back = crate::config::config::AppConfig::default();
+            let mut ini = configparser::ini::Ini::new();
+            ini.read(written).expect("a file this app wrote");
+            crate::config::config::custom_presets_read_for_test(&ini, &mut read_back);
+            assert_eq!(
+                read_back
+                    .custom_presets
+                    .iter()
+                    .map(|preset| preset.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["Painted"]
+            );
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// The two states the window can be in that no file may hold: a preset with no name, and two
+    /// presets of one name. Both are refused before anything is written, and `autosave` says why
+    /// on the status line (`clean`).
+    #[test]
+    fn an_unnamed_or_a_doubled_preset_is_what_may_not_be_written() {
+        let mut good = CustomPreset::named("Painted");
+        good.exe = "C:/mspaint.exe".into();
+        good.set_extensions_text("jpg");
+        assert!(clean(std::slice::from_ref(&good)).is_ok());
+
+        let mut blank = good.clone();
+        blank.name = "   ".into();
+        assert!(clean(&[blank]).is_err(), "a preset with no name is refused");
+
+        let mut twin = good.clone();
+        twin.name = "painted".into();
+        assert!(
+            clean(&[good, twin]).is_err(),
+            "two presets of one name are refused"
+        );
     }
 
     #[test]
