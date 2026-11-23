@@ -186,12 +186,13 @@ fn window_mode_label(mode: CustomWindowMode) -> &'static str {
     }
 }
 
-const CAPTURE_TECHNIQUES: [CustomCaptureTechnique; 5] = [
+const CAPTURE_TECHNIQUES: [CustomCaptureTechnique; 6] = [
     CustomCaptureTechnique::InvisibleLayered,
     CustomCaptureTechnique::BehindHost,
     CustomCaptureTechnique::OffScreen,
     CustomCaptureTechnique::DirectWindow,
     CustomCaptureTechnique::OffscreenStaged,
+    CustomCaptureTechnique::InProcessHook,
 ];
 
 fn capture_technique_label(technique: CustomCaptureTechnique) -> &'static str {
@@ -201,6 +202,7 @@ fn capture_technique_label(technique: CustomCaptureTechnique) -> &'static str {
         CustomCaptureTechnique::OffScreen => "Off-Screen (DWM)",
         CustomCaptureTechnique::DirectWindow => "Direct Window",
         CustomCaptureTechnique::OffscreenStaged => "Off-Screen Staged (-10000 -> Reveal)",
+        CustomCaptureTechnique::InProcessHook => "In-Process Hook (Zero-Flash)",
     }
 }
 
@@ -5097,7 +5099,7 @@ mod tests {
                 CustomCaptureTechnique::InvisibleLayered
             );
 
-            assert_eq!(CAPTURE_TECHNIQUES.len(), 5);
+            assert_eq!(CAPTURE_TECHNIQUES.len(), 6);
             assert_eq!(
                 CAPTURE_TECHNIQUES[4],
                 CustomCaptureTechnique::OffscreenStaged
@@ -5105,6 +5107,11 @@ mod tests {
             assert_eq!(
                 capture_technique_label(CustomCaptureTechnique::OffscreenStaged),
                 "Off-Screen Staged (-10000 -> Reveal)"
+            );
+            assert_eq!(CAPTURE_TECHNIQUES[5], CustomCaptureTechnique::InProcessHook);
+            assert_eq!(
+                capture_technique_label(CustomCaptureTechnique::InProcessHook),
+                "In-Process Hook (Zero-Flash)"
             );
             for (idx, expected) in CAPTURE_TECHNIQUES.iter().copied().enumerate() {
                 SendMessageW(combo, CB_SETCURSEL, WPARAM(idx), LPARAM(0));

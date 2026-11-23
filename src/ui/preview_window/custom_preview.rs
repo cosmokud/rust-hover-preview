@@ -118,14 +118,14 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
-use windows::core::{w, PCWSTR, PWSTR};
+use windows::core::{w, PCSTR, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, BOOL, COLORREF, FILETIME, HANDLE, HWND, LPARAM, LRESULT, RECT, WAIT_OBJECT_0,
-    WAIT_TIMEOUT, WPARAM,
+    CloseHandle, FreeLibrary, BOOL, COLORREF, FILETIME, HANDLE, HINSTANCE, HMODULE, HWND,
+    INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
@@ -138,12 +138,17 @@ use windows::Win32::Graphics::Gdi::{
     MonitorFromRect, UpdateWindow, HBRUSH, HGDIOBJ, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     NULL_BRUSH,
 };
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
+use windows::Win32::System::Memory::{
+    CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS,
+    MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
+};
 use windows::Win32::System::Threading::{
-    CreateProcessW, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, TerminateProcess,
-    WaitForInputIdle, WaitForSingleObject, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
+    CreateProcessW, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, ResumeThread,
+    TerminateProcess, WaitForInputIdle, WaitForSingleObject, CREATE_SUSPENDED,
+    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTF_USEPOSITION,
+    STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
@@ -152,17 +157,19 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetLayeredWindowAttributes, GetSystemMetrics, GetWindow,
     GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextLengthW,
     GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-    MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW, SendMessageTimeoutW,
-    SetForegroundWindow, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement,
-    SetWindowPos, ShowWindow, TranslateMessage, CHILDID_SELF, EVENT_OBJECT_CREATE,
-    EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HWND_BOTTOM,
-    HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE,
-    OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN,
-    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
-    SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY,
-    WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW,
+    RegisterWindowMessageW, SendMessageTimeoutW, SetForegroundWindow, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW, ShowWindow,
+    TranslateMessage, UnhookWindowsHookEx, CHILDID_SELF, EVENT_OBJECT_CREATE,
+    EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HHOOK,
+    HOOKPROC, HWND_BOTTOM, HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG,
+    MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE, WH_CALLWNDPROC, WH_CBT, WINDOWPLACEMENT,
+    WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
     WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
@@ -344,6 +351,8 @@ static SOURCE_IS_NEW: AtomicBool = AtomicBool::new(false);
 static SOURCE_INVISIBLE_LAYERED: AtomicBool = AtomicBool::new(false);
 /// Saved on-screen rect for `OffscreenStaged` reused non-owned windows so teardown never leaves them at `STAGE_COORD`.
 static SOURCE_RESTORE_RECT: Mutex<Option<RECT>> = Mutex::new(None);
+/// Active `InProcessHook` shared-memory control handle so `hide()` cloaks synchronously before hiding `host`.
+static ACTIVE_HOOK_CONTROL: Mutex<Option<Arc<HookSharedView>>> = Mutex::new(None);
 /// The thumbnail registration the Shell is drawing through, while one stands.
 static THUMBNAIL: Mutex<isize> = Mutex::new(0);
 /// The hover on screen, while there is one.
@@ -423,11 +432,28 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 
     let launch_filetime = current_filetime_u64();
     let launched_at = Instant::now();
-    let Some((process, pid)) = launch(&exe, path, provisional, capture_technique) else {
-        return false;
+    let (process, pid, hook_session, capture_technique) = if capture_technique
+        == CustomCaptureTechnique::InProcessHook
+    {
+        let Some((proc_handle, pid, session)) = launch_in_process_hook(&exe, path, provisional)
+        else {
+            return false;
+        };
+        let effective = if session.is_some() {
+            CustomCaptureTechnique::InProcessHook
+        } else {
+            CustomCaptureTechnique::InvisibleLayered
+        };
+        (proc_handle, pid, session, effective)
+    } else {
+        let Some((proc_handle, pid)) = launch(&exe, path, provisional, capture_technique) else {
+            return false;
+        };
+        (proc_handle, pid, None, capture_technique)
     };
     let process = Arc::new(process);
     let Some(host) = (unsafe { ensure_host() }) else {
+        drop(hook_session);
         let _ = unsafe { TerminateProcess(HANDLE(process.as_raw_handle()), 1) };
         return false;
     };
@@ -484,6 +510,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             scaling,
             window_mode,
             capture_technique,
+            hook_session,
         )
     });
     true
@@ -498,7 +525,13 @@ pub(super) fn hide() {
     if let Ok(mut want) = WANT.lock() {
         *want = None;
     }
-    if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
+    let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|g| g.clone());
+    if let Some(ctrl) = hook_ctrl {
+        let source = SOURCE.load(Ordering::SeqCst);
+        if source != 0 {
+            ctrl.cloak_async(HWND(source as *mut _));
+        }
+    } else if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
         keep_source_invisible(SOURCE.load(Ordering::SeqCst));
     } else {
         // Push on-monitor source off-screen before hiding host so it never flashes on desktop during LINGER.
@@ -554,6 +587,9 @@ fn end_the_program() {
     let source_pid = SOURCE_PID.swap(0, Ordering::SeqCst);
     let source_is_new = SOURCE_IS_NEW.swap(false, Ordering::SeqCst);
     SOURCE_INVISIBLE_LAYERED.store(false, Ordering::SeqCst);
+    if let Ok(mut ctrl) = ACTIVE_HOOK_CONTROL.lock() {
+        *ctrl = None;
+    }
     let restore_rect = SOURCE_RESTORE_RECT.lock().ok().and_then(|mut r| r.take());
     if source != 0 {
         let source = HWND(source as *mut _);
@@ -942,8 +978,11 @@ fn run_it(
     scaling: CustomScaling,
     window_mode: CustomWindowMode,
     capture_technique: CustomCaptureTechnique,
+    hook_session: Option<InProcessHookSession>,
 ) {
-    let Some(source) = (if capture_technique == CustomCaptureTechnique::OffscreenStaged {
+    let Some(source) = (if let Some(ref session) = hook_session {
+        wait_for_a_window_in_process_hook(&launch, session)
+    } else if capture_technique == CustomCaptureTechnique::OffscreenStaged {
         wait_for_a_window_offscreen_staged(&launch)
     } else {
         wait_for_a_window(&launch)
@@ -957,6 +996,13 @@ fn run_it(
     };
     if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
         return;
+    }
+
+    if let Some(ref session) = hook_session {
+        session.view.set_captured_hwnd(source);
+        if let Ok(mut ctrl) = ACTIVE_HOOK_CONTROL.lock() {
+            *ctrl = Some(Arc::clone(&session.view));
+        }
     }
 
     let source_pid = pid_of(source);
@@ -1016,7 +1062,32 @@ fn run_it(
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
 
-    if capture_technique == CustomCaptureTechnique::OffscreenStaged {
+    if let Some(ref session) = hook_session {
+        let mut staged = OffscreenStagedState {
+            invisible_layered: &mut invisible_layered,
+            placed_mode: &mut placed_mode,
+            placed_host_rect: &mut placed_host_rect,
+            expected_rect: &mut expected_rect,
+            the_ask: &mut the_ask,
+            box_of_the_host: &mut box_of_the_host,
+            registered: &mut registered,
+        };
+        if !run_in_process_hook_settle_and_reveal(
+            host,
+            source,
+            &launch,
+            session,
+            &processes,
+            &mut images,
+            &mut creation_times,
+            was_hidden,
+            window_mode,
+            &current_target_rect,
+            &mut staged,
+        ) {
+            return;
+        }
+    } else if capture_technique == CustomCaptureTechnique::OffscreenStaged {
         let mut staged = OffscreenStagedState {
             invisible_layered: &mut invisible_layered,
             placed_mode: &mut placed_mode,
@@ -1114,7 +1185,8 @@ fn run_it(
                     }
                     CustomCaptureTechnique::InvisibleLayered
                     | CustomCaptureTechnique::BehindHost
-                    | CustomCaptureTechnique::OffscreenStaged => {
+                    | CustomCaptureTechnique::OffscreenStaged
+                    | CustomCaptureTechnique::InProcessHook => {
                         let insets = if window_mode == CustomWindowMode::Normal {
                             dwm_frame_insets(source)
                         } else {
@@ -1384,7 +1456,9 @@ fn run_it(
             // Hover gone (LINGER): never run hide_others census so user-opened instances stay untouched.
             let since = *lingering.get_or_insert_with(Instant::now);
             placed_host_rect = None;
-            if invisible_layered {
+            if let Some(ref session) = hook_session {
+                session.view.cloak_async(source);
+            } else if invisible_layered {
                 keep_source_invisible(source.0 as isize);
             } else {
                 placed_mode = None;
@@ -1436,7 +1510,37 @@ fn run_it(
         let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
         let host_rect = (x, y, width, height);
 
-        if placed_mode.is_none() || placed_host_rect != Some(host_rect) {
+        if let Some(ref session) = hook_session {
+            let needs_reposition = session.view.is_cloaked()
+                || placed_mode.is_none()
+                || placed_host_rect != Some(host_rect);
+            if needs_reposition {
+                if placed_host_rect.is_some_and(|p| p.2 != host_rect.2 || p.3 != host_rect.3) {
+                    the_ask = None;
+                }
+                let mut staged = OffscreenStagedState {
+                    invisible_layered: &mut invisible_layered,
+                    placed_mode: &mut placed_mode,
+                    placed_host_rect: &mut placed_host_rect,
+                    expected_rect: &mut expected_rect,
+                    the_ask: &mut the_ask,
+                    box_of_the_host: &mut box_of_the_host,
+                    registered: &mut registered,
+                };
+                reveal_in_process_hook(
+                    host,
+                    source,
+                    &launch,
+                    session,
+                    &processes,
+                    host_rect,
+                    window_mode,
+                    &mut staged,
+                );
+                std::thread::sleep(KEEP_POLL);
+                continue;
+            }
+        } else if placed_mode.is_none() || placed_host_rect != Some(host_rect) {
             if placed_host_rect.is_some_and(|p| p.2 != host_rect.2 || p.3 != host_rect.3) {
                 the_ask = None;
             }
@@ -2465,7 +2569,8 @@ fn decide_snap_action(
         }
         CustomCaptureTechnique::InvisibleLayered
         | CustomCaptureTechnique::BehindHost
-        | CustomCaptureTechnique::OffscreenStaged => {
+        | CustomCaptureTechnique::OffscreenStaged
+        | CustomCaptureTechnique::InProcessHook => {
             if current_mode == Some(PlacementMode::InvisibleLayered) {
                 return SnapAction::KeepInvisibleLayered;
             }
@@ -3476,6 +3581,683 @@ fn run_offscreen_staged_settle_and_reveal(
     *state.placed_mode = Some(mode);
     *state.placed_host_rect = Some(host_rect);
     *state.expected_rect = window_rect(source);
+    true
+}
+
+// --- CustomCaptureTechnique::InProcessHook ---
+
+const HOOK_MAGIC: u32 = 0x5248_5048;
+const HOOK_VERSION: u32 = 1;
+const CMD_UNCLOAK: usize = 1;
+const CMD_CLOAK: usize = 2;
+const HOOK_CONTROL_MSG_NAME: PCWSTR = w!("RhpCustomPreviewHookControl");
+
+#[repr(C)]
+struct HookSharedState {
+    magic: u32,
+    version: u32,
+    target_pid: u32,
+    uncloak_msg: u32,
+    cloak_enabled: AtomicU32,
+    rect_locked: AtomicU32,
+    x: AtomicI32,
+    y: AtomicI32,
+    w: AtomicI32,
+    h: AtomicI32,
+    captured_hwnd: AtomicIsize,
+    hook_hits: AtomicU32,
+}
+
+/// Shared memory mapping for `InProcessHook`; safe to clone across `hide()` and worker thread.
+struct HookSharedView {
+    _mapping: OwnedHandle,
+    view: *mut HookSharedState,
+    uncloak_msg: u32,
+}
+
+// SAFETY: `view` points to a process-wide file mapping whose fields are atomics / immutable header.
+unsafe impl Send for HookSharedView {}
+unsafe impl Sync for HookSharedView {}
+
+impl Drop for HookSharedView {
+    fn drop(&mut self) {
+        if !self.view.is_null() {
+            let _ = unsafe {
+                UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                    Value: self.view as *mut _,
+                })
+            };
+        }
+    }
+}
+
+impl HookSharedView {
+    fn create(
+        pid: u32,
+        provisional: Option<(i32, i32, i32, i32)>,
+        uncloak_msg: u32,
+    ) -> Option<Self> {
+        let name = wide_null(OsStr::new(&format!("Local\\RhpCustomPreviewHook_{pid}")));
+        let size = std::mem::size_of::<HookSharedState>() as u32;
+        let mapping = unsafe {
+            CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                None,
+                PAGE_READWRITE,
+                0,
+                size,
+                PCWSTR(name.as_ptr()),
+            )
+        }
+        .ok()?;
+        let mapping = unsafe { OwnedHandle::from_raw_handle(mapping.0) };
+        let mapped = unsafe {
+            MapViewOfFile(
+                HANDLE(mapping.as_raw_handle()),
+                FILE_MAP_ALL_ACCESS,
+                0,
+                0,
+                size as usize,
+            )
+        };
+        if mapped.Value.is_null() {
+            return None;
+        }
+        let ptr = mapped.Value as *mut HookSharedState;
+        let (x, y, w, h) = provisional.unwrap_or((0, 0, 0, 0));
+        unsafe {
+            ptr.write(HookSharedState {
+                magic: HOOK_MAGIC,
+                version: HOOK_VERSION,
+                target_pid: pid,
+                uncloak_msg,
+                cloak_enabled: AtomicU32::new(1),
+                rect_locked: AtomicU32::new(1),
+                x: AtomicI32::new(x),
+                y: AtomicI32::new(y),
+                w: AtomicI32::new(w),
+                h: AtomicI32::new(h),
+                captured_hwnd: AtomicIsize::new(0),
+                hook_hits: AtomicU32::new(0),
+            });
+        }
+        Some(Self {
+            _mapping: mapping,
+            view: ptr,
+            uncloak_msg,
+        })
+    }
+
+    #[inline]
+    fn state(&self) -> &HookSharedState {
+        unsafe { &*self.view }
+    }
+
+    fn set_rect(&self, x: i32, y: i32, w: i32, h: i32) {
+        let s = self.state();
+        s.x.store(x, Ordering::Release);
+        s.y.store(y, Ordering::Release);
+        s.w.store(w, Ordering::Release);
+        s.h.store(h, Ordering::Release);
+    }
+
+    fn set_captured_hwnd(&self, hwnd: HWND) {
+        self.state()
+            .captured_hwnd
+            .store(hwnd.0 as isize, Ordering::Release);
+    }
+
+    fn captured_hwnd(&self) -> Option<HWND> {
+        let raw = self.state().captured_hwnd.load(Ordering::Acquire);
+        (raw != 0).then_some(HWND(raw as *mut _))
+    }
+
+    fn is_cloaked(&self) -> bool {
+        self.state().cloak_enabled.load(Ordering::Acquire) == 1
+    }
+
+    fn cloak_async(&self, hwnd: HWND) {
+        self.state().cloak_enabled.store(1, Ordering::Release);
+        if !hwnd.0.is_null() && unsafe { IsWindow(hwnd) }.as_bool() {
+            let _ = unsafe { PostMessageW(hwnd, self.uncloak_msg, WPARAM(CMD_CLOAK), LPARAM(0)) };
+        }
+    }
+
+    fn uncloak_sync(&self, hwnd: HWND) {
+        self.state().cloak_enabled.store(0, Ordering::Release);
+        if !hwnd.0.is_null() && unsafe { IsWindow(hwnd) }.as_bool() {
+            let _ = unsafe {
+                SendMessageTimeoutW(
+                    hwnd,
+                    self.uncloak_msg,
+                    WPARAM(CMD_UNCLOAK),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                    150,
+                    None,
+                )
+            };
+        }
+    }
+}
+
+/// Active hook handles + DLL module + shared memory for `CustomCaptureTechnique::InProcessHook`.
+struct InProcessHookSession {
+    view: Arc<HookSharedView>,
+    cbt_hook: HHOOK,
+    callwnd_hook: HHOOK,
+    dll_module: HMODULE,
+}
+
+// SAFETY: `HHOOK` and `HMODULE` are process-wide Win32 handles; `UnhookWindowsHookEx` / `FreeLibrary`
+// are safe to call from the worker thread on teardown.
+unsafe impl Send for InProcessHookSession {}
+
+impl Drop for InProcessHookSession {
+    fn drop(&mut self) {
+        if let Ok(mut active) = ACTIVE_HOOK_CONTROL.lock() {
+            if active
+                .as_ref()
+                .is_some_and(|ctrl| Arc::ptr_eq(ctrl, &self.view))
+            {
+                *active = None;
+            }
+        }
+        if !self.cbt_hook.0.is_null() {
+            let _ = unsafe { UnhookWindowsHookEx(self.cbt_hook) };
+        }
+        if !self.callwnd_hook.0.is_null() {
+            let _ = unsafe { UnhookWindowsHookEx(self.callwnd_hook) };
+        }
+        if !self.dll_module.0.is_null() {
+            let _ = unsafe { FreeLibrary(self.dll_module) };
+        }
+    }
+}
+
+fn find_hook_dll() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let direct = dir.join("custom_preview_hook.dll");
+    if direct.is_file() {
+        return Some(direct);
+    }
+    // Integration/unit tests run under `target/<profile>/deps/`; DLL lives in `target/<profile>/`.
+    let parent_candidate = dir.parent()?.join("custom_preview_hook.dll");
+    parent_candidate.is_file().then_some(parent_candidate)
+}
+
+fn load_hook_dll() -> Option<(HMODULE, HOOKPROC, HOOKPROC)> {
+    let path = find_hook_dll()?;
+    let wide = wide_null(path.as_os_str());
+    let hmod = unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) }.ok()?;
+    let cbt_raw = unsafe { GetProcAddress(hmod, PCSTR(c"rhp_cbt_proc".as_ptr().cast())) };
+    let cwp_raw = unsafe { GetProcAddress(hmod, PCSTR(c"rhp_callwnd_proc".as_ptr().cast())) };
+    match (cbt_raw, cwp_raw) {
+        (Some(cbt_fn), Some(cwp_fn)) => {
+            // SAFETY: Both exported functions match Win32 `HOOKPROC` (`extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT`).
+            let cbt_proc: HOOKPROC = Some(unsafe {
+                std::mem::transmute::<
+                    unsafe extern "system" fn() -> isize,
+                    unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT,
+                >(cbt_fn)
+            });
+            let cwp_proc: HOOKPROC = Some(unsafe {
+                std::mem::transmute::<
+                    unsafe extern "system" fn() -> isize,
+                    unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT,
+                >(cwp_fn)
+            });
+            Some((hmod, cbt_proc, cwp_proc))
+        }
+        _ => {
+            let _ = unsafe { FreeLibrary(hmod) };
+            None
+        }
+    }
+}
+
+fn try_attach_thread_hooks(
+    hmod: HMODULE,
+    cbt_proc: HOOKPROC,
+    cwp_proc: HOOKPROC,
+    tid: u32,
+) -> Option<(HHOOK, HHOOK)> {
+    let hinst = HINSTANCE(hmod.0);
+    let cbt = unsafe { SetWindowsHookExW(WH_CBT, cbt_proc, hinst, tid) }.ok()?;
+    match unsafe { SetWindowsHookExW(WH_CALLWNDPROC, cwp_proc, hinst, tid) } {
+        Ok(cwp) => Some((cbt, cwp)),
+        Err(_) => {
+            let _ = unsafe { UnhookWindowsHookEx(cbt) };
+            None
+        }
+    }
+}
+
+/// Spawn target with `CREATE_SUSPENDED`, initialize per-PID shared memory, and attach `WH_CBT` +
+/// `WH_CALLWNDPROC` before/immediately after `ResumeThread`. Falls back to `None` session
+/// (caller degrades cleanly to `InvisibleLayered`) if DLL is missing or hook cannot attach.
+fn launch_in_process_hook(
+    exe: &str,
+    path: &Path,
+    provisional: Option<(i32, i32, i32, i32)>,
+) -> Option<(OwnedHandle, u32, Option<InProcessHookSession>)> {
+    let Some((hmod, cbt_proc, cwp_proc)) = load_hook_dll() else {
+        let (proc_handle, pid) = launch(
+            exe,
+            path,
+            provisional,
+            CustomCaptureTechnique::InvisibleLayered,
+        )?;
+        return Some((proc_handle, pid, None));
+    };
+
+    let application = wide_null(OsStr::new(exe));
+    let mut cmdline = build_command_line(OsStr::new(exe), path.as_os_str());
+    let cwd_wide = Path::new(exe)
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| wide_null(dir.as_os_str()));
+    let cwd_ptr = cwd_wide
+        .as_ref()
+        .map_or(PCWSTR::null(), |buf| PCWSTR(buf.as_ptr()));
+
+    let mut si = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        dwFlags: STARTF_USESHOWWINDOW,
+        wShowWindow: SW_SHOWNOACTIVATE.0 as u16,
+        ..Default::default()
+    };
+    if let Some((x, y, w, h)) = provisional {
+        si.dwFlags |= STARTF_USEPOSITION | STARTF_USESIZE;
+        si.dwX = x.max(0) as u32;
+        si.dwY = y.max(0) as u32;
+        si.dwXSize = w.max(1) as u32;
+        si.dwYSize = h.max(1) as u32;
+    }
+
+    let mut pi = PROCESS_INFORMATION::default();
+    if unsafe {
+        CreateProcessW(
+            PCWSTR(application.as_ptr()),
+            PWSTR(cmdline.as_mut_ptr()),
+            None,
+            None,
+            BOOL(0),
+            CREATE_SUSPENDED,
+            None,
+            cwd_ptr,
+            &si,
+            &mut pi,
+        )
+    }
+    .is_err()
+    {
+        let _ = unsafe { FreeLibrary(hmod) };
+        return None;
+    }
+
+    // SAFETY: `pi.hProcess` is uniquely owned and closed on `OwnedHandle` drop.
+    let process = unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0) };
+    let pid = pi.dwProcessId;
+    let tid = pi.dwThreadId;
+    let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
+    let view = HookSharedView::create(pid, provisional, uncloak_msg).map(Arc::new);
+
+    // Attempt hook install before `ResumeThread`; if Win11 rejects a suspended thread before
+    // `W32THREAD` init (`ERROR_INVALID_THREAD_ID`), resume and retry in a tight ~1ms loop.
+    let mut hooks = if view.is_some() {
+        try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, tid)
+    } else {
+        None
+    };
+
+    let _ = unsafe { ResumeThread(pi.hThread) };
+    let _ = unsafe { CloseHandle(pi.hThread) };
+
+    if view.is_some() && hooks.is_none() {
+        let retry_deadline = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < retry_deadline {
+            if process_has_exited(HANDLE(process.as_raw_handle())) {
+                break;
+            }
+            if let Some(pair) = try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, tid) {
+                hooks = Some(pair);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    let session = match (view, hooks) {
+        (Some(view), Some((cbt_hook, callwnd_hook))) => Some(InProcessHookSession {
+            view,
+            cbt_hook,
+            callwnd_hook,
+            dll_module: hmod,
+        }),
+        _ => {
+            let _ = unsafe { FreeLibrary(hmod) };
+            None
+        }
+    };
+    Some((process, pid, session))
+}
+
+/// Fast discovery for `InProcessHook`: checks `session.captured_hwnd` first alongside `census`.
+fn wait_for_a_window_in_process_hook(
+    launch: &Launch,
+    session: &InProcessHookSession,
+) -> Option<HWND> {
+    let deadline = Instant::now() + WINDOW_WAIT;
+    let mut processes = process_tree(launch.pid);
+    let mut read = Instant::now();
+    let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
+    let mut first_candidate: Option<(Instant, HWND)> = None;
+
+    while Instant::now() < deadline {
+        if !is_current(launch.id) {
+            return None;
+        }
+        if let Some(hwnd) = session.view.captured_hwnd() {
+            if unsafe { IsWindow(hwnd) }.as_bool() {
+                let mut rect = RECT::default();
+                let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+                    (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64
+                } else {
+                    0
+                };
+                let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
+                if titled && area >= THE_SMALLEST_PICTURE {
+                    return Some(hwnd);
+                }
+                first_candidate.get_or_insert_with(|| (Instant::now(), hwnd));
+            }
+        }
+
+        let look = census(
+            launch,
+            &processes,
+            &mut images,
+            &mut creation_times,
+            0,
+            false,
+            OwnershipMode::Discover {
+                allow_image_fallback: false,
+            },
+        );
+        if let Some((_, window)) = look.shown {
+            return Some(window);
+        }
+        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+            let entry = first_candidate.get_or_insert_with(|| (Instant::now(), hidden));
+            entry.1 = hidden;
+            if entry.0.elapsed() >= Duration::from_millis(40) {
+                return Some(hidden);
+            }
+        }
+
+        if read.elapsed() >= TREE_POLL {
+            processes = process_tree(launch.pid);
+            read = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    first_candidate
+        .map(|(_, hwnd)| hwnd)
+        .or_else(|| wait_for_a_window(launch))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reveal_in_process_hook(
+    host: HWND,
+    source: HWND,
+    launch: &Launch,
+    session: &InProcessHookSession,
+    processes: &[u32],
+    host_rect: (i32, i32, i32, i32),
+    window_mode: CustomWindowMode,
+    state: &mut OffscreenStagedState<'_>,
+) {
+    let (hx, hy, hw, hh) = host_rect;
+    let insets = if window_mode == CustomWindowMode::Normal {
+        dwm_frame_insets(source)
+    } else {
+        (0, 0, 0, 0)
+    };
+    let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
+    session.view.set_rect(wx, wy, ww, wh);
+
+    if unsafe { IsZoomed(source) }.as_bool() || unsafe { IsIconic(source) }.as_bool() {
+        let placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            flags: WINDOWPLACEMENT_FLAGS(0),
+            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+            rcNormalPosition: workspace_rect_for_screen(RECT {
+                left: wx,
+                top: wy,
+                right: wx + ww,
+                bottom: wy + wh,
+            }),
+            ..Default::default()
+        };
+        let _ = unsafe { SetWindowPlacement(source, &placement) };
+    }
+    let _ = unsafe { SetWindowPos(source, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+    if !unsafe { IsWindowVisible(source) }.as_bool() {
+        let _ = unsafe { ShowWindow(source, SW_SHOWNOACTIVATE) };
+    }
+
+    let fits_host = aligned_behind_host(source, host_rect);
+    let mode = if fits_host {
+        // Size `host`, register thumbnail, and show opaque topmost `host` FIRST so `source`
+        // uncloaks behind an already-visible cover with zero flash.
+        if *state.box_of_the_host != Some(host_rect) {
+            let _ = unsafe {
+                SetWindowPos(
+                    host,
+                    HWND::default(),
+                    hx,
+                    hy,
+                    hw,
+                    hh,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            };
+            *state.box_of_the_host = Some(host_rect);
+        }
+        if *state.registered == 0 {
+            if let Ok(registration) = unsafe { DwmRegisterThumbnail(host, source) } {
+                *state.registered = registration;
+                if let Ok(mut held) = THUMBNAIL.lock() {
+                    *held = registration;
+                }
+            }
+        }
+        if *state.registered != 0 {
+            let mut client = RECT::default();
+            let _ = unsafe { GetClientRect(host, &mut client) };
+            let picture = if window_mode == CustomWindowMode::Normal {
+                unsafe { DwmQueryThumbnailSourceSize(*state.registered) }
+                    .ok()
+                    .filter(|s| s.cx > 0 && s.cy > 0)
+                    .map(|s| (s.cx, s.cy))
+                    .unwrap_or_else(|| {
+                        let (w, h) = source_size(source, window_mode);
+                        (w as i32, h as i32)
+                    })
+            } else {
+                let (w, h) = source_size(source, window_mode);
+                (w as i32, h as i32)
+            };
+            let properties =
+                thumbnail_properties(client.right, client.bottom, picture, window_mode);
+            if unsafe { DwmUpdateThumbnailProperties(*state.registered, &properties) }.is_ok() {
+                SHOWN.store(true, Ordering::SeqCst);
+                let _ = unsafe {
+                    SendMessageTimeoutW(
+                        host,
+                        WM_THE_PICTURE_IS_READY,
+                        WPARAM(0),
+                        LPARAM(0),
+                        SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                        100,
+                        None,
+                    )
+                };
+            }
+        }
+        session.view.uncloak_sync(source);
+        let _ = unsafe { InvalidateRect(source, None, false) };
+        let _ = unsafe { UpdateWindow(source) };
+        PlacementMode::BehindHost
+    } else {
+        // Min-size exceeds `host_rect`: move off-screen BEFORE uncloaking so it never flashes.
+        let ask = the_ask_for((hw, hh), source_size(source, window_mode));
+        *state.the_ask = Some(ask);
+        session
+            .view
+            .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+        let _ = unsafe {
+            SetWindowPos(
+                source,
+                HWND_BOTTOM,
+                STAGE_COORD,
+                STAGE_COORD,
+                ask.0,
+                ask.1,
+                SWP_NOACTIVATE,
+            )
+        };
+        session.view.uncloak_sync(source);
+        let _ = unsafe { InvalidateRect(source, None, false) };
+        let _ = unsafe { UpdateWindow(source) };
+        PlacementMode::OffScreen
+    };
+
+    restore_foreground(launch.previous_foreground, processes);
+    *state.placed_mode = Some(mode);
+    *state.placed_host_rect = Some(host_rect);
+    *state.expected_rect = window_rect(source);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_in_process_hook_settle_and_reveal(
+    host: HWND,
+    source: HWND,
+    launch: &Launch,
+    session: &InProcessHookSession,
+    processes: &[u32],
+    images: &mut HashMap<u32, Option<String>>,
+    creation_times: &mut HashMap<u32, Option<u64>>,
+    was_hidden: bool,
+    window_mode: CustomWindowMode,
+    current_target_rect: &dyn Fn() -> Option<(i32, i32, i32, i32)>,
+    state: &mut OffscreenStagedState<'_>,
+) -> bool {
+    if was_hidden {
+        if let Some(target_rect) = current_target_rect() {
+            let insets = if window_mode == CustomWindowMode::Normal {
+                dwm_frame_insets(source)
+            } else {
+                (0, 0, 0, 0)
+            };
+            let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+            session.view.set_rect(wx, wy, ww, wh);
+            let placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                flags: WINDOWPLACEMENT_FLAGS(0),
+                showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                rcNormalPosition: workspace_rect_for_screen(RECT {
+                    left: wx,
+                    top: wy,
+                    right: wx + ww,
+                    bottom: wy + wh,
+                }),
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(source, &placement) };
+        } else {
+            let _ = unsafe { ShowWindow(source, SW_SHOWNOACTIVATE) };
+        }
+    }
+
+    census(
+        launch,
+        processes,
+        images,
+        creation_times,
+        source.0 as isize,
+        true,
+        OwnershipMode::OwnedOnly,
+    )
+    .take();
+
+    // Settle while `source` is cloaked (`DWMWA_CLOAK = 1`) and rect-locked at `HWND_BOTTOM`.
+    let settle_start = Instant::now();
+    let settle_deadline = settle_start + Duration::from_millis(500);
+    let mut last_rect = window_rect(source);
+    let mut last_change = settle_start;
+
+    while Instant::now() < settle_deadline {
+        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+            return false;
+        }
+        let Some(target_rect) = current_target_rect() else {
+            return true;
+        };
+        let insets = if window_mode == CustomWindowMode::Normal {
+            dwm_frame_insets(source)
+        } else {
+            (0, 0, 0, 0)
+        };
+        let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+        session.view.set_rect(wx, wy, ww, wh);
+
+        let cur = window_rect(source);
+        if cur != last_rect {
+            last_rect = cur;
+            last_change = Instant::now();
+        } else if last_change.elapsed() >= Duration::from_millis(100) {
+            let answered = unsafe {
+                SendMessageTimeoutW(
+                    source,
+                    WM_NULL,
+                    WPARAM(0),
+                    LPARAM(0),
+                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                    50,
+                    None,
+                )
+            }
+            .0 != 0;
+            if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+                return false;
+            }
+            if answered && window_rect(source) == last_rect {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+        return false;
+    }
+    let Some(host_rect) = current_target_rect() else {
+        return true;
+    };
+    reveal_in_process_hook(
+        host,
+        source,
+        launch,
+        session,
+        processes,
+        host_rect,
+        window_mode,
+        state,
+    );
     true
 }
 
@@ -4747,6 +5529,10 @@ mod tests {
         assert!(!tries_invisible_layered(
             CustomCaptureTechnique::OffscreenStaged
         ));
+        assert!(uses_dwm_host(CustomCaptureTechnique::InProcessHook));
+        assert!(!tries_invisible_layered(
+            CustomCaptureTechnique::InProcessHook
+        ));
     }
 
     #[test]
@@ -4801,5 +5587,84 @@ mod tests {
             bottom: 700,
         };
         assert!(!should_restore_on_teardown(false, on_screen, vscreen));
+    }
+
+    #[test]
+    fn in_process_hook_dll_exports_shm_layout_and_thread_hook_attachment() {
+        // 1. Companion DLL must exist beside the test binary (or parent target dir) and export both hooks.
+        let (hmod, cbt_proc, cwp_proc) = load_hook_dll().expect(
+            "custom_preview_hook.dll must be built and export rhp_cbt_proc + rhp_callwnd_proc",
+        );
+
+        // 2. Verify shared memory creation and field layout.
+        let pid = std::process::id();
+        let msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
+        assert_ne!(msg, 0);
+        let view = HookSharedView::create(pid, Some((120, 80, 640, 480)), msg)
+            .expect("HookSharedView::create must succeed");
+        assert_eq!(std::mem::size_of::<HookSharedState>(), 56);
+        assert_eq!(view.state().magic, HOOK_MAGIC);
+        assert_eq!(view.state().version, HOOK_VERSION);
+        assert_eq!(view.state().target_pid, pid);
+        assert!(view.is_cloaked());
+        assert_eq!(view.state().x.load(Ordering::Acquire), 120);
+        assert_eq!(view.state().y.load(Ordering::Acquire), 80);
+        assert_eq!(view.state().w.load(Ordering::Acquire), 640);
+        assert_eq!(view.state().h.load(Ordering::Acquire), 480);
+
+        // 3. Empirical Win11 check: spawn a benign suspended process (`cmd.exe /c exit 0`) and test
+        //    whether `SetWindowsHookExW(WH_CBT | WH_CALLWNDPROC, ..., tid)` succeeds before vs after `ResumeThread`.
+        let cmd_exe = std::env::var_os("ComSpec").expect("ComSpec must be set on Windows");
+        let app_w = wide_null(OsStr::new(&cmd_exe));
+        let mut cmdline = wide_null(OsStr::new("cmd.exe /c exit 0"));
+        let si = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            dwFlags: STARTF_USESHOWWINDOW,
+            wShowWindow: SW_HIDE.0 as u16,
+            ..Default::default()
+        };
+        let mut pi = PROCESS_INFORMATION::default();
+        unsafe {
+            CreateProcessW(
+                PCWSTR(app_w.as_ptr()),
+                PWSTR(cmdline.as_mut_ptr()),
+                None,
+                None,
+                BOOL(0),
+                CREATE_SUSPENDED,
+                None,
+                PCWSTR::null(),
+                &si,
+                &mut pi,
+            )
+            .expect("CreateProcessW(CREATE_SUSPENDED) failed");
+        }
+        let attached_suspended = try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, pi.dwThreadId);
+        let pre_resume_ok = attached_suspended.is_some();
+        if let Some((cbt, cwp)) = attached_suspended {
+            let _ = unsafe { UnhookWindowsHookEx(cbt) };
+            let _ = unsafe { UnhookWindowsHookEx(cwp) };
+        }
+
+        // Also verify attaching to a running thread (current thread, guaranteed W32THREAD-ready).
+        let current_tid = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+        let current_hooks = try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, current_tid)
+            .expect("SetWindowsHookExW on active thread must succeed");
+        let _ = unsafe { UnhookWindowsHookEx(current_hooks.0) };
+        let _ = unsafe { UnhookWindowsHookEx(current_hooks.1) };
+
+        let _ = unsafe { TerminateProcess(pi.hProcess, 0) };
+        let _ = unsafe { CloseHandle(pi.hThread) };
+        let _ = unsafe { CloseHandle(pi.hProcess) };
+        let _ = unsafe { FreeLibrary(hmod) };
+
+        eprintln!(
+            "[empirical] SetWindowsHookExW(WH_CBT+WH_CALLWNDPROC) on CREATE_SUSPENDED thread: {}",
+            if pre_resume_ok {
+                "ACCEPTED_BEFORE_RESUME"
+            } else {
+                "REJECTED_BEFORE_RESUME (retry-after-resume path active)"
+            }
+        );
     }
 }
