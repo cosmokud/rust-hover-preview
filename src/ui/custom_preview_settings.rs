@@ -5,6 +5,7 @@
 //! owner-drawn `BUTTON`) painted with the active `TextTheme` palette and live theme switching.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::Once;
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -13,27 +14,28 @@ use windows::Win32::Graphics::Dwm::{
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint,
-    FillRect, GetStockObject, InvalidateRect, LineTo, MoveToEx, RedrawWindow, RoundRect,
-    ScreenToClient, SelectObject, SetBkColor, SetBkMode, SetTextColor, UpdateWindow,
-    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DT_CENTER, DT_LEFT, DT_NOPREFIX,
-    DT_SINGLELINE, DT_VCENTER, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, HGDIOBJ, NULL_BRUSH,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, RDW_ALLCHILDREN, RDW_ERASE,
-    RDW_INVALIDATE, RDW_UPDATENOW, TRANSPARENT,
+    BeginPaint, CreateFontW, CreatePen, CreateSolidBrush, DeleteObject, DrawTextW, Ellipse,
+    EndPaint, FillRect, GetDC, GetStockObject, GetTextMetricsW, InvalidateRect, LineTo, MoveToEx,
+    RedrawWindow, ReleaseDC, RoundRect, ScreenToClient, SelectObject, SetBkColor, SetBkMode,
+    SetTextColor, UpdateWindow, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DT_CENTER,
+    DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FW_NORMAL, FW_SEMIBOLD,
+    HBRUSH, HDC, HFONT, HGDIOBJ, NULL_BRUSH, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PROOF_QUALITY,
+    PS_SOLID, RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, TEXTMETRICW, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::{
     GetOpenFileNameW, OFN_FILEMUSTEXIST, OFN_HIDEREADONLY, OFN_PATHMUSTEXIST, OPENFILENAMEW,
 };
 use windows::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETLIMITTEXT, EM_SETMARGINS, EM_SETSEL, MARGINS,
-    MEASUREITEMSTRUCT, ODS_DISABLED, ODS_SELECTED, TBM_SETPOS, TBM_SETRANGE,
+    GetComboBoxInfo, SetWindowTheme, COMBOBOXINFO, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL,
+    EM_SETLIMITTEXT, EM_SETSEL, MARGINS, MEASUREITEMSTRUCT, ODS_DISABLED, ODS_SELECTED,
 };
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetDoubleClickTime, GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus,
-    TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_A, VK_BACK, VK_CONTROL, VK_DOWN, VK_ESCAPE,
-    VK_MENU, VK_RETURN, VK_SHIFT, VK_TAB, VK_UP,
+    EnableWindow, GetDoubleClickTime, GetFocus, GetKeyState, IsWindowEnabled, ReleaseCapture,
+    SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_A, VK_BACK, VK_CONTROL,
+    VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB,
+    VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
@@ -42,21 +44,21 @@ use windows::Win32::UI::WindowsAndMessaging::{
     KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
     SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
     TranslateMessage, BS_OWNERDRAW, CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED,
-    CB_ADDSTRING, CB_GETCURSEL, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CS_HREDRAW,
-    CS_VREDRAW, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU,
-    HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
-    HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOTIFY, LBS_OWNERDRAWFIXED,
-    LB_ADDSTRING, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL,
-    MINMAXINFO, MSG, NCCALCSIZE_PARAMS, SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME,
-    SM_CYDOUBLECLK, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE,
-    WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DRAWITEM, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_NCCALCSIZE,
-    WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
-    WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED,
-    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC,
+    HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
+    HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS, LBS_NOTIFY,
+    LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT,
+    LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS, SM_CXDOUBLECLK, SM_CXPADDEDBORDER,
+    SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND,
+    WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE,
+    WM_TIMER, WNDCLASSEXW, WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::config::config::{
@@ -67,18 +69,19 @@ use crate::text::{text_paint, text_theme};
 use crate::CONFIG;
 
 const CLASS_NAME: PCWSTR = w!("RustHoverPreviewCustomPreview");
+const SLIDER_CLASS: PCWSTR = w!("RustHoverPreviewThemedSlider");
 
 static OPEN: AtomicBool = AtomicBool::new(false);
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
+static SLIDER_CLASS_REGISTERED: Once = Once::new();
 
-const TBM_GETPOS: u32 = 0x0408;
 const WM_MOUSELEAVE: u32 = 0x02A3;
-const EC_LEFTMARGIN: usize = 0x0001;
-const EC_RIGHTMARGIN: usize = 0x0002;
 
 const WM_BRING_FORWARD: u32 = WM_APP + 17;
 const WM_THEME_CHANGED: u32 = WM_APP + 18;
 const WM_STEP_NUMERIC: u32 = WM_APP + 19;
+const WM_SLIDER_SET_VALUE: u32 = WM_APP + 20;
+const WM_SLIDER_GET_VALUE: u32 = WM_APP + 21;
 
 const TITLEBAR_LOGICAL_H: i32 = 40;
 const TITLEBAR_BTN_W: i32 = 44;
@@ -184,18 +187,25 @@ struct Palette {
     titlebar: COLORREF,
     card: COLORREF,
     field: COLORREF,
+    field_disabled: COLORREF,
     border: COLORREF,
     ink: COLORREF,
     muted: COLORREF,
     accent: COLORREF,
+    accent_hover: COLORREF,
+    accent_press: COLORREF,
     accent_text: COLORREF,
     number: COLORREF,
     button_bg: COLORREF,
     button_hover: COLORREF,
     button_press: COLORREF,
+    button_disabled: COLORREF,
     danger: COLORREF,
     danger_bg: COLORREF,
+    danger_text: COLORREF,
+    danger_on_fill: COLORREF,
     danger_hover: COLORREF,
+    slider_track: COLORREF,
     dark: bool,
 }
 
@@ -246,10 +256,10 @@ impl Palette {
                 mix(page, rgb(0, 0, 0), 10),
                 card,
                 mix(page, rgb(0, 0, 0), 18),
-                mix(page, ink, 18),
-                mix(card, ink, 9),
-                mix(card, ink, 16),
-                mix(card, ink, 24),
+                mix(page, ink, 20),
+                mix(card, ink, 10),
+                mix(card, ink, 18),
+                mix(card, ink, 26),
             )
         } else {
             let card = mix(page, rgb(0, 0, 0), 3);
@@ -257,24 +267,38 @@ impl Palette {
                 mix(page, rgb(0, 0, 0), 4),
                 card,
                 rgb(255, 255, 255),
-                mix(page, ink, 16),
-                mix(card, ink, 5),
-                mix(card, ink, 11),
-                mix(card, ink, 18),
+                mix(page, ink, 18),
+                mix(card, ink, 6),
+                mix(card, ink, 12),
+                mix(card, ink, 19),
             )
         };
 
-        let danger = if dark {
-            rgb(224, 108, 117)
+        let field_disabled = mix(card, field, 50);
+        let button_disabled = mix(card, border, 32);
+        let slider_track = mix(card, ink, if dark { 20 } else { 16 });
+
+        // Authentic One Dark Pro red (#E06C75) / Atom One Light red (#E45649).
+        let (danger, danger_text, danger_on_fill, danger_bg) = if dark {
+            let d = rgb(0xE0, 0x6C, 0x75);
+            (d, d, rgb(0x1E, 0x22, 0x2A), mix(card, d, 18))
         } else {
-            rgb(201, 59, 69)
+            let d = rgb(0xE4, 0x56, 0x49);
+            (
+                d,
+                rgb(0xC9, 0x3B, 0x32),
+                rgb(0xFF, 0xFF, 0xFF),
+                mix(card, d, 10),
+            )
         };
-        let danger_bg = mix(card, danger, if dark { 16 } else { 12 });
-        let danger_hover = rgb(212, 47, 58);
-        let accent_text = if text_paint::luminance(accent_arr) > 0.52 {
-            rgb(24, 28, 34)
+        let danger_hover = if dark { rgb(0xD8, 0x4B, 0x56) } else { danger };
+
+        let accent_hover = mix(accent, rgb(255, 255, 255), if dark { 14 } else { 12 });
+        let accent_press = mix(accent, rgb(0, 0, 0), 16);
+        let accent_text = if dark {
+            rgb(0x1E, 0x22, 0x2A)
         } else {
-            rgb(255, 255, 255)
+            rgb(0xFF, 0xFF, 0xFF)
         };
 
         Self {
@@ -282,18 +306,25 @@ impl Palette {
             titlebar,
             card,
             field,
+            field_disabled,
             border,
             ink,
             muted: mix(ink, page, 45),
             accent,
+            accent_hover,
+            accent_press,
             accent_text,
             number,
             button_bg,
             button_hover,
             button_press,
+            button_disabled,
             danger,
             danger_bg,
+            danger_text,
+            danger_on_fill,
             danger_hover,
+            slider_track,
             dark,
         }
     }
@@ -306,6 +337,7 @@ struct LayoutRects {
     btn_min: RECT,
     btn_max: RECT,
     btn_close: RECT,
+    edit_boxes: [(i32, RECT); 6],
 }
 
 impl LayoutRects {
@@ -319,6 +351,13 @@ impl LayoutRects {
         } else {
             None
         }
+    }
+
+    fn edit_box_at(&self, x: i32, y: i32) -> Option<i32> {
+        self.edit_boxes
+            .iter()
+            .find(|(_, r)| pt_in_rect(*r, x, y))
+            .map(|(id, _)| *id)
     }
 }
 
@@ -339,6 +378,7 @@ struct State {
     brush_page: HBRUSH,
     brush_card: HBRUSH,
     brush_field: HBRUSH,
+    brush_field_disabled: HBRUSH,
     dpi: i32,
     hovered_tb: Option<TitlebarButton>,
     pressed_tb: Option<TitlebarButton>,
@@ -355,6 +395,7 @@ impl Drop for State {
             let _ = DeleteObject(HGDIOBJ(self.brush_page.0));
             let _ = DeleteObject(HGDIOBJ(self.brush_card.0));
             let _ = DeleteObject(HGDIOBJ(self.brush_field.0));
+            let _ = DeleteObject(HGDIOBJ(self.brush_field_disabled.0));
         }
     }
 }
@@ -375,6 +416,27 @@ struct StepperSubclass {
     delta: i32,
     hovered: bool,
     pressed: bool,
+    tracking: bool,
+}
+
+struct ButtonSubclass {
+    orig_proc: WNDPROC,
+    hovered: bool,
+    tracking: bool,
+}
+
+struct ComboSubclass {
+    orig_proc: WNDPROC,
+    parent: HWND,
+    hovered: bool,
+    tracking: bool,
+}
+
+struct SliderState {
+    parent: HWND,
+    value: u32,
+    dragging: bool,
+    hovered: bool,
     tracking: bool,
 }
 
@@ -553,6 +615,21 @@ unsafe fn apply_dwm_chrome(hwnd: HWND, dark: bool) {
     let _ = unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) };
 }
 
+unsafe fn apply_combo_list_theme(combo: HWND, dark: bool) {
+    let mut info = COMBOBOXINFO {
+        cbSize: std::mem::size_of::<COMBOBOXINFO>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetComboBoxInfo(combo, &mut info) }.is_ok() && !info.hwndList.0.is_null() {
+        let theme = if dark {
+            w!("DarkMode_Explorer")
+        } else {
+            w!("")
+        };
+        let _ = unsafe { SetWindowTheme(info.hwndList, theme, None) };
+    }
+}
+
 unsafe fn apply_theme(state: &mut State) {
     let palette = Palette::of(theme_now());
     state.palette = palette;
@@ -560,10 +637,25 @@ unsafe fn apply_theme(state: &mut State) {
         let _ = DeleteObject(HGDIOBJ(state.brush_page.0));
         let _ = DeleteObject(HGDIOBJ(state.brush_card.0));
         let _ = DeleteObject(HGDIOBJ(state.brush_field.0));
+        let _ = DeleteObject(HGDIOBJ(state.brush_field_disabled.0));
         state.brush_page = CreateSolidBrush(palette.page);
         state.brush_card = CreateSolidBrush(palette.card);
         state.brush_field = CreateSolidBrush(palette.field);
+        state.brush_field_disabled = CreateSolidBrush(palette.field_disabled);
         apply_dwm_chrome(state.hwnd, palette.dark);
+        for id in [ID_WINDOW_MODE, ID_SCALING, ID_BACKGROUND] {
+            if let Ok(combo) = GetDlgItem(state.hwnd, id) {
+                apply_combo_list_theme(combo, palette.dark);
+            }
+        }
+        if let Ok(list) = GetDlgItem(state.hwnd, ID_LIST) {
+            let theme = if palette.dark {
+                w!("DarkMode_Explorer")
+            } else {
+                w!("")
+            };
+            let _ = SetWindowTheme(list, theme, None);
+        }
         let _ = RedrawWindow(
             state.hwnd,
             None,
@@ -719,6 +811,15 @@ unsafe extern "system" fn window_proc(
                     }
                     return LRESULT(0);
                 }
+                // Clicking anywhere in a padded EDIT container focuses its centered EDIT control.
+                if let Some(edit_id) = state.rects.edit_box_at(x, y) {
+                    if let Ok(edit) = unsafe { GetDlgItem(hwnd, edit_id) } {
+                        if unsafe { IsWindowEnabled(edit) }.as_bool() {
+                            let _ = unsafe { SetFocus(edit) };
+                            return LRESULT(0);
+                        }
+                    }
+                }
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
@@ -817,8 +918,18 @@ unsafe extern "system" fn window_proc(
             };
             let hdc = HDC(wparam.0 as *mut _);
             let ctl = HWND(lparam.0 as *mut _);
+            // Disabled EDIT controls send WM_CTLCOLORSTATIC; match container disabled fill seamlessly.
+            let is_edit = EDIT_IDS
+                .iter()
+                .any(|&id| unsafe { GetDlgItem(hwnd, id) }.is_ok_and(|h| h == ctl));
             let status_hwnd = unsafe { GetDlgItem(hwnd, ID_STATUS) }.unwrap_or_default();
-            let (bg, brush, ink) = if ctl == status_hwnd {
+            let (bg, brush, ink) = if is_edit {
+                (
+                    state.palette.field_disabled,
+                    state.brush_field_disabled,
+                    state.palette.muted,
+                )
+            } else if ctl == status_hwnd {
                 (state.palette.page, state.brush_page, state.palette.muted)
             } else {
                 (state.palette.card, state.brush_card, state.palette.muted)
@@ -834,11 +945,22 @@ unsafe extern "system" fn window_proc(
                 return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
             };
             let hdc = HDC(wparam.0 as *mut _);
+            let ctl = HWND(lparam.0 as *mut _);
+            let enabled = unsafe { IsWindowEnabled(ctl) }.as_bool();
+            let (bg, brush, ink) = if enabled {
+                (state.palette.field, state.brush_field, state.palette.ink)
+            } else {
+                (
+                    state.palette.field_disabled,
+                    state.brush_field_disabled,
+                    state.palette.muted,
+                )
+            };
             unsafe {
-                SetTextColor(hdc, state.palette.ink);
-                SetBkColor(hdc, state.palette.field);
+                SetTextColor(hdc, ink);
+                SetBkColor(hdc, bg);
             }
-            LRESULT(state.brush_field.0 as isize)
+            LRESULT(brush.0 as isize)
         }
         WM_CTLCOLORLISTBOX => {
             let Some(state) = (unsafe { state_of(hwnd) }) else {
@@ -975,28 +1097,17 @@ unsafe fn paint_window(state: &State, hdc: HDC) {
         let ec = state.rects.editor_card;
         let _ = RoundRect(hdc, ec.left, ec.top, ec.right, ec.bottom, radius, radius);
 
-        // Border & focus accent ring around each EDIT control and LISTBOX.
+        // Padded containers & focus accent ring around each centered EDIT control.
         let focused = GetFocus();
         let focus_pen = CreatePen(PS_SOLID, 1, p.accent);
-        for id in EDIT_IDS.into_iter().chain(std::iter::once(ID_LIST)) {
-            let Ok(ctrl) = GetDlgItem(state.hwnd, id) else {
-                continue;
-            };
-            let mut r = RECT::default();
-            if GetWindowRect(ctrl, &mut r).is_err() {
+        let field_radius = scale(4, dpi);
+        for (id, r) in state.rects.edit_boxes {
+            if r.right <= r.left || r.bottom <= r.top {
                 continue;
             }
-            let mut tl = POINT {
-                x: r.left,
-                y: r.top,
-            };
-            let mut br = POINT {
-                x: r.right,
-                y: r.bottom,
-            };
-            let _ = ScreenToClient(state.hwnd, &mut tl);
-            let _ = ScreenToClient(state.hwnd, &mut br);
-            let is_focused = ctrl == focused;
+            let ctrl = GetDlgItem(state.hwnd, id).unwrap_or_default();
+            let enabled = !ctrl.0.is_null() && IsWindowEnabled(ctrl).as_bool();
+            let is_focused = enabled && ctrl == focused;
             let _ = SelectObject(
                 hdc,
                 HGDIOBJ(if is_focused {
@@ -1005,16 +1116,59 @@ unsafe fn paint_window(state: &State, hdc: HDC) {
                     border_pen.0
                 }),
             );
-            let _ = SelectObject(hdc, HGDIOBJ(state.brush_field.0));
+            let _ = SelectObject(
+                hdc,
+                HGDIOBJ(if enabled {
+                    state.brush_field.0
+                } else {
+                    state.brush_field_disabled.0
+                }),
+            );
             let _ = RoundRect(
                 hdc,
-                tl.x - 1,
-                tl.y - 1,
-                br.x + 1,
-                br.y + 1,
-                scale(4, dpi),
-                scale(4, dpi),
+                r.left,
+                r.top,
+                r.right,
+                r.bottom,
+                field_radius,
+                field_radius,
             );
+        }
+
+        // Border & focus accent ring around LISTBOX.
+        if let Ok(ctrl) = GetDlgItem(state.hwnd, ID_LIST) {
+            let mut r = RECT::default();
+            if GetWindowRect(ctrl, &mut r).is_ok() {
+                let mut tl = POINT {
+                    x: r.left,
+                    y: r.top,
+                };
+                let mut br = POINT {
+                    x: r.right,
+                    y: r.bottom,
+                };
+                let _ = ScreenToClient(state.hwnd, &mut tl);
+                let _ = ScreenToClient(state.hwnd, &mut br);
+                let is_focused = ctrl == focused;
+                let _ = SelectObject(
+                    hdc,
+                    HGDIOBJ(if is_focused {
+                        focus_pen.0
+                    } else {
+                        border_pen.0
+                    }),
+                );
+                let _ = SelectObject(hdc, HGDIOBJ(state.brush_field.0));
+                let _ = RoundRect(
+                    hdc,
+                    tl.x - 1,
+                    tl.y - 1,
+                    br.x + 1,
+                    br.y + 1,
+                    field_radius,
+                    field_radius,
+                );
+            }
         }
 
         let _ = SelectObject(hdc, old_pen);
@@ -1158,6 +1312,7 @@ unsafe fn build(hwnd: HWND) -> State {
         brush_page: unsafe { CreateSolidBrush(palette.page) },
         brush_card: unsafe { CreateSolidBrush(palette.card) },
         brush_field: unsafe { CreateSolidBrush(palette.field) },
+        brush_field_disabled: unsafe { CreateSolidBrush(palette.field_disabled) },
         dpi,
         hovered_tb: None,
         pressed_tb: None,
@@ -1169,6 +1324,7 @@ unsafe fn build(hwnd: HWND) -> State {
             btn_min: RECT::default(),
             btn_max: RECT::default(),
             btn_close: RECT::default(),
+            edit_boxes: EDIT_IDS.map(|id| (id, RECT::default())),
         },
     };
 
@@ -1259,15 +1415,7 @@ unsafe fn build(hwnd: HWND) -> State {
             ID_BACKGROUND,
         )
     });
-    controls.push(unsafe {
-        child(
-            hwnd,
-            w!("msctls_trackbar32"),
-            "",
-            child_style(WS_TABSTOP.0),
-            ID_VOLUME,
-        )
-    });
+    controls.push(unsafe { create_themed_slider(hwnd, ID_VOLUME) });
     controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_VOLUME_VALUE) });
     let vol_up = unsafe { stepper_button(hwnd, "▲", ID_VOLUME_UP, ID_VOLUME_VALUE, 1) };
     let vol_dn = unsafe { stepper_button(hwnd, "▼", ID_VOLUME_DOWN, ID_VOLUME_VALUE, -1) };
@@ -1303,7 +1451,8 @@ unsafe fn build(hwnd: HWND) -> State {
         }
     }
 
-    // Configure every EDIT: generous text limits, inner margins, and keyboard/triple-click subclass.
+    // Configure every EDIT: generous text limits and keyboard/triple-click subclass.
+    // Horizontal inset comes from the parent-painted outer container rect.
     let edit_limits = [
         (ID_SEARCH, 32767usize),
         (ID_NAME, 48),
@@ -1312,21 +1461,22 @@ unsafe fn build(hwnd: HWND) -> State {
         (ID_SCALING_PERCENT, 4),
         (ID_VOLUME_VALUE, 3),
     ];
-    let margin = scale(6, dpi) as usize;
-    let margin_lparam = LPARAM(((margin << 16) | (margin & 0xFFFF)) as isize);
     for (id, limit) in edit_limits {
         if let Ok(edit) = unsafe { GetDlgItem(hwnd, id) } {
             unsafe {
                 SendMessageW(edit, EM_SETLIMITTEXT, WPARAM(limit), LPARAM(0));
-                SendMessageW(
-                    edit,
-                    EM_SETMARGINS,
-                    WPARAM(EC_LEFTMARGIN | EC_RIGHTMARGIN),
-                    margin_lparam,
-                );
                 install_edit_subclass(edit, hwnd, id);
             }
         }
+    }
+
+    if let Ok(list) = unsafe { GetDlgItem(hwnd, ID_LIST) } {
+        let theme = if palette.dark {
+            w!("DarkMode_Explorer")
+        } else {
+            w!("")
+        };
+        let _ = unsafe { SetWindowTheme(list, theme, None) };
     }
 
     let window_mode_combo = unsafe { GetDlgItem(hwnd, ID_WINDOW_MODE) }.unwrap_or_default();
@@ -1345,9 +1495,13 @@ unsafe fn build(hwnd: HWND) -> State {
         unsafe { combo_add(background_combo, background_label(background)) };
     }
 
-    let volume = unsafe { GetDlgItem(hwnd, ID_VOLUME) }.unwrap_or_default();
-    unsafe {
-        SendMessageW(volume, TBM_SETRANGE, WPARAM(1), LPARAM(0x640000));
+    for combo in [window_mode_combo, scaling, background_combo] {
+        if !combo.0.is_null() {
+            unsafe {
+                install_combo_subclass(combo, hwnd);
+                apply_combo_list_theme(combo, palette.dark);
+            }
+        }
     }
 
     if !state.presets.is_empty() {
@@ -1735,8 +1889,13 @@ unsafe fn step_numeric_field(state: &mut State, target_id: i32, delta: i32) {
             state.loading = true;
             unsafe {
                 set_text(state.hwnd, ID_VOLUME_VALUE, &next.to_string());
-                let trackbar = GetDlgItem(state.hwnd, ID_VOLUME).unwrap_or_default();
-                SendMessageW(trackbar, TBM_SETPOS, WPARAM(1), LPARAM(next as isize));
+                let slider = GetDlgItem(state.hwnd, ID_VOLUME).unwrap_or_default();
+                SendMessageW(
+                    slider,
+                    WM_SLIDER_SET_VALUE,
+                    WPARAM(next as usize),
+                    LPARAM(0),
+                );
             }
             state.loading = false;
         }
@@ -1766,7 +1925,7 @@ unsafe fn child(hwnd: HWND, class: PCWSTR, text: &str, style: WINDOW_STYLE, id: 
 }
 
 unsafe fn button(hwnd: HWND, text: &str, id: i32) -> HWND {
-    unsafe {
+    let btn = unsafe {
         child(
             hwnd,
             w!("BUTTON"),
@@ -1774,6 +1933,576 @@ unsafe fn button(hwnd: HWND, text: &str, id: i32) -> HWND {
             child_style(WS_TABSTOP.0 | BS_OWNERDRAW as u32),
             id,
         )
+    };
+    if !btn.0.is_null() {
+        let orig = unsafe {
+            SetWindowLongPtrW(
+                btn,
+                GWLP_WNDPROC,
+                button_subclass_proc as *const () as usize as isize,
+            )
+        };
+        let orig_proc: WNDPROC = unsafe { std::mem::transmute(orig) };
+        let data = Box::into_raw(Box::new(ButtonSubclass {
+            orig_proc,
+            hovered: false,
+            tracking: false,
+        }));
+        unsafe { SetWindowLongPtrW(btn, GWLP_USERDATA, data as isize) };
+    }
+    btn
+}
+
+unsafe extern "system" fn button_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut ButtonSubclass;
+    let Some(sub) = (unsafe { raw.as_mut() }) else {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+    let orig_proc = sub.orig_proc;
+
+    match msg {
+        WM_MOUSEMOVE => {
+            if !sub.hovered {
+                sub.hovered = true;
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+            if !sub.tracking {
+                sub.tracking = true;
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                let _ = unsafe { TrackMouseEvent(&mut tme) };
+            }
+        }
+        WM_MOUSELEAVE => {
+            sub.tracking = false;
+            if sub.hovered {
+                sub.hovered = false;
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+        }
+        WM_NCDESTROY => {
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(raw));
+            }
+            return unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+        }
+        _ => {}
+    }
+
+    unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
+}
+
+unsafe fn install_combo_subclass(combo: HWND, parent: HWND) {
+    let orig = unsafe {
+        SetWindowLongPtrW(
+            combo,
+            GWLP_WNDPROC,
+            combo_subclass_proc as *const () as usize as isize,
+        )
+    };
+    let orig_proc: WNDPROC = unsafe { std::mem::transmute(orig) };
+    let data = Box::into_raw(Box::new(ComboSubclass {
+        orig_proc,
+        parent,
+        hovered: false,
+        tracking: false,
+    }));
+    unsafe { SetWindowLongPtrW(combo, GWLP_USERDATA, data as isize) };
+}
+
+unsafe extern "system" fn combo_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut ComboSubclass;
+    let Some(sub) = (unsafe { raw.as_mut() }) else {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+    let orig_proc = sub.orig_proc;
+
+    match msg {
+        WM_ERASEBKGND => return LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+            let (p, dpi, font, card_brush) = match unsafe { state_of(sub.parent) } {
+                Some(state) => (state.palette, state.dpi, state.font, Some(state.brush_card)),
+                None => (Palette::of(theme_now()), 96, HFONT::default(), None),
+            };
+            let mut rc = RECT::default();
+            let _ = unsafe { GetClientRect(hwnd, &mut rc) };
+            let enabled = unsafe { IsWindowEnabled(hwnd) }.as_bool();
+            let focused = enabled && unsafe { GetFocus() } == hwnd;
+            let dropped =
+                unsafe { SendMessageW(hwnd, CB_GETDROPPEDSTATE, WPARAM(0), LPARAM(0)).0 } != 0;
+            let active = enabled && (focused || dropped || sub.hovered);
+
+            unsafe {
+                if let Some(cb) = card_brush {
+                    FillRect(hdc, &rc, cb);
+                } else {
+                    let b = CreateSolidBrush(p.card);
+                    FillRect(hdc, &rc, b);
+                    let _ = DeleteObject(HGDIOBJ(b.0));
+                }
+
+                let fill_col = if enabled { p.field } else { p.field_disabled };
+                let border_col = if active { p.accent } else { p.border };
+                let fill_brush = CreateSolidBrush(fill_col);
+                let border_pen = CreatePen(PS_SOLID, 1, border_col);
+                let old_b = SelectObject(hdc, HGDIOBJ(fill_brush.0));
+                let old_p = SelectObject(hdc, HGDIOBJ(border_pen.0));
+                let r = scale(4, dpi);
+                let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, r, r);
+                let _ = SelectObject(hdc, old_b);
+                let _ = SelectObject(hdc, old_p);
+                let _ = DeleteObject(HGDIOBJ(fill_brush.0));
+                let _ = DeleteObject(HGDIOBJ(border_pen.0));
+
+                // Selected item label.
+                let sel = SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
+                if sel >= 0 {
+                    let len = SendMessageW(hwnd, CB_GETLBTEXTLEN, WPARAM(sel as usize), LPARAM(0))
+                        .0
+                        .max(0) as usize;
+                    if len > 0 {
+                        let mut buf = vec![0u16; len + 1];
+                        SendMessageW(
+                            hwnd,
+                            CB_GETLBTEXT,
+                            WPARAM(sel as usize),
+                            LPARAM(buf.as_mut_ptr() as isize),
+                        );
+                        buf.truncate(len);
+                        let mut text_rc = RECT {
+                            left: rc.left + scale(10, dpi),
+                            top: rc.top,
+                            right: (rc.right - scale(26, dpi)).max(rc.left + scale(10, dpi)),
+                            bottom: rc.bottom,
+                        };
+                        SetBkMode(hdc, TRANSPARENT);
+                        SetTextColor(hdc, if enabled { p.ink } else { p.muted });
+                        let old_f = if !font.0.is_null() {
+                            Some(SelectObject(hdc, HGDIOBJ(font.0)))
+                        } else {
+                            None
+                        };
+                        DrawTextW(
+                            hdc,
+                            &mut buf,
+                            &mut text_rc,
+                            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+                        );
+                        if let Some(of) = old_f {
+                            let _ = SelectObject(hdc, of);
+                        }
+                    }
+                }
+
+                // Custom chevron on right (replaces white Win32 dropdown button).
+                let chev_col = if !enabled {
+                    p.muted
+                } else if active {
+                    p.ink
+                } else {
+                    p.muted
+                };
+                let cx = rc.right - scale(14, dpi);
+                let cy = (rc.top + rc.bottom) / 2;
+                let hw = scale(4, dpi).max(3);
+                let hh = scale(2, dpi).max(2);
+                let chev_pen = CreatePen(PS_SOLID, scale(1, dpi).max(1), chev_col);
+                let old_p = SelectObject(hdc, HGDIOBJ(chev_pen.0));
+                let _ = MoveToEx(hdc, cx - hw, cy - hh + 1, None);
+                let _ = LineTo(hdc, cx, cy + hh);
+                let _ = LineTo(hdc, cx + hw + 1, cy - hh);
+                let _ = SelectObject(hdc, old_p);
+                let _ = DeleteObject(HGDIOBJ(chev_pen.0));
+
+                let _ = EndPaint(hwnd, &ps);
+            }
+            return LRESULT(0);
+        }
+        WM_MOUSEMOVE => {
+            if !sub.hovered {
+                sub.hovered = true;
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+            if !sub.tracking {
+                sub.tracking = true;
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                let _ = unsafe { TrackMouseEvent(&mut tme) };
+            }
+        }
+        WM_MOUSELEAVE => {
+            sub.tracking = false;
+            if sub.hovered {
+                sub.hovered = false;
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+        }
+        WM_SETFOCUS | WM_KILLFOCUS | WM_ENABLE => {
+            let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+            let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            return res;
+        }
+        WM_NCDESTROY => {
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(raw));
+            }
+            return unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+        }
+        _ => {}
+    }
+
+    unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
+}
+
+fn slider_value_from_x(x: i32, track_left: i32, track_right: i32) -> u32 {
+    let span = (track_right - track_left).max(1);
+    let clamped = (x - track_left).clamp(0, span);
+    ((clamped as i64 * VOLUME_MAX as i64 + span as i64 / 2) / span as i64)
+        .clamp(VOLUME_MIN as i64, VOLUME_MAX as i64) as u32
+}
+
+fn slider_thumb_x(value: u32, track_left: i32, track_right: i32) -> i32 {
+    let span = (track_right - track_left).max(1);
+    let v = value.clamp(VOLUME_MIN, VOLUME_MAX) as i64;
+    track_left + ((v * span as i64 + VOLUME_MAX as i64 / 2) / VOLUME_MAX as i64) as i32
+}
+
+unsafe fn create_themed_slider(parent: HWND, id: i32) -> HWND {
+    SLIDER_CLASS_REGISTERED.call_once(|| {
+        let Ok(hinstance) = (unsafe { GetModuleHandleW(None) }) else {
+            return;
+        };
+        let class = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+            style: CS_HREDRAW | CS_VREDRAW,
+            lpfnWndProc: Some(slider_proc),
+            hInstance: hinstance.into(),
+            hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default(),
+            hbrBackground: HBRUSH(unsafe { GetStockObject(NULL_BRUSH) }.0),
+            lpszClassName: SLIDER_CLASS,
+            ..Default::default()
+        };
+        unsafe { RegisterClassExW(&class) };
+    });
+
+    let slider = unsafe { child(parent, SLIDER_CLASS, "", child_style(WS_TABSTOP.0), id) };
+    if !slider.0.is_null() {
+        let data = Box::into_raw(Box::new(SliderState {
+            parent,
+            value: 100,
+            dragging: false,
+            hovered: false,
+            tracking: false,
+        }));
+        unsafe { SetWindowLongPtrW(slider, GWLP_USERDATA, data as isize) };
+    }
+    slider
+}
+
+unsafe extern "system" fn slider_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut SliderState;
+    let Some(sl) = (unsafe { raw.as_mut() }) else {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+
+    let dpi = unsafe { state_of(sl.parent) }.map_or(96, |s| s.dpi);
+    let track_bounds = |hwnd: HWND, dpi: i32| -> (RECT, i32, i32) {
+        let mut rc = RECT::default();
+        let _ = unsafe { GetClientRect(hwnd, &mut rc) };
+        let pad = scale(8, dpi);
+        let left = pad;
+        let right = (rc.right - pad).max(left + 1);
+        (rc, left, right)
+    };
+    let notify_parent = |sl: &mut SliderState, hwnd: HWND, next: u32| {
+        let clamped = next.clamp(VOLUME_MIN, VOLUME_MAX);
+        if sl.value != clamped {
+            sl.value = clamped;
+            let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            unsafe {
+                SendMessageW(sl.parent, WM_HSCROLL, WPARAM(0), LPARAM(hwnd.0 as isize));
+            }
+        }
+    };
+
+    match msg {
+        WM_SLIDER_SET_VALUE => {
+            let next = (wparam.0 as u32).clamp(VOLUME_MIN, VOLUME_MAX);
+            if sl.value != next {
+                sl.value = next;
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+            LRESULT(0)
+        }
+        WM_SLIDER_GET_VALUE => LRESULT(sl.value as isize),
+        WM_ERASEBKGND => LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
+            let (p, card_brush) = match unsafe { state_of(sl.parent) } {
+                Some(state) => (state.palette, Some(state.brush_card)),
+                None => (Palette::of(theme_now()), None),
+            };
+            let (rc, track_left, track_right) = track_bounds(hwnd, dpi);
+            let enabled = unsafe { IsWindowEnabled(hwnd) }.as_bool();
+            let focused = enabled && unsafe { GetFocus() } == hwnd;
+            let cy = (rc.top + rc.bottom) / 2;
+            let track_h = scale(4, dpi).max(3);
+            let track_top = cy - track_h / 2;
+            let track_bot = track_top + track_h;
+            let thumb_x = slider_thumb_x(sl.value, track_left, track_right);
+            let base_r = scale(6, dpi).max(5);
+            let thumb_r = if enabled && (sl.dragging || sl.hovered) {
+                base_r + 1
+            } else {
+                base_r
+            };
+
+            unsafe {
+                if let Some(cb) = card_brush {
+                    FillRect(hdc, &rc, cb);
+                } else {
+                    let b = CreateSolidBrush(p.card);
+                    FillRect(hdc, &rc, b);
+                    let _ = DeleteObject(HGDIOBJ(b.0));
+                }
+
+                // Unfilled track.
+                let track_col = if enabled { p.slider_track } else { p.border };
+                let tb = CreateSolidBrush(track_col);
+                let tp = CreatePen(PS_SOLID, 1, track_col);
+                let old_b = SelectObject(hdc, HGDIOBJ(tb.0));
+                let old_p = SelectObject(hdc, HGDIOBJ(tp.0));
+                let _ = RoundRect(
+                    hdc,
+                    track_left,
+                    track_top,
+                    track_right,
+                    track_bot,
+                    track_h,
+                    track_h,
+                );
+                let _ = SelectObject(hdc, old_b);
+                let _ = SelectObject(hdc, old_p);
+                let _ = DeleteObject(HGDIOBJ(tb.0));
+                let _ = DeleteObject(HGDIOBJ(tp.0));
+
+                // Active filled bar (0..value).
+                if thumb_x > track_left {
+                    let active_col = if enabled { p.accent } else { p.muted };
+                    let ab = CreateSolidBrush(active_col);
+                    let ap = CreatePen(PS_SOLID, 1, active_col);
+                    let old_b = SelectObject(hdc, HGDIOBJ(ab.0));
+                    let old_p = SelectObject(hdc, HGDIOBJ(ap.0));
+                    let _ = RoundRect(
+                        hdc,
+                        track_left,
+                        track_top,
+                        thumb_x.min(track_right),
+                        track_bot,
+                        track_h,
+                        track_h,
+                    );
+                    let _ = SelectObject(hdc, old_b);
+                    let _ = SelectObject(hdc, old_p);
+                    let _ = DeleteObject(HGDIOBJ(ab.0));
+                    let _ = DeleteObject(HGDIOBJ(ap.0));
+                }
+
+                // Circular thumb (bright highlight on hover/drag; subtle focus halo when focused).
+                let thumb_fill = if !enabled {
+                    p.muted
+                } else if sl.dragging || sl.hovered {
+                    p.accent_hover
+                } else {
+                    p.accent
+                };
+                let thumb_border = if focused { p.ink } else { p.card };
+                let cb = CreateSolidBrush(thumb_fill);
+                let cp = CreatePen(PS_SOLID, 1, thumb_border);
+                let old_b = SelectObject(hdc, HGDIOBJ(cb.0));
+                let old_p = SelectObject(hdc, HGDIOBJ(cp.0));
+                let _ = Ellipse(
+                    hdc,
+                    thumb_x - thumb_r,
+                    cy - thumb_r,
+                    thumb_x + thumb_r + 1,
+                    cy + thumb_r + 1,
+                );
+                let _ = SelectObject(hdc, old_b);
+                let _ = SelectObject(hdc, old_p);
+                let _ = DeleteObject(HGDIOBJ(cb.0));
+                let _ = DeleteObject(HGDIOBJ(cp.0));
+
+                let _ = EndPaint(hwnd, &ps);
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            if !unsafe { IsWindowEnabled(hwnd) }.as_bool() {
+                return LRESULT(0);
+            }
+            let x = (lparam.0 & 0xFFFF) as i16 as i32;
+            let (_, track_left, track_right) = track_bounds(hwnd, dpi);
+            sl.dragging = true;
+            unsafe {
+                let _ = SetFocus(hwnd);
+                SetCapture(hwnd);
+            }
+            let next = slider_value_from_x(x, track_left, track_right);
+            notify_parent(sl, hwnd, next);
+            let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            LRESULT(0)
+        }
+        WM_MOUSEMOVE => {
+            if sl.dragging {
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let (_, track_left, track_right) = track_bounds(hwnd, dpi);
+                let next = slider_value_from_x(x, track_left, track_right);
+                notify_parent(sl, hwnd, next);
+            } else {
+                if !sl.hovered {
+                    sl.hovered = true;
+                    let _ = unsafe { InvalidateRect(hwnd, None, false) };
+                }
+                if !sl.tracking {
+                    sl.tracking = true;
+                    let mut tme = TRACKMOUSEEVENT {
+                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                        dwFlags: TME_LEAVE,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 0,
+                    };
+                    let _ = unsafe { TrackMouseEvent(&mut tme) };
+                }
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            if sl.dragging {
+                sl.dragging = false;
+                let _ = unsafe { ReleaseCapture() };
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED | WM_CANCELMODE => {
+            if sl.dragging {
+                sl.dragging = false;
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            sl.tracking = false;
+            if sl.hovered {
+                sl.hovered = false;
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            if !unsafe { IsWindowEnabled(hwnd) }.as_bool() {
+                return LRESULT(0);
+            }
+            let delta = ((wparam.0 >> 16) as i16) as i32;
+            let step = if delta > 0 { 5 } else { -5 };
+            notify_parent(sl, hwnd, step_volume(sl.value, step));
+            LRESULT(0)
+        }
+        WM_KEYDOWN => {
+            if !unsafe { IsWindowEnabled(hwnd) }.as_bool() {
+                return LRESULT(0);
+            }
+            let vk = wparam.0 as u16;
+            let next = if vk == VK_LEFT.0 || vk == VK_DOWN.0 {
+                Some(step_volume(sl.value, -1))
+            } else if vk == VK_RIGHT.0 || vk == VK_UP.0 {
+                Some(step_volume(sl.value, 1))
+            } else if vk == VK_HOME.0 {
+                Some(VOLUME_MIN)
+            } else if vk == VK_END.0 {
+                Some(VOLUME_MAX)
+            } else {
+                None
+            };
+            if let Some(v) = next {
+                notify_parent(sl, hwnd, v);
+                return LRESULT(0);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        WM_ENABLE | WM_SETFOCUS | WM_KILLFOCUS => {
+            let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        WM_NCDESTROY => {
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(raw));
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+unsafe fn font_text_height(hwnd: HWND, font: HFONT) -> i32 {
+    let hdc = unsafe { GetDC(hwnd) };
+    if hdc.0.is_null() {
+        return 18;
+    }
+    let old = unsafe { SelectObject(hdc, HGDIOBJ(font.0)) };
+    let mut tm = TEXTMETRICW::default();
+    let ok = unsafe { GetTextMetricsW(hdc, &mut tm) }.as_bool();
+    let _ = unsafe { SelectObject(hdc, old) };
+    let _ = unsafe { ReleaseDC(hwnd, hdc) };
+    if ok && tm.tmHeight > 0 {
+        tm.tmHeight
+    } else {
+        18
+    }
+}
+
+/// Vertically centers a borderless single-line EDIT inside its outer container `RECT`.
+fn centered_edit_rect(container: RECT, text_height: i32, pad_x: i32) -> RECT {
+    let ch = (container.bottom - container.top).max(1);
+    let eh = text_height.clamp(1, ch);
+    let top = container.top + (ch - eh) / 2;
+    let left = container.left + pad_x;
+    let right = (container.right - pad_x).max(left + 1);
+    RECT {
+        left,
+        top,
+        right,
+        bottom: top + eh,
     }
 }
 
@@ -1848,6 +2577,7 @@ fn compute_layout_rects(width: i32, height: i32, dpi: i32) -> LayoutRects {
         btn_min,
         btn_max,
         btn_close,
+        edit_boxes: EDIT_IDS.map(|id| (id, RECT::default())),
     }
 }
 
@@ -1867,11 +2597,33 @@ unsafe fn lay_out(state: &mut State) {
     let label_w = scale(92, dpi);
     let stepper_w = scale(22, dpi);
     let half_row = row / 2;
+    let text_h = unsafe { font_text_height(state.hwnd, state.font) };
+    let edit_pad_x = scale(8, dpi);
 
     let place = |id: i32, x: i32, y: i32, w: i32, h: i32| {
         if let Ok(control) = unsafe { GetDlgItem(state.hwnd, id) } {
             let _ = unsafe { SetWindowPos(control, HWND::default(), x, y, w, h, SWP_NOZORDER) };
         }
+    };
+    let mut edit_boxes = EDIT_IDS.map(|id| (id, RECT::default()));
+    let mut place_edit = |id: i32, x: i32, y: i32, w: i32, h: i32| {
+        let container = RECT {
+            left: x,
+            top: y,
+            right: x + w,
+            bottom: y + h,
+        };
+        if let Some(slot) = edit_boxes.iter_mut().find(|(eid, _)| *eid == id) {
+            slot.1 = container;
+        }
+        let inner_rc = centered_edit_rect(container, text_h, edit_pad_x);
+        place(
+            id,
+            inner_rc.left,
+            inner_rc.top,
+            inner_rc.right - inner_rc.left,
+            inner_rc.bottom - inner_rc.top,
+        );
     };
 
     // Sidebar card interior.
@@ -1881,7 +2633,7 @@ unsafe fn lay_out(state: &mut State) {
     let s_w = (sc.right - sc.left - inner * 2).max(scale(100, dpi));
     let add_w = scale(50, dpi);
     let search_w = (s_w - add_w - scale(8, dpi)).max(scale(60, dpi));
-    place(ID_SEARCH, s_left, s_top, search_w, row);
+    place_edit(ID_SEARCH, s_left, s_top, search_w, row);
     place(ID_ADD, s_left + search_w + scale(8, dpi), s_top, add_w, row);
     place(
         ID_LIST,
@@ -1912,21 +2664,21 @@ unsafe fn lay_out(state: &mut State) {
         place(
             ID_LABEL_BASE + index as i32,
             e_left,
-            y + scale(6, dpi),
+            y + (row - text_h) / 2,
             label_w - scale(6, dpi),
-            row - scale(6, dpi),
+            text_h + scale(2, dpi),
         );
         y += row + gap;
     }
 
     let mut y = ec.top + inner + scale(4, dpi);
-    place(ID_NAME, field_left, y, field_w, row);
+    place_edit(ID_NAME, field_left, y, field_w, row);
     y += row + gap;
-    place(ID_EXTENSIONS, field_left, y, field_w, row);
+    place_edit(ID_EXTENSIONS, field_left, y, field_w, row);
     y += row + gap;
 
     let browse_w = scale(86, dpi);
-    place(
+    place_edit(
         ID_EXE,
         field_left,
         y,
@@ -1957,7 +2709,7 @@ unsafe fn lay_out(state: &mut State) {
         scaling_combo_w,
         row + combo_drop_height(dpi),
     );
-    place(ID_SCALING_PERCENT, pct_x, y, pct_edit_w, row);
+    place_edit(ID_SCALING_PERCENT, pct_x, y, pct_edit_w, row);
     place(
         ID_SCALING_UP,
         pct_x + pct_edit_w + scale(2, dpi),
@@ -1989,7 +2741,7 @@ unsafe fn lay_out(state: &mut State) {
     let vol_slider_w = (field_w - vol_group_w - scale(8, dpi)).max(scale(80, dpi));
     let vol_x = field_left + field_w - vol_group_w;
     place(ID_VOLUME, field_left, y, vol_slider_w, row);
-    place(ID_VOLUME_VALUE, vol_x, y, vol_edit_w, row);
+    place_edit(ID_VOLUME_VALUE, vol_x, y, vol_edit_w, row);
     place(
         ID_VOLUME_UP,
         vol_x + vol_edit_w + scale(2, dpi),
@@ -2004,6 +2756,8 @@ unsafe fn lay_out(state: &mut State) {
         stepper_w,
         row - half_row,
     );
+
+    state.rects.edit_boxes = edit_boxes;
 
     // Footer row.
     let btn_w = scale(86, dpi);
@@ -2027,9 +2781,9 @@ unsafe fn lay_out(state: &mut State) {
     place(
         ID_STATUS,
         pad + scale(4, dpi),
-        btn_y + scale(6, dpi),
+        btn_y + (btn_h - text_h) / 2,
         (width - pad * 2 - btn_w * 3 - scale(28, dpi)).max(scale(80, dpi)),
-        btn_h - scale(6, dpi),
+        text_h + scale(2, dpi),
     );
 
     unsafe {
@@ -2107,6 +2861,7 @@ unsafe fn set_scaling_percent_enabled(hwnd: HWND, enabled: bool) {
             let _ = unsafe { EnableWindow(ctrl, enabled) };
         }
     }
+    let _ = unsafe { InvalidateRect(hwnd, None, false) };
 }
 
 unsafe fn fill_fields(state: &mut State) {
@@ -2184,8 +2939,13 @@ unsafe fn fill_fields(state: &mut State) {
             LPARAM(0),
         );
 
-        let trackbar = GetDlgItem(state.hwnd, ID_VOLUME).unwrap_or_default();
-        SendMessageW(trackbar, TBM_SETPOS, WPARAM(1), LPARAM(volume as isize));
+        let slider = GetDlgItem(state.hwnd, ID_VOLUME).unwrap_or_default();
+        SendMessageW(
+            slider,
+            WM_SLIDER_SET_VALUE,
+            WPARAM(volume as usize),
+            LPARAM(0),
+        );
         set_text(state.hwnd, ID_VOLUME_VALUE, &volume.to_string());
     }
     state.loading = false;
@@ -2213,6 +2973,8 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
     }
     if !enabled {
         unsafe { set_scaling_percent_enabled(state.hwnd, false) };
+    } else {
+        let _ = unsafe { InvalidateRect(state.hwnd, None, false) };
     }
 }
 
@@ -2429,8 +3191,8 @@ unsafe fn volume_moved(state: &mut State) {
     let Some(index) = state.selected else {
         return;
     };
-    let trackbar = unsafe { GetDlgItem(state.hwnd, ID_VOLUME) }.unwrap_or_default();
-    let position = unsafe { SendMessageW(trackbar, TBM_GETPOS, WPARAM(0), LPARAM(0)).0 }
+    let slider = unsafe { GetDlgItem(state.hwnd, ID_VOLUME) }.unwrap_or_default();
+    let position = unsafe { SendMessageW(slider, WM_SLIDER_GET_VALUE, WPARAM(0), LPARAM(0)).0 }
         .clamp(VOLUME_MIN as isize, VOLUME_MAX as isize) as u32;
 
     state.loading = true;
@@ -2457,9 +3219,14 @@ unsafe fn volume_typed(state: &mut State) {
     if let Some(preset) = state.presets.get_mut(index) {
         preset.volume = volume;
     }
-    let trackbar = unsafe { GetDlgItem(state.hwnd, ID_VOLUME) }.unwrap_or_default();
+    let slider = unsafe { GetDlgItem(state.hwnd, ID_VOLUME) }.unwrap_or_default();
     unsafe {
-        SendMessageW(trackbar, TBM_SETPOS, WPARAM(1), LPARAM(volume as isize));
+        SendMessageW(
+            slider,
+            WM_SLIDER_SET_VALUE,
+            WPARAM(volume as usize),
+            LPARAM(0),
+        );
     }
 }
 
@@ -2567,12 +3334,17 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
     let disabled = item.itemState.0 & ODS_DISABLED.0 != 0;
     let dpi = state.dpi;
 
+    let btn_hovered = |hwnd: HWND| -> bool {
+        let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const ButtonSubclass;
+        unsafe { raw.as_ref() }.is_some_and(|s| s.hovered)
+    };
+
     let (fill, border_col, text_col) = if is_stepper(item.CtlID) {
         let raw =
             unsafe { GetWindowLongPtrW(item.hwndItem, GWLP_USERDATA) } as *const StepperSubclass;
         let (hov, prs) = unsafe { raw.as_ref() }.map_or((false, false), |s| (s.hovered, s.pressed));
         let fill = if disabled {
-            p.card
+            p.button_disabled
         } else if prs || selected {
             p.accent
         } else if hov {
@@ -2589,44 +3361,58 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         };
         (fill, p.border, fg)
     } else if item.CtlID == ID_SAVE as u32 {
+        let hov = !disabled && btn_hovered(item.hwndItem);
         let fill = if disabled {
-            p.button_bg
+            p.button_disabled
         } else if selected {
-            mix(p.accent, p.page, 20)
+            p.accent_press
+        } else if hov {
+            p.accent_hover
         } else {
             p.accent
         };
         (
             fill,
-            if disabled { p.border } else { p.accent },
+            if disabled { p.border } else { fill },
             if disabled { p.muted } else { p.accent_text },
         )
     } else if item.CtlID == ID_DELETE as u32 {
+        let hov = !disabled && btn_hovered(item.hwndItem);
         let fill = if disabled {
-            p.button_bg
+            p.button_disabled
         } else if selected {
+            mix(p.danger, rgb(0, 0, 0), 14)
+        } else if hov {
             p.danger
         } else {
             p.danger_bg
         };
         let fg = if disabled {
             p.muted
-        } else if selected {
-            rgb(255, 255, 255)
+        } else if selected || hov {
+            p.danger_on_fill
         } else {
-            p.danger
+            p.danger_text
         };
         (fill, if disabled { p.border } else { p.danger }, fg)
     } else if is_button(item.CtlID) {
+        let hov = !disabled && btn_hovered(item.hwndItem);
         let fill = if disabled {
-            p.card
+            p.button_disabled
         } else if selected {
             p.button_press
+        } else if hov {
+            p.button_hover
         } else {
             p.button_bg
         };
         (fill, p.border, if disabled { p.muted } else { p.ink })
-    } else if item.CtlID == ID_LIST as u32 && selected {
+    } else if (item.CtlID == ID_LIST as u32
+        || item.CtlID == ID_WINDOW_MODE as u32
+        || item.CtlID == ID_SCALING as u32
+        || item.CtlID == ID_BACKGROUND as u32)
+        && selected
+    {
         (mix(p.field, p.accent, 22), p.accent, p.ink)
     } else {
         (p.field, p.border, if disabled { p.muted } else { p.ink })
@@ -2896,6 +3682,44 @@ mod tests {
         assert_eq!(light.page, rgb(0xFA, 0xFA, 0xFA));
         assert_eq!(light.ink, rgb(0x38, 0x3A, 0x42));
         assert_eq!(light.accent, rgb(0x01, 0x84, 0xBC));
+
+        // High-contrast Save & Delete button tokens in both themes.
+        assert_eq!(dark.accent_text, rgb(0x1E, 0x22, 0x2A));
+        assert_eq!(dark.danger, rgb(0xE0, 0x6C, 0x75));
+        assert_eq!(dark.danger_on_fill, rgb(0x1E, 0x22, 0x2A));
+        assert_eq!(light.accent_text, rgb(0xFF, 0xFF, 0xFF));
+        assert_eq!(light.danger, rgb(0xE4, 0x56, 0x49));
+        assert_eq!(light.danger_text, rgb(0xC9, 0x3B, 0x32));
+        assert_eq!(light.danger_on_fill, rgb(0xFF, 0xFF, 0xFF));
+    }
+
+    #[test]
+    fn slider_math_maps_endpoints_and_midpoint_accurately() {
+        assert_eq!(slider_value_from_x(0, 10, 210), 0);
+        assert_eq!(slider_value_from_x(10, 10, 210), 0);
+        assert_eq!(slider_value_from_x(110, 10, 210), 50);
+        assert_eq!(slider_value_from_x(210, 10, 210), 100);
+        assert_eq!(slider_value_from_x(300, 10, 210), 100);
+
+        assert_eq!(slider_thumb_x(0, 10, 210), 10);
+        assert_eq!(slider_thumb_x(50, 10, 210), 110);
+        assert_eq!(slider_thumb_x(100, 10, 210), 210);
+    }
+
+    #[test]
+    fn centered_edit_rect_centers_text_vertically_with_horizontal_padding() {
+        let container = RECT {
+            left: 100,
+            top: 40,
+            right: 300,
+            bottom: 70,
+        };
+        let edit = centered_edit_rect(container, 18, 8);
+        assert_eq!(edit.left, 108);
+        assert_eq!(edit.right, 292);
+        assert_eq!(edit.top, 46);
+        assert_eq!(edit.bottom, 64);
+        assert_eq!(edit.top - container.top, container.bottom - edit.bottom);
     }
 
     #[test]
