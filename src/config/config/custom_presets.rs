@@ -42,7 +42,9 @@ use configparser::ini::Ini;
 use crate::formats::lists::sanitize_extension_list;
 
 use super::app_config::AppConfig;
-use super::defaults::{sanitize_preview_scale_percent, sanitize_volume, DEFAULT_AUDIO_VOLUME};
+use super::defaults::{
+    sanitize_preview_scale_percent, sanitize_volume, CONFIG_SECTION, DEFAULT_AUDIO_VOLUME,
+};
 use super::setting_types::PreviewScale;
 
 /// The prefix every preset's section carries: `[custom:<name>]`.
@@ -54,6 +56,13 @@ pub const MAX_PRESETS: usize = 100;
 /// The longest name a preset may have, in characters — a tab has to fit it, and the section
 /// name is written from it.
 pub const MAX_NAME_CHARS: usize = 48;
+
+/// The settings key holding the order the window lists the presets in: their names, top first.
+///
+/// Their order is what decides which preset wins an extension two of them name
+/// (see `preset_for`), so it is written as a key of its own — the file's sections are a map's
+/// order, alphabetical, and a file read back from it would hand `.jpg` to the wrong program.
+pub(crate) const PRESET_ORDER_KEY: &str = "custom_preset_order";
 
 /// How a custom preview's target window is captured and framed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -307,6 +316,17 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
         ini.set(&section, "scaling", Some(preset.scaling.as_str()));
         ini.set(&section, "volume", Some(preset.volume.to_string()));
     }
+
+    // The order the window lists them in, which is what the top-to-bottom precedence is
+    // (`preset_for`). Read back from the settings section rather than from the order of the
+    // sections in the file, which is a map's order: alphabetical, and not the list's. Written
+    // even with nothing to name, so a file this build wrote is one that has the key.
+    let names: Vec<String> = config
+        .custom_presets
+        .iter()
+        .filter_map(|preset| sanitize_name(&preset.name))
+        .collect();
+    ini.set(CONFIG_SECTION, PRESET_ORDER_KEY, Some(names.join(", ")));
 }
 
 /// Every `[custom:<name>]` section read into the configuration, replacing what it held.
@@ -376,10 +396,24 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         presets.push(preset);
     }
 
+    // The order the window listed them in, which the sections themselves do not keep: a name the
+    // order names but the file does not hold is dropped, and one it does not name — a preset
+    // written by hand — keeps the place the sections gave it, at the end.
+    if let Some(order) = ini.get(CONFIG_SECTION, PRESET_ORDER_KEY) {
+        let names: Vec<String> = order.split(',').filter_map(sanitize_name).collect();
+        presets.sort_by_key(|preset| {
+            names
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(&preset.name))
+                .unwrap_or(usize::MAX)
+        });
+    }
+
     config.custom_presets = presets;
 }
 
-/// The preset that claims `path`, in the order the configuration holds them.
+/// The preset that claims `path`: **the first usable, enabled one in the order the window lists
+/// them, top to bottom**, which is what lets a preset above another win the extensions both name.
 ///
 /// It is the question every side asks — the hook, the loader, the layout, the pin — and it is a
 /// plain read of the configuration the caller already holds rather than a lock of its own, so a
@@ -430,6 +464,56 @@ mod tests {
         assert!(preset.claims(Path::new("C:/work/art.PSD")));
         assert!(!preset.claims(Path::new("C:/work/art.psd.bak")));
         assert!(!preset.claims(Path::new("C:/work/psd")));
+    }
+
+    #[test]
+    fn the_top_preset_wins_an_extension_two_of_them_name() {
+        let mut paint = CustomPreset::named("Painted");
+        paint.exe = "C:/Windows/System32/mspaint.exe".into();
+        paint.set_extensions_text("jpg, png");
+
+        let mut art = CustomPreset::named("Art");
+        art.exe = "C:/Art/Art.exe".into();
+        art.set_extensions_text("jpg, psd");
+
+        let config = config_with(vec![paint, art]);
+        assert_eq!(
+            preset_for(&config, Path::new("holiday.JPG")).map(|p| p.name.as_str()),
+            Some("Painted")
+        );
+        assert_eq!(
+            preset_for(&config, Path::new("art.psd")).map(|p| p.name.as_str()),
+            Some("Art")
+        );
+    }
+
+    #[test]
+    fn the_window_order_is_written_and_read_back() {
+        let mut first = CustomPreset::named("Painted");
+        first.exe = "C:/mspaint.exe".into();
+        first.set_extensions_text("jpg");
+        let mut second = CustomPreset::named("Art");
+        second.exe = "C:/Art.exe".into();
+        second.set_extensions_text("jpg");
+
+        // "Art" sorts above "Painted" as a section; the written order is what puts Painted top.
+        let config = config_with(vec![first, second]);
+        let mut ini = Ini::new();
+        write_all(&config, &mut ini);
+
+        let mut read = AppConfig::default();
+        read_all(&ini, &mut read);
+        assert_eq!(
+            read.custom_presets
+                .iter()
+                .map(|preset| preset.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Painted", "Art"]
+        );
+        assert_eq!(
+            preset_for(&read, Path::new("holiday.jpg")).map(|p| p.name.as_str()),
+            Some("Painted")
+        );
     }
 
     #[test]

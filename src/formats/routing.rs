@@ -459,8 +459,9 @@ pub fn kind_of(path: &Path, config: &AppConfig) -> Option<PreviewType> {
 ///
 /// A preset is the user naming a program for an extension, and it takes precedence over every
 /// kind this app ships — `[archive]`, `[audio]`, `[magick]`, `[ffmpeg]` and the rest — because a
-/// name in a preset is a name the user has said how to preview. The claim is the extension
-/// alone and never the file's bytes: nothing here opens the file, so the hook may ask it.
+/// name in a preset is a name the user has said how to preview. Two presets naming one extension
+/// are settled by where they sit in the list: the top one wins. The claim is the extension alone
+/// and never the file's bytes: nothing here opens the file, so the hook may ask it.
 ///
 /// It is asked before [`kind_of`] by every side that decides what a file is (see
 /// `custom_preview`), and it is a plain read of the configuration handed in rather than a lock,

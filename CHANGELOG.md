@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Presets in `Tray → Preview Settings → Custom Preview` can be dragged into an order, and the top one wins an extension two of them name** — a `.jpg` claimed by both `Paint` and `Photoshop` is previewed by whichever sits higher in the list, so the order is now the precedence between presets rather than only the shape of the list. The order is written to `config.ini` as `custom_preset_order` (`[settings]`), the names top first, and a move is saved the moment the row is dropped; a preset written by hand with no place in that list is listed after the ones that have one. A drag that only clicks a row is still a click, and a search narrows which rows can be moved. The order the `[custom:<name>]` sections appear in is unchanged — they are written alphabetically — which is why the list is a key of its own.
+
 ## [0.5.11] - 2026-11-23
 
 ### Added

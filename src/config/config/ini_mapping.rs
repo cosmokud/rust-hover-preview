@@ -1437,8 +1437,12 @@ impl AppConfig {
 /// on disk, and what reads them is `migrate` on the way past — never `apply_ini`, which is the read
 /// a test holds every other written key to.
 #[cfg(test)]
-pub(crate) const KEYS_NOTHING_READS: &[&str] =
-    &[migrate::CURRENT_VERSION_KEY, migrate::MIN_READER_KEY];
+pub(crate) const KEYS_NOTHING_READS: &[&str] = &[
+    migrate::CURRENT_VERSION_KEY,
+    migrate::MIN_READER_KEY,
+    // Read by `custom_presets::read_all` beside the sections it orders, not into a field.
+    super::custom_presets::PRESET_ORDER_KEY,
+];
 
 /// The idle time an engine is read as, from the two keys a build before this one wrote for it.
 ///

@@ -44,25 +44,25 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, DispatchMessageW, EndDeferWindowPos, GetClientRect, GetDlgItem, GetMessageTime,
     GetMessageW, GetNextDlgTabItem, GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW,
     GetWindowTextW, IsWindow, IsZoomed, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
-    SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW, CBS_DROPDOWNLIST, CBS_HASSTRINGS,
-    CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE, CB_GETLBTEXT,
-    CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL, GWLP_USERDATA,
-    GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT,
-    HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, LBN_SELCHANGE, LBS_HASSTRINGS,
-    LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING, LB_GETCURSEL, LB_GETTEXT,
-    LB_GETTEXTLEN, LB_RESETCONTENT, LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS,
-    SM_CXDOUBLECLK, SM_CXPADDEDBORDER, SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE,
-    SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CANCELMODE,
-    WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND,
-    WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCDESTROY,
-    WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER,
-    WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME,
-    WS_VISIBLE, WS_VSCROLL,
+    RegisterClassExW, SendMessageW, SetCursor, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
+    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW, CBS_DROPDOWNLIST,
+    CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL, CB_GETDROPPEDSTATE,
+    CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE, ES_AUTOHSCROLL,
+    GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
+    HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_SIZEALL, LBN_SELCHANGE,
+    LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LBS_OWNERDRAWFIXED, LB_ADDSTRING,
+    LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT,
+    LB_SETCURSEL, MINMAXINFO, MSG, NCCALCSIZE_PARAMS, SM_CXDOUBLECLK, SM_CXPADDEDBORDER,
+    SM_CXSIZEFRAME, SM_CYDOUBLECLK, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WM_DRAWITEM, WM_ENABLE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_HSCROLL, WM_KEYDOWN,
+    WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MEASUREITEM, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_PRINTCLIENT,
+    WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDCLASS_STYLES, WNDPROC, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPED,
+    WS_SYSMENU, WS_TABSTOP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::config::config::{
@@ -442,6 +442,11 @@ struct ComboSubclass {
 struct ListSubclass {
     orig_proc: WNDPROC,
     parent: HWND,
+    /// Position in the drawn rows a press landed on, while that press may still turn out to be a
+    /// click.
+    press: Option<usize>,
+    /// Whether that press has become a drag of the row it landed on.
+    dragging: bool,
 }
 
 struct SliderState {
@@ -2244,7 +2249,12 @@ unsafe fn install_list_subclass(list: HWND, parent: HWND) {
         )
     };
     let orig_proc: WNDPROC = unsafe { std::mem::transmute(orig) };
-    let data = Box::into_raw(Box::new(ListSubclass { orig_proc, parent }));
+    let data = Box::into_raw(Box::new(ListSubclass {
+        orig_proc,
+        parent,
+        press: None,
+        dragging: false,
+    }));
     unsafe { SetWindowLongPtrW(list, GWLP_USERDATA, data as isize) };
 }
 
@@ -2264,6 +2274,95 @@ unsafe extern "system" fn list_subclass_proc(
 
     match msg {
         WM_ERASEBKGND => LRESULT(1),
+        WM_LBUTTONDOWN => {
+            let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+            // The list's own selection runs first: a press on a row is one that may become a drag,
+            // and a press below the last row drags nothing.
+            let count = unsafe { SendMessageW(hwnd, LB_GETCOUNT, WPARAM(0), LPARAM(0)).0 };
+            let (row, outside) = row_at_point(hwnd, lparam);
+            sub.press = (!outside && row < count as usize).then_some(row);
+            if sub.press.is_some() {
+                // Held for the whole press so a drag is followed past the list's own edges; the
+                // list releases it itself on the press it thinks a click.
+                let _ = unsafe { SetCapture(hwnd) };
+            }
+            res
+        }
+        WM_MOUSEMOVE => {
+            let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+            let Some(press) = sub.press else {
+                return res;
+            };
+            let Some(state) = state_of(parent) else {
+                return res;
+            };
+            let count = unsafe { SendMessageW(hwnd, LB_GETCOUNT, WPARAM(0), LPARAM(0)).0 };
+            if count <= 0 {
+                return res;
+            }
+            let (row, _) = row_at_point(hwnd, lparam);
+            let row = row.min(count as usize - 1);
+            if !sub.dragging {
+                // A press still on its own row is a click, and it never becomes a move.
+                if row == press {
+                    return res;
+                }
+                sub.dragging = true;
+                let _ = unsafe { SetCursor(LoadCursorW(None, IDC_SIZEALL).unwrap_or_default()) };
+            }
+            // Every row the drag passes over takes the preset of the row it left, so the list
+            // follows the pointer and the preset under it stays the one being moved. Rows are the
+            // drawn ones, so a search narrows which presets a drag can reach.
+            let (Some(from), Some(to)) = (
+                state.shown.get(press).copied(),
+                state.shown.get(row).copied(),
+            ) else {
+                return res;
+            };
+            if from == to {
+                return res;
+            }
+            let preset = state.presets.remove(from);
+            state.presets.insert(to, preset);
+            state.selected = state
+                .selected
+                .map(|selected| if selected == from { to } else { selected });
+            let search = unsafe { text_of(state.hwnd, ID_SEARCH) };
+            state.shown = shown_presets(&state.presets, &search);
+            let drawn = state
+                .shown
+                .iter()
+                .position(|held| *held == to)
+                .unwrap_or(row);
+            sub.press = Some(drawn);
+            unsafe { rebuild_list(state) };
+            let _ = unsafe { SendMessageW(hwnd, LB_SETCURSEL, WPARAM(drawn), LPARAM(0)) };
+            res
+        }
+        WM_LBUTTONUP => {
+            let was_dragging = sub.dragging;
+            sub.press = None;
+            sub.dragging = false;
+            if was_dragging {
+                let _ = unsafe { SetCursor(LoadCursorW(None, IDC_ARROW).unwrap_or_default()) };
+                // The list is the order a file is routed by, so a move is kept at once rather
+                // than at the next Save.
+                if let Some(state) = state_of(parent) {
+                    let _ = persist(state);
+                }
+            }
+            unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
+        }
+        WM_CAPTURECHANGED => {
+            if sub.dragging {
+                if let Some(state) = state_of(parent) {
+                    let _ = persist(state);
+                }
+            }
+            sub.press = None;
+            sub.dragging = false;
+            unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
+        }
         WM_PAINT => {
             unsafe {
                 paint_double_buffered(hwnd, |hdc, rc| {
@@ -3590,6 +3689,14 @@ fn shown_presets(presets: &[CustomPreset], search: &str) -> Vec<usize> {
         .filter(|(_, preset)| needle.is_empty() || preset.name.to_lowercase().contains(&needle))
         .map(|(index, _)| index)
         .collect()
+}
+
+/// The row nearest the pointer a mouse message names, and whether the pointer is past the last
+/// row — `LB_ITEMFROMPOINT` clamps to the nearest row, which is what a drag past either end of
+/// the list needs.
+fn row_at_point(list: HWND, lparam: LPARAM) -> (usize, bool) {
+    let answer = unsafe { SendMessageW(list, LB_ITEMFROMPOINT, WPARAM(0), lparam) }.0 as u32;
+    ((answer & 0xFFFF) as usize, (answer >> 16) & 1 == 1)
 }
 
 unsafe fn rebuild_list(state: &mut State) {
