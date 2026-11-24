@@ -242,12 +242,17 @@ fn promotion_technique_label(technique: CustomPromotionTechnique) -> &'static st
     }
 }
 
-const PLACEMENTS: [CustomPlacement; 2] = [CustomPlacement::FollowTray, CustomPlacement::Forced];
+const PLACEMENTS: [CustomPlacement; 3] = [
+    CustomPlacement::FollowTray,
+    CustomPlacement::Forced,
+    CustomPlacement::Hook,
+];
 
 fn placement_label(placement: CustomPlacement) -> &'static str {
     match placement {
         CustomPlacement::FollowTray => "Tray -> Placement",
         CustomPlacement::Forced => "Tray -> Placement + Forced",
+        CustomPlacement::Hook => "Tray -> Placement + Hook",
     }
 }
 
@@ -6630,7 +6635,7 @@ mod tests {
             );
             assert_eq!(state.presets[0].placement, CustomPlacement::FollowTray);
 
-            assert_eq!(PLACEMENTS.len(), 2);
+            assert_eq!(PLACEMENTS.len(), 3);
             assert_eq!(PLACEMENTS[0], CustomPlacement::FollowTray);
             assert_eq!(
                 placement_label(CustomPlacement::FollowTray),
@@ -6640,6 +6645,11 @@ mod tests {
             assert_eq!(
                 placement_label(CustomPlacement::Forced),
                 "Tray -> Placement + Forced"
+            );
+            assert_eq!(PLACEMENTS[2], CustomPlacement::Hook);
+            assert_eq!(
+                placement_label(CustomPlacement::Hook),
+                "Tray -> Placement + Hook"
             );
 
             for (idx, expected) in PLACEMENTS.iter().copied().enumerate() {

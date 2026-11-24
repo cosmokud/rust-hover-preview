@@ -173,6 +173,8 @@ pub enum CustomPlacement {
     FollowTray,
     /// Aggressively enforce `Tray -> Placement` across initial show, size constraints, and drift.
     Forced,
+    /// Inject `custom_preview_hook.dll` (and dynamic attach fallback) to lock creation & tracking rects.
+    Hook,
 }
 
 impl CustomPlacement {
@@ -180,6 +182,7 @@ impl CustomPlacement {
         match self {
             Self::FollowTray => "tray",
             Self::Forced => "tray_forced",
+            Self::Hook => "tray_hook",
         }
     }
 
@@ -187,6 +190,7 @@ impl CustomPlacement {
         match value.trim().to_ascii_lowercase().as_str() {
             "tray" | "follow_tray" | "follow-tray" => Some(Self::FollowTray),
             "tray_forced" | "tray-forced" | "forced" => Some(Self::Forced),
+            "tray_hook" | "tray-hook" | "hook" => Some(Self::Hook),
             _ => None,
         }
     }
@@ -1041,6 +1045,7 @@ mod tests {
         let cases = [
             (CustomPlacement::FollowTray, "tray"),
             (CustomPlacement::Forced, "tray_forced"),
+            (CustomPlacement::Hook, "tray_hook"),
         ];
         for (placement, expected_str) in cases {
             let mut preset = CustomPreset::named("PlaceTest");

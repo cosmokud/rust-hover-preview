@@ -126,8 +126,9 @@ use std::time::{Duration, Instant};
 
 use windows::core::{w, PCSTR, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, FreeLibrary, BOOL, COLORREF, FILETIME, HANDLE, HINSTANCE, HMODULE, HWND,
-    INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+    CloseHandle, FreeLibrary, GetLastError, BOOL, COLORREF, ERROR_ALREADY_EXISTS, FILETIME, HANDLE,
+    HINSTANCE, HMODULE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0,
+    WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmFlush, DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
@@ -244,6 +245,7 @@ const FORCED_FAST_POLL_WINDOW: Duration = Duration::from_millis(1500);
 const FORCED_SETTLE_STABLE: Duration = Duration::from_millis(200);
 const FORCED_SETTLE_CAP: Duration = Duration::from_millis(1200);
 const FORCED_CURSOR_STANDOFF_PX: i32 = 12;
+const HOOK_FALLBACK_OWN_SIZE: (u32, u32) = (1280, 800);
 
 /// Neutral dark backdrop painted on the host where the target window does not fill the box.
 const HOST_BACKDROP: COLORREF = COLORREF(0x0020_2020);
@@ -402,6 +404,8 @@ struct Launch {
     process: Arc<OwnedHandle>,
     /// The process this app began.
     pid: u32,
+    /// Initial primary thread id of the spawned process (`0` if unavailable).
+    tid: u32,
     /// The preset program's own file name, lowercased: what a process the program hands its file
     /// to is running, however it was begun.
     exe: String,
@@ -417,10 +421,57 @@ struct Launch {
     launch_filetime: u64,
     /// Monotonic timestamp captured immediately before `CreateProcessW`.
     launched_at: Instant,
-    /// Preset placement mode (`FollowTray` vs `Forced`).
+    /// Preset placement mode (`FollowTray`, `Forced`, or `Hook`).
     placement: CustomPlacement,
     /// Which launch this is, so that a worker begun for an earlier one stands down.
     id: u64,
+}
+
+#[inline]
+fn enforces_placement(placement: CustomPlacement) -> bool {
+    matches!(placement, CustomPlacement::Forced | CustomPlacement::Hook)
+}
+
+#[inline]
+fn uses_hook_enforcement(placement: CustomPlacement) -> bool {
+    placement == CustomPlacement::Hook
+}
+
+#[inline]
+fn sh_forced_mode(placement: CustomPlacement) -> u8 {
+    match placement {
+        CustomPlacement::FollowTray => 0,
+        CustomPlacement::Forced => 1,
+        CustomPlacement::Hook => 2,
+    }
+}
+
+#[inline]
+fn z_order_mode_for(capture_technique: CustomCaptureTechnique) -> u8 {
+    match capture_technique {
+        CustomCaptureTechnique::DirectWindow => ZORDER_TOPMOST,
+        _ => ZORDER_BOTTOM,
+    }
+}
+
+/// Concrete `Tray -> Placement` target rect for hook initialization (`Hook` mode uses fallback size
+/// when the file declares no intrinsic dimensions so `HCBT_CREATEWND` always receives `w, h > 0`).
+fn hook_provisional_rect(
+    at: Where,
+    path: &Path,
+    scaling: CustomScaling,
+    provisional: Option<(i32, i32, i32, i32)>,
+) -> Option<(i32, i32, i32, i32)> {
+    provisional.or_else(|| {
+        let scale = resolve_scale(path, scaling);
+        provisional_rect_for(
+            at,
+            HOOK_FALLBACK_OWN_SIZE,
+            scale,
+            follow_cursor(),
+            bypass_placement(),
+        )
+    })
 }
 
 /// The host window, made once and kept off the screen between hovers.
@@ -737,31 +788,36 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         let scale = resolve_scale(path, scaling);
         provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
     });
+    let hook_provisional = if uses_hook_enforcement(placement) {
+        hook_provisional_rect(at, path, scaling, provisional)
+    } else {
+        provisional
+    };
 
     let launch_filetime = current_filetime_u64();
     let launched_at = Instant::now();
-    let (process, pid, hook_session, capture_technique) = if capture_technique
+    let (process, pid, tid, hook_session, capture_technique) = if capture_technique
         == CustomCaptureTechnique::InProcessHook
+        || uses_hook_enforcement(placement)
     {
-        let Some((proc_handle, pid, session)) = launch_in_process_hook(
-            &exe,
-            path,
-            provisional,
-            placement == CustomPlacement::Forced,
-        ) else {
+        let init = hook_init_for(capture_technique, placement, hook_provisional);
+        let Some((proc_handle, pid, tid, session)) =
+            launch_with_hook(&exe, path, hook_provisional, capture_technique, init)
+        else {
             return false;
         };
-        let effective = if session.is_some() {
-            CustomCaptureTechnique::InProcessHook
-        } else {
-            CustomCaptureTechnique::InvisibleLayered
-        };
-        (proc_handle, pid, session, effective)
+        let effective =
+            if capture_technique == CustomCaptureTechnique::InProcessHook && session.is_none() {
+                CustomCaptureTechnique::InvisibleLayered
+            } else {
+                capture_technique
+            };
+        (proc_handle, pid, tid, session, effective)
     } else {
         let Some((proc_handle, pid)) = launch(&exe, path, provisional, capture_technique) else {
             return false;
         };
-        (proc_handle, pid, None, capture_technique)
+        (proc_handle, pid, 0, None, capture_technique)
     };
     let process = Arc::new(process);
     let Some(host) = (unsafe { ensure_host() }) else {
@@ -798,7 +854,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             .into_iter()
             .collect();
     }
-    FORCED_SETTLING.store(placement == CustomPlacement::Forced, Ordering::Release);
+    FORCED_SETTLING.store(enforces_placement(placement), Ordering::Release);
     LIVE.store(true, Ordering::Release);
     if let Ok(mut slot) = ACTIVE_CAPTURE_TECHNIQUE.lock() {
         *slot = capture_technique;
@@ -813,10 +869,11 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let launch = Launch {
         path: path.to_path_buf(),
         initial_own,
-        provisional,
+        provisional: hook_provisional,
         packaged_broker,
         process,
         pid,
+        tid,
         exe: exe_file,
         previous_foreground,
         windows_before,
@@ -1373,8 +1430,12 @@ fn end_the_program() {
     let source_pid = SOURCE_PID.swap(0, Ordering::SeqCst);
     let source_is_new = SOURCE_IS_NEW.swap(false, Ordering::SeqCst);
     SOURCE_INVISIBLE_LAYERED.store(false, Ordering::SeqCst);
-    if let Ok(mut ctrl) = ACTIVE_HOOK_CONTROL.lock() {
-        *ctrl = None;
+    let hook_ctrl = ACTIVE_HOOK_CONTROL
+        .lock()
+        .ok()
+        .and_then(|mut ctrl| ctrl.take());
+    if let Some(ref ctrl) = hook_ctrl {
+        ctrl.clear_locks_for_detach();
     }
     if let Ok(mut r) = LAST_HOST_RECT.lock() {
         *r = None;
@@ -1389,6 +1450,11 @@ fn end_the_program() {
     if source != 0 {
         let source = HWND(source as *mut _);
         if unsafe { IsWindow(source) }.as_bool() {
+            if !source_is_new {
+                if let Some(ref ctrl) = hook_ctrl {
+                    let _ = ctrl.detach_sync(source);
+                }
+            }
             if let Some(target) = restore_rect {
                 if window_rect(source).is_some_and(|cur| {
                     should_restore_on_teardown(source_is_new, cur, virtual_screen())
@@ -1870,10 +1936,14 @@ fn run_it(
     window_mode: CustomWindowMode,
     capture_technique: CustomCaptureTechnique,
     volume: Option<u32>,
-    hook_session: Option<InProcessHookSession>,
+    mut hook_session: Option<InProcessHookSession>,
 ) {
-    let Some(source) = (if let Some(ref session) = hook_session {
-        wait_for_a_window_in_process_hook(&launch, session)
+    let Some(source) = (if capture_technique == CustomCaptureTechnique::InProcessHook {
+        if let Some(ref session) = hook_session {
+            wait_for_a_window_in_process_hook(&launch, session)
+        } else {
+            wait_for_a_window(&launch)
+        }
     } else if capture_technique == CustomCaptureTechnique::OffscreenStaged {
         wait_for_a_window_offscreen_staged(&launch)
     } else {
@@ -1896,14 +1966,8 @@ fn run_it(
         return;
     }
 
-    if let Some(ref session) = hook_session {
-        session.view.set_captured_hwnd(source);
-        if let Ok(mut ctrl) = ACTIVE_HOOK_CONTROL.lock() {
-            *ctrl = Some(Arc::clone(&session.view));
-        }
-    }
-
-    let source_pid = pid_of(source);
+    let mut source_pid = 0u32;
+    let source_tid = unsafe { GetWindowThreadProcessId(source, Some(&mut source_pid)) };
     let source_is_new = source_pid != 0 && !launch.processes_before.contains(&source_pid);
     SOURCE.store(source.0 as isize, Ordering::SeqCst);
     SOURCE_PID.store(source_pid, Ordering::SeqCst);
@@ -1940,6 +2004,57 @@ fn run_it(
     let own = launch.initial_own.unwrap_or_else(|| own_size(source));
     let scale = resolve_scale(&launch.path, scaling);
 
+    let current_target_rect = || -> Option<(i32, i32, i32, i32)> {
+        let at = WANT
+            .lock()
+            .ok()
+            .and_then(|want| want.as_ref().map(|want| want.at))?;
+        provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
+    };
+
+    // Ensure hook covers secondary UI threads and child/brokered PIDs BEFORE modifying window styles
+    // (such as DirectWindow's WS_EX_TOOLWINDOW), and register the active SHM handle for detach/hide.
+    if uses_hook_enforcement(launch.placement) {
+        let target_hint = current_target_rect().or(launch.provisional);
+        let mut init = hook_init_for(capture_technique, launch.placement, target_hint);
+        init.captured_hwnd = source.0 as isize;
+        let same_pid_hooked = hook_session
+            .as_ref()
+            .is_some_and(|session| session.pid == source_pid);
+        if same_pid_hooked {
+            if let Some(ref mut session) = hook_session {
+                if source_tid != 0 && (source_tid != launch.tid || session.hooks.is_empty()) {
+                    let _ = session.attach_thread(source_tid);
+                }
+            }
+        } else if source_pid != 0 && source_tid != 0 {
+            if let Some(dynamic) = attach_dynamic_hook_session(source_pid, source_tid, init) {
+                hook_session = Some(dynamic);
+            }
+        }
+    }
+    if let Some(ref session) = hook_session {
+        session.view.set_captured_hwnd(source);
+        if let Ok(mut ctrl) = ACTIVE_HOOK_CONTROL.lock() {
+            *ctrl = Some(Arc::clone(&session.view));
+        }
+        if uses_hook_enforcement(launch.placement) {
+            let init = hook_init_for(
+                capture_technique,
+                launch.placement,
+                current_target_rect().or(launch.provisional),
+            );
+            session.view.set_forced_mode(init.forced_mode);
+            session.view.set_z_order_mode(init.z_order_mode);
+            session
+                .view
+                .set_rect(init.rect.0, init.rect.1, init.rect.2, init.rect.3);
+            if capture_technique != CustomCaptureTechnique::InProcessHook {
+                let _ = session.view.enforce_now_sync(source);
+            }
+        }
+    }
+
     // Normal mode keeps target chrome/styles untouched; Borderless strips frame chrome.
     if window_mode == CustomWindowMode::Borderless {
         strip_the_frame(source);
@@ -1956,14 +2071,6 @@ fn run_it(
     let mut expected_rect: Option<RECT> = None;
     let mut the_ask: Option<(i32, i32)> = None;
 
-    let current_target_rect = || -> Option<(i32, i32, i32, i32)> {
-        let at = WANT
-            .lock()
-            .ok()
-            .and_then(|want| want.as_ref().map(|want| want.at))?;
-        provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
-    };
-
     let mut tree_read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
@@ -1971,30 +2078,32 @@ fn run_it(
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
     let mut registered: isize = 0;
 
-    if let Some(ref session) = hook_session {
-        let mut staged = OffscreenStagedState {
-            invisible_layered: &mut invisible_layered,
-            placed_mode: &mut placed_mode,
-            placed_host_rect: &mut placed_host_rect,
-            expected_rect: &mut expected_rect,
-            the_ask: &mut the_ask,
-            box_of_the_host: &mut box_of_the_host,
-            registered: &mut registered,
-        };
-        if !run_in_process_hook_settle_and_reveal(
-            host,
-            source,
-            &launch,
-            session,
-            &processes,
-            &mut images,
-            &mut creation_times,
-            was_hidden,
-            window_mode,
-            &current_target_rect,
-            &mut staged,
-        ) {
-            return;
+    if capture_technique == CustomCaptureTechnique::InProcessHook {
+        if let Some(ref session) = hook_session {
+            let mut staged = OffscreenStagedState {
+                invisible_layered: &mut invisible_layered,
+                placed_mode: &mut placed_mode,
+                placed_host_rect: &mut placed_host_rect,
+                expected_rect: &mut expected_rect,
+                the_ask: &mut the_ask,
+                box_of_the_host: &mut box_of_the_host,
+                registered: &mut registered,
+            };
+            if !run_in_process_hook_settle_and_reveal(
+                host,
+                source,
+                &launch,
+                session,
+                &processes,
+                &mut images,
+                &mut creation_times,
+                was_hidden,
+                window_mode,
+                &current_target_rect,
+                &mut staged,
+            ) {
+                return;
+            }
         }
     } else if capture_technique == CustomCaptureTechnique::OffscreenStaged {
         let mut staged = OffscreenStagedState {
@@ -2016,6 +2125,7 @@ fn run_it(
             was_hidden,
             own,
             window_mode,
+            hook_session.as_ref().map(|session| &*session.view),
             &current_target_rect,
             &mut staged,
         ) {
@@ -2038,15 +2148,20 @@ fn run_it(
         };
         let settle_guard = WinEventGuard(settle_hook);
 
+        let hook_view = hook_session.as_ref().map(|session| &*session.view);
         if was_hidden {
             // App honored `SW_HIDE`: atomically position + reveal via `SetWindowPlacement` so it never
             // flashes at its old saved coordinates.
             if let Some(target_rect) = current_target_rect() {
-                let ctx = placement_ctx_from_want(&launch, &processes, None);
+                let ctx = placement_ctx_from_want(&launch, &processes, None, hook_view);
                 let mode = match capture_technique {
                     CustomCaptureTechnique::OffScreen => {
                         let vscreen = virtual_screen();
                         let (px, py) = parking_origin(vscreen);
+                        if let Some(view) = ctx.hook {
+                            view.set_z_order_mode(ZORDER_BOTTOM);
+                            view.set_rect(px, py, target_rect.2.max(1), target_rect.3.max(1));
+                        }
                         let placement = WINDOWPLACEMENT {
                             length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
                             flags: WINDOWPLACEMENT_FLAGS(0),
@@ -2076,6 +2191,10 @@ fn run_it(
                             (0, 0, 0, 0)
                         };
                         let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+                        if let Some(view) = ctx.hook {
+                            view.set_z_order_mode(ZORDER_TOPMOST);
+                            view.set_rect(wx, wy, ww, wh);
+                        }
                         let placement = WINDOWPLACEMENT {
                             length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
                             flags: WINDOWPLACEMENT_FLAGS(0),
@@ -2103,6 +2222,10 @@ fn run_it(
                             (0, 0, 0, 0)
                         };
                         let (wx, wy, ww, wh) = behind_host_window_rect(target_rect, insets);
+                        if let Some(view) = ctx.hook {
+                            view.set_z_order_mode(ZORDER_BOTTOM);
+                            view.set_rect(wx, wy, ww, wh);
+                        }
                         let workspace_rect = workspace_rect_for_screen(RECT {
                             left: wx,
                             top: wy,
@@ -2143,14 +2266,21 @@ fn run_it(
                             let (wx2, wy2, ww2, wh2) =
                                 behind_host_window_rect(target_rect, insets2);
                             if ctx.forced {
+                                apply_hook_rect_now(
+                                    ctx.hook,
+                                    source,
+                                    (wx2, wy2, ww2, wh2),
+                                    ZORDER_BOTTOM,
+                                );
                                 force_place_window(
                                     source,
                                     (wx2, wy2, ww2, wh2),
                                     HWND_BOTTOM,
                                     SET_WINDOW_POS_FLAGS(0),
-                                    None,
-                                    launch.previous_foreground,
-                                    &processes,
+                                    PlacementContext {
+                                        avoid_cursor: None,
+                                        ..ctx
+                                    },
                                 );
                             } else {
                                 let _ = unsafe {
@@ -2189,7 +2319,7 @@ fn run_it(
                 expected_rect = window_rect(source);
             }
         } else if let Some(target_rect) = current_target_rect() {
-            let ctx = placement_ctx_from_want(&launch, &processes, None);
+            let ctx = placement_ctx_from_want(&launch, &processes, None, hook_view);
             // App ignored `SW_HIDE`: apply the selected capture technique immediately.
             placed_mode = Some(if invisible_layered {
                 place_invisible_layered(source, target_rect, window_mode, &mut the_ask, ctx);
@@ -2261,7 +2391,7 @@ fn run_it(
             // Ignore self-triggered LOCATIONCHANGE from our own SetWindowPos.
             let raw_source_moved = drain_settle_events(source, &launch, &processes);
             let source_moved = raw_source_moved && window_rect(source) != expected_rect;
-            let ctx = placement_ctx_from_want(&launch, &processes, None);
+            let ctx = placement_ctx_from_want(&launch, &processes, None, hook_view);
 
             let needs_resnap = source_moved
                 || placed_host_rect != Some(target_rect)
@@ -2449,7 +2579,11 @@ fn run_it(
             }
             return;
         };
-        let forced = placement == CustomPlacement::Forced;
+        let forced = enforces_placement(placement);
+        let hook_mode = uses_hook_enforcement(placement);
+        let active_hook_view = hook_mode
+            .then(|| hook_session.as_ref().map(|session| &*session.view))
+            .flatten();
         let cursor_pt = where_cursor(at);
 
         // Hide secondary splash/dialog windows belonging strictly to `processes` (never by exe name).
@@ -2476,6 +2610,7 @@ fn run_it(
         }
         let ctx = PlacementContext {
             forced,
+            hook: active_hook_view,
             avoid_cursor: cursor_pt,
             previous_foreground: launch.previous_foreground,
             processes: &processes,
@@ -2486,30 +2621,41 @@ fn run_it(
                 return;
             }
             placed_host_rect = None;
-            if let Some(ref session) = hook_session {
-                session.view.stage_offscreen();
-                if !session.view.cloak_sync(source) {
-                    if invisible_layered {
-                        keep_source_invisible(source.0 as isize);
-                    } else {
-                        placed_mode = None;
-                        let _ = unsafe {
-                            SetWindowPos(
-                                source,
-                                HWND_BOTTOM,
-                                STAGE_COORD,
-                                STAGE_COORD,
-                                0,
-                                0,
-                                SWP_NOSIZE | SWP_NOACTIVATE,
-                            )
-                        };
+            if capture_technique == CustomCaptureTechnique::InProcessHook {
+                if let Some(ref session) = hook_session {
+                    session.view.stage_offscreen();
+                    if !session.view.cloak_sync(source) {
+                        if invisible_layered {
+                            keep_source_invisible(source.0 as isize);
+                        } else {
+                            placed_mode = None;
+                            let _ = unsafe {
+                                SetWindowPos(
+                                    source,
+                                    HWND_BOTTOM,
+                                    STAGE_COORD,
+                                    STAGE_COORD,
+                                    0,
+                                    0,
+                                    SWP_NOSIZE | SWP_NOACTIVATE,
+                                )
+                            };
+                        }
+                    }
+                } else {
+                    placed_mode = None;
+                    if !is_window_offscreen(source) {
+                        push_offscreen(source);
                     }
                 }
             } else if invisible_layered {
                 keep_source_invisible(source.0 as isize);
             } else {
                 placed_mode = None;
+                if let Some(view) = active_hook_view {
+                    view.stage_offscreen();
+                    let _ = view.enforce_now_sync(source);
+                }
                 if !is_window_offscreen(source) {
                     push_offscreen(source);
                 }
@@ -2538,11 +2684,13 @@ fn run_it(
             if !is_current(launch.id) || DETACHING.load(Ordering::Acquire) {
                 return;
             }
-            session
-                .view
-                .state()
-                .forced_placement
-                .store(u8::from(forced), Ordering::Release);
+            session.view.set_forced_mode(sh_forced_mode(placement));
+        }
+
+        if capture_technique == CustomCaptureTechnique::InProcessHook {
+            let Some(ref session) = hook_session else {
+                continue;
+            };
             let needs_reposition = session.view.is_cloaked()
                 || placed_mode.is_none()
                 || placed_host_rect != Some(host_rect);
@@ -2582,15 +2730,23 @@ fn run_it(
                                 (0, 0, 0, 0)
                             };
                             let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
+                            let no_shift_ctx = PlacementContext {
+                                avoid_cursor: None,
+                                ..ctx
+                            };
                             session.view.set_rect(wx, wy, ww, wh);
+                            apply_hook_rect_now(
+                                active_hook_view,
+                                source,
+                                (wx, wy, ww, wh),
+                                ZORDER_BOTTOM,
+                            );
                             force_place_window(
                                 source,
                                 (wx, wy, ww, wh),
                                 HWND_BOTTOM,
                                 SET_WINDOW_POS_FLAGS(0),
-                                None,
-                                launch.previous_foreground,
-                                &processes,
+                                no_shift_ctx,
                             );
                             if aligned_behind_host(source, host_rect) {
                                 expected_rect = window_rect(source);
@@ -2601,14 +2757,18 @@ fn run_it(
                                 session
                                     .view
                                     .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+                                apply_hook_rect_now(
+                                    active_hook_view,
+                                    source,
+                                    (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                                    ZORDER_BOTTOM,
+                                );
                                 force_place_window(
                                     source,
                                     (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
                                     HWND_BOTTOM,
                                     SET_WINDOW_POS_FLAGS(0),
-                                    None,
-                                    launch.previous_foreground,
-                                    &processes,
+                                    no_shift_ctx,
                                 );
                                 nudge_clamped_offscreen_off_cursor(
                                     source,
@@ -2637,14 +2797,21 @@ fn run_it(
                             session
                                 .view
                                 .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+                            apply_hook_rect_now(
+                                active_hook_view,
+                                source,
+                                (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                                ZORDER_BOTTOM,
+                            );
                             force_place_window(
                                 source,
                                 (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
                                 HWND_BOTTOM,
                                 SET_WINDOW_POS_FLAGS(0),
-                                None,
-                                launch.previous_foreground,
-                                &processes,
+                                PlacementContext {
+                                    avoid_cursor: None,
+                                    ..ctx
+                                },
                             );
                             nudge_clamped_offscreen_off_cursor(
                                 source,
@@ -2772,7 +2939,7 @@ fn run_it(
                     {
                         nudge_clamped_offscreen_off_cursor(
                             source,
-                            None,
+                            active_hook_view,
                             cursor_pt,
                             launch.previous_foreground,
                             &processes,
@@ -3266,9 +3433,38 @@ fn shift_rect_off_cursor(
 #[derive(Clone, Copy)]
 struct PlacementContext<'a> {
     forced: bool,
+    hook: Option<&'a HookSharedView>,
     avoid_cursor: Option<POINT>,
     previous_foreground: isize,
     processes: &'a [u32],
+}
+
+fn apply_hook_rect_now(
+    hook: Option<&HookSharedView>,
+    window: HWND,
+    rect: (i32, i32, i32, i32),
+    z_order_mode: u8,
+) {
+    if let Some(view) = hook {
+        view.set_z_order_mode(z_order_mode);
+        view.set_rect(rect.0, rect.1, rect.2, rect.3);
+        let _ = view.enforce_now_sync(window);
+    }
+}
+
+fn sync_hook_if_shifted(hook: Option<&HookSharedView>, window: HWND, intended_xy: (i32, i32)) {
+    if let Some(view) = hook {
+        if let Some(actual) = window_rect(window) {
+            if actual.left != intended_xy.0 || actual.top != intended_xy.1 {
+                view.set_rect(
+                    actual.left,
+                    actual.top,
+                    (actual.right - actual.left).max(1),
+                    (actual.bottom - actual.top).max(1),
+                );
+            }
+        }
+    }
 }
 
 fn force_place_window(
@@ -3276,9 +3472,7 @@ fn force_place_window(
     target_rect: (i32, i32, i32, i32),
     z_order: HWND,
     extra_flags: SET_WINDOW_POS_FLAGS,
-    avoid_cursor: Option<POINT>,
-    previous_foreground: isize,
-    processes: &[u32],
+    ctx: PlacementContext<'_>,
 ) {
     let (tx, ty, tw, th) = target_rect;
     let (tw, th) = (tw.max(1), th.max(1));
@@ -3333,12 +3527,20 @@ fn force_place_window(
         };
     }
 
-    if let Some(cursor) = avoid_cursor {
+    if let Some(cursor) = ctx.avoid_cursor {
         if let Some(actual) = window_rect(hwnd) {
             let work = work_area_rect(cursor);
             if let Some((sx, sy)) =
                 shift_rect_off_cursor(actual, cursor, work, FORCED_CURSOR_STANDOFF_PX)
             {
+                if let Some(view) = ctx.hook {
+                    view.set_rect(
+                        sx,
+                        sy,
+                        (actual.right - actual.left).max(1),
+                        (actual.bottom - actual.top).max(1),
+                    );
+                }
                 let _ = unsafe {
                     SetWindowPos(
                         hwnd,
@@ -3358,7 +3560,7 @@ fn force_place_window(
         }
     }
 
-    restore_foreground(previous_foreground, processes);
+    restore_foreground(ctx.previous_foreground, ctx.processes);
 }
 
 /// Compute `LAST_HOST_RECT` after forced `DirectWindow` placement: keep `host_rect` when
@@ -3396,27 +3598,26 @@ fn place_direct_window(
     let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
 
     if ctx.forced {
+        apply_hook_rect_now(ctx.hook, window, (wx, wy, ww, wh), ZORDER_TOPMOST);
         force_place_window(
             window,
             (wx, wy, ww, wh),
             HWND_TOPMOST,
             SET_WINDOW_POS_FLAGS(0),
-            ctx.avoid_cursor,
-            ctx.previous_foreground,
-            ctx.processes,
+            ctx,
         );
         if !unsafe { IsWindowVisible(window) }.as_bool() {
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+            apply_hook_rect_now(ctx.hook, window, (wx, wy, ww, wh), ZORDER_TOPMOST);
             force_place_window(
                 window,
                 (wx, wy, ww, wh),
                 HWND_TOPMOST,
                 SET_WINDOW_POS_FLAGS(0),
-                ctx.avoid_cursor,
-                ctx.previous_foreground,
-                ctx.processes,
+                ctx,
             );
         }
+        sync_hook_if_shifted(ctx.hook, window, (wx, wy));
         if let Some(actual) = window_rect(window) {
             let synced = shifted_direct_host_rect((wx, wy, ww, wh), actual, host_rect);
             if let Ok(mut slot) = LAST_HOST_RECT.lock() {
@@ -3597,15 +3798,15 @@ fn place_invisible_layered(
     };
     let (wx, wy, ww, wh) = behind_host_window_rect((hx, hy, tw, th), insets);
 
+    let mut final_target = (wx, wy, ww, wh);
     if ctx.forced {
+        apply_hook_rect_now(ctx.hook, window, (wx, wy, ww, wh), ZORDER_BOTTOM);
         force_place_window(
             window,
             (wx, wy, ww, wh),
             HWND_BOTTOM,
             SET_WINDOW_POS_FLAGS(0),
-            ctx.avoid_cursor,
-            ctx.previous_foreground,
-            ctx.processes,
+            ctx,
         );
     } else {
         if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
@@ -3633,15 +3834,15 @@ fn place_invisible_layered(
     if ask != (tw, th) {
         *the_ask = (ask != (hw, hh)).then_some(ask);
         let (wx2, wy2, ww2, wh2) = behind_host_window_rect((hx, hy, ask.0, ask.1), insets);
+        final_target = (wx2, wy2, ww2, wh2);
         if ctx.forced {
+            apply_hook_rect_now(ctx.hook, window, final_target, ZORDER_BOTTOM);
             force_place_window(
                 window,
-                (wx2, wy2, ww2, wh2),
+                final_target,
                 HWND_BOTTOM,
                 SET_WINDOW_POS_FLAGS(0),
-                ctx.avoid_cursor,
-                ctx.previous_foreground,
-                ctx.processes,
+                ctx,
             );
         } else {
             let _ =
@@ -3654,16 +3855,19 @@ fn place_invisible_layered(
         if ctx.forced {
             let (cw, ch) = the_ask.unwrap_or((hw, hh));
             let (wx3, wy3, ww3, wh3) = behind_host_window_rect((hx, hy, cw, ch), insets);
+            final_target = (wx3, wy3, ww3, wh3);
+            apply_hook_rect_now(ctx.hook, window, final_target, ZORDER_BOTTOM);
             force_place_window(
                 window,
-                (wx3, wy3, ww3, wh3),
+                final_target,
                 HWND_BOTTOM,
                 SET_WINDOW_POS_FLAGS(0),
-                ctx.avoid_cursor,
-                ctx.previous_foreground,
-                ctx.processes,
+                ctx,
             );
         }
+    }
+    if ctx.forced {
+        sync_hook_if_shifted(ctx.hook, window, (final_target.0, final_target.1));
     }
     keep_source_invisible(window.0 as isize);
     let _ = unsafe { InvalidateRect(window, None, false) };
@@ -3844,25 +4048,27 @@ fn place_behind_host(
     let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
 
     if ctx.forced {
+        let no_shift_ctx = PlacementContext {
+            avoid_cursor: None,
+            ..ctx
+        };
+        apply_hook_rect_now(ctx.hook, window, (wx, wy, ww, wh), ZORDER_BOTTOM);
         force_place_window(
             window,
             (wx, wy, ww, wh),
             HWND_BOTTOM,
             SET_WINDOW_POS_FLAGS(0),
-            None,
-            ctx.previous_foreground,
-            ctx.processes,
+            no_shift_ctx,
         );
         if !unsafe { IsWindowVisible(window) }.as_bool() {
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+            apply_hook_rect_now(ctx.hook, window, (wx, wy, ww, wh), ZORDER_BOTTOM);
             force_place_window(
                 window,
                 (wx, wy, ww, wh),
                 HWND_BOTTOM,
                 SET_WINDOW_POS_FLAGS(0),
-                None,
-                ctx.previous_foreground,
-                ctx.processes,
+                no_shift_ctx,
             );
         }
     } else {
@@ -4092,43 +4298,49 @@ fn park_offscreen(window: HWND, width: i32, height: i32, ctx: PlacementContext<'
     };
 
     if ctx.forced {
+        let no_shift_ctx = PlacementContext {
+            avoid_cursor: None,
+            ..ctx
+        };
+        apply_hook_rect_now(ctx.hook, window, (px, py, width, height), ZORDER_BOTTOM);
         force_place_window(
             window,
             (px, py, width, height),
             HWND_BOTTOM,
             SET_WINDOW_POS_FLAGS(0),
-            None,
-            ctx.previous_foreground,
-            ctx.processes,
+            no_shift_ctx,
         );
         if should_try_fallback_parking(true, (px, py), window_rect(window), vscreen) {
+            apply_hook_rect_now(
+                ctx.hook,
+                window,
+                (FALLBACK_PARKING, FALLBACK_PARKING, width, height),
+                ZORDER_BOTTOM,
+            );
             force_place_window(
                 window,
                 (FALLBACK_PARKING, FALLBACK_PARKING, width, height),
                 HWND_BOTTOM,
                 SWP_NOSIZE,
-                None,
-                ctx.previous_foreground,
-                ctx.processes,
+                no_shift_ctx,
             );
         }
         if !unsafe { IsWindowVisible(window) }.as_bool() {
             let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
             if !is_window_offscreen(window) {
+                apply_hook_rect_now(ctx.hook, window, (px, py, width, height), ZORDER_BOTTOM);
                 force_place_window(
                     window,
                     (px, py, width, height),
                     HWND_BOTTOM,
                     SET_WINDOW_POS_FLAGS(0),
-                    None,
-                    ctx.previous_foreground,
-                    ctx.processes,
+                    no_shift_ctx,
                 );
             }
         }
         nudge_clamped_offscreen_off_cursor(
             window,
-            None,
+            ctx.hook,
             ctx.avoid_cursor,
             ctx.previous_foreground,
             ctx.processes,
@@ -4920,14 +5132,16 @@ fn placement_ctx_from_want<'a>(
     launch: &Launch,
     processes: &'a [u32],
     at: Option<Where>,
+    hook: Option<&'a HookSharedView>,
 ) -> PlacementContext<'a> {
     let want = current_want_snapshot();
-    let forced = want
-        .map(|(_, p)| p == CustomPlacement::Forced)
-        .unwrap_or(launch.placement == CustomPlacement::Forced);
+    let placement = want.map(|(_, p)| p).unwrap_or(launch.placement);
+    let forced = enforces_placement(placement);
+    let hook = uses_hook_enforcement(placement).then_some(hook).flatten();
     let avoid_cursor = at.or_else(|| want.map(|(w, _)| w)).and_then(where_cursor);
     PlacementContext {
         forced,
+        hook,
         avoid_cursor,
         previous_foreground: launch.previous_foreground,
         processes,
@@ -4947,10 +5161,14 @@ fn run_offscreen_staged_settle_and_reveal(
     was_hidden: bool,
     own: (u32, u32),
     window_mode: CustomWindowMode,
+    hook_view: Option<&HookSharedView>,
     current_target_rect: &dyn Fn() -> Option<(i32, i32, i32, i32)>,
     state: &mut OffscreenStagedState<'_>,
 ) -> bool {
-    let forced = launch.placement == CustomPlacement::Forced;
+    let forced = enforces_placement(launch.placement);
+    let active_hook = uses_hook_enforcement(launch.placement)
+        .then_some(hook_view)
+        .flatten();
     let vscreen = virtual_screen();
     let initial_target = current_target_rect();
     // Save an on-screen restore rect for reused non-owned windows so teardown never leaves them at STAGE_COORD.
@@ -4994,14 +5212,24 @@ fn run_offscreen_staged_settle_and_reveal(
 
     let stage_now = || {
         if forced {
+            apply_hook_rect_now(
+                active_hook,
+                source,
+                (STAGE_COORD, STAGE_COORD, stage_w, stage_h),
+                ZORDER_BOTTOM,
+            );
             force_place_window(
                 source,
                 (STAGE_COORD, STAGE_COORD, stage_w, stage_h),
                 HWND_BOTTOM,
                 SET_WINDOW_POS_FLAGS(0),
-                None,
-                launch.previous_foreground,
-                processes,
+                PlacementContext {
+                    forced,
+                    hook: active_hook,
+                    avoid_cursor: None,
+                    previous_foreground: launch.previous_foreground,
+                    processes,
+                },
             );
         } else {
             let _ = unsafe {
@@ -5155,7 +5383,7 @@ fn run_offscreen_staged_settle_and_reveal(
     }
     let (hx, hy, hw, hh) = host_rect;
 
-    let ctx = placement_ctx_from_want(launch, processes, None);
+    let ctx = placement_ctx_from_want(launch, processes, None, active_hook);
 
     // Branch A: try `WS_EX_LAYERED` + `LWA_ALPHA = 1` WHILE STILL AT `(STAGE_COORD, STAGE_COORD)`.
     if make_source_invisible(source.0 as isize) {
@@ -5165,15 +5393,15 @@ fn run_offscreen_staged_settle_and_reveal(
         if window_rect(source).is_some_and(|r| is_off_screen(&r, vscreen)) {
             let (aw, ah) = state.the_ask.unwrap_or((hw, hh));
             if ctx.forced {
+                apply_hook_rect_now(active_hook, source, (hx, hy, aw, ah), ZORDER_BOTTOM);
                 force_place_window(
                     source,
                     (hx, hy, aw, ah),
                     HWND_BOTTOM,
                     SET_WINDOW_POS_FLAGS(0),
-                    ctx.avoid_cursor,
-                    launch.previous_foreground,
-                    processes,
+                    ctx,
                 );
+                sync_hook_if_shifted(active_hook, source, (hx, hy));
             } else {
                 let _ =
                     unsafe { SetWindowPos(source, HWND_BOTTOM, hx, hy, aw, ah, SWP_NOACTIVATE) };
@@ -5197,6 +5425,12 @@ fn run_offscreen_staged_settle_and_reveal(
         (0, 0, 0, 0)
     };
     let (_, _, ww, wh) = behind_host_window_rect(host_rect, insets);
+    apply_hook_rect_now(
+        active_hook,
+        source,
+        (STAGE_COORD, STAGE_COORD, ww, wh),
+        ZORDER_BOTTOM,
+    );
     let _ = unsafe {
         SetWindowPos(
             source,
@@ -5272,14 +5506,21 @@ fn run_offscreen_staged_settle_and_reveal(
         let ask = the_ask_for((hw, hh), source_size(source, window_mode));
         *state.the_ask = Some(ask);
         if ctx.forced {
+            apply_hook_rect_now(
+                active_hook,
+                source,
+                (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                ZORDER_BOTTOM,
+            );
             force_place_window(
                 source,
                 (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
                 HWND_BOTTOM,
                 SET_WINDOW_POS_FLAGS(0),
-                None,
-                launch.previous_foreground,
-                processes,
+                PlacementContext {
+                    avoid_cursor: None,
+                    ..ctx
+                },
             );
         } else {
             let _ = unsafe {
@@ -5312,6 +5553,11 @@ const HOOK_VERSION: u32 = 1;
 const CMD_UNCLOAK: usize = 1;
 const CMD_CLOAK: usize = 2;
 const CMD_DETACH: usize = 3;
+const CMD_ENFORCE_NOW: usize = 4;
+const ZORDER_BOTTOM: u8 = 0;
+const ZORDER_TOPMOST: u8 = 1;
+#[allow(dead_code)]
+const ZORDER_KEEP: u8 = 2;
 const HOOK_CONTROL_MSG_NAME: PCWSTR = w!("RhpCustomPreviewHookControl");
 
 #[repr(C)]
@@ -5329,9 +5575,46 @@ struct HookSharedState {
     captured_hwnd: AtomicIsize,
     hook_hits: AtomicU32,
     forced_placement: AtomicU8,
+    z_order_mode: AtomicU8,
 }
 
-/// Shared memory mapping for `InProcessHook`; safe to clone across `hide()` and worker thread.
+#[derive(Clone, Copy)]
+struct HookSharedInit {
+    rect: (i32, i32, i32, i32),
+    cloak_enabled: bool,
+    rect_locked: bool,
+    forced_mode: u8,
+    z_order_mode: u8,
+    captured_hwnd: isize,
+}
+
+fn hook_init_for(
+    capture_technique: CustomCaptureTechnique,
+    placement: CustomPlacement,
+    provisional: Option<(i32, i32, i32, i32)>,
+) -> HookSharedInit {
+    let stage_by_default = matches!(
+        capture_technique,
+        CustomCaptureTechnique::InProcessHook
+            | CustomCaptureTechnique::OffscreenStaged
+            | CustomCaptureTechnique::OffScreen
+    );
+    let rect = match provisional {
+        Some((px, py, pw, ph)) if !stage_by_default => (px, py, pw.max(1), ph.max(1)),
+        Some((_, _, pw, ph)) => (STAGE_COORD, STAGE_COORD, pw.max(1), ph.max(1)),
+        None => (STAGE_COORD, STAGE_COORD, 0, 0),
+    };
+    HookSharedInit {
+        rect,
+        cloak_enabled: capture_technique == CustomCaptureTechnique::InProcessHook,
+        rect_locked: true,
+        forced_mode: sh_forced_mode(placement),
+        z_order_mode: z_order_mode_for(capture_technique),
+        captured_hwnd: 0,
+    }
+}
+
+/// Shared memory mapping for `InProcessHook` & `CustomPlacement::Hook`; safe to clone across `hide()` and worker thread.
 struct HookSharedView {
     _mapping: OwnedHandle,
     view: *mut HookSharedState,
@@ -5355,12 +5638,7 @@ impl Drop for HookSharedView {
 }
 
 impl HookSharedView {
-    fn create(
-        pid: u32,
-        provisional: Option<(i32, i32, i32, i32)>,
-        uncloak_msg: u32,
-        forced: bool,
-    ) -> Option<Self> {
+    fn create(pid: u32, init: HookSharedInit, uncloak_msg: u32) -> Option<Self> {
         let name = wide_null(OsStr::new(&format!("Local\\RhpCustomPreviewHook_{pid}")));
         let size = std::mem::size_of::<HookSharedState>() as u32;
         let mapping = unsafe {
@@ -5374,6 +5652,7 @@ impl HookSharedView {
             )
         }
         .ok()?;
+        let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
         let mapping = unsafe { OwnedHandle::from_raw_handle(mapping.0) };
         let mapped = unsafe {
             MapViewOfFile(
@@ -5388,23 +5667,44 @@ impl HookSharedView {
             return None;
         }
         let ptr = mapped.Value as *mut HookSharedState;
-        let (w, h) = provisional.map_or((0, 0), |(_, _, w, h)| (w.max(1), h.max(1)));
+        let (x, y, w, h) = init.rect;
         unsafe {
-            ptr.write(HookSharedState {
-                magic: HOOK_MAGIC,
-                version: HOOK_VERSION,
-                target_pid: pid,
-                uncloak_msg,
-                cloak_enabled: AtomicU32::new(1),
-                rect_locked: AtomicU32::new(1),
-                x: AtomicI32::new(STAGE_COORD),
-                y: AtomicI32::new(STAGE_COORD),
-                w: AtomicI32::new(w),
-                h: AtomicI32::new(h),
-                captured_hwnd: AtomicIsize::new(0),
-                hook_hits: AtomicU32::new(0),
-                forced_placement: AtomicU8::new(u8::from(forced)),
-            });
+            let existing_valid = already_exists
+                && (*ptr).magic == HOOK_MAGIC
+                && (*ptr).version == HOOK_VERSION
+                && (*ptr).target_pid == pid;
+            if existing_valid {
+                let s = &*ptr;
+                s.cloak_enabled
+                    .store(u32::from(init.cloak_enabled), Ordering::Release);
+                s.rect_locked
+                    .store(u32::from(init.rect_locked), Ordering::Release);
+                s.x.store(x, Ordering::Release);
+                s.y.store(y, Ordering::Release);
+                s.w.store(w, Ordering::Release);
+                s.h.store(h, Ordering::Release);
+                s.captured_hwnd.store(init.captured_hwnd, Ordering::Release);
+                s.forced_placement
+                    .store(init.forced_mode, Ordering::Release);
+                s.z_order_mode.store(init.z_order_mode, Ordering::Release);
+            } else {
+                ptr.write(HookSharedState {
+                    magic: HOOK_MAGIC,
+                    version: HOOK_VERSION,
+                    target_pid: pid,
+                    uncloak_msg,
+                    cloak_enabled: AtomicU32::new(u32::from(init.cloak_enabled)),
+                    rect_locked: AtomicU32::new(u32::from(init.rect_locked)),
+                    x: AtomicI32::new(x),
+                    y: AtomicI32::new(y),
+                    w: AtomicI32::new(w),
+                    h: AtomicI32::new(h),
+                    captured_hwnd: AtomicIsize::new(init.captured_hwnd),
+                    hook_hits: AtomicU32::new(0),
+                    forced_placement: AtomicU8::new(init.forced_mode),
+                    z_order_mode: AtomicU8::new(init.z_order_mode),
+                });
+            }
         }
         Some(Self {
             _mapping: mapping,
@@ -5424,6 +5724,14 @@ impl HookSharedView {
         s.y.store(y, Ordering::Release);
         s.w.store(w, Ordering::Release);
         s.h.store(h, Ordering::Release);
+    }
+
+    fn set_z_order_mode(&self, mode: u8) {
+        self.state().z_order_mode.store(mode, Ordering::Release);
+    }
+
+    fn set_forced_mode(&self, mode: u8) {
+        self.state().forced_placement.store(mode, Ordering::Release);
     }
 
     fn stage_offscreen(&self) {
@@ -5497,6 +5805,35 @@ impl HookSharedView {
         }
     }
 
+    /// Synchronously ensure subclass installation and snap `hwnd` to locked SHM rect from in-process.
+    fn enforce_now_sync(&self, hwnd: HWND) -> bool {
+        if DETACHING.load(Ordering::Acquire) {
+            return false;
+        }
+        self.state().rect_locked.store(1, Ordering::Release);
+        if DETACHING.load(Ordering::Acquire) {
+            self.clear_locks_for_detach();
+            return false;
+        }
+        if hwnd.0.is_null() || !unsafe { IsWindow(hwnd) }.as_bool() {
+            return false;
+        }
+        let hits_before = self.hook_hits();
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                self.uncloak_msg,
+                WPARAM(CMD_ENFORCE_NOW),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                100,
+                None,
+            )
+        }
+        .0 != 0;
+        sent && self.hook_hits() > hits_before
+    }
+
     /// Clear cloak + rect and forced-placement locks before promotion moves or restores `hwnd`.
     fn clear_locks_for_detach(&self) {
         let s = self.state();
@@ -5528,17 +5865,34 @@ impl HookSharedView {
     }
 }
 
-/// Active hook handles + DLL module + shared memory for `CustomCaptureTechnique::InProcessHook`.
+/// Active hook handles + DLL module + shared memory for `InProcessHook` & `CustomPlacement::Hook`.
 struct InProcessHookSession {
+    pid: u32,
     view: Arc<HookSharedView>,
-    cbt_hook: HHOOK,
-    callwnd_hook: HHOOK,
+    hooks: Vec<(u32, HHOOK, HHOOK)>,
     dll_module: HMODULE,
 }
 
 // SAFETY: `HHOOK` and `HMODULE` are process-wide Win32 handles; `UnhookWindowsHookEx` / `FreeLibrary`
 // are safe to call from the worker thread on teardown.
 unsafe impl Send for InProcessHookSession {}
+
+impl InProcessHookSession {
+    fn attach_thread(&mut self, tid: u32) -> bool {
+        if tid == 0 || self.hooks.iter().any(|&(t, _, _)| t == tid) {
+            return true;
+        }
+        let Some((cbt_proc, cwp_proc)) = hook_procs_from_module(self.dll_module) else {
+            return false;
+        };
+        let Some((cbt, cwp)) = try_attach_thread_hooks(self.dll_module, cbt_proc, cwp_proc, tid)
+        else {
+            return false;
+        };
+        self.hooks.push((tid, cbt, cwp));
+        true
+    }
+}
 
 impl Drop for InProcessHookSession {
     fn drop(&mut self) {
@@ -5550,11 +5904,13 @@ impl Drop for InProcessHookSession {
                 *active = None;
             }
         }
-        if !self.cbt_hook.0.is_null() {
-            let _ = unsafe { UnhookWindowsHookEx(self.cbt_hook) };
-        }
-        if !self.callwnd_hook.0.is_null() {
-            let _ = unsafe { UnhookWindowsHookEx(self.callwnd_hook) };
+        for &(_, cbt_hook, callwnd_hook) in &self.hooks {
+            if !cbt_hook.0.is_null() {
+                let _ = unsafe { UnhookWindowsHookEx(cbt_hook) };
+            }
+            if !callwnd_hook.0.is_null() {
+                let _ = unsafe { UnhookWindowsHookEx(callwnd_hook) };
+            }
         }
         if !self.dll_module.0.is_null() {
             let _ = unsafe { FreeLibrary(self.dll_module) };
@@ -5601,10 +5957,7 @@ pub(crate) fn hook_dll_present() -> bool {
 
 static HOOK_DLL_PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
-fn load_hook_dll() -> Option<(HMODULE, HOOKPROC, HOOKPROC)> {
-    let path = find_hook_dll()?;
-    let wide = wide_null(path.as_os_str());
-    let hmod = unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) }.ok()?;
+fn hook_procs_from_module(hmod: HMODULE) -> Option<(HOOKPROC, HOOKPROC)> {
     let cbt_raw = unsafe { GetProcAddress(hmod, PCSTR(c"rhp_cbt_proc".as_ptr().cast())) };
     let cwp_raw = unsafe { GetProcAddress(hmod, PCSTR(c"rhp_callwnd_proc".as_ptr().cast())) };
     match (cbt_raw, cwp_raw) {
@@ -5622,9 +5975,19 @@ fn load_hook_dll() -> Option<(HMODULE, HOOKPROC, HOOKPROC)> {
                     unsafe extern "system" fn(i32, WPARAM, LPARAM) -> LRESULT,
                 >(cwp_fn)
             });
-            Some((hmod, cbt_proc, cwp_proc))
+            Some((cbt_proc, cwp_proc))
         }
-        _ => {
+        _ => None,
+    }
+}
+
+fn load_hook_dll() -> Option<(HMODULE, HOOKPROC, HOOKPROC)> {
+    let path = find_hook_dll()?;
+    let wide = wide_null(path.as_os_str());
+    let hmod = unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) }.ok()?;
+    match hook_procs_from_module(hmod) {
+        Some((cbt_proc, cwp_proc)) => Some((hmod, cbt_proc, cwp_proc)),
+        None => {
             let _ = unsafe { FreeLibrary(hmod) };
             None
         }
@@ -5648,25 +6011,57 @@ fn try_attach_thread_hooks(
     }
 }
 
+/// Attach a hook session directly onto `(pid, tid)` for child/brokered processes or late threads.
+fn attach_dynamic_hook_session(
+    pid: u32,
+    tid: u32,
+    init: HookSharedInit,
+) -> Option<InProcessHookSession> {
+    if pid == 0 || tid == 0 {
+        return None;
+    }
+    let (hmod, cbt_proc, cwp_proc) = load_hook_dll()?;
+    let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
+    let view = HookSharedView::create(pid, init, uncloak_msg).map(Arc::new);
+    let hooks = if view.is_some() {
+        try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, tid)
+    } else {
+        None
+    };
+    match (view, hooks) {
+        (Some(view), Some((cbt_hook, callwnd_hook))) => Some(InProcessHookSession {
+            pid,
+            view,
+            hooks: vec![(tid, cbt_hook, callwnd_hook)],
+            dll_module: hmod,
+        }),
+        _ => {
+            let _ = unsafe { FreeLibrary(hmod) };
+            None
+        }
+    }
+}
+
 const IN_PROCESS_HOOK_SHOW_CMD: u16 = SW_HIDE.0 as u16;
 
 /// Spawn target with `CREATE_SUSPENDED`, initialize per-PID shared memory, and attach `WH_CBT` +
 /// `WH_CALLWNDPROC` before/immediately after `ResumeThread`. Falls back to `None` session
-/// (caller degrades cleanly to `InvisibleLayered`) if DLL is missing or hook cannot attach.
-fn launch_in_process_hook(
+/// if DLL is missing or hook cannot attach.
+fn launch_with_hook(
     exe: &str,
     path: &Path,
     provisional: Option<(i32, i32, i32, i32)>,
-    forced: bool,
-) -> Option<(OwnedHandle, u32, Option<InProcessHookSession>)> {
+    capture_technique: CustomCaptureTechnique,
+    init: HookSharedInit,
+) -> Option<(OwnedHandle, u32, u32, Option<InProcessHookSession>)> {
     let Some((hmod, cbt_proc, cwp_proc)) = load_hook_dll() else {
-        let (proc_handle, pid) = launch(
-            exe,
-            path,
-            provisional,
-            CustomCaptureTechnique::InvisibleLayered,
-        )?;
-        return Some((proc_handle, pid, None));
+        let fallback_tech = if capture_technique == CustomCaptureTechnique::InProcessHook {
+            CustomCaptureTechnique::InvisibleLayered
+        } else {
+            capture_technique
+        };
+        let (proc_handle, pid) = launch(exe, path, provisional, fallback_tech)?;
+        return Some((proc_handle, pid, 0, None));
     };
 
     let application = wide_null(OsStr::new(exe));
@@ -5679,13 +6074,10 @@ fn launch_in_process_hook(
         .as_ref()
         .map_or(PCWSTR::null(), |buf| PCWSTR(buf.as_ptr()));
 
-    // Off-screen positive STARTUPINFOW + SW_HIDE (u32-safe); hook locks real creation to STAGE_COORD.
-    let mut si = launch_startup_info_for(
-        provisional,
-        CustomCaptureTechnique::InProcessHook,
-        virtual_screen(),
-    );
-    si.wShowWindow = IN_PROCESS_HOOK_SHOW_CMD;
+    let mut si = launch_startup_info_for(provisional, capture_technique, virtual_screen());
+    if capture_technique == CustomCaptureTechnique::InProcessHook {
+        si.wShowWindow = IN_PROCESS_HOOK_SHOW_CMD;
+    }
 
     let mut pi = PROCESS_INFORMATION::default();
     if unsafe {
@@ -5713,7 +6105,7 @@ fn launch_in_process_hook(
     let pid = pi.dwProcessId;
     let tid = pi.dwThreadId;
     let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
-    let view = HookSharedView::create(pid, provisional, uncloak_msg, forced).map(Arc::new);
+    let view = HookSharedView::create(pid, init, uncloak_msg).map(Arc::new);
 
     // Attempt hook install before `ResumeThread`; if Win11 rejects a suspended thread before
     // `W32THREAD` init (`ERROR_INVALID_THREAD_ID`), spin-yield 30ms (sub-0.1ms attach; avoids
@@ -5749,9 +6141,9 @@ fn launch_in_process_hook(
 
     let session = match (view, hooks) {
         (Some(view), Some((cbt_hook, callwnd_hook))) => Some(InProcessHookSession {
+            pid,
             view,
-            cbt_hook,
-            callwnd_hook,
+            hooks: vec![(tid, cbt_hook, callwnd_hook)],
             dll_module: hmod,
         }),
         _ => {
@@ -5759,7 +6151,7 @@ fn launch_in_process_hook(
             None
         }
     };
-    Some((process, pid, session))
+    Some((process, pid, tid, session))
 }
 
 /// Validate a `captured_hwnd` candidate: live, unowned, non-toolwindow, and titled or >= 64x64.
@@ -5906,7 +6298,7 @@ fn reveal_in_process_hook(
     if let Ok(mut slot) = LAST_HOST_RECT.lock() {
         *slot = Some(host_rect);
     }
-    let ctx = placement_ctx_from_want(launch, processes, None);
+    let ctx = placement_ctx_from_want(launch, processes, None, Some(&session.view));
     // Late-hooked fallback (`hook_hits == 0`): source is not cloaked; use InvisibleLayered if active.
     if session.view.hook_hits() == 0 && *state.invisible_layered {
         session
@@ -5914,7 +6306,8 @@ fn reveal_in_process_hook(
             .state()
             .cloak_enabled
             .store(0, Ordering::Release);
-        place_invisible_layered(source, host_rect, window_mode, state.the_ask, ctx);
+        let fallback_ctx = PlacementContext { hook: None, ..ctx };
+        place_invisible_layered(source, host_rect, window_mode, state.the_ask, fallback_ctx);
         restore_foreground(launch.previous_foreground, processes);
         *state.placed_mode = Some(PlacementMode::InvisibleLayered);
         *state.placed_host_rect = Some(host_rect);
@@ -5935,15 +6328,23 @@ fn reveal_in_process_hook(
     if !session.view.is_cloaked() {
         let _ = session.view.cloak_sync(source);
     }
+    let no_shift_ctx = PlacementContext {
+        avoid_cursor: None,
+        ..ctx
+    };
     if ctx.forced {
+        apply_hook_rect_now(
+            ctx.hook,
+            source,
+            (STAGE_COORD, STAGE_COORD, ww, wh),
+            ZORDER_BOTTOM,
+        );
         force_place_window(
             source,
             (STAGE_COORD, STAGE_COORD, ww, wh),
             HWND_BOTTOM,
             SET_WINDOW_POS_FLAGS(0),
-            None,
-            launch.previous_foreground,
-            processes,
+            no_shift_ctx,
         );
     } else {
         if unsafe { IsZoomed(source) }.as_bool() || unsafe { IsIconic(source) }.as_bool() {
@@ -5988,14 +6389,18 @@ fn reveal_in_process_hook(
             .view
             .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
         if ctx.forced {
+            apply_hook_rect_now(
+                ctx.hook,
+                source,
+                (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                ZORDER_BOTTOM,
+            );
             force_place_window(
                 source,
                 (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
                 HWND_BOTTOM,
                 SET_WINDOW_POS_FLAGS(0),
-                None,
-                launch.previous_foreground,
-                processes,
+                no_shift_ctx,
             );
         } else {
             let _ = unsafe {
@@ -6074,25 +6479,23 @@ fn reveal_in_process_hook(
     let mode = if fits_host {
         session.view.set_rect(wx, wy, ww, wh);
         if ctx.forced {
+            apply_hook_rect_now(ctx.hook, source, (wx, wy, ww, wh), ZORDER_BOTTOM);
             force_place_window(
                 source,
                 (wx, wy, ww, wh),
                 HWND_BOTTOM,
                 SET_WINDOW_POS_FLAGS(0),
-                None,
-                launch.previous_foreground,
-                processes,
+                no_shift_ctx,
             );
             session.view.uncloak_sync(source);
             if !aligned_behind_host(source, host_rect) {
+                apply_hook_rect_now(ctx.hook, source, (wx, wy, ww, wh), ZORDER_BOTTOM);
                 force_place_window(
                     source,
                     (wx, wy, ww, wh),
                     HWND_BOTTOM,
                     SET_WINDOW_POS_FLAGS(0),
-                    None,
-                    launch.previous_foreground,
-                    processes,
+                    no_shift_ctx,
                 );
             }
             if aligned_behind_host(source, host_rect) {
@@ -6105,14 +6508,18 @@ fn reveal_in_process_hook(
                 session
                     .view
                     .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+                apply_hook_rect_now(
+                    ctx.hook,
+                    source,
+                    (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                    ZORDER_BOTTOM,
+                );
                 force_place_window(
                     source,
                     (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
                     HWND_BOTTOM,
                     SET_WINDOW_POS_FLAGS(0),
-                    None,
-                    launch.previous_foreground,
-                    processes,
+                    no_shift_ctx,
                 );
                 nudge_clamped_offscreen_off_cursor(
                     source,
@@ -6142,14 +6549,18 @@ fn reveal_in_process_hook(
             session
                 .view
                 .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+            apply_hook_rect_now(
+                ctx.hook,
+                source,
+                (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                ZORDER_BOTTOM,
+            );
             force_place_window(
                 source,
                 (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
                 HWND_BOTTOM,
                 SET_WINDOW_POS_FLAGS(0),
-                None,
-                launch.previous_foreground,
-                processes,
+                no_shift_ctx,
             );
             nudge_clamped_offscreen_off_cursor(
                 source,
@@ -6205,6 +6616,8 @@ fn run_in_process_hook_settle_and_reveal(
         }
     };
 
+    let forced = enforces_placement(launch.placement);
+    let hook_mode = uses_hook_enforcement(launch.placement);
     if was_hidden {
         let Some(target_rect) = current_target_rect() else {
             if is_current(launch.id) {
@@ -6228,6 +6641,9 @@ fn run_in_process_hook_settle_and_reveal(
             ..Default::default()
         };
         let _ = unsafe { SetWindowPlacement(source, &placement) };
+        if hook_mode {
+            let _ = session.view.enforce_now_sync(source);
+        }
     }
 
     // Confirm hook actually ran on `source`'s thread; if late-hooked / secondary-thread UI,
@@ -6287,11 +6703,19 @@ fn run_in_process_hook_settle_and_reveal(
         session.view.set_rect(STAGE_COORD, STAGE_COORD, ww, wh);
 
         let cur = window_rect(source);
-        if cur != last_rect
-            || (launch.placement == CustomPlacement::Forced
-                && unsafe { IsZoomed(source) }.as_bool())
+        let needs_hook_snap = hook_mode
+            && !cur.is_some_and(|r| {
+                r.left == STAGE_COORD
+                    && r.top == STAGE_COORD
+                    && (r.right - r.left) == ww
+                    && (r.bottom - r.top) == wh
+            });
+        if cur != last_rect || (forced && unsafe { IsZoomed(source) }.as_bool()) || needs_hook_snap
         {
-            if launch.placement == CustomPlacement::Forced {
+            if hook_mode {
+                let _ = session.view.enforce_now_sync(source);
+            }
+            if forced {
                 let _ = unsafe {
                     SetWindowPos(
                         source,
@@ -7730,22 +8154,40 @@ mod tests {
 
     #[test]
     fn in_process_hook_dll_exports_shm_layout_and_thread_hook_attachment() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // 1. Companion DLL must exist beside the test binary (or parent target dir) and export both hooks.
         let (hmod, cbt_proc, cwp_proc) = load_hook_dll().expect(
             "custom_preview_hook.dll must be built and export rhp_cbt_proc + rhp_callwnd_proc",
         );
 
-        // 2. Verify shared memory creation and field layout.
+        // 2. Verify shared memory creation and exact 56-byte C field layout.
         let pid = std::process::id();
         let msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
         assert_ne!(msg, 0);
-        let view = HookSharedView::create(pid, Some((120, 80, 640, 480)), msg, true)
-            .expect("HookSharedView::create must succeed");
+        let view = HookSharedView::create(
+            pid,
+            HookSharedInit {
+                rect: (STAGE_COORD, STAGE_COORD, 640, 480),
+                cloak_enabled: true,
+                rect_locked: true,
+                forced_mode: 1,
+                z_order_mode: ZORDER_BOTTOM,
+                captured_hwnd: 0,
+            },
+            msg,
+        )
+        .expect("HookSharedView::create must succeed");
         assert_eq!(std::mem::size_of::<HookSharedState>(), 56);
+        assert_eq!(std::mem::offset_of!(HookSharedState, forced_placement), 52);
+        assert_eq!(std::mem::offset_of!(HookSharedState, z_order_mode), 53);
         assert_eq!(view.state().magic, HOOK_MAGIC);
         assert_eq!(view.state().version, HOOK_VERSION);
         assert_eq!(view.state().target_pid, pid);
         assert_eq!(view.state().forced_placement.load(Ordering::Acquire), 1);
+        assert_eq!(
+            view.state().z_order_mode.load(Ordering::Acquire),
+            ZORDER_BOTTOM
+        );
         assert!(view.is_cloaked());
         assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 1);
         assert_eq!(view.state().x.load(Ordering::Acquire), STAGE_COORD);
@@ -7918,6 +8360,165 @@ mod tests {
             (210, 140),
             "detached window must move freely with zero leftover subclass rect-lock"
         );
+
+        // Test CustomPlacement::Hook (forced_placement = 2, ZORDER_TOPMOST, invisible owner,
+        // WM_GETMINMAXINFO override, SWP_NOSENDCHANGING re-snap via WM_WINDOWPOSCHANGED, and CMD_DETACH).
+        let hook_view = HookSharedView::create(
+            pid,
+            HookSharedInit {
+                rect: (150, 110, 260, 180),
+                cloak_enabled: false,
+                rect_locked: true,
+                forced_mode: 2,
+                z_order_mode: ZORDER_TOPMOST,
+                captured_hwnd: 0,
+            },
+            msg,
+        )
+        .expect("re-init HookSharedView in Hook mode");
+        let hook_hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("Hook Mode Test"),
+                WS_CAPTION
+                    | WS_MAXIMIZE
+                    | WS_THICKFRAME
+                    | windows::Win32::UI::WindowsAndMessaging::WS_VISIBLE,
+                10,
+                10,
+                900,
+                700,
+                helper_hwnd,
+                None,
+                None,
+                None,
+            )
+            .expect("create invisible-owner Hook Mode Test window")
+        };
+        assert!(
+            !unsafe { IsZoomed(hook_hwnd) }.as_bool(),
+            "Hook HCBT_CREATEWND must strip WS_MAXIMIZE"
+        );
+        let created_rect = window_rect(hook_hwnd).expect("created hook_hwnd rect");
+        assert_eq!(
+            (
+                created_rect.left,
+                created_rect.top,
+                created_rect.right - created_rect.left,
+                created_rect.bottom - created_rect.top,
+            ),
+            (150, 110, 260, 180),
+            "Hook mode must lock creation origin and size even with invisible owner"
+        );
+
+        hook_view.set_rect(170, 130, 110, 90);
+        assert!(hook_view.enforce_now_sync(hook_hwnd));
+        let enforced_rect = window_rect(hook_hwnd).expect("enforced hook_hwnd rect");
+        assert_eq!(
+            (
+                enforced_rect.left,
+                enforced_rect.top,
+                enforced_rect.right - enforced_rect.left,
+                enforced_rect.bottom - enforced_rect.top,
+            ),
+            (170, 130, 110, 90),
+            "CMD_ENFORCE_NOW + WM_GETMINMAXINFO override must shrink below default track floor"
+        );
+        let ex_after_enforce = unsafe { GetWindowLongPtrW(hook_hwnd, GWL_EXSTYLE) } as u32;
+        assert_ne!(
+            ex_after_enforce & WS_EX_TOPMOST.0,
+            0,
+            "ZORDER_TOPMOST must elevate window for DirectWindow"
+        );
+
+        let _ = unsafe {
+            SetWindowPos(
+                hook_hwnd,
+                HWND_BOTTOM,
+                40,
+                40,
+                500,
+                400,
+                SWP_NOSENDCHANGING | SWP_NOACTIVATE,
+            )
+        };
+        let snapped_back = window_rect(hook_hwnd).expect("snapped_back hook_hwnd rect");
+        assert_eq!(
+            (
+                snapped_back.left,
+                snapped_back.top,
+                snapped_back.right - snapped_back.left,
+                snapped_back.bottom - snapped_back.top,
+            ),
+            (170, 130, 110, 90),
+            "WM_WINDOWPOSCHANGED must snap back even when SWP_NOSENDCHANGING bypasses CHANGING"
+        );
+
+        // Cursor-shift in force_place_window must update SHM BEFORE SetWindowPos(SWP_NOSENDCHANGING)
+        // so WM_WINDOWPOSCHANGED never pulls the shifted window back onto the cursor.
+        let cursor_on_hook = POINT { x: 200, y: 160 };
+        force_place_window(
+            hook_hwnd,
+            (170, 130, 110, 90),
+            HWND_TOPMOST,
+            SET_WINDOW_POS_FLAGS(0),
+            PlacementContext {
+                forced: true,
+                hook: Some(&hook_view),
+                avoid_cursor: Some(cursor_on_hook),
+                previous_foreground: 0,
+                processes: &[],
+            },
+        );
+        let shifted_hook = window_rect(hook_hwnd).expect("shifted hook_hwnd rect");
+        assert!(
+            !point_in_rect(cursor_on_hook, shifted_hook),
+            "Hook window must stay off-cursor without WM_WINDOWPOSCHANGED snap-back"
+        );
+        assert_eq!(
+            hook_view.state().x.load(Ordering::Acquire),
+            shifted_hook.left
+        );
+        assert_eq!(
+            hook_view.state().y.load(Ordering::Acquire),
+            shifted_hook.top
+        );
+
+        // enforce_now_sync must never re-lock SHM while DETACHING is active.
+        hook_view.clear_locks_for_detach();
+        DETACHING.store(true, Ordering::SeqCst);
+        let detach_guard = DetachGuard;
+        assert!(!hook_view.enforce_now_sync(hook_hwnd));
+        assert_eq!(hook_view.state().rect_locked.load(Ordering::Acquire), 0);
+        drop(detach_guard);
+
+        assert!(hook_view.detach_sync(hook_hwnd));
+        let _ = unsafe {
+            SetWindowPos(
+                hook_hwnd,
+                HWND_NOTOPMOST,
+                220,
+                150,
+                320,
+                220,
+                SWP_NOACTIVATE,
+            )
+        };
+        let freed_rect = window_rect(hook_hwnd).expect("freed hook_hwnd rect");
+        assert_eq!(
+            (
+                freed_rect.left,
+                freed_rect.top,
+                freed_rect.right - freed_rect.left,
+                freed_rect.bottom - freed_rect.top,
+            ),
+            (220, 150, 320, 220),
+            "CMD_DETACH must restore full move and resize freedom"
+        );
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hook_hwnd) };
+        drop(hook_view);
+        drop(view);
 
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(main_hwnd) };
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(helper_hwnd) };
@@ -8357,6 +8958,7 @@ mod tests {
             CustomWindowMode::Borderless,
             PlacementContext {
                 forced: true,
+                hook: None,
                 avoid_cursor: Some(cursor),
                 previous_foreground: 0,
                 processes: &[],
@@ -8377,15 +8979,85 @@ mod tests {
 
         // HookSharedView::clear_locks_for_detach immediately zeroes cloak, forced_placement, and rect_locked.
         let msg = unsafe { RegisterWindowMessageW(w!("RhpDetachLocksUnitTest")) };
-        let view = HookSharedView::create(0xDEAD_BEEF, Some((100, 100, 320, 240)), msg, true)
-            .expect("create HookSharedView");
+        let view = HookSharedView::create(
+            0xDEAD_BEEF,
+            HookSharedInit {
+                rect: (STAGE_COORD, STAGE_COORD, 320, 240),
+                cloak_enabled: true,
+                rect_locked: true,
+                forced_mode: 2,
+                z_order_mode: ZORDER_TOPMOST,
+                captured_hwnd: 0,
+            },
+            msg,
+        )
+        .expect("create HookSharedView");
         assert_eq!(view.state().cloak_enabled.load(Ordering::Acquire), 1);
-        assert_eq!(view.state().forced_placement.load(Ordering::Acquire), 1);
+        assert_eq!(view.state().forced_placement.load(Ordering::Acquire), 2);
+        assert_eq!(
+            view.state().z_order_mode.load(Ordering::Acquire),
+            ZORDER_TOPMOST
+        );
         assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 1);
         view.clear_locks_for_detach();
         assert_eq!(view.state().cloak_enabled.load(Ordering::Acquire), 0);
         assert_eq!(view.state().forced_placement.load(Ordering::Acquire), 0);
         assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 0);
+
+        // Verify Hook placement helpers across capture techniques and non-media provisional fallback.
+        assert_eq!(
+            z_order_mode_for(CustomCaptureTechnique::DirectWindow),
+            ZORDER_TOPMOST
+        );
+        for tech in [
+            CustomCaptureTechnique::BehindHost,
+            CustomCaptureTechnique::InvisibleLayered,
+            CustomCaptureTechnique::OffScreen,
+            CustomCaptureTechnique::OffscreenStaged,
+            CustomCaptureTechnique::InProcessHook,
+        ] {
+            assert_eq!(z_order_mode_for(tech), ZORDER_BOTTOM);
+        }
+
+        let target = (240, 160, 420, 300);
+        let direct_init = hook_init_for(
+            CustomCaptureTechnique::DirectWindow,
+            CustomPlacement::Hook,
+            Some(target),
+        );
+        assert_eq!(direct_init.rect, target);
+        assert!(!direct_init.cloak_enabled);
+        assert_eq!(direct_init.forced_mode, 2);
+        assert_eq!(direct_init.z_order_mode, ZORDER_TOPMOST);
+
+        let staged_init = hook_init_for(
+            CustomCaptureTechnique::OffscreenStaged,
+            CustomPlacement::Hook,
+            Some(target),
+        );
+        assert_eq!(staged_init.rect, (STAGE_COORD, STAGE_COORD, 420, 300));
+        assert!(!staged_init.cloak_enabled);
+        assert_eq!(staged_init.forced_mode, 2);
+        assert_eq!(staged_init.z_order_mode, ZORDER_BOTTOM);
+
+        let in_proc_init = hook_init_for(
+            CustomCaptureTechnique::InProcessHook,
+            CustomPlacement::Hook,
+            Some(target),
+        );
+        assert_eq!(in_proc_init.rect, (STAGE_COORD, STAGE_COORD, 420, 300));
+        assert!(in_proc_init.cloak_enabled);
+        assert_eq!(in_proc_init.forced_mode, 2);
+        assert_eq!(in_proc_init.z_order_mode, ZORDER_BOTTOM);
+
+        let fallback_rect = hook_provisional_rect(
+            pointer((bounds.left + 100, bounds.top + 100)),
+            Path::new("document.unknown_custom_ext"),
+            CustomScaling::FollowTray,
+            None,
+        )
+        .expect("Hook placement must compute concrete non-zero fallback rect");
+        assert!(fallback_rect.2 > 0 && fallback_rect.3 > 0);
 
         // Offscreen clamp guard avoids 8ms STAGE_COORD oscillation when already settled off-cursor behind host.
         let vscreen = RECT {
