@@ -69,9 +69,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::config::{
-    sanitize_program_input, CustomCaptureTechnique, CustomPlacement, CustomPreset,
-    CustomPromotionTechnique, CustomScaling, CustomWindowMode, PreviewScale, TextTheme,
-    MAX_PRESETS,
+    sanitize_arguments, sanitize_program_input, CustomCaptureTechnique, CustomPlacement,
+    CustomPreset, CustomPromotionTechnique, CustomScaling, CustomWindowMode, PreviewScale,
+    TextTheme, MAX_PRESETS,
 };
 use crate::text::{text_paint, text_theme};
 use crate::CONFIG;
@@ -153,13 +153,15 @@ const ID_PROMOTION_TECHNIQUE: i32 = 127;
 const ID_VOLUME_ENABLED: i32 = 128;
 const ID_PLACEMENT: i32 = 129;
 const ID_STATUS: i32 = 130;
+const ID_ARGUMENTS: i32 = 131;
 const ID_LABEL_BASE: i32 = 140;
 
-const EDIT_IDS: [i32; 6] = [
+const EDIT_IDS: [i32; 7] = [
     ID_SEARCH,
     ID_NAME,
     ID_EXTENSIONS,
     ID_EXE,
+    ID_ARGUMENTS,
     ID_SCALING_PERCENT,
     ID_VOLUME_VALUE,
 ];
@@ -274,11 +276,12 @@ fn placement_index(placement: CustomPlacement) -> usize {
         .unwrap_or(0)
 }
 
-const EDITOR_LABELS: [&str; 10] = [
+const EDITOR_LABELS: [&str; 11] = [
     "Enabled",
     "Name",
     "Extensions",
     "Program",
+    "Arguments",
     "Capture Method",
     "Promotion",
     "Placement",
@@ -597,7 +600,7 @@ struct LayoutRects {
     btn_max: RECT,
     btn_close: RECT,
     list_rect: RECT,
-    edit_boxes: [(i32, RECT); 6],
+    edit_boxes: [(i32, RECT); 7],
 }
 
 impl LayoutRects {
@@ -872,7 +875,7 @@ fn create_window() -> Option<HWND> {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             920,
-            660,
+            700,
             None,
             None,
             HINSTANCE(hinstance.0),
@@ -1192,7 +1195,7 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
             let dpi = (unsafe { GetDpiForWindow(hwnd) } as i32).max(96);
             info.ptMinTrackSize.x = scale(680, dpi);
-            info.ptMinTrackSize.y = scale(590, dpi);
+            info.ptMinTrackSize.y = scale(630, dpi);
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -1975,6 +1978,7 @@ unsafe fn build(hwnd: HWND) -> State {
     controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_EXTENSIONS) });
     controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_EXE) });
     controls.push(unsafe { button(hwnd, "Browse…", ID_BROWSE) });
+    controls.push(unsafe { child(hwnd, w!("EDIT"), "", edit_style, ID_ARGUMENTS) });
     controls.push(unsafe {
         child(
             hwnd,
@@ -2110,6 +2114,7 @@ unsafe fn build(hwnd: HWND) -> State {
         (ID_NAME, 48),
         (ID_EXTENSIONS, 32767),
         (ID_EXE, 32767),
+        (ID_ARGUMENTS, 2048),
         (ID_SCALING_PERCENT, 4),
         (ID_VOLUME_VALUE, 3),
     ];
@@ -4572,6 +4577,9 @@ unsafe fn lay_out(state: &mut State) {
     place(ID_BROWSE, field_left + field_w - browse_w, y, browse_w, row);
     y += row + gap;
 
+    place_edit(ID_ARGUMENTS, field_left, y, field_w, row);
+    y += row + gap;
+
     place(
         ID_CAPTURE_TECHNIQUE,
         field_left,
@@ -4742,6 +4750,11 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                 unsafe { exe_changed(state) };
             }
         }
+        ID_ARGUMENTS => {
+            if notice == EN_CHANGE {
+                unsafe { arguments_changed(state) };
+            }
+        }
         ID_WINDOW_MODE
         | ID_CAPTURE_TECHNIQUE
         | ID_PROMOTION_TECHNIQUE
@@ -4841,6 +4854,7 @@ unsafe fn fill_fields(state: &mut State) {
             ID_NAME,
             ID_EXTENSIONS,
             ID_EXE,
+            ID_ARGUMENTS,
             ID_SCALING_PERCENT,
             ID_VOLUME_VALUE,
         ] {
@@ -4869,6 +4883,7 @@ unsafe fn fill_fields(state: &mut State) {
     let enabled = preset.enabled;
     let extensions = preset.extensions_text();
     let exe = preset.exe.clone();
+    let arguments = preset.arguments.clone();
     let window_mode = preset.window_mode;
     let capture_technique = preset.capture_technique;
     let promotion_technique = preset.promotion_technique;
@@ -4898,6 +4913,7 @@ unsafe fn fill_fields(state: &mut State) {
         set_text(state.hwnd, ID_NAME, &name);
         set_text(state.hwnd, ID_EXTENSIONS, &extensions);
         set_text(state.hwnd, ID_EXE, &exe);
+        set_text(state.hwnd, ID_ARGUMENTS, &arguments);
 
         let mode_combo = GetDlgItem(state.hwnd, ID_WINDOW_MODE).unwrap_or_default();
         let mode_index = WINDOW_MODES
@@ -5001,6 +5017,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_EXTENSIONS,
         ID_EXE,
         ID_BROWSE,
+        ID_ARGUMENTS,
         ID_WINDOW_MODE,
         ID_CAPTURE_TECHNIQUE,
         ID_PROMOTION_TECHNIQUE,
@@ -5198,6 +5215,33 @@ unsafe fn exe_changed(state: &mut State) {
         state.loading = false;
     }
     unsafe { fields_changed(state) };
+}
+
+/// Update `preset.arguments` when edited, stripping any line breaks without collapsing spaces/quotes.
+unsafe fn arguments_changed(state: &mut State) {
+    if state.loading {
+        return;
+    }
+    let Some(index) = state.selected else {
+        return;
+    };
+    let typed = unsafe { text_of(state.hwnd, ID_ARGUMENTS) };
+    let cleaned = sanitize_arguments(&typed);
+    if cleaned != typed {
+        let caret = cleaned.len() as isize;
+        state.loading = true;
+        unsafe {
+            set_text(state.hwnd, ID_ARGUMENTS, &cleaned);
+            if let Ok(edit) = GetDlgItem(state.hwnd, ID_ARGUMENTS) {
+                SendMessageW(edit, EM_SETSEL, WPARAM(caret as usize), LPARAM(caret));
+            }
+        }
+        state.loading = false;
+    }
+    if let Some(preset) = state.presets.get_mut(index) {
+        preset.arguments = cleaned;
+    }
+    state.dirtied = true;
 }
 
 unsafe fn window_mode_chosen(state: &mut State) {
@@ -6038,6 +6082,7 @@ mod tests {
                 ID_NAME,
                 ID_EXTENSIONS,
                 ID_EXE,
+                ID_ARGUMENTS,
                 ID_WINDOW_MODE,
                 ID_CAPTURE_TECHNIQUE,
                 ID_PROMOTION_TECHNIQUE,
@@ -6507,22 +6552,27 @@ mod tests {
                 state.dirtied = false;
             }
 
-            // Capture Method sits directly above Promotion, which sits directly above Placement,
-            // which sits directly above Window (both controls & labels) in that exact Tab order.
-            assert_eq!(EDITOR_LABELS[4], "Capture Method");
-            assert_eq!(EDITOR_LABELS[5], "Promotion");
-            assert_eq!(EDITOR_LABELS[6], "Placement");
-            assert_eq!(EDITOR_LABELS[7], "Window");
+            // Program -> Arguments -> Capture Method -> Promotion -> Placement -> Window (controls & labels) in Tab order.
+            assert_eq!(EDITOR_LABELS.len(), 11);
+            assert_eq!(EDITOR_LABELS[3], "Program");
+            assert_eq!(EDITOR_LABELS[4], "Arguments");
+            assert_eq!(EDITOR_LABELS[5], "Capture Method");
+            assert_eq!(EDITOR_LABELS[6], "Promotion");
+            assert_eq!(EDITOR_LABELS[7], "Placement");
+            assert_eq!(EDITOR_LABELS[8], "Window");
+            let args_edit = GetDlgItem(hwnd, ID_ARGUMENTS).unwrap_or_default();
             let promo_combo = GetDlgItem(hwnd, ID_PROMOTION_TECHNIQUE).unwrap_or_default();
             let place_combo = GetDlgItem(hwnd, ID_PLACEMENT).unwrap_or_default();
             let win_combo = GetDlgItem(hwnd, ID_WINDOW_MODE).unwrap_or_default();
             let browse_btn = GetDlgItem(hwnd, ID_BROWSE).unwrap_or_default();
-            let (mut cap_rc, mut promo_rc, mut place_rc, mut win_rc) = (
+            let (mut args_rc, mut cap_rc, mut promo_rc, mut place_rc, mut win_rc) = (
+                RECT::default(),
                 RECT::default(),
                 RECT::default(),
                 RECT::default(),
                 RECT::default(),
             );
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(args_edit, &mut args_rc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(combo, &mut cap_rc);
             let _ =
                 windows::Win32::UI::WindowsAndMessaging::GetWindowRect(promo_combo, &mut promo_rc);
@@ -6530,8 +6580,12 @@ mod tests {
                 windows::Win32::UI::WindowsAndMessaging::GetWindowRect(place_combo, &mut place_rc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(win_combo, &mut win_rc);
             assert!(
-                cap_rc.top < promo_rc.top && promo_rc.top < place_rc.top && place_rc.top < win_rc.top,
-                "Row order must be Capture Method ({}) < Promotion ({}) < Placement ({}) < Window ({})",
+                args_rc.top < cap_rc.top
+                    && cap_rc.top < promo_rc.top
+                    && promo_rc.top < place_rc.top
+                    && place_rc.top < win_rc.top,
+                "Row order must be Arguments ({}) < Capture Method ({}) < Promotion ({}) < Placement ({}) < Window ({})",
+                args_rc.top,
                 cap_rc.top,
                 promo_rc.top,
                 place_rc.top,
@@ -6539,8 +6593,13 @@ mod tests {
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, browse_btn, false).ok(),
+                Some(args_edit),
+                "Tab from Browse must move to Arguments"
+            );
+            assert_eq!(
+                GetNextDlgTabItem(hwnd, args_edit, false).ok(),
                 Some(combo),
-                "Tab from Browse must move to Capture Method"
+                "Tab from Arguments must move to Capture Method"
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, combo, false).ok(),
@@ -6558,23 +6617,29 @@ mod tests {
                 "Tab from Placement must move to Window"
             );
 
-            // Labels 4..=7: Capture Method < Promotion < Placement < Window.
-            let cap_label = GetDlgItem(hwnd, ID_LABEL_BASE + 4).unwrap_or_default();
-            let promo_label = GetDlgItem(hwnd, ID_LABEL_BASE + 5).unwrap_or_default();
-            let place_label = GetDlgItem(hwnd, ID_LABEL_BASE + 6).unwrap_or_default();
-            let win_label = GetDlgItem(hwnd, ID_LABEL_BASE + 7).unwrap_or_default();
-            let (mut lrc, mut plrc, mut plcrc, mut wlrc) = (
+            // Labels 4..=8: Arguments < Capture Method < Promotion < Placement < Window.
+            let args_label = GetDlgItem(hwnd, ID_LABEL_BASE + 4).unwrap_or_default();
+            let cap_label = GetDlgItem(hwnd, ID_LABEL_BASE + 5).unwrap_or_default();
+            let promo_label = GetDlgItem(hwnd, ID_LABEL_BASE + 6).unwrap_or_default();
+            let place_label = GetDlgItem(hwnd, ID_LABEL_BASE + 7).unwrap_or_default();
+            let win_label = GetDlgItem(hwnd, ID_LABEL_BASE + 8).unwrap_or_default();
+            let (mut alrc, mut lrc, mut plrc, mut plcrc, mut wlrc) = (
+                RECT::default(),
                 RECT::default(),
                 RECT::default(),
                 RECT::default(),
                 RECT::default(),
             );
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(args_label, &mut alrc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(cap_label, &mut lrc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(promo_label, &mut plrc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(place_label, &mut plcrc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(win_label, &mut wlrc);
             assert!(
-                lrc.top < plrc.top && plrc.top < plcrc.top && plcrc.top < wlrc.top,
+                alrc.top < lrc.top
+                    && lrc.top < plrc.top
+                    && plrc.top < plcrc.top
+                    && plcrc.top < wlrc.top,
                 "Label order must match row order"
             );
             assert!(
@@ -6582,6 +6647,52 @@ mod tests {
                 "Label width {}px too narrow",
                 plrc.right - plrc.left
             );
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn arguments_edit_updates_preset_and_survives_fill_fields() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.presets.clear();
+            let mut first = CustomPreset::named("Video");
+            first.exe = "mpv.exe".into();
+            first.set_extensions_text("mp4");
+            let mut second = CustomPreset::named("Image");
+            second.exe = "viewer.exe".into();
+            second.arguments = "--single".into();
+            second.set_extensions_text("png");
+            state.presets.push(first);
+            state.presets.push(second);
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
+
+            let args_edit = GetDlgItem(hwnd, ID_ARGUMENTS).unwrap_or_default();
+            assert!(IsWindowEnabled(args_edit).as_bool());
+            assert_eq!(text_of(hwnd, ID_ARGUMENTS), "");
+
+            set_text(hwnd, ID_ARGUMENTS, "--fullscreen --title=\"a b\"\r\n");
+            command(state, ID_ARGUMENTS, EN_CHANGE);
+            assert_eq!(state.presets[0].arguments, "--fullscreen --title=\"a b\"");
+            assert_eq!(text_of(hwnd, ID_ARGUMENTS), "--fullscreen --title=\"a b\"");
+            assert!(state.dirtied);
+
+            // Switching to another preset and back restores the edited Arguments in ID_ARGUMENTS.
+            state.selected = Some(1);
+            fill_fields(state);
+            assert_eq!(text_of(hwnd, ID_ARGUMENTS), "--single");
+
+            state.selected = Some(0);
+            fill_fields(state);
+            assert_eq!(text_of(hwnd, ID_ARGUMENTS), "--fullscreen --title=\"a b\"");
 
             let _ = DestroyWindow(hwnd);
         }

@@ -253,6 +253,8 @@ pub struct CustomPreset {
     /// The program, as the user typed or browsed to it. Empty is a preset with nothing to run,
     /// which is a preset that claims nothing until one is given.
     pub exe: String,
+    /// Optional command-line arguments passed before (or around `{file}` instead of trailing) the hovered file path.
+    pub arguments: String,
     /// The extensions it claims, each a bare extension without its dot, lowercased — the same
     /// shape `formats::lists` keeps its own entries in.
     pub extensions: Vec<String>,
@@ -279,6 +281,7 @@ impl Default for CustomPreset {
             name: String::new(),
             enabled: true,
             exe: String::new(),
+            arguments: String::new(),
             extensions: Vec::new(),
             window_mode: CustomWindowMode::default(),
             capture_technique: CustomCaptureTechnique::default(),
@@ -347,6 +350,7 @@ impl CustomPreset {
     pub fn sanitized(mut self) -> Option<Self> {
         self.name = sanitize_name(&self.name)?;
         self.exe = sanitize_exe(&self.exe);
+        self.arguments = sanitize_arguments(&self.arguments);
         self.extensions = sanitize_extension_list(&self.extensions.join(","));
         self.scaling = self.scaling.sanitized();
         self.volume = sanitize_volume(self.volume);
@@ -399,6 +403,147 @@ pub fn sanitize_program_input(raw: &str) -> String {
         .to_string()
 }
 
+/// Strip line breaks from the Arguments field while preserving spaces, quotes, flags, and `=`.
+pub fn sanitize_arguments(raw: &str) -> String {
+    raw.replace(['\r', '\n'], "")
+}
+
+/// Reversible INI value escaping so `configparser` 1.0 never truncates at `;`/`#` or chokes on `[`/`]`.
+pub(crate) fn encode_ini_arguments(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            '#' => out.push_str("%23"),
+            ';' => out.push_str("%3B"),
+            '[' => out.push_str("%5B"),
+            ']' => out.push_str("%5D"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Inverse of [`encode_ini_arguments`], leaving unencoded literal `%` (such as hand-edited `100%`) untouched.
+pub(crate) fn decode_ini_arguments(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(ch) = rest.chars().next() {
+        if let Some((decoded, tail)) = rest
+            .strip_prefix("%25")
+            .map(|t| ('%', t))
+            .or_else(|| rest.strip_prefix("%23").map(|t| ('#', t)))
+            .or_else(|| rest.strip_prefix("%3B").map(|t| (';', t)))
+            .or_else(|| rest.strip_prefix("%5B").map(|t| ('[', t)))
+            .or_else(|| rest.strip_prefix("%5D").map(|t| (']', t)))
+        {
+            out.push(decoded);
+            rest = tail;
+        } else {
+            out.push(ch);
+            rest = &rest[ch.len_utf8()..];
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArgQuote {
+    None,
+    Double,
+    Single,
+}
+
+/// Parse an Arguments string into individual argv tokens following Windows `CommandLineToArgvW`
+/// backslash-before-quote rules plus single-quote grouping outside double quotes.
+pub fn parse_arguments(raw: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut quote = ArgQuote::None;
+    let mut chars = raw.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if quote == ArgQuote::Single {
+            if ch == '\'' {
+                quote = ArgQuote::None;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        if ch == '\\' {
+            in_token = true;
+            let mut slashes = 1usize;
+            while chars.peek() == Some(&'\\') {
+                chars.next();
+                slashes += 1;
+            }
+            if chars.peek() == Some(&'"') {
+                chars.next();
+                for _ in 0..(slashes / 2) {
+                    current.push('\\');
+                }
+                if slashes % 2 == 1 {
+                    current.push('"');
+                } else {
+                    quote = match quote {
+                        ArgQuote::None => ArgQuote::Double,
+                        ArgQuote::Double => ArgQuote::None,
+                        ArgQuote::Single => ArgQuote::Single,
+                    };
+                }
+            } else {
+                for _ in 0..slashes {
+                    current.push('\\');
+                }
+            }
+        } else if ch == '"' {
+            in_token = true;
+            quote = match quote {
+                ArgQuote::None => ArgQuote::Double,
+                ArgQuote::Double => ArgQuote::None,
+                ArgQuote::Single => ArgQuote::Single,
+            };
+        } else if ch == '\'' && quote == ArgQuote::None {
+            in_token = true;
+            quote = ArgQuote::Single;
+        } else if quote == ArgQuote::None && matches!(ch, ' ' | '\t' | '\r' | '\n') {
+            if in_token {
+                args.push(std::mem::take(&mut current));
+                in_token = false;
+            }
+        } else {
+            in_token = true;
+            current.push(ch);
+        }
+    }
+
+    if in_token {
+        args.push(current);
+    }
+    args
+}
+
+/// Build the argv list (excluding argv[0]) for launching a custom preview with `arguments` and
+/// `file_path`, expanding `{file}` placeholders or appending `file_path` at the end when omitted.
+pub fn build_launch_args(arguments: &str, file_path: &Path) -> Vec<String> {
+    let file_str = file_path.to_string_lossy();
+    let mut args = parse_arguments(arguments);
+    let mut substituted = false;
+    for arg in &mut args {
+        if arg.contains("{file}") {
+            *arg = arg.replace("{file}", &file_str);
+            substituted = true;
+        }
+    }
+    if !substituted {
+        args.push(file_str.into_owned());
+    }
+    args
+}
+
 fn parse_enabled(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" | "on" => Some(true),
@@ -424,6 +569,11 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
             Some(if preset.enabled { "true" } else { "false" }.to_string()),
         );
         ini.set(&section, "exe", Some(preset.exe.clone()));
+        ini.set(
+            &section,
+            "arguments",
+            Some(encode_ini_arguments(&preset.arguments)),
+        );
         ini.set(&section, "extensions", Some(preset.extensions_text()));
         ini.set(
             &section,
@@ -517,6 +667,9 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         }
         if let Some(exe) = ini.get(section, "exe") {
             preset.exe = sanitize_exe(&exe);
+        }
+        if let Some(arguments) = ini.get(section, "arguments") {
+            preset.arguments = sanitize_arguments(&decode_ini_arguments(&arguments));
         }
         if let Some(extensions) = ini.get(section, "extensions") {
             preset.set_extensions_text(&extensions);
@@ -1102,5 +1255,152 @@ mod tests {
         assert!(preset_for(&cfg, path).is_none());
         assert!(!crate::formats::routing::is_custom_preview(path, &cfg));
         assert!(crate::formats::routing::custom_preset_for(path, &cfg).is_none());
+    }
+
+    #[test]
+    fn parse_arguments_handles_quotes_escapes_backslashes_and_edge_cases() {
+        assert_eq!(parse_arguments(""), Vec::<String>::new());
+        assert_eq!(parse_arguments("   \t \r\n "), Vec::<String>::new());
+        assert_eq!(
+            parse_arguments("--fullscreen --silent"),
+            vec!["--fullscreen", "--silent"]
+        );
+        assert_eq!(parse_arguments("--key=value"), vec!["--key=value"]);
+        assert_eq!(
+            parse_arguments(r#"--title="hello world""#),
+            vec!["--title=hello world"]
+        );
+        assert_eq!(
+            parse_arguments("--title='single quoted' 'has \"double\" inside'"),
+            vec!["--title=single quoted", "has \"double\" inside"]
+        );
+        assert_eq!(
+            parse_arguments(r#""it's fine" "\"escaped\"""#),
+            vec!["it's fine", "\"escaped\""]
+        );
+        assert_eq!(
+            parse_arguments(r#"--dir=sub\dir\file "trailing\dir\\""#),
+            vec![r"--dir=sub\dir\file", r"trailing\dir\"]
+        );
+        assert_eq!(parse_arguments(r#"a"b c"d"#), vec!["ab cd"]);
+        assert_eq!(parse_arguments(r#""""#), vec![""]);
+        assert_eq!(
+            parse_arguments(r#"--title="unterminated quote"#),
+            vec!["--title=unterminated quote"]
+        );
+        assert_eq!(
+            parse_arguments("--title='unterminated single"),
+            vec!["--title=unterminated single"]
+        );
+        assert_eq!(
+            sanitize_arguments("  --flag=1 \r\n --second=\"a b\" "),
+            "  --flag=1  --second=\"a b\" "
+        );
+    }
+
+    #[test]
+    fn build_launch_args_handles_file_placeholder_and_default_trailing_path() {
+        let sample = Path::new(r"samples\my video.mp4");
+        assert_eq!(build_launch_args("", sample), vec![r"samples\my video.mp4"]);
+        assert_eq!(
+            build_launch_args("--fullscreen --silent", sample),
+            vec!["--fullscreen", "--silent", r"samples\my video.mp4"]
+        );
+        assert_eq!(
+            build_launch_args("{file} --loop", sample),
+            vec![r"samples\my video.mp4", "--loop"]
+        );
+        assert_eq!(
+            build_launch_args("--input={file} --silent", sample),
+            vec![r"--input=samples\my video.mp4", "--silent"]
+        );
+        assert_eq!(
+            build_launch_args("--first={file} --second={file}", sample),
+            vec![
+                r"--first=samples\my video.mp4",
+                r"--second=samples\my video.mp4"
+            ]
+        );
+    }
+
+    #[test]
+    fn arguments_ini_write_serialize_load_round_trips_special_chars_and_defaults_empty() {
+        assert_eq!(CustomPreset::default().arguments, "");
+
+        let tricky = [
+            "--fullscreen --silent",
+            r#"--title="a=b c""#,
+            "--background-color=#111111",
+            "--vf=lavfi=[scale=1280:-1]",
+            "--opts=a=1;b=2",
+            "100%",
+            "--literal=%23 --combo=%25#;[ ]",
+        ];
+
+        for &args in &tricky {
+            let mut preset = CustomPreset::named("ArgsTest");
+            preset.exe = "viewer.exe".into();
+            preset.arguments = args.into();
+            preset.set_extensions_text("mp4");
+
+            let cfg = config_with(vec![preset]);
+            let mut written = Ini::new();
+            write_all(&cfg, &mut written);
+
+            let serialized = written.writes();
+            if args == "--fullscreen --silent" {
+                assert!(
+                    serialized.contains("arguments=--fullscreen --silent"),
+                    "normal args must remain human-readable in INI:\n{serialized}"
+                );
+            }
+
+            let mut loaded = Ini::new();
+            loaded
+                .read(serialized)
+                .expect("serialized INI with escaped arguments must parse cleanly");
+
+            let mut read = AppConfig::default();
+            read_all(&loaded, &mut read);
+            assert_eq!(read.custom_presets.len(), 1);
+            assert_eq!(
+                read.custom_presets[0].arguments, args,
+                "failed round-trip for `{args}`"
+            );
+        }
+
+        // Hand-edited literal `%` (e.g. `100%`) without `%25` encoding still reads cleanly,
+        // and missing `arguments` key defaults to empty string `""`.
+        let raw_ini = "\
+[custom:hand]
+name=Hand
+exe=viewer.exe
+extensions=png
+arguments=--zoom=100% --silent
+
+[custom:legacy]
+name=Legacy
+exe=old.exe
+extensions=bmp
+";
+        let mut parsed = Ini::new();
+        parsed
+            .read(raw_ini.to_string())
+            .expect("hand INI must parse");
+        let mut read = AppConfig::default();
+        read_all(&parsed, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        let hand = read
+            .custom_presets
+            .iter()
+            .find(|p| p.name == "Hand")
+            .expect("Hand preset");
+        let legacy = read
+            .custom_presets
+            .iter()
+            .find(|p| p.name == "Legacy")
+            .expect("Legacy preset");
+        assert_eq!(hand.arguments, "--zoom=100% --silent");
+        assert_eq!(legacy.arguments, "");
     }
 }
