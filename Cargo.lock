@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "rust-hover-preview"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "brotli",
  "brotli-decompressor",

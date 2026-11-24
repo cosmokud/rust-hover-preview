@@ -9,6 +9,8 @@ Settings are stored at:
 
 A portable copy — the release's zip, unzipped with its `.portable` marker beside the executable — keeps every folder of its own in that same place instead, under `rust-hover-preview\` beside the executable: `config.ini`, `theme`, `engines`, `webview`, `libreoffice` and `.env.local`. Nothing but `%TEMP%` is written on the machine it runs from, and `Start with Windows` still writes its one entry in the registry.
 
+A `.env.local` beside the executable is read as well — before the one in the folder above — so a diagnostic flag can be set for one copy of the app without touching the machine. Neither file overrides a variable the process was started with.
+
 The file is watched, and changes apply without a restart. A read takes what the file says and puts right in the app what it cannot read — the file itself is left alone until the next start, so a hand edit is never written over while it is being made. A save writes the whole file beside it, flushed to the disk, and moves it into place, so a save cut short leaves the file that was there; a file holding no setting of its own is not read as a configuration, and is left exactly where it is.
 
 Example, trimmed:
@@ -181,20 +183,24 @@ spinner_delay_ms=250
 name=Paint
 enabled=true
 exe=C:\Windows\System32\mspaint.exe
+arguments=
 extensions=jpg, png
 window_mode=normal
 capture_technique=in_process_hook
 promotion_technique=direct_promotion
+placement=tray
 scaling=tray
 volume_enabled=false
 volume=100
 ```
 
   - `exe` — the program. A quoted path is accepted, as is the one a **Copy as path** puts on the clipboard.
+  - `arguments` — the command line the program is started with, before the file, on a hover and on a promotion. Spaces split it, double quotes group (and `\\` before a quote is an escape, as `CommandLineToArgvW` reads it), a single-quoted run groups without escapes, and `{file}` stands where the file path goes — written once, twice, or inside a value such as `--input={file}`; where no `{file}` appears the path is appended at the end. `;`, `#`, `[` and `]` are stored escaped, so they survive the file, and a field pasted as one wrapped run of flags (`"--fullscreen --silent"`) is unwrapped rather than handed over as a single argument.
   - `extensions` — the names it claims, without dots.
   - `window_mode` — `normal` (the program's own frame) or `borderless`.
   - `capture_technique` — how the program's window is kept out of sight while it is previewed: `in_process_hook` (default; needs `custom_preview_hook.dll` beside the executable — or, for a lone executable, in `%LOCALAPPDATA%\rust-hover-preview` — and falls back to `invisible_layered` without it), `invisible_layered`, `behind_host`, `off_screen`, `direct_window`, `offscreen_staged`.
   - `promotion_technique` — what the pin key does: `direct_promotion` (default; the live preview window is let go and raised) or `open_as_new_process`.
+  - `placement` — how the program's window is held at the hover's box, where the program has an opinion of its own: `tray` (default; the window is placed once and trusted), `tray_forced` (it is moved back when it drifts, with the box shifted clear of the pointer where the two would overlap), or `tray_hook` (the hook refuses a size, a move, a maximize or a minimize from inside the program, and re-snaps it; needs the DLL, and reads as `tray_forced` without one).
   - `scaling` — `tray` (default; follow the file's own kind's scaling row) or any share the tray offers: `fit`, `screen 100`, `screen 75`, `screen 50`, or a percentage such as `200`.
   - `volume_enabled` / `volume` — whether this app sets the program's Windows mixer level, and the level itself. Off by default, so the mixer keeps the program.
 

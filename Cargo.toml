@@ -4,7 +4,7 @@ default-members = [".", "crates/custom-preview-hook"]
 
 [package]
 name = "rust-hover-preview"
-version = "0.6.1"
+version = "0.6.2"
 edition = "2021"
 description = "Windows 11 system tray app that shows image, video, PDF, text, and archive previews on hover in Explorer"
 authors = ["Rust Hover Preview Contributors"]
