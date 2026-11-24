@@ -126,9 +126,9 @@ use std::time::{Duration, Instant};
 
 use windows::core::{w, PCSTR, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, FreeLibrary, GetLastError, BOOL, COLORREF, ERROR_ALREADY_EXISTS, FILETIME, HANDLE,
-    HINSTANCE, HMODULE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0,
-    WAIT_TIMEOUT, WPARAM,
+    CloseHandle, FreeLibrary, GetLastError, BOOL, COLORREF, ERROR_ALREADY_EXISTS, ERROR_MORE_DATA,
+    FILETIME, HANDLE, HINSTANCE, HMODULE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT,
+    WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmFlush, DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
@@ -142,8 +142,9 @@ use windows::Win32::Graphics::Gdi::{
     NULL_BRUSH,
 };
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
@@ -339,6 +340,48 @@ impl PreviewJob {
         }
     }
 
+    /// Query live process IDs assigned to this Job Object, retrying once on `ERROR_MORE_DATA`.
+    fn process_ids(&self) -> Vec<u32> {
+        if self.handle.is_invalid() || self.handle.0.is_null() {
+            return Vec::new();
+        }
+        let my_pid = std::process::id();
+        let header_size = std::mem::size_of::<JOBOBJECT_BASIC_PROCESS_ID_LIST>();
+        let ptr_size = std::mem::size_of::<usize>();
+        let header_usizes = header_size.div_ceil(ptr_size);
+        let mut cap: usize = 64;
+
+        for attempt in 0..2 {
+            let total_usizes = header_usizes + cap;
+            let total_bytes = (total_usizes * ptr_size) as u32;
+            let mut buf = vec![0usize; total_usizes];
+            let res = unsafe {
+                QueryInformationJobObject(
+                    self.handle,
+                    JobObjectBasicProcessIdList,
+                    buf.as_mut_ptr().cast(),
+                    total_bytes,
+                    None,
+                )
+            };
+            if let Err(err) = res {
+                let is_more_data = err.code() == ERROR_MORE_DATA.to_hresult()
+                    || unsafe { GetLastError() } == ERROR_MORE_DATA;
+                if attempt == 0 && is_more_data {
+                    let list =
+                        unsafe { &*(buf.as_ptr() as *const JOBOBJECT_BASIC_PROCESS_ID_LIST) };
+                    let needed = list.NumberOfAssignedProcesses as usize;
+                    cap = needed.max(cap * 2).min(4096);
+                    continue;
+                }
+                return Vec::new();
+            }
+
+            return parse_job_process_id_list(&buf, my_pid);
+        }
+        Vec::new()
+    }
+
     /// Clear `KILL_ON_JOB_CLOSE` before closing so the process survives independently on promote.
     fn detach(mut self) -> bool {
         if self.handle.is_invalid() || self.handle.0.is_null() {
@@ -423,8 +466,140 @@ struct Launch {
     launched_at: Instant,
     /// Preset placement mode (`FollowTray`, `Forced`, or `Hook`).
     placement: CustomPlacement,
+    /// Capture technique originally requested by the preset (before 32-bit hook fallback).
+    requested_capture: CustomCaptureTechnique,
+    /// Dedicated install directory of the launched executable when safe for stub fallback matching.
+    install_dir: Option<PathBuf>,
     /// Which launch this is, so that a worker begun for an earlier one stands down.
     id: u64,
+}
+
+fn parse_job_process_id_list(buf: &[usize], my_pid: u32) -> Vec<u32> {
+    let ptr_size = std::mem::size_of::<usize>();
+    let total_bytes = std::mem::size_of_val(buf);
+    if total_bytes < std::mem::size_of::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() {
+        return Vec::new();
+    }
+    let list = unsafe { &*(buf.as_ptr() as *const JOBOBJECT_BASIC_PROCESS_ID_LIST) };
+    let list_ptr = std::ptr::addr_of!(list.ProcessIdList).cast::<usize>();
+    let offset_bytes = (list_ptr as usize).saturating_sub(buf.as_ptr() as usize);
+    let max_slots = total_bytes.saturating_sub(offset_bytes) / ptr_size;
+    let count = (list.NumberOfProcessIdsInList as usize).min(max_slots);
+    let raw_pids = unsafe { std::slice::from_raw_parts(list_ptr, count) };
+    let mut out = Vec::with_capacity(count);
+    for &raw in raw_pids {
+        if let Ok(pid) = u32::try_from(raw) {
+            if pid != 0 && pid != my_pid && !out.contains(&pid) {
+                out.push(pid);
+            }
+        }
+    }
+    out
+}
+
+fn active_job_pids(launch_id: u64) -> Vec<u32> {
+    if !is_current(launch_id) {
+        return Vec::new();
+    }
+    let Ok(held) = PROGRAM.lock() else {
+        return Vec::new();
+    };
+    if !is_current(launch_id) {
+        return Vec::new();
+    }
+    held.as_ref()
+        .and_then(|program| program.job.as_ref())
+        .map(PreviewJob::process_ids)
+        .unwrap_or_default()
+}
+
+/// True only when `dir` is a dedicated application folder rather than a shallow or shared system/user container.
+fn is_safe_app_install_dir(dir: &Path) -> bool {
+    let mut count = 0usize;
+    let mut last = None;
+    for comp in dir.components() {
+        match comp {
+            std::path::Component::Normal(s) => {
+                count += 1;
+                last = Some(s);
+            }
+            std::path::Component::ParentDir | std::path::Component::CurDir => return false,
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {}
+        }
+    }
+    if count < 3 {
+        return false;
+    }
+    let Some(last) = last else {
+        return false;
+    };
+    let last_lower = last.to_string_lossy().to_lowercase();
+    !matches!(
+        last_lower.as_str(),
+        "windows"
+            | "system32"
+            | "syswow64"
+            | "program files"
+            | "program files (x86)"
+            | "programdata"
+            | "local"
+            | "locallow"
+            | "roaming"
+            | "programs"
+            | "desktop"
+            | "downloads"
+            | "documents"
+            | "temp"
+            | "tmp"
+            | "users"
+            | "bin"
+            | "winapps"
+            | "windowsapps"
+    )
+}
+
+fn normalized_path_components(path: &Path) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::Prefix(prefix) => match prefix.kind() {
+                std::path::Prefix::Disk(d) | std::path::Prefix::VerbatimDisk(d) => {
+                    out.push(format!("disk:{}", d.to_ascii_lowercase() as char));
+                }
+                std::path::Prefix::UNC(server, share)
+                | std::path::Prefix::VerbatimUNC(server, share) => {
+                    out.push(format!(
+                        "unc:{}:{}",
+                        server.to_string_lossy().to_lowercase(),
+                        share.to_string_lossy().to_lowercase()
+                    ));
+                }
+                _ => {
+                    out.push(prefix.as_os_str().to_string_lossy().to_lowercase());
+                }
+            },
+            std::path::Component::RootDir => {
+                out.push("/".to_owned());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => return None,
+            std::path::Component::Normal(seg) => {
+                out.push(seg.to_string_lossy().to_lowercase());
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Case-insensitive path-component prefix check (`exe_path` strictly inside `install_dir`).
+fn exe_is_inside_install_dir(exe_path: &Path, install_dir: &Path) -> bool {
+    let (Some(exe_comps), Some(dir_comps)) = (
+        normalized_path_components(exe_path),
+        normalized_path_components(install_dir),
+    ) else {
+        return false;
+    };
+    exe_comps.len() > dir_comps.len() && exe_comps.starts_with(&dir_comps)
 }
 
 #[inline]
@@ -993,13 +1168,15 @@ fn select_best_candidate<T: Copy>(candidates: &[(CandidateRank, T)]) -> Option<(
 
 static LAST_DUMPED_300MS_ID: AtomicU64 = AtomicU64::new(0);
 
+type ProcessImages = HashMap<u32, Option<PathBuf>>;
+
 fn maybe_trace_300ms_no_match(
     tag: &str,
     launch: &Launch,
     started: Instant,
     dumped: &mut bool,
     processes: &[u32],
-    images: &mut HashMap<u32, Option<String>>,
+    images: &mut ProcessImages,
 ) {
     if !trace::enabled() || *dumped || started.elapsed() < Duration::from_millis(300) {
         return;
@@ -1012,8 +1189,11 @@ fn maybe_trace_300ms_no_match(
     struct DumpState<'a> {
         launch: &'a Launch,
         tree: &'a [u32],
-        images: &'a mut HashMap<u32, Option<String>>,
-        rows: Vec<(HWND, u32, u32, bool)>,
+        job_pids: &'a [u32],
+        images: &'a mut ProcessImages,
+        my_pid: u32,
+        rows: Vec<(HWND, u32, u32, bool, bool)>,
+        extra_visible: Vec<(HWND, u32)>,
     }
 
     unsafe extern "system" fn visit_dump(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -1027,25 +1207,45 @@ fn maybe_trace_300ms_no_match(
             return BOOL(1);
         }
         let in_tree = state.tree.contains(&pid);
+        let in_job = state.job_pids.contains(&pid);
+        let full_path = image_path_of(pid, state.images);
         let matches_exe = !state.launch.exe.is_empty()
-            && image_name_of(pid, state.images).as_deref() == Some(state.launch.exe.as_str());
-        if in_tree || matches_exe {
-            state.rows.push((hwnd, pid, tid, in_tree));
+            && full_path
+                .as_deref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .as_deref()
+                == Some(state.launch.exe.as_str());
+        let in_install_dir = !state.launch.processes_before.contains(&pid)
+            && state
+                .launch
+                .install_dir
+                .as_deref()
+                .zip(full_path.as_deref())
+                .is_some_and(|(dir, exe)| exe_is_inside_install_dir(exe, dir));
+        if in_tree || in_job || matches_exe || in_install_dir {
+            state.rows.push((hwnd, pid, tid, in_tree, in_job));
+        } else if state.extra_visible.len() < 10
+            && pid != state.my_pid
+            && !state.launch.windows_before.contains(&(hwnd.0 as isize))
+            && unsafe { IsWindowVisible(hwnd) }.as_bool()
+        {
+            state.extra_visible.push((hwnd, pid));
         }
         BOOL(1)
     }
 
-    let mut tree = process_tree(launch.pid);
-    for &pid in processes {
-        if !tree.contains(&pid) {
-            tree.push(pid);
-        }
-    }
+    let tree = process_tree(launch.pid);
+    let _ = processes;
+    let job_pids = active_job_pids(launch.id);
     let mut state = DumpState {
         launch,
         tree: &tree,
+        job_pids: &job_pids,
         images,
+        my_pid: std::process::id(),
         rows: Vec::new(),
+        extra_visible: Vec::new(),
     };
     let _ = unsafe {
         EnumWindows(
@@ -1053,15 +1253,17 @@ fn maybe_trace_300ms_no_match(
             LPARAM(&mut state as *mut DumpState<'_> as isize),
         )
     };
+    let row_count = state.rows.len();
     cp_trace!(
-        "{tag}: 300ms_no_match_dump id={} exe={} launch_pid={} tree={:?} count={}",
+        "{tag}: 300ms_no_match_dump id={} exe={} launch_pid={} tree={:?} job_pids={:?} count={}",
         launch.id,
         launch.exe,
         launch.pid,
         tree,
-        state.rows.len()
+        job_pids,
+        row_count
     );
-    for (hwnd, pid, tid, in_tree) in state.rows {
+    for (hwnd, pid, tid, in_tree, in_job) in state.rows {
         let class = hwnd_class_name(hwnd);
         let title_len = unsafe { GetWindowTextLengthW(hwnd) };
         let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
@@ -1075,12 +1277,13 @@ fn maybe_trace_300ms_no_match(
         let rect = window_rect(hwnd);
         let in_before = launch.windows_before.contains(&(hwnd.0 as isize));
         cp_trace!(
-            "{tag}_win: id={} hwnd=0x{:x} pid={} tid={} in_tree={} class={:?} title_len={} style=0x{:x} ex=0x{:x} owner=0x{:x} owner_vis={} vis={} rect={:?} in_before={}",
+            "{tag}_win: id={} hwnd=0x{:x} pid={} tid={} in_tree={} in_job={} class={:?} title_len={} style=0x{:x} ex=0x{:x} owner=0x{:x} owner_vis={} vis={} rect={:?} in_before={}",
             launch.id,
             hwnd.0 as usize,
             pid,
             tid,
             in_tree,
+            in_job,
             class,
             title_len,
             style,
@@ -1091,6 +1294,22 @@ fn maybe_trace_300ms_no_match(
             rect,
             in_before
         );
+    }
+    if row_count == 0 {
+        for (hwnd, pid) in state.extra_visible {
+            let exe = image_name_of(pid, state.images).unwrap_or_else(|| "<unknown>".to_owned());
+            let class = hwnd_class_name(hwnd);
+            let rect = window_rect(hwnd);
+            cp_trace!(
+                "{tag}_desktop_new: id={} hwnd=0x{:x} pid={} exe={:?} class={:?} rect={:?}",
+                launch.id,
+                hwnd.0 as usize,
+                pid,
+                exe,
+                class,
+                rect
+            );
+        }
     }
 }
 
@@ -1224,11 +1443,16 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         return false;
     };
 
-    let exe_file = Path::new(&exe)
+    let exe_path = Path::new(&exe);
+    let exe_file = exe_path
         .file_name()
         .map(|name| name.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    let packaged_broker = is_packaged_broker_path(Path::new(&exe));
+    let packaged_broker = is_packaged_broker_path(exe_path);
+    let install_dir = exe_path
+        .parent()
+        .filter(|dir| is_safe_app_install_dir(dir))
+        .map(Path::to_path_buf);
     // Per-preview detachable Job Object: crash-reaps while previewing, detaches cleanly on promote.
     let job = PreviewJob::create_and_assign(pid);
     engine_processes::record_player(&exe, pid);
@@ -1265,7 +1489,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     // is the program on screen.
     let id = LAUNCH.fetch_add(1, Ordering::SeqCst) + 1;
     cp_trace!(
-        "show: launch id={} path={} exe={} req_cap={:?} cap={:?} placement={:?} win_mode={:?} scaling={:?} own={:?} prov={:?} hook_prov={:?} pid={} tid={} hook_session={} packaged={} cursor={:?}",
+        "show: launch id={} path={} exe={} req_cap={:?} cap={:?} placement={:?} win_mode={:?} scaling={:?} own={:?} prov={:?} hook_prov={:?} pid={} tid={} hook_session={} packaged={} has_install_dir={} cursor={:?}",
         id,
         path_basename(path),
         exe_file,
@@ -1281,6 +1505,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         tid,
         hook_session.is_some(),
         packaged_broker,
+        install_dir.is_some(),
         where_cursor(at)
     );
     let launch = Launch {
@@ -1298,6 +1523,8 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         launch_filetime,
         launched_at,
         placement,
+        requested_capture,
+        install_dir,
         id,
     };
     // The window is carried as a number: `HWND` is a pointer and a pointer is not `Send`, and
@@ -1698,6 +1925,7 @@ fn try_detach_active_preview(path: &Path) -> bool {
     }
 
     if source_pid != 0 {
+        engine_processes::forget(source_pid);
         let _ = unsafe { AllowSetForegroundWindow(source_pid) };
     }
     let _ = unsafe { BringWindowToTop(source_hwnd) };
@@ -1774,6 +2002,7 @@ pub(super) fn open_fully(path: &Path) -> bool {
 struct OwnedPidInputs<'a> {
     launched_pid: u32,
     launched_tree: &'a [u32],
+    job_pids: &'a [u32],
     source_pid: u32,
     source_is_new: bool,
     source_tree: &'a [u32],
@@ -1786,6 +2015,7 @@ fn merge_owned_pids_to_end(inputs: OwnedPidInputs<'_>) -> Vec<u32> {
     let OwnedPidInputs {
         launched_pid,
         launched_tree,
+        job_pids,
         source_pid,
         source_is_new,
         source_tree,
@@ -1811,6 +2041,9 @@ fn merge_owned_pids_to_end(inputs: OwnedPidInputs<'_>) -> Vec<u32> {
         for &pid in launched_tree {
             push_if_owned(pid, pid == launched_pid);
         }
+    }
+    for &pid in job_pids {
+        push_if_owned(pid, pid == launched_pid && launched_pid != 0);
     }
     if source_is_new && source_pid != 0 {
         push_if_owned(source_pid, false);
@@ -1920,6 +2153,11 @@ fn end_the_program() {
     } else {
         Vec::new()
     };
+    let job_pids = program
+        .as_ref()
+        .and_then(|program| program.job.as_ref())
+        .map(PreviewJob::process_ids)
+        .unwrap_or_default();
     let source_tree = if source_is_new && source_pid != 0 && source_pid != my_pid {
         process_tree(source_pid)
     } else {
@@ -1928,6 +2166,7 @@ fn end_the_program() {
     let pids_to_end = merge_owned_pids_to_end(OwnedPidInputs {
         launched_pid,
         launched_tree: &launched_tree,
+        job_pids: &job_pids,
         source_pid,
         source_is_new,
         source_tree: &source_tree,
@@ -2324,17 +2563,24 @@ fn update_owned_pids_if_current(launch: &Launch, pids: &[u32]) {
     }
 }
 
-/// End `launch.pid` and any newly spawned descendants, excluding pre-launch and self PIDs.
+/// End `launch.pid` and any newly spawned descendants or active job processes, excluding pre-launch and self PIDs.
 fn sweep_launch_tree(launch: &Launch) {
     let my_pid = std::process::id();
+    let mut to_end = Vec::new();
     if launch.pid != 0 && launch.pid != my_pid {
-        for pid in process_tree(launch.pid) {
-            if pid != 0
-                && pid != my_pid
-                && (pid == launch.pid || !launch.processes_before.contains(&pid))
-            {
-                end_process(pid);
-            }
+        to_end.extend(process_tree(launch.pid));
+    }
+    for pid in active_job_pids(launch.id) {
+        if !to_end.contains(&pid) {
+            to_end.push(pid);
+        }
+    }
+    for pid in to_end {
+        if pid != 0
+            && pid != my_pid
+            && (pid == launch.pid || !launch.processes_before.contains(&pid))
+        {
+            end_process(pid);
         }
     }
 }
@@ -2427,8 +2673,8 @@ fn run_it(
         *ex = Some(unsafe { GetWindowLongPtrW(source, GWL_EXSTYLE) });
     }
 
-    // Lock ownership strictly to our launched tree (+ adopted brokered tree if newly spawned).
-    let mut processes = owned_pids_for(launch.pid, source_pid, source_is_new);
+    // Lock ownership strictly to our launched tree (+ active job PIDs + adopted brokered tree if newly spawned).
+    let mut processes = owned_pids_for(launch.id, launch.pid, source_pid, source_is_new);
     update_owned_pids_if_current(&launch, &processes);
     if let Some(vol) = volume {
         audio_session::apply_custom_preview_volume(processes.clone(), vol);
@@ -2452,9 +2698,42 @@ fn run_it(
     let scale = resolve_scale(&launch.path, scaling);
 
     if trace::enabled() {
+        let tree_pids = process_tree(launch.pid);
+        let job_pids = active_job_pids(launch.id);
+        let discover_via = if source_pid == launch.pid {
+            "launch_pid"
+        } else if tree_pids.contains(&source_pid) {
+            "process_tree"
+        } else if job_pids.contains(&source_pid) {
+            "job_pid"
+        } else if source_is_new
+            && launch.install_dir.as_deref().is_some_and(|dir| {
+                unsafe { process_image_path(source_pid) }
+                    .is_some_and(|p| exe_is_inside_install_dir(&p, dir))
+            })
+        {
+            "install_dir"
+        } else {
+            "image_name"
+        };
+        if matches!(discover_via, "job_pid" | "install_dir") {
+            let exe_name = unsafe { process_image_path(source_pid) }
+                .as_deref()
+                .and_then(image_name_from_path)
+                .unwrap_or_else(|| "<unknown>".to_owned());
+            cp_trace!(
+                "discover_fallback: id={} via={} hwnd=0x{:x} pid={} launch_pid={} exe={:?}",
+                launch.id,
+                discover_via,
+                source.0 as usize,
+                source_pid,
+                launch.pid,
+                exe_name
+            );
+        }
         let extra = format!(
-            " id={} launch_pid={} launch_tid={} was_hidden={} inv_layered={} own={:?} scale={:?}",
-            launch.id, launch.pid, launch.tid, was_hidden, invisible_layered, own, scale
+            " id={} via={} launch_pid={} launch_tid={} was_hidden={} inv_layered={} own={:?} scale={:?}",
+            launch.id, discover_via, launch.pid, launch.tid, was_hidden, invisible_layered, own, scale
         );
         trace_window_diag(
             "discovered",
@@ -2478,11 +2757,23 @@ fn run_it(
         provisional_rect_for(at, own, scale, follow_cursor(), bypass_placement())
     };
 
-    // Ensure hook covers secondary UI threads and child/brokered PIDs BEFORE modifying window styles
-    // (such as DirectWindow's WS_EX_TOOLWINDOW), and register the active SHM handle for detach/hide.
-    if uses_hook_enforcement(launch.placement) {
+    // Ensure hook covers secondary UI threads and child/brokered PIDs (including 64-bit
+    // grandchildren spawned by 32-bit stubs) BEFORE modifying window styles, and register the
+    // active SHM handle for detach/hide.
+    let mut capture_technique = capture_technique;
+    let wants_hook_session = uses_hook_enforcement(launch.placement)
+        || launch.requested_capture == CustomCaptureTechnique::InProcessHook;
+    if wants_hook_session {
         let target_hint = current_target_rect().or(launch.provisional);
-        let mut init = hook_init_for(capture_technique, launch.placement, target_hint);
+        let desired_capture = if launch.requested_capture == CustomCaptureTechnique::InProcessHook
+            && source_pid != launch.pid
+            && pid_is_wow64(source_pid) != Some(true)
+        {
+            CustomCaptureTechnique::InProcessHook
+        } else {
+            capture_technique
+        };
+        let mut init = hook_init_for(desired_capture, launch.placement, target_hint);
         init.captured_hwnd = source.0 as isize;
         let same_pid_hooked = hook_session
             .as_ref()
@@ -2501,19 +2792,45 @@ fn run_it(
                     );
                 }
             }
-        } else if source_pid != 0 && source_tid != 0 {
-            let dynamic = attach_dynamic_hook_session(source_pid, source_tid, init);
-            cp_trace!(
-                "run_it: attach_dynamic_session id={} prev_pid={:?} src_pid={} src_tid={} ok={}",
-                launch.id,
-                hook_session.as_ref().map(|s| s.pid),
-                source_pid,
-                source_tid,
-                dynamic.is_some()
-            );
-            if let Some(dynamic) = dynamic {
-                hook_session = Some(dynamic);
+        } else {
+            let prev_pid = hook_session.as_ref().map(|s| s.pid);
+            drop(hook_session.take());
+            let should_dynamic_attach = source_pid != 0
+                && source_tid != 0
+                && (source_pid != launch.pid || uses_hook_enforcement(launch.placement))
+                && pid_is_wow64(source_pid) != Some(true);
+            if should_dynamic_attach {
+                let dynamic = attach_dynamic_hook_session(source_pid, source_tid, init);
+                cp_trace!(
+                    "run_it: attach_dynamic_session id={} prev_pid={:?} src_pid={} src_tid={} req_cap={:?} ok={}",
+                    launch.id,
+                    prev_pid,
+                    source_pid,
+                    source_tid,
+                    launch.requested_capture,
+                    dynamic.is_some()
+                );
+                if let Some(dynamic) = dynamic {
+                    hook_session = Some(dynamic);
+                    if capture_technique != desired_capture {
+                        capture_technique = desired_capture;
+                        if let Ok(mut slot) = ACTIVE_CAPTURE_TECHNIQUE.lock() {
+                            *slot = capture_technique;
+                        }
+                    }
+                }
             }
+        }
+    }
+    if hook_session.is_none() && capture_technique == CustomCaptureTechnique::InProcessHook {
+        capture_technique = CustomCaptureTechnique::InvisibleLayered;
+        if let Ok(mut slot) = ACTIVE_CAPTURE_TECHNIQUE.lock() {
+            *slot = capture_technique;
+        }
+        if !was_hidden && !invisible_layered {
+            invisible_layered = make_source_invisible(source.0 as isize);
+            SOURCE_INVISIBLE_LAYERED.store(invisible_layered, Ordering::SeqCst);
+            restore_foreground(launch.previous_foreground, &processes);
         }
     }
     if let Some(ref session) = hook_session {
@@ -2584,7 +2901,7 @@ fn run_it(
     let mut the_ask: Option<(i32, i32)> = None;
 
     let mut tree_read = Instant::now();
-    let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut images: ProcessImages = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
 
     let mut box_of_the_host: Option<(i32, i32, i32, i32)> = None;
@@ -3136,7 +3453,7 @@ fn run_it(
         )
         .take();
         if tree_read.elapsed() >= Duration::from_secs(1) {
-            processes = owned_pids_for(launch.pid, source_pid, source_is_new);
+            processes = owned_pids_for(launch.id, launch.pid, source_pid, source_is_new);
             update_owned_pids_if_current(&launch, &processes);
             tree_read = Instant::now();
         }
@@ -5356,12 +5673,122 @@ fn belongs_to_preview(
     process_creation_time.is_some_and(|ct| ct >= min_time)
 }
 
-/// Owned PID set after adoption: launched tree union adopted brokered tree (only if newly spawned).
-fn owned_pids_for(launch_pid: u32, source_pid: u32, source_is_new: bool) -> Vec<u32> {
-    let mut owned = process_tree(launch_pid);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiscoveryMatch {
+    TreeOrJob,
+    ImageName,
+    InstallDir,
+}
+
+fn full_path_matches_install_dir(
+    pid_is_new: bool,
+    install_dir: Option<&Path>,
+    full_path: Option<&Path>,
+) -> bool {
+    if !pid_is_new {
+        return false;
+    }
+    let (Some(dir), Some(exe)) = (install_dir, full_path) else {
+        return false;
+    };
+    exe_is_inside_install_dir(exe, dir)
+}
+
+fn discovery_match_for_pid(
+    pid: u32,
+    launch: &Launch,
+    processes: &[u32],
+    mode: OwnershipMode,
+    images: &mut ProcessImages,
+    creation_times: &mut HashMap<u32, Option<u64>>,
+) -> Option<DiscoveryMatch> {
+    if pid == 0 || pid == std::process::id() {
+        return None;
+    }
+    if processes.contains(&pid) {
+        return Some(DiscoveryMatch::TreeOrJob);
+    }
+    let OwnershipMode::Discover {
+        allow_image_fallback: true,
+    } = mode
+    else {
+        return None;
+    };
+    let full_path = image_path_of(pid, images);
+    let image = full_path.as_deref().and_then(image_name_from_path);
+    let is_new = !launch.processes_before.contains(&pid);
+    let creation = if image.as_deref() == Some(launch.exe.as_str()) && is_new {
+        creation_time_of(pid, creation_times)
+    } else {
+        None
+    };
+    if belongs_to_preview(
+        pid,
+        processes,
+        mode,
+        &launch.exe,
+        launch.launch_filetime,
+        &launch.processes_before,
+        image.as_deref(),
+        creation,
+    ) {
+        return Some(DiscoveryMatch::ImageName);
+    }
+    if full_path_matches_install_dir(is_new, launch.install_dir.as_deref(), full_path.as_deref()) {
+        return Some(DiscoveryMatch::InstallDir);
+    }
+    None
+}
+
+fn discovery_processes(launch: &Launch) -> Vec<u32> {
+    let my_pid = std::process::id();
+    let mut found = Vec::new();
+    for pid in process_tree(launch.pid)
+        .into_iter()
+        .chain(active_job_pids(launch.id))
+    {
+        if pid != 0 && pid != my_pid && !found.contains(&pid) {
+            found.push(pid);
+        }
+    }
+    found
+}
+
+fn merge_active_job_pids(launch: &Launch, processes: &mut Vec<u32>) -> bool {
+    let my_pid = std::process::id();
+    let mut changed = false;
+    for pid in active_job_pids(launch.id) {
+        if pid != 0 && pid != my_pid && !processes.contains(&pid) {
+            processes.push(pid);
+            changed = true;
+        }
+    }
+    if changed {
+        update_owned_pids_if_current(launch, processes);
+    }
+    changed
+}
+
+/// Owned PID set after adoption: launched tree union active job PIDs union adopted brokered tree (only if newly spawned).
+fn owned_pids_for(
+    launch_id: u64,
+    launch_pid: u32,
+    source_pid: u32,
+    source_is_new: bool,
+) -> Vec<u32> {
+    let my_pid = std::process::id();
+    let mut owned = Vec::new();
+    for pid in process_tree(launch_pid)
+        .into_iter()
+        .chain(active_job_pids(launch_id))
+    {
+        if pid != 0 && pid != my_pid && !owned.contains(&pid) {
+            owned.push(pid);
+        }
+    }
     if source_is_new && source_pid != 0 {
         for pid in process_tree(source_pid) {
-            if !owned.contains(&pid) {
+            if pid != 0 && pid != my_pid && !owned.contains(&pid) {
                 owned.push(pid);
             }
         }
@@ -5373,7 +5800,7 @@ fn owned_pids_for(launch_pid: u32, source_pid: u32, source_is_new: bool) -> Vec<
 struct Census<'a> {
     launch: &'a Launch,
     processes: &'a [u32],
-    images: &'a mut HashMap<u32, Option<String>>,
+    images: &'a mut ProcessImages,
     creation_times: &'a mut HashMap<u32, Option<u64>>,
     /// The window this app has already adopted, which is the picture and not to be hidden.
     keep: isize,
@@ -5389,7 +5816,7 @@ struct Census<'a> {
 fn census<'a>(
     launch: &'a Launch,
     processes: &'a [u32],
-    images: &'a mut HashMap<u32, Option<String>>,
+    images: &'a mut ProcessImages,
     creation_times: &'a mut HashMap<u32, Option<u64>>,
     keep: isize,
     hide_others: bool,
@@ -5473,33 +5900,15 @@ impl Census<'_> {
     }
 
     fn belongs(&mut self, pid: u32) -> bool {
-        if self.processes.contains(&pid) {
-            return true;
-        }
-        let OwnershipMode::Discover {
-            allow_image_fallback: true,
-        } = self.mode
-        else {
-            return false;
-        };
-        let image = image_name_of(pid, self.images);
-        let creation = if image.as_deref() == Some(self.launch.exe.as_str())
-            && !self.launch.processes_before.contains(&pid)
-        {
-            creation_time_of(pid, self.creation_times)
-        } else {
-            None
-        };
-        belongs_to_preview(
+        discovery_match_for_pid(
             pid,
+            self.launch,
             self.processes,
             self.mode,
-            &self.launch.exe,
-            self.launch.launch_filetime,
-            &self.launch.processes_before,
-            image.as_deref(),
-            creation,
+            self.images,
+            self.creation_times,
         )
+        .is_some()
     }
 
     /// Nothing is read out of the census: what it did is the hiding, and what it found is what the
@@ -5635,10 +6044,10 @@ fn stage_candidate_offscreen(hwnd: HWND, w: i32, h: i32) {
 /// candidates at `(STAGE_COORD, STAGE_COORD)` on CREATE/SHOW, adopts hidden candidates after 40ms.
 fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
-    let mut processes = process_tree(launch.pid);
+    let mut processes = discovery_processes(launch);
     update_owned_pids_if_current(launch, &processes);
     let mut read = Instant::now();
-    let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut images: ProcessImages = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut first_hidden: Option<(Instant, HWND)> = None;
     let (stage_w, stage_h) = launch
@@ -5671,7 +6080,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
     };
 
     let check_now = |processes: &[u32],
-                     images: &mut HashMap<u32, Option<String>>,
+                     images: &mut ProcessImages,
                      creation_times: &mut HashMap<u32, Option<u64>>,
                      first_hidden: &mut Option<(Instant, HWND)>|
      -> Option<HWND> {
@@ -5751,7 +6160,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
         }
 
         if read.elapsed() >= TREE_POLL {
-            processes = process_tree(launch.pid);
+            processes = discovery_processes(launch);
             update_owned_pids_if_current(launch, &processes);
             read = Instant::now();
         }
@@ -5786,30 +6195,18 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
                     if pid == 0 {
                         continue;
                     }
-                    let belongs = if processes.contains(&pid) {
-                        true
-                    } else if allow_fallback {
-                        let image = image_name_of(pid, &mut images);
-                        let creation = if image.as_deref() == Some(launch.exe.as_str())
-                            && !launch.processes_before.contains(&pid)
-                        {
-                            creation_time_of(pid, &mut creation_times)
-                        } else {
-                            None
-                        };
-                        belongs_to_preview(
-                            pid,
-                            &processes,
-                            mode,
-                            &launch.exe,
-                            launch.launch_filetime,
-                            &launch.processes_before,
-                            image.as_deref(),
-                            creation,
-                        )
-                    } else {
-                        false
-                    };
+                    if !processes.contains(&pid) {
+                        merge_active_job_pids(launch, &mut processes);
+                    }
+                    let belongs = discovery_match_for_pid(
+                        pid,
+                        launch,
+                        &processes,
+                        mode,
+                        &mut images,
+                        &mut creation_times,
+                    )
+                    .is_some();
                     if belongs {
                         if event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW {
                             stage_candidate_offscreen(hwnd, stage_w, stage_h);
@@ -5908,7 +6305,7 @@ fn run_offscreen_staged_settle_and_reveal(
     source: HWND,
     launch: &Launch,
     processes: &[u32],
-    images: &mut HashMap<u32, Option<String>>,
+    images: &mut ProcessImages,
     creation_times: &mut HashMap<u32, Option<u64>>,
     was_hidden: bool,
     own: (u32, u32),
@@ -7197,10 +7594,11 @@ fn wait_for_a_window_in_process_hook(
 ) -> Option<HWND> {
     let started = Instant::now();
     let deadline = started + WINDOW_WAIT;
-    let mut processes = process_tree(launch.pid);
+    let mut processes = discovery_processes(launch);
     update_owned_pids_if_current(launch, &processes);
     let mut read = started;
-    let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut job_read = started;
+    let mut images: ProcessImages = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut first_candidate: Option<(Instant, HWND)> = None;
     let mut dumped_300ms = false;
@@ -7213,6 +7611,10 @@ fn wait_for_a_window_in_process_hook(
                 session.view.hook_hits()
             );
             return None;
+        }
+        if job_read.elapsed() >= Duration::from_millis(25) {
+            merge_active_job_pids(launch, &mut processes);
+            job_read = Instant::now();
         }
         let valid_captured = session
             .view
@@ -7322,9 +7724,10 @@ fn wait_for_a_window_in_process_hook(
         );
 
         if read.elapsed() >= TREE_POLL {
-            processes = process_tree(launch.pid);
+            processes = discovery_processes(launch);
             update_owned_pids_if_current(launch, &processes);
             read = Instant::now();
+            job_read = read;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -7769,7 +8172,7 @@ fn run_in_process_hook_settle_and_reveal(
     launch: &Launch,
     session: &InProcessHookSession,
     processes: &[u32],
-    images: &mut HashMap<u32, Option<String>>,
+    images: &mut ProcessImages,
     creation_times: &mut HashMap<u32, Option<u64>>,
     was_hidden: bool,
     window_mode: CustomWindowMode,
@@ -8039,10 +8442,10 @@ fn run_in_process_hook_settle_and_reveal(
 fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let started = Instant::now();
     let deadline = started + WINDOW_WAIT;
-    let mut processes = process_tree(launch.pid);
+    let mut processes = discovery_processes(launch);
     update_owned_pids_if_current(launch, &processes);
     let mut read = started;
-    let mut images: HashMap<u32, Option<String>> = HashMap::new();
+    let mut images: ProcessImages = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut dumped_300ms = false;
 
@@ -8071,10 +8474,10 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     };
 
     let check_now = |processes: &[u32],
-                     images: &mut HashMap<u32, Option<String>>,
+                     images: &mut ProcessImages,
                      creation_times: &mut HashMap<u32, Option<u64>>|
      -> Option<HWND> {
-        // Pass 1: ALWAYS check process_tree(launch.pid) first; never adopt sibling PIDs when tree has a window.
+        // Pass 1: ALWAYS check process_tree(launch.pid) + job PIDs first; never adopt sibling PIDs when tree/job has a window.
         let tree_only = OwnershipMode::Discover {
             allow_image_fallback: false,
         };
@@ -8107,8 +8510,8 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             return look2.best_candidate().map(|(_, w)| w).or(Some(window));
         }
 
-        // Pass 2: Brokered/packaged app fallback ONLY when process_tree has no window AND
-        // launcher exited (broker stub) or grace elapsed.
+        // Pass 2: Brokered/packaged app + same-install-dir stub fallback ONLY when tree/job has
+        // no window AND launcher exited or grace elapsed.
         if !fallback_allowed(launch) {
             return None;
         }
@@ -8174,7 +8577,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
         );
 
         if read.elapsed() >= TREE_POLL {
-            processes = process_tree(launch.pid);
+            processes = discovery_processes(launch);
             update_owned_pids_if_current(launch, &processes);
             read = Instant::now();
         }
@@ -8209,30 +8612,18 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                     if pid == 0 {
                         continue;
                     }
-                    let belongs = if processes.contains(&pid) {
-                        true
-                    } else if allow_fallback {
-                        let image = image_name_of(pid, &mut images);
-                        let creation = if image.as_deref() == Some(launch.exe.as_str())
-                            && !launch.processes_before.contains(&pid)
-                        {
-                            creation_time_of(pid, &mut creation_times)
-                        } else {
-                            None
-                        };
-                        belongs_to_preview(
-                            pid,
-                            &processes,
-                            mode,
-                            &launch.exe,
-                            launch.launch_filetime,
-                            &launch.processes_before,
-                            image.as_deref(),
-                            creation,
-                        )
-                    } else {
-                        false
-                    };
+                    if !processes.contains(&pid) {
+                        merge_active_job_pids(launch, &mut processes);
+                    }
+                    let belongs = discovery_match_for_pid(
+                        pid,
+                        launch,
+                        &processes,
+                        mode,
+                        &mut images,
+                        &mut creation_times,
+                    )
+                    .is_some();
                     if belongs {
                         if event == EVENT_OBJECT_CREATE {
                             if let Some(provisional) = launch.provisional {
@@ -8365,22 +8756,34 @@ fn top_level_windows() -> Vec<isize> {
     found
 }
 
+/// Full image path of `pid` (cached once per discovery/launch).
+fn image_path_of(pid: u32, images: &mut ProcessImages) -> Option<PathBuf> {
+    if let Some(known) = images.get(&pid) {
+        return known.clone();
+    }
+    let path = unsafe { process_image_path(pid) };
+    images.insert(pid, path.clone());
+    path
+}
+
+fn image_name_from_path(path: &Path) -> Option<String> {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+}
+
 /// The image a process is running, as its file name and lowercased, or nothing where the machine
 /// will not say.
 ///
 /// Asked once per process per launch: the answer does not change while the process lives, and
 /// every window on the desktop is asked about on every look.
-fn image_name_of(pid: u32, images: &mut HashMap<u32, Option<String>>) -> Option<String> {
-    if let Some(known) = images.get(&pid) {
-        return known.clone();
-    }
-    let name = unsafe { process_image_name(pid) };
-    images.insert(pid, name.clone());
-    name
+fn image_name_of(pid: u32, images: &mut ProcessImages) -> Option<String> {
+    image_path_of(pid, images)
+        .as_deref()
+        .and_then(image_name_from_path)
 }
 
 /// Safety: opens the process for the query alone and closes it again; nothing is dereferenced.
-unsafe fn process_image_name(pid: u32) -> Option<String> {
+unsafe fn process_image_path(pid: u32) -> Option<PathBuf> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
     let mut buffer = [0u16; 1024];
     let mut length = buffer.len() as u32;
@@ -8396,12 +8799,7 @@ unsafe fn process_image_name(pid: u32) -> Option<String> {
     queried.ok()?;
 
     let path = String::from_utf16_lossy(&buffer[..length as usize]);
-    Some(
-        path.rsplit(['\\', '/'])
-            .next()
-            .unwrap_or(&path)
-            .to_lowercase(),
-    )
+    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 #[cfg(test)]
@@ -9924,10 +10322,11 @@ mod tests {
         assert!(PROGRAM.lock().unwrap().is_none());
         assert!(OWNED_PIDS.lock().unwrap().is_empty());
 
-        // Owned PID merge must include launched/new source trees + tracked PIDs, and never pre-existing or own PID.
+        // Owned PID merge must include launched/job/new source trees + tracked PIDs, and never pre-existing or own PID.
         let merged_new = merge_owned_pids_to_end(OwnedPidInputs {
             launched_pid: 100,
             launched_tree: &[100, 101, 500, 999],
+            job_pids: &[150, 151, 500, 999],
             source_pid: 200,
             source_is_new: true,
             source_tree: &[200, 201, 500],
@@ -9935,12 +10334,13 @@ mod tests {
             processes_before: &[500, 100],
             my_pid: 999,
         });
-        assert_eq!(merged_new, vec![100, 101, 200, 201, 300]);
+        assert_eq!(merged_new, vec![100, 101, 150, 151, 200, 201, 300]);
 
         // Reused broker (!source_is_new) must NEVER terminate source_pid or its tree.
         let merged_reused = merge_owned_pids_to_end(OwnedPidInputs {
             launched_pid: 100,
             launched_tree: &[100, 101],
+            job_pids: &[150],
             source_pid: 500,
             source_is_new: false,
             source_tree: &[500, 501],
@@ -9948,7 +10348,7 @@ mod tests {
             processes_before: &[500],
             my_pid: 999,
         });
-        assert_eq!(merged_reused, vec![100, 101, 300]);
+        assert_eq!(merged_reused, vec![100, 101, 150, 300]);
     }
 
     #[test]
@@ -10902,5 +11302,194 @@ mod tests {
             select_best_candidate(&with_main_hidden).map(|(_, id)| id),
             Some("tier1_hidden")
         );
+    }
+
+    #[test]
+    fn safe_app_install_dir_rejects_shallow_and_generic_containers() {
+        // Shallow paths (< 3 normal components beyond root/prefix) are rejected.
+        assert!(!is_safe_app_install_dir(Path::new(r"\")));
+        assert!(!is_safe_app_install_dir(Path::new(r"\myapp")));
+        assert!(!is_safe_app_install_dir(Path::new(r"\apps\myapp")));
+        assert!(!is_safe_app_install_dir(Path::new(r"apps\myapp")));
+        assert!(!is_safe_app_install_dir(Path::new(r".\apps\vendor\myapp")));
+        assert!(!is_safe_app_install_dir(Path::new(
+            r"\apps\vendor\..\myapp"
+        )));
+
+        // Generic/system/shared containers rejected case-insensitively regardless of depth.
+        for generic in [
+            "windows",
+            "System32",
+            "syswow64",
+            "Program Files",
+            "program files (x86)",
+            "ProgramData",
+            "Local",
+            "LocalLow",
+            "Roaming",
+            "Programs",
+            "Desktop",
+            "Downloads",
+            "Documents",
+            "Temp",
+            "tmp",
+            "Users",
+            "bin",
+            "WinApps",
+            "WindowsApps",
+        ] {
+            let candidate = format!(r"\root\container\{generic}");
+            assert!(
+                !is_safe_app_install_dir(Path::new(&candidate)),
+                "generic container {generic} must be rejected"
+            );
+        }
+
+        // Dedicated application folders (>= 3 normal components, non-generic leaf) accepted.
+        assert!(is_safe_app_install_dir(Path::new(r"\apps\vendor\MyApp")));
+        assert!(is_safe_app_install_dir(Path::new(
+            r"\Program Files\Vendor\MyApp"
+        )));
+        assert!(is_safe_app_install_dir(Path::new(
+            r"\AppData\Local\Programs\MyApp"
+        )));
+        assert!(!is_safe_app_install_dir(Path::new(
+            r"\\server\share\apps\MyApp"
+        )));
+        assert!(is_safe_app_install_dir(Path::new(
+            r"\\server\share\apps\vendor\MyApp"
+        )));
+    }
+
+    #[test]
+    fn exe_is_inside_install_dir_checks_components_case_insensitively_and_rejects_prefix_traps() {
+        let dir = Path::new(r"\apps\vendor\SomeApp");
+
+        // Direct and nested Squirrel/Velopack subdirectories accepted case-insensitively.
+        assert!(exe_is_inside_install_dir(
+            Path::new(r"\apps\vendor\SomeApp\worker.exe"),
+            dir
+        ));
+        assert!(exe_is_inside_install_dir(
+            Path::new(r"\APPS\Vendor\someapp\current\SubApp.EXE"),
+            dir
+        ));
+        assert!(exe_is_inside_install_dir(
+            Path::new("/apps/vendor/someapp/app-1.2.3/RealApp.exe"),
+            dir
+        ));
+
+        // Sibling prefix trap MUST be rejected (`SomeApp2` != `SomeApp`).
+        assert!(!exe_is_inside_install_dir(
+            Path::new(r"\apps\vendor\SomeApp2\other.exe"),
+            dir
+        ));
+        assert!(!exe_is_inside_install_dir(
+            Path::new(r"\apps\vendor\SomeApp-updater\updater.exe"),
+            dir
+        ));
+
+        // Directory itself, parent traversal, and unrelated directories rejected.
+        assert!(!exe_is_inside_install_dir(dir, dir));
+        assert!(!exe_is_inside_install_dir(
+            Path::new(r"\apps\vendor\SomeApp\..\OtherApp\app.exe"),
+            dir
+        ));
+        assert!(!exe_is_inside_install_dir(
+            Path::new(r"\apps\other\app.exe"),
+            dir
+        ));
+
+        // Verbatim UNC vs standard UNC normalizes identically.
+        assert!(exe_is_inside_install_dir(
+            Path::new(r"\\?\UNC\server\share\apps\SomeApp\current\app.exe"),
+            Path::new(r"\\server\share\apps\someapp"),
+        ));
+
+        // `full_path_matches_install_dir` strictly requires newly spawned PID and `Some(install_dir)`.
+        assert!(full_path_matches_install_dir(
+            true,
+            Some(dir),
+            Some(Path::new(r"\apps\vendor\someapp\current\app.exe")),
+        ));
+        assert!(!full_path_matches_install_dir(
+            false,
+            Some(dir),
+            Some(Path::new(r"\apps\vendor\someapp\current\app.exe")),
+        ));
+        assert!(!full_path_matches_install_dir(
+            true,
+            None,
+            Some(Path::new(r"\apps\vendor\someapp\current\app.exe")),
+        ));
+        assert!(!full_path_matches_install_dir(
+            true,
+            Some(dir),
+            Some(Path::new(r"\apps\vendor\SomeApp2\app.exe")),
+        ));
+    }
+
+    #[test]
+    fn preview_job_process_ids_queries_job_and_filters_pid_list_buffer() {
+        // Default/invalid job returns empty cleanly.
+        let invalid = PreviewJob {
+            handle: HANDLE::default(),
+        };
+        assert!(invalid.process_ids().is_empty());
+
+        // Fresh unassigned job returns empty cleanly.
+        let empty_handle =
+            unsafe { CreateJobObjectW(None, PCWSTR::null()) }.expect("create empty job object");
+        let empty_job = PreviewJob {
+            handle: empty_handle,
+        };
+        assert!(empty_job.process_ids().is_empty());
+
+        // Assigned child process appears in process_ids(); 0 and self PID are excluded.
+        let mut child = engine_processes::hidden_command("cmd.exe")
+            .args(["/C", "ping -n 6 127.0.0.1 >nul"])
+            .spawn()
+            .expect("spawn child for PreviewJob::process_ids test");
+        let child_pid = child.id();
+        let job = PreviewJob::create_and_assign(child_pid).expect("assign child to job");
+        let pids = job.process_ids();
+        assert!(
+            pids.contains(&child_pid),
+            "job pids {pids:?} must include {child_pid}"
+        );
+        assert!(!pids.contains(&0));
+        assert!(!pids.contains(&std::process::id()));
+        drop(job);
+        let _ = child.kill();
+        let _ = child.wait();
+
+        // Buffer parser filters 0, self PID, duplicates, out-of-u32 entries, and clamps to buffer len.
+        let header_size = std::mem::size_of::<JOBOBJECT_BASIC_PROCESS_ID_LIST>();
+        let ptr_size = std::mem::size_of::<usize>();
+        let header_usizes = header_size.div_ceil(ptr_size);
+        let mut buf = vec![0usize; header_usizes + 6];
+        let list_ptr = std::ptr::addr_of!(
+            unsafe { &*(buf.as_ptr() as *const JOBOBJECT_BASIC_PROCESS_ID_LIST) }.ProcessIdList
+        ) as usize;
+        let offset_usizes = (list_ptr - buf.as_ptr() as usize) / ptr_size;
+        {
+            let list = unsafe { &mut *(buf.as_mut_ptr() as *mut JOBOBJECT_BASIC_PROCESS_ID_LIST) };
+            list.NumberOfAssignedProcesses = 10;
+            list.NumberOfProcessIdsInList = 999; // deliberately larger than buffer slots
+        }
+        let slots = &mut buf[offset_usizes..];
+        slots[0] = 0;
+        slots[1] = 777; // my_pid
+        slots[2] = 4201;
+        slots[3] = 4201; // duplicate
+        slots[4] = 4202;
+        slots[5] = usize::MAX; // non-u32 on 64-bit; or 0xFFFF_FFFF on 32-bit
+        let parsed = parse_job_process_id_list(&buf, 777);
+        let expected = if usize::BITS > 32 {
+            vec![4201, 4202]
+        } else {
+            vec![4201, 4202, u32::MAX]
+        };
+        assert_eq!(parsed, expected);
     }
 }
