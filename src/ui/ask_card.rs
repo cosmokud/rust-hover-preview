@@ -25,8 +25,16 @@
 //! live in the *alpha* byte, which GDI never writes and a layered window composites over the
 //! desktop, so the card is composed in this app's own premultiplied-BGRA buffer and handed to
 //! `UpdateLayeredWindow` in one surface (see `Canvas`). The one thing drawn through GDI is the text,
-//! which keeps its hinting and ClearType edges: a run is drawn white on black in a scratch DIB and
-//! read back as coverage (`Canvas::text`), so the ink stays the palette's rather than the mask's.
+//! which keeps its hinting: a run is drawn white on black in a scratch DIB and read back as coverage
+//! (`Canvas::text`), so the ink stays the palette's rather than the mask's. That font is the card's own
+//! — normal weight, and **grayscale** anti-aliased (`text_font`) — because a mask is one alpha per
+//! pixel and ClearType's three subpixel coverages are not; a run drawn with the editor's own quality
+//! came out heavier here than the same run in the window beside it.
+//!
+//! **Every shape is one fill inside another.** A border is the shape drawn in its border colour with the
+//! card's own box a hairline inside it, and a button is the same — never a band walked along the
+//! outline, which along an arc a few pixels across is a diagonal line thinner than a pixel and puts holes
+//! in the corners. The outlines are sampled four times across the pixel (`covered`) for the same reason.
 //!
 //! **The safe answer is the default.** `Enter` and `Space` answer what the keyboard is on, which is
 //! the button that changes nothing until `Tab` or either arrow moves it — exactly as `MB_DEFBUTTON2`
@@ -42,11 +50,13 @@ use std::sync::Once;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-    DrawTextW, EndPaint, GetDC, GetStockObject, InvalidateRect, ReleaseDC, SelectObject, SetBkMode,
-    SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
-    DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE,
-    DT_VCENTER, DT_WORDBREAK, HBRUSH, HDC, HFONT, HGDIOBJ, NULL_BRUSH, PAINTSTRUCT, TRANSPARENT,
+    BeginPaint, ClientToScreen, CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC,
+    DeleteObject, DrawTextW, EndPaint, GetDC, GetStockObject, InvalidateRect, ReleaseDC,
+    SelectObject, SetBkMode, SetTextColor, AC_SRC_ALPHA, AC_SRC_OVER, ANTIALIASED_QUALITY,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
+    DEFAULT_PITCH, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, FW_NORMAL, FW_SEMIBOLD, HBRUSH, HDC, HFONT, HGDIOBJ,
+    NULL_BRUSH, OUT_DEFAULT_PRECIS, PAINTSTRUCT, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -67,7 +77,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
-use super::custom_preview_settings::{make_font, mix, pt_in_rect, rgb, scale, theme_now, Palette};
+use super::custom_preview_settings::{mix, pt_in_rect, rgb, scale, theme_now, Palette};
 
 /// The class the card's window is created from.
 const CLASS_NAME: PCWSTR = w!("RustHoverPreviewAskCard");
@@ -94,6 +104,10 @@ const CARD_CORNER_LOGICAL: i32 = 8;
 /// a weight above it.
 const HEADING_LOGICAL: i32 = 16;
 const BODY_LOGICAL: i32 = 13;
+/// The size a button's word is written at: the editor's own body size, because one pixel more is the
+/// pixel the hinting answers with a two-pixel stem — which is how a word at 14 came out heavier than the
+/// very same word at 13 in the sentence above it.
+const BUTTON_LOGICAL: i32 = 13;
 
 static CLASS_REGISTERED: Once = Once::new();
 
@@ -264,10 +278,41 @@ struct Fonts {
 impl Fonts {
     fn make(dpi: i32) -> Self {
         Self {
-            heading: unsafe { make_font(dpi, HEADING_LOGICAL, 600) },
-            body: unsafe { make_font(dpi, BODY_LOGICAL, 400) },
-            button: unsafe { make_font(dpi, BODY_LOGICAL, 600) },
+            heading: text_font(dpi, HEADING_LOGICAL, FW_SEMIBOLD.0 as i32),
+            body: text_font(dpi, BODY_LOGICAL, FW_NORMAL.0 as i32),
+            button: text_font(dpi, BUTTON_LOGICAL, FW_NORMAL.0 as i32),
         }
+    }
+}
+
+/// A run's font, made for a **mask** rather than for GDI to paint: grayscale anti-aliasing, so that
+/// what is read back is the glyph's coverage and not a subpixel pattern.
+///
+/// The editor draws straight through GDI and takes ClearType for it; this card does not draw text at
+/// all — it reads a run back as one alpha per pixel (`Canvas::text`). ClearType renders a glyph as three
+/// coloured coverages, and any single number taken from them is not the coverage the glyph has: the
+/// largest channel of a ClearType edge is the ink at full strength, which is why a run drawn that way
+/// came out heavier and blobbier than the same run in the window beside it. Grayscale anti-aliasing is
+/// one coverage per pixel, which is exactly what the mask is.
+fn text_font(dpi: i32, size: i32, weight: i32) -> HFONT {
+    let face = wide("Segoe UI");
+    unsafe {
+        CreateFontW(
+            -scale(size, dpi),
+            0,
+            0,
+            0,
+            weight,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            ANTIALIASED_QUALITY.0 as u32,
+            DEFAULT_PITCH.0 as u32,
+            PCWSTR(face.as_ptr()),
+        )
     }
 }
 
@@ -281,6 +326,11 @@ impl Drop for Fonts {
             }
         }
     }
+}
+
+/// A string as the Win32 calls want it: UTF-16, terminated.
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn card_of(hwnd: HWND) -> Option<&'static mut Card> {
@@ -419,6 +469,16 @@ impl Rect {
 
     fn height(self) -> f32 {
         (self.bottom - self.top).max(0.0)
+    }
+
+    /// The same box, `by` inside every edge.
+    fn inset(self, by: f32) -> Self {
+        Self {
+            left: self.left + by,
+            top: self.top + by,
+            right: (self.right - by).max(self.left + by),
+            bottom: (self.bottom - by).max(self.top + by),
+        }
     }
 
     /// The same box as the `RECT` the editor's own geometry is measured in, which is what the
@@ -776,8 +836,18 @@ fn compose(card: &Card) -> Option<Canvas> {
     } else {
         (mix(p.card, rgb(255, 255, 255), 40), p.card)
     };
-    canvas.gradient(body, radius, sheen, floor);
-    canvas.stroke(body, radius, p.border, 1.0);
+    // **A frame is a fill and a fill inside it**, not a band walked along the edge: the shape's own
+    // anti-aliasing draws both rings, so the border follows the corner arc as exactly as the card does.
+    // A one-pixel band along an arc a few pixels across is a diagonal line thinner than a pixel, and no
+    // sampler — one point, four, or sixteen — can put ink in every pixel it crosses.
+    let hairline = (s).max(1.0);
+    canvas.fill(body, radius, p.border, 1.0);
+    canvas.gradient(
+        body.inset(hairline),
+        (radius - hairline).max(0.0),
+        sheen,
+        floor,
+    );
 
     // The badge the question is marked with: the palette's red in a disc, standing above the
     // heading. It says what kind of question this is before a word of it is read.
@@ -789,8 +859,8 @@ fn compose(card: &Card) -> Option<Canvas> {
         right: cx + r,
         bottom: cy + r,
     };
-    canvas.fill(disc, r, p.danger_bg, 1.0);
-    canvas.stroke(disc, r, mix(p.danger, p.card, 45), (s).max(1.0));
+    canvas.fill(disc, r, mix(p.danger, p.card, 45), 1.0);
+    canvas.fill(disc.inset(hairline), r - hairline, p.danger_bg, 1.0);
     let bar_w = (scale(3, dpi) as f32).max(2.0);
     canvas.fill(
         Rect {
@@ -827,8 +897,7 @@ fn compose(card: &Card) -> Option<Canvas> {
         };
         let box_ = Rect::around(rect.left, rect.top, rect.right, rect.bottom);
         let button_radius = 7.0 * s;
-        canvas.gradient(box_, button_radius, top, bottom);
-        canvas.stroke(
+        canvas.fill(
             box_,
             button_radius,
             if card.focused == decision {
@@ -836,7 +905,13 @@ fn compose(card: &Card) -> Option<Canvas> {
             } else {
                 border
             },
-            (s).max(1.0),
+            1.0,
+        );
+        canvas.gradient(
+            box_.inset(hairline),
+            (button_radius - hairline).max(0.0),
+            top,
+            bottom,
         );
         canvas.text(
             card.fonts.button,
@@ -1216,6 +1291,21 @@ fn aa_coverage(d: f32) -> f32 {
     (0.5 - d).clamp(0.0, 1.0)
 }
 
+/// The share of a pixel a shape covers, averaged over the four quarters the pixel is cut into.
+///
+/// A shape whose outline turns inside one pixel — an arc a few pixels across, which is every corner of
+/// these buttons — is the one a single sample gets wrong in whole pixels rather than in fractions: the
+/// outline crosses a pixel's diagonal, and its centre then falls on one side of it for the whole of that
+/// pixel, which is the stair the eye reads as aliasing. Four samples across the diagonal resolve it.
+fn covered(px: f32, py: f32, coverage: impl Fn(f32, f32) -> f32) -> f32 {
+    const QUARTERS: [(f32, f32); 4] = [(0.75, 0.75), (0.25, 0.75), (0.75, 0.25), (0.25, 0.25)];
+    let mut total = 0.0;
+    for (dx, dy) in QUARTERS {
+        total += coverage(px + dx - 0.5, py + dy - 0.5);
+    }
+    total / QUARTERS.len() as f32
+}
+
 fn channels(colour: COLORREF) -> (u8, u8, u8) {
     (
         (colour.0 & 0xFF) as u8,
@@ -1230,7 +1320,9 @@ fn channels(colour: COLORREF) -> (u8, u8, u8) {
 /// a layered window reads, so the shapes are composed here arithmetically and the whole surface is
 /// handed to `UpdateLayeredWindow` in one go. The one thing GDI draws is text, into a scratch DIB of
 /// its own and read back as coverage (`text`), because glyphs are the one shape here that has to be
-/// hinted rather than outlined.
+/// hinted rather than outlined. Every other shape is a fill — a border is a fill inside a fill — and the
+/// outlines are sampled four times across the pixel, so that an arc turning inside one pixel is a curve
+/// rather than a stair.
 struct Canvas {
     w: i32,
     h: i32,
@@ -1297,22 +1389,36 @@ impl Canvas {
         )
     }
 
-    /// Half the width of the row at `py` that a rounded box covers *wholly*, if any: the rows inside
-    /// the box's own core are filled rather than walked, which is what keeps a card's paint a few
-    /// hundred thousand stores rather than a few hundred thousand distance fields.
+    /// Half the width of the row at `py` that a rounded box covers *wholly*: the rows inside the box's
+    /// own core are filled rather than walked, which is what keeps a card's paint a few hundred thousand
+    /// stores rather than a few hundred thousand distance fields.
+    ///
+    /// Two things make it exact rather than approximate, and both are the difference between a rounded
+    /// corner and a stair:
+    ///
+    /// * a row the box does not reach is **not** covered — the width is nothing above the top edge and
+    ///   below the bottom one, where a width of `hw - r` would paint a band outside the shape;
+    /// * the core keeps a **whole pixel** inside the outline, because a pixel the outline cuts is one
+    ///   whose coverage is a fraction: a core that reached within half a pixel of it would fill those in
+    ///   solid, which is the stepped corner this card had before it was sampled.
     fn covered_half(bounds: Rect, radius: f32, py: f32) -> f32 {
         let hw = bounds.width() * 0.5;
         let hh = bounds.height() * 0.5;
         let r = radius.min(hw).min(hh).max(0.0);
-        let limit = r - 0.5;
-        if limit <= 0.0 {
+
+        // The row, measured from the straight part of the shape's side: within `r` of it is inside the
+        // box at all, and the rest is the corner.
+        let past_the_side = (py - (bounds.top + bounds.bottom) * 0.5).abs() - (hh - r);
+        let inside = r - 1.0;
+        if past_the_side >= inside {
             return 0.0;
         }
-        let dy_in = (py - (bounds.top + bounds.bottom) * 0.5).abs() - (hh - r);
-        let allowance = if dy_in <= 0.0 {
-            limit
+        let allowance = if past_the_side <= 0.0 {
+            inside
         } else {
-            (limit * limit - dy_in * dy_in).max(0.0).sqrt()
+            (inside * inside - past_the_side * past_the_side)
+                .max(0.0)
+                .sqrt()
         };
         (hw - r + allowance).max(0.0)
     }
@@ -1337,7 +1443,9 @@ impl Canvas {
                     continue;
                 }
                 let px = x as f32 + 0.5;
-                let coverage = aa_coverage(sd_rounded_box(px, py, cx, cy, hw, hh, radius));
+                let coverage = covered(px, py, |at_x, at_y| {
+                    aa_coverage(sd_rounded_box(at_x, at_y, cx, cy, hw, hh, radius))
+                });
                 if coverage > 0.0 {
                     self.blend(x, y, colour, coverage * alpha);
                 }
@@ -1369,28 +1477,9 @@ impl Canvas {
                     continue;
                 }
                 let px = x as f32 + 0.5;
-                let coverage = aa_coverage(sd_rounded_box(px, py, cx, cy, hw, hh, radius));
-                if coverage > 0.0 {
-                    self.blend(x, y, colour, coverage);
-                }
-            }
-        }
-    }
-
-    /// The ring of a rounded box: the coverage of its outline less the coverage of what is inside it
-    /// (`width` in), so a one-pixel border is one pixel of that colour rather than two half ones.
-    fn stroke(&mut self, bounds: Rect, radius: f32, colour: COLORREF, width: f32) {
-        let cx = (bounds.left + bounds.right) * 0.5;
-        let cy = (bounds.top + bounds.bottom) * 0.5;
-        let hw = bounds.width() * 0.5;
-        let hh = bounds.height() * 0.5;
-        let (ix0, iy0, ix1, iy1) = self.area(bounds, 1.0);
-        for y in iy0..iy1 {
-            let py = y as f32 + 0.5;
-            for x in ix0..ix1 {
-                let px = x as f32 + 0.5;
-                let outer = sd_rounded_box(px, py, cx, cy, hw, hh, radius);
-                let coverage = aa_coverage(outer) - aa_coverage(outer + width);
+                let coverage = covered(px, py, |at_x, at_y| {
+                    aa_coverage(sd_rounded_box(at_x, at_y, cx, cy, hw, hh, radius))
+                });
                 if coverage > 0.0 {
                     self.blend(x, y, colour, coverage);
                 }
@@ -1429,10 +1518,11 @@ impl Canvas {
     /// A run of text, in the palette's own ink.
     ///
     /// The run is drawn by GDI as white on black in a scratch DIB and read back as coverage, and only
-    /// then blended here in `colour`: GDI leaves the alpha byte of what it draws at zero, and a glyph
-    /// is a shape this canvas has no way to outline. What is read back is the largest of the three
-    /// channels, which is the coverage whatever the subpixel filter did to the colour of an edge —
-    /// and the ink stays the theme's rather than the mask's.
+    /// then blended here in `colour`: GDI leaves the alpha byte of what it draws at zero, and a glyph is
+    /// a shape this canvas has no way to outline. What is read back is the largest of the three channels,
+    /// which — with the grayscale anti-aliasing `text_font` asks for — is the glyph's coverage itself.
+    /// ClearType would put three different coverages in one pixel and the mask would be the strongest of
+    /// them, which is a run drawn heavier than it was.
     fn text(
         &mut self,
         font: HFONT,
@@ -1985,6 +2075,189 @@ mod tests {
             assert!(((pixel >> 8) & 0xFF) <= alpha);
             assert!((pixel & 0xFF) <= alpha);
         }
+    }
+
+    /// A button's word is a normal-weight run, and the mask it is read back from is one coverage per
+    /// pixel: the two reasons a label here used to come out darker and blobbier than the same word in
+    /// the sentence above it.
+    #[test]
+    fn a_buttons_word_is_an_unbolded_run_read_back_as_one_coverage() {
+        use windows::Win32::Graphics::Gdi::{GetObjectW, LOGFONTW};
+
+        let fonts = Fonts::make(96);
+        for font in [fonts.button, fonts.body] {
+            let mut logfont = LOGFONTW::default();
+            let read = unsafe {
+                GetObjectW(
+                    HGDIOBJ(font.0),
+                    std::mem::size_of::<LOGFONTW>() as i32,
+                    Some(&mut logfont as *mut _ as *mut c_void),
+                )
+            };
+            assert_eq!(
+                read as usize,
+                std::mem::size_of::<LOGFONTW>(),
+                "a font of the card's could not be read back"
+            );
+            assert_eq!(
+                logfont.lfWeight, FW_NORMAL.0 as i32,
+                "a run of the card's is not normal weight"
+            );
+            assert_eq!(
+                logfont.lfQuality, ANTIALIASED_QUALITY,
+                "a run of the card's is not grayscale anti-aliased"
+            );
+        }
+
+        // And what that font draws is a mask: every pixel of the run is grey, so the largest of its
+        // three channels *is* its coverage. ClearType — the editor's own quality — writes three
+        // different ones, and `Canvas::text` would read the strongest of them as the whole of it.
+        let dc = unsafe { GetDC(HWND::default()) };
+        let mut bits: *mut c_void = ptr::null_mut();
+        let (w, h) = (120, 28);
+        let dib = unsafe {
+            CreateDIBSection(dc, &top_down_bmi(w, h), DIB_RGB_COLORS, &mut bits, None, 0)
+        };
+        let Ok(dib) = dib else {
+            panic!("a scratch surface");
+        };
+        unsafe { std::ptr::write_bytes(bits, 0, (w * h) as usize * 4) };
+        let mem = unsafe { CreateCompatibleDC(dc) };
+        let old_bitmap = unsafe { SelectObject(mem, HGDIOBJ(dib.0)) };
+        let old_font = unsafe { SelectObject(mem, HGDIOBJ(fonts.button.0)) };
+        unsafe {
+            SetBkMode(mem, TRANSPARENT);
+            SetTextColor(mem, rgb(255, 255, 255));
+        }
+        let mut run: Vec<u16> = "Cancel".encode_utf16().collect();
+        let mut box_ = RECT {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        };
+        unsafe {
+            DrawTextW(
+                mem,
+                &mut run,
+                &mut box_,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            )
+        };
+
+        let pixels = unsafe { std::slice::from_raw_parts(bits as *const u32, (w * h) as usize) };
+        let mut inked = 0;
+        for pixel in pixels.iter().copied() {
+            let (red, green, blue) = ((pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF);
+            assert_eq!(
+                (red, green),
+                (green, blue),
+                "a glyph pixel is not one coverage: {pixel:#x}"
+            );
+            if red > 0 {
+                inked += 1;
+            }
+        }
+        assert!(inked > 40, "the run drew almost nothing: {inked} pixels");
+
+        unsafe {
+            let _ = SelectObject(mem, old_font);
+            let _ = SelectObject(mem, old_bitmap);
+            let _ = DeleteDC(mem);
+            let _ = DeleteObject(HGDIOBJ(dib.0));
+            ReleaseDC(HWND::default(), dc);
+        }
+    }
+
+    /// A rounded box's border follows its corners, all the way round.
+    ///
+    /// The border is a fill and a fill inside it, so the arc is drawn by the same anti-aliasing as the
+    /// shape, and a one-pixel ring is what that leaves. Walked as a band along the outline it was not: a
+    /// diagonal line a pixel wide is thinner than a pixel, and no number of samples puts ink in every
+    /// pixel an arc that turns inside one pixel crosses — which is what the corners of these buttons
+    /// looked like.
+    #[test]
+    fn the_ring_of_a_button_follows_its_corners() {
+        let mut canvas = Canvas::new(80, 60).expect("a screen device context");
+        let bounds = Rect::around(10, 10, 70, 50);
+        let radius = 9.0_f32;
+        let hairline = 1.0_f32;
+        // A black button and a white ring, so the red channel *is* the ring's coverage.
+        canvas.fill(bounds, radius, rgb(255, 255, 255), 1.0);
+        canvas.fill(bounds.inset(hairline), radius - hairline, rgb(0, 0, 0), 1.0);
+
+        // Every point of the ring's own middle line — the outline brought a half-width inward, which is
+        // the box shrunk by that much and the corner radius with it — has ink to its own pixel.
+        let inner = bounds.inset(hairline * 0.5);
+        let arc = radius - hairline * 0.5;
+        let (cx, cy) = (
+            (inner.left + inner.right) * 0.5,
+            (inner.top + inner.bottom) * 0.5,
+        );
+        let (hw, hh) = (inner.width() * 0.5, inner.height() * 0.5);
+        // Each corner, and the quarter its own arc is drawn in: outward is `(sx, sy)`.
+        let corners = [
+            (cx + (hw - arc), cy + (hh - arc), 1.0, 1.0),
+            (cx - (hw - arc), cy + (hh - arc), -1.0, 1.0),
+            (cx - (hw - arc), cy - (hh - arc), -1.0, -1.0),
+            (cx + (hw - arc), cy - (hh - arc), 1.0, -1.0),
+        ];
+        let mut walked = 0;
+        for (ax, ay, sx, sy) in corners {
+            for step in 0..=90 {
+                let angle = (step as f32) * std::f32::consts::FRAC_PI_2 / 90.0;
+                let px = ax + sx * arc * angle.cos();
+                let py = ay + sy * arc * angle.sin();
+                // The nine pixels around the point: the ring is a pixel and a bit wide and its arc runs
+                // through a box of nine, so a box holding a piece of ring holds well over one pixel's
+                // worth of ink — and a box at a hole holds almost none.
+                let (x0, y0) = (px.floor() as i32, py.floor() as i32);
+                let mut ink = 0;
+                for y in y0 - 1..=y0 + 1 {
+                    for x in x0 - 1..=x0 + 1 {
+                        ink += (canvas.pixels[(y * canvas.w + x) as usize] >> 16) & 0xFF;
+                    }
+                }
+                assert!(
+                    ink >= 255,
+                    "the ring has a hole at ({px:.2}, {py:.2}): {ink} of ink around it"
+                );
+                walked += 1;
+            }
+        }
+        assert_eq!(walked, 4 * 91);
+
+        // And the band is a band: the row above the box's own edge carries a sliver of the ring's
+        // anti-aliasing and nothing more, where a smeared band would put half of it there.
+        let above =
+            canvas.pixels[((bounds.top as i32 - 1) * canvas.w + bounds.left as i32 + 20) as usize];
+        assert!(
+            (above >> 24) <= 32,
+            "the ring is smeared outside the box: alpha {}",
+            above >> 24
+        );
+        let middle = canvas.pixels[((bounds.top + bounds.bottom) as i32 / 2 * canvas.w
+            + (bounds.left + bounds.right) as i32 / 2) as usize];
+        assert_eq!(
+            (middle >> 16) & 0xFF,
+            0,
+            "the fill is not the button's own colour"
+        );
+
+        // A straight edge is one pixel of border and not two half ones: the row above it carries the
+        // eighth of a pixel a one-pixel anti-aliasing ramp gives away, and the row at it is the border.
+        let column = bounds.left as i32 + 30;
+        let top = bounds.top as i32;
+        let above = (canvas.pixels[((top - 1) * canvas.w + column) as usize] >> 16) & 0xFF;
+        let on_edge = (canvas.pixels[(top * canvas.w + column) as usize] >> 16) & 0xFF;
+        assert!(
+            above * 4 < on_edge,
+            "the border is smeared off its edge: {above} above against {on_edge} on it"
+        );
+        assert!(
+            on_edge > 120,
+            "the top edge is not a pixel of border: {on_edge} (above {above})"
+        );
     }
 
     #[test]
