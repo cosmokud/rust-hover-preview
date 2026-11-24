@@ -4492,6 +4492,9 @@ fn hook_dll_candidates(dir: &Path, user_folder: Option<PathBuf>) -> Vec<PathBuf>
 /// `<local appdata>\rust-hover-preview` — local and not the roaming folder `config.ini` lives in,
 /// which a domain profile syncs and no binary belongs in.
 fn user_hook_folder() -> Option<PathBuf> {
+    if let Some(portable) = crate::paths::data_root() {
+        return Some(portable.to_path_buf());
+    }
     directories::BaseDirs::new().map(|base| base.data_local_dir().join("rust-hover-preview"))
 }
 

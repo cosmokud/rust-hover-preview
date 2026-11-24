@@ -226,7 +226,11 @@ unsafe extern "system" fn tray_window_proc(
                         // nothing and a menu that stays as it was.
                         match updates::ask() {
                             updates::Answer::Auto => {
-                                if updates::install() {
+                                // A run with an installer ends itself for it to replace the exe;
+                                // a portable run's answer is the release page, which `install`
+                                // opens itself, and nothing here ends.
+                                let installed = updates::install();
+                                if installed && !crate::paths::portable() {
                                     RUNNING.store(false, Ordering::SeqCst);
                                     PostQuitMessage(0);
                                 }

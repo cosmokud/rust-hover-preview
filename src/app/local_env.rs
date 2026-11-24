@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 /// Path to `.env.local` inside local AppData directory (`%LOCALAPPDATA%\rust-hover-preview\.env.local`).
 pub fn local_env_path() -> Option<PathBuf> {
+    if let Some(portable) = crate::paths::data_root() {
+        return Some(portable.join(".env.local"));
+    }
     directories::BaseDirs::new()
         .map(|dirs| dirs.data_local_dir().join("rust-hover-preview"))
         .or_else(|| {

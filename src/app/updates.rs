@@ -265,6 +265,14 @@ pub(crate) fn install() -> bool {
         return false;
     };
 
+    // A portable run has no installer to run: one would put the app under `%LOCALAPPDATA%` and
+    // leave the folder it was started from holding the older version. Asking is answered with the
+    // release page, where the zip of the version that was found is downloaded by hand.
+    if crate::paths::portable() {
+        open_release_page();
+        return false;
+    }
+
     let installed = run_installer(&version);
     if !installed {
         download_failed(&version);
@@ -284,6 +292,11 @@ pub(crate) fn install() -> bool {
 /// `note_update_installed`). It is only reached where `the_app_is_idle` said so, which is what
 /// makes it safe to end the run: nothing of the user's is on screen to be closed.
 fn install_silently(version: &str) {
+    // Never for a portable run, whose update is a zip somebody unzips: there is no installer that
+    // would leave it anywhere but under `%LOCALAPPDATA%`.
+    if crate::paths::portable() {
+        return;
+    }
     if run_installer(version) {
         crate::shell::tray::note_update_installed();
     }
@@ -294,7 +307,7 @@ fn install_silently(version: &str) {
 /// app the first has just replaced (see `INSTALLING`). What was owed is dropped before the
 /// thread starts, since the install is now happening rather than waiting to.
 fn start_the_install(version: &str) {
-    if INSTALLING.swap(true, Ordering::SeqCst) {
+    if crate::paths::portable() || INSTALLING.swap(true, Ordering::SeqCst) {
         return;
     }
 
