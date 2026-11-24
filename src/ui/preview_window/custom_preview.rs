@@ -909,6 +909,191 @@ fn trace_drift(
     *count = count.saturating_add(1);
 }
 
+const TOOLWINDOW_FALLBACK_MIN_AREA: i64 = 160 * 120;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum CandidateTier {
+    ToolWindow = 1,
+    UntitledVisible = 2,
+    HiddenOwner = 3,
+    Main = 4,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct CandidateRank {
+    tier: CandidateTier,
+    visible: bool,
+    area: i64,
+}
+
+fn owner_rect_is_blocking(
+    owner_present: bool,
+    owner_visible: bool,
+    owner_wh: Option<(i32, i32)>,
+) -> bool {
+    if !owner_present || !owner_visible {
+        return false;
+    }
+    owner_wh.is_some_and(|(w, h)| w > 1 && h > 1)
+}
+
+fn window_is_blocking_owner(owner: HWND) -> bool {
+    if owner.0.is_null() {
+        return false;
+    }
+    let owner_visible = unsafe { IsWindowVisible(owner) }.as_bool();
+    if !owner_visible {
+        return false;
+    }
+    let mut rect = RECT::default();
+    let owner_wh = unsafe { GetWindowRect(owner, &mut rect) }
+        .is_ok()
+        .then_some((rect.right - rect.left, rect.bottom - rect.top));
+    owner_rect_is_blocking(true, owner_visible, owner_wh)
+}
+
+/// True only when `hwnd` has an owner that is both visible and non-tiny (`w > 1 && h > 1`).
+/// Hidden/1x1 helper owners such as Delphi `TApplication` or WinForms owners are non-blocking.
+fn owner_is_blocking(hwnd: HWND) -> bool {
+    unsafe { GetWindow(hwnd, GW_OWNER) }
+        .ok()
+        .is_some_and(window_is_blocking_owner)
+}
+
+fn classify_candidate(
+    titled: bool,
+    strictly_owned: bool,
+    owner_blocking: bool,
+    tool_window: bool,
+    visible: bool,
+    area: i64,
+) -> Option<CandidateTier> {
+    if titled && !strictly_owned && !tool_window && area >= THE_SMALLEST_PICTURE {
+        Some(CandidateTier::Main)
+    } else if titled && !owner_blocking && !tool_window && area >= THE_SMALLEST_PICTURE {
+        Some(CandidateTier::HiddenOwner)
+    } else if visible && !owner_blocking && !tool_window && area >= THE_SMALLEST_PICTURE {
+        Some(CandidateTier::UntitledVisible)
+    } else if visible && !owner_blocking && tool_window && area >= TOOLWINDOW_FALLBACK_MIN_AREA {
+        Some(CandidateTier::ToolWindow)
+    } else {
+        None
+    }
+}
+
+fn select_best_candidate<T: Copy>(candidates: &[(CandidateRank, T)]) -> Option<(CandidateRank, T)> {
+    let mut best: Option<(CandidateRank, T)> = None;
+    for &(rank, item) in candidates {
+        if best.is_none_or(|(best_rank, _)| rank > best_rank) {
+            best = Some((rank, item));
+        }
+    }
+    best
+}
+
+static LAST_DUMPED_300MS_ID: AtomicU64 = AtomicU64::new(0);
+
+fn maybe_trace_300ms_no_match(
+    tag: &str,
+    launch: &Launch,
+    started: Instant,
+    dumped: &mut bool,
+    processes: &[u32],
+    images: &mut HashMap<u32, Option<String>>,
+) {
+    if !trace::enabled() || *dumped || started.elapsed() < Duration::from_millis(300) {
+        return;
+    }
+    *dumped = true;
+    if LAST_DUMPED_300MS_ID.swap(launch.id, Ordering::AcqRel) == launch.id {
+        return;
+    }
+
+    struct DumpState<'a> {
+        launch: &'a Launch,
+        tree: &'a [u32],
+        images: &'a mut HashMap<u32, Option<String>>,
+        rows: Vec<(HWND, u32, u32, bool)>,
+    }
+
+    unsafe extern "system" fn visit_dump(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        if hwnd.0.is_null() {
+            return BOOL(1);
+        }
+        let state = unsafe { &mut *(lparam.0 as *mut DumpState<'_>) };
+        let mut pid = 0u32;
+        let tid = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        if pid == 0 {
+            return BOOL(1);
+        }
+        let in_tree = state.tree.contains(&pid);
+        let matches_exe = !state.launch.exe.is_empty()
+            && image_name_of(pid, state.images).as_deref() == Some(state.launch.exe.as_str());
+        if in_tree || matches_exe {
+            state.rows.push((hwnd, pid, tid, in_tree));
+        }
+        BOOL(1)
+    }
+
+    let mut tree = process_tree(launch.pid);
+    for &pid in processes {
+        if !tree.contains(&pid) {
+            tree.push(pid);
+        }
+    }
+    let mut state = DumpState {
+        launch,
+        tree: &tree,
+        images,
+        rows: Vec::new(),
+    };
+    let _ = unsafe {
+        EnumWindows(
+            Some(visit_dump),
+            LPARAM(&mut state as *mut DumpState<'_> as isize),
+        )
+    };
+    cp_trace!(
+        "{tag}: 300ms_no_match_dump id={} exe={} launch_pid={} tree={:?} count={}",
+        launch.id,
+        launch.exe,
+        launch.pid,
+        tree,
+        state.rows.len()
+    );
+    for (hwnd, pid, tid, in_tree) in state.rows {
+        let class = hwnd_class_name(hwnd);
+        let title_len = unsafe { GetWindowTextLengthW(hwnd) };
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        let owner_hwnd = unsafe { GetWindow(hwnd, GW_OWNER) }
+            .ok()
+            .filter(|o| !o.0.is_null());
+        let owner_raw = owner_hwnd.map_or(0usize, |o| o.0 as usize);
+        let owner_vis = owner_hwnd.is_some_and(|o| unsafe { IsWindowVisible(o) }.as_bool());
+        let vis = unsafe { IsWindowVisible(hwnd) }.as_bool();
+        let rect = window_rect(hwnd);
+        let in_before = launch.windows_before.contains(&(hwnd.0 as isize));
+        cp_trace!(
+            "{tag}_win: id={} hwnd=0x{:x} pid={} tid={} in_tree={} class={:?} title_len={} style=0x{:x} ex=0x{:x} owner=0x{:x} owner_vis={} vis={} rect={:?} in_before={}",
+            launch.id,
+            hwnd.0 as usize,
+            pid,
+            tid,
+            in_tree,
+            class,
+            title_len,
+            style,
+            ex_style,
+            owner_raw,
+            owner_vis,
+            vis,
+            rect,
+            in_before
+        );
+    }
+}
+
 /// Show `path` in the program its preset names, at the box that preset's scale and the tray's
 /// placement ask for.
 ///
@@ -5195,11 +5380,9 @@ struct Census<'a> {
     /// Hide visible non-`keep` windows only after `source` is adopted (never during discovery).
     hide_others: bool,
     mode: OwnershipMode,
-    /// The program's document windows, by the desktop's order, with the area each one covers.
-    found: Vec<(i64, HWND)>,
-    /// The largest document window the program was showing, and how much of the display it
-    /// covers: a splash is a window, and the document is the one that fills a frame.
-    shown: Option<(i64, HWND)>,
+    /// Candidate windows ranked by tier (`Main > HiddenOwner > UntitledVisible > ToolWindow`),
+    /// then visibility, then area.
+    candidates: Vec<(CandidateRank, HWND)>,
 }
 
 /// Look at the desktop once, on the terms `Census` states.
@@ -5226,14 +5409,17 @@ fn census<'a>(
         keep,
         hide_others,
         mode,
-        found: Vec::new(),
-        shown: None,
+        candidates: Vec::new(),
     };
     let _ = unsafe { EnumWindows(Some(visit), LPARAM(&mut census as *mut Census<'_> as isize)) };
     census
 }
 
 impl Census<'_> {
+    fn best_candidate(&self) -> Option<(CandidateRank, HWND)> {
+        select_best_candidate(&self.candidates)
+    }
+
     fn visit(&mut self, hwnd: HWND) {
         if hwnd.0 as isize == self.keep || hwnd.0.is_null() {
             return;
@@ -5248,33 +5434,41 @@ impl Census<'_> {
         }
 
         let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+        let tool_window = ex_style & WS_EX_TOOLWINDOW.0 != 0;
         let owner_hwnd = unsafe { GetWindow(hwnd, GW_OWNER) }
             .ok()
             .filter(|o| !o.0.is_null());
-        let owned = owner_hwnd.is_some();
+        let strictly_owned = owner_hwnd.is_some();
+        let owner_blocking = owner_hwnd.is_some_and(window_is_blocking_owner);
         let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
+        let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
         let mut rect = RECT::default();
         let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
-            (rect.right - rect.left) as i64 * (rect.bottom - rect.top) as i64
+            (rect.right - rect.left).max(0) as i64 * (rect.bottom - rect.top).max(0) as i64
         } else {
             0
         };
-        // **A document window, and not every window a program owns** (see the module note): a
-        // helper is untitled or a few pixels square, and is never the picture.
-        let document =
-            titled && !owned && ex_style & WS_EX_TOOLWINDOW.0 == 0 && area >= THE_SMALLEST_PICTURE;
 
-        if unsafe { IsWindowVisible(hwnd) }.as_bool() {
-            if document && self.shown.is_none_or(|(best, _)| area > best) {
-                self.shown = Some((area, hwnd));
-            }
-            if self.hide_others {
-                suppress_companion_window(hwnd, self.keep);
-            }
+        if let Some(tier) = classify_candidate(
+            titled,
+            strictly_owned,
+            owner_blocking,
+            tool_window,
+            visible,
+            area,
+        ) {
+            self.candidates.push((
+                CandidateRank {
+                    tier,
+                    visible,
+                    area,
+                },
+                hwnd,
+            ));
         }
 
-        if document {
-            self.found.push((area, hwnd));
+        if visible && self.hide_others {
+            suppress_companion_window(hwnd, self.keep);
         }
     }
 
@@ -5493,14 +5687,14 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
             false,
             tree_only,
         );
-        if let Some((_, window)) = look.shown {
-            return Some(window);
-        }
-        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
-            let entry = first_hidden.get_or_insert_with(|| (Instant::now(), hidden));
-            entry.1 = hidden;
+        if let Some((rank, window)) = look.best_candidate() {
+            if rank.visible {
+                return Some(window);
+            }
+            let entry = first_hidden.get_or_insert_with(|| (Instant::now(), window));
+            entry.1 = window;
             if entry.0.elapsed() >= Duration::from_millis(40) {
-                return Some(hidden);
+                return Some(window);
             }
             return None;
         }
@@ -5520,14 +5714,14 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
             false,
             with_fallback,
         );
-        if let Some((_, window)) = look.shown {
-            return Some(window);
-        }
-        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
-            let entry = first_hidden.get_or_insert_with(|| (Instant::now(), hidden));
-            entry.1 = hidden;
+        if let Some((rank, window)) = look.best_candidate() {
+            if rank.visible {
+                return Some(window);
+            }
+            let entry = first_hidden.get_or_insert_with(|| (Instant::now(), window));
+            entry.1 = window;
             if entry.0.elapsed() >= Duration::from_millis(40) {
-                return Some(hidden);
+                return Some(window);
             }
         }
         None
@@ -6717,6 +6911,14 @@ fn attach_dynamic_hook_session(
         cp_trace!("hook_attach: dynamic skipped pid={} tid={}", pid, tid);
         return None;
     }
+    if pid_is_wow64(pid) == Some(true) {
+        cp_trace!(
+            "dynamic_hook: wow64_skip_64bit_hook pid={} tid={}",
+            pid,
+            tid
+        );
+        return None;
+    }
     let (hmod, cbt_proc, cwp_proc) = load_hook_dll()?;
     let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
     let view = HookSharedView::create(pid, init, uncloak_msg).map(Arc::new);
@@ -6835,11 +7037,12 @@ fn launch_with_hook(
     let process = unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0) };
     let pid = pi.dwProcessId;
     let tid = pi.dwThreadId;
+    let wow64 = process_is_wow64(HANDLE(process.as_raw_handle()));
     cp_trace!(
         "launch_with_hook: created pid={} tid={} wow64={:?} cap={:?} si_flags=0x{:x} si_show={} si_xy=({},{}) si_wh=({},{})",
         pid,
         tid,
-        process_is_wow64(HANDLE(process.as_raw_handle())),
+        wow64,
         capture_technique,
         si.dwFlags.0,
         si.wShowWindow,
@@ -6848,6 +7051,17 @@ fn launch_with_hook(
         si.dwXSize,
         si.dwYSize
     );
+    if wow64 == Some(true) {
+        cp_trace!(
+            "launch_with_hook: wow64_skip_64bit_hook pid={} tid={}",
+            pid,
+            tid
+        );
+        let _ = unsafe { ResumeThread(pi.hThread) };
+        let _ = unsafe { CloseHandle(pi.hThread) };
+        let _ = unsafe { FreeLibrary(hmod) };
+        return Some((process, pid, tid, None));
+    }
     let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
     let view = HookSharedView::create(pid, init, uncloak_msg).map(Arc::new);
 
@@ -6949,15 +7163,12 @@ fn launch_with_hook(
     Some((process, pid, tid, session))
 }
 
-/// Validate a `captured_hwnd` candidate: live, unowned, non-toolwindow, and titled or >= 64x64.
+/// Validate a `captured_hwnd` candidate: live, non-blocked owner, non-toolwindow, and titled or >= 64x64.
 fn validate_captured_hwnd(hwnd: HWND) -> Option<(i64, bool, HWND)> {
     if !unsafe { IsWindow(hwnd) }.as_bool() {
         return None;
     }
-    if unsafe { GetWindow(hwnd, GW_OWNER) }
-        .ok()
-        .is_some_and(|owner| !owner.0.is_null())
-    {
+    if owner_is_blocking(hwnd) {
         return None;
     }
     let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
@@ -6984,13 +7195,15 @@ fn wait_for_a_window_in_process_hook(
     launch: &Launch,
     session: &InProcessHookSession,
 ) -> Option<HWND> {
-    let deadline = Instant::now() + WINDOW_WAIT;
+    let started = Instant::now();
+    let deadline = started + WINDOW_WAIT;
     let mut processes = process_tree(launch.pid);
     update_owned_pids_if_current(launch, &processes);
-    let mut read = Instant::now();
+    let mut read = started;
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut first_candidate: Option<(Instant, HWND)> = None;
+    let mut dumped_300ms = false;
 
     while Instant::now() < deadline {
         if !launch_still_wanted(launch) {
@@ -7017,46 +7230,65 @@ fn wait_for_a_window_in_process_hook(
                 allow_image_fallback: false,
             },
         );
-        let found = if let Some((shown_area, shown_hwnd)) = look.shown {
-            if let Some((cap_area, true, cap_hwnd)) = valid_captured {
-                if cap_area > shown_area {
-                    Some(cap_hwnd)
-                } else {
-                    Some(shown_hwnd)
-                }
-            } else {
-                Some(shown_hwnd)
-            }
-        } else {
-            let best_hidden = look.found.iter().copied().max_by_key(|(area, _)| *area);
-            if let Some((cap_area, true, cap_hwnd)) = valid_captured {
-                if let Some((hidden_area, hidden_hwnd)) = best_hidden {
-                    if hidden_area > cap_area {
-                        Some(hidden_hwnd)
-                    } else if cap_area >= THE_SMALLEST_PICTURE {
+        let mut best = look.best_candidate();
+        if best.is_none()
+            && (launch.packaged_broker
+                || process_has_exited(HANDLE(launch.process.as_raw_handle()))
+                || started.elapsed() >= BROKER_FALLBACK_GRACE)
+        {
+            let look_fb = census(
+                launch,
+                &processes,
+                &mut images,
+                &mut creation_times,
+                0,
+                false,
+                OwnershipMode::Discover {
+                    allow_image_fallback: true,
+                },
+            );
+            best = look_fb.best_candidate();
+        }
+
+        let found = if let Some((rank, best_hwnd)) = best {
+            if rank.visible {
+                if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+                    if cap_area > rank.area {
                         Some(cap_hwnd)
                     } else {
-                        None
+                        Some(best_hwnd)
                     }
+                } else {
+                    Some(best_hwnd)
+                }
+            } else if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+                if rank.area > cap_area {
+                    Some(best_hwnd)
                 } else if cap_area >= THE_SMALLEST_PICTURE {
                     Some(cap_hwnd)
                 } else {
                     None
                 }
-            } else if let Some((_, hidden)) = best_hidden {
-                let entry = first_candidate.get_or_insert_with(|| (Instant::now(), hidden));
-                entry.1 = hidden;
+            } else {
+                let entry = first_candidate.get_or_insert_with(|| (Instant::now(), best_hwnd));
+                entry.1 = best_hwnd;
                 if entry.0.elapsed() >= Duration::from_millis(40) {
-                    Some(hidden)
+                    Some(best_hwnd)
                 } else {
                     None
                 }
+            }
+        } else if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+            if cap_area >= THE_SMALLEST_PICTURE {
+                Some(cap_hwnd)
             } else {
-                if let Some((_, _, cap_hwnd)) = valid_captured {
-                    first_candidate.get_or_insert_with(|| (Instant::now(), cap_hwnd));
-                }
                 None
             }
+        } else {
+            if let Some((_, _, cap_hwnd)) = valid_captured {
+                first_candidate.get_or_insert_with(|| (Instant::now(), cap_hwnd));
+            }
+            None
         };
         if let Some(window) = found {
             if !launch_still_wanted(launch) {
@@ -7079,6 +7311,15 @@ fn wait_for_a_window_in_process_hook(
             );
             return Some(window);
         }
+
+        maybe_trace_300ms_no_match(
+            "wait_hook",
+            launch,
+            started,
+            &mut dumped_300ms,
+            &processes,
+            &mut images,
+        );
 
         if read.elapsed() >= TREE_POLL {
             processes = process_tree(launch.pid);
@@ -7796,12 +8037,14 @@ fn run_in_process_hook_settle_and_reveal(
 /// The program's window, waited for within [`WINDOW_WAIT`] via out-of-context WinEvent hook
 /// (`EVENT_OBJECT_CREATE`..`EVENT_OBJECT_SHOW`) with a 5ms `MsgWaitForMultipleObjectsEx` fallback.
 fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
-    let deadline = Instant::now() + WINDOW_WAIT;
+    let started = Instant::now();
+    let deadline = started + WINDOW_WAIT;
     let mut processes = process_tree(launch.pid);
     update_owned_pids_if_current(launch, &processes);
-    let mut read = Instant::now();
+    let mut read = started;
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
+    let mut dumped_300ms = false;
 
     WINEVENT_EVENTS.with(|q| q.borrow_mut().clear());
     let hook = unsafe {
@@ -7844,10 +8087,10 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             false,
             tree_only,
         );
-        if let Some((_, window)) = look.shown {
-            return Some(window);
-        }
-        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+        if let Some((rank, window)) = look.best_candidate() {
+            if rank.visible {
+                return Some(window);
+            }
             wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 250);
             if !launch_still_wanted(launch) {
                 return None;
@@ -7861,16 +8104,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                 false,
                 tree_only,
             );
-            if let Some((_, window)) = look2.shown {
-                return Some(window);
-            }
-            return look2
-                .found
-                .iter()
-                .copied()
-                .max_by_key(|(area, _)| *area)
-                .map(|(_, window)| window)
-                .or(Some(hidden));
+            return look2.best_candidate().map(|(_, w)| w).or(Some(window));
         }
 
         // Pass 2: Brokered/packaged app fallback ONLY when process_tree has no window AND
@@ -7890,10 +8124,10 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             false,
             with_fallback,
         );
-        if let Some((_, window)) = look.shown {
-            return Some(window);
-        }
-        if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
+        if let Some((rank, window)) = look.best_candidate() {
+            if rank.visible {
+                return Some(window);
+            }
             wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 250);
             if !launch_still_wanted(launch) {
                 return None;
@@ -7907,16 +8141,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                 false,
                 with_fallback,
             );
-            if let Some((_, window)) = look2.shown {
-                return Some(window);
-            }
-            return look2
-                .found
-                .iter()
-                .copied()
-                .max_by_key(|(area, _)| *area)
-                .map(|(_, window)| window)
-                .or(Some(hidden));
+            return look2.best_candidate().map(|(_, w)| w).or(Some(window));
         }
         None
     };
@@ -7939,6 +8164,14 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             }
             return Some(window);
         }
+        maybe_trace_300ms_no_match(
+            "wait_std",
+            launch,
+            started,
+            &mut dumped_300ms,
+            &processes,
+            &mut images,
+        );
 
         if read.elapsed() >= TREE_POLL {
             processes = process_tree(launch.pid);
@@ -10538,5 +10771,136 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].ends_with(" first line"));
         assert!(lines[1].ends_with(" second line"));
+    }
+
+    #[test]
+    fn tiered_candidate_classification_and_ranking() {
+        // Owner blocking logic: only visible owners larger than 1x1 block candidates.
+        assert!(!owner_rect_is_blocking(false, false, None));
+        assert!(!owner_rect_is_blocking(true, false, Some((800, 600))));
+        assert!(!owner_rect_is_blocking(true, true, Some((0, 0))));
+        assert!(!owner_rect_is_blocking(true, true, Some((1, 1))));
+        assert!(!owner_rect_is_blocking(true, true, Some((1, 200))));
+        assert!(!owner_rect_is_blocking(true, true, Some((200, 1))));
+        assert!(!owner_rect_is_blocking(true, true, None));
+        assert!(owner_rect_is_blocking(true, true, Some((2, 2))));
+        assert!(owner_rect_is_blocking(true, true, Some((800, 600))));
+        assert!(!owner_is_blocking(HWND::default()));
+
+        // Tier classification rules.
+        let doc_area = THE_SMALLEST_PICTURE;
+        let tool_area = TOOLWINDOW_FALLBACK_MIN_AREA;
+        assert_eq!(
+            classify_candidate(true, false, false, false, false, doc_area),
+            Some(CandidateTier::Main)
+        );
+        assert_eq!(
+            classify_candidate(true, true, false, false, false, doc_area),
+            Some(CandidateTier::HiddenOwner)
+        );
+        assert_eq!(
+            classify_candidate(false, false, false, false, true, doc_area),
+            Some(CandidateTier::UntitledVisible)
+        );
+        assert_eq!(
+            classify_candidate(false, true, false, false, true, doc_area),
+            Some(CandidateTier::UntitledVisible)
+        );
+        assert_eq!(
+            classify_candidate(false, false, false, false, false, doc_area),
+            None,
+            "hidden untitled window must be rejected"
+        );
+        assert_eq!(
+            classify_candidate(false, false, false, true, true, tool_area - 1),
+            None,
+            "small toolwindow below 160x120 must be rejected"
+        );
+        assert_eq!(
+            classify_candidate(true, true, false, true, true, tool_area),
+            Some(CandidateTier::ToolWindow)
+        );
+        assert_eq!(
+            classify_candidate(true, false, false, true, false, tool_area),
+            None,
+            "hidden toolwindow must be rejected"
+        );
+        assert_eq!(
+            classify_candidate(true, true, true, false, true, 1920 * 1080),
+            None,
+            "dialog/popup owned by visible non-tiny window must be rejected across all tiers"
+        );
+        assert_eq!(
+            classify_candidate(false, true, true, true, true, 1920 * 1080),
+            None
+        );
+
+        // Priority ranking: Tier 1 > Tier 2 > Tier 3 > Tier 4; within tier: visible > hidden; then area.
+        let ranked = vec![
+            (
+                CandidateRank {
+                    tier: CandidateTier::ToolWindow,
+                    visible: true,
+                    area: 1_000_000,
+                },
+                "tier4",
+            ),
+            (
+                CandidateRank {
+                    tier: CandidateTier::UntitledVisible,
+                    visible: true,
+                    area: 800_000,
+                },
+                "tier3",
+            ),
+            (
+                CandidateRank {
+                    tier: CandidateTier::HiddenOwner,
+                    visible: false,
+                    area: 500_000,
+                },
+                "tier2_hidden_large",
+            ),
+            (
+                CandidateRank {
+                    tier: CandidateTier::HiddenOwner,
+                    visible: true,
+                    area: 100_000,
+                },
+                "tier2_visible_small",
+            ),
+        ];
+        assert_eq!(
+            select_best_candidate(&ranked).map(|(_, id)| id),
+            Some("tier2_visible_small")
+        );
+        assert_eq!(
+            select_best_candidate(&ranked[..3]).map(|(_, id)| id),
+            Some("tier2_hidden_large")
+        );
+        assert_eq!(
+            select_best_candidate(&ranked[..2]).map(|(_, id)| id),
+            Some("tier3")
+        );
+        assert_eq!(
+            select_best_candidate(&ranked[..1]).map(|(_, id)| id),
+            Some("tier4")
+        );
+
+        let with_main_hidden = vec![
+            ranked[3],
+            (
+                CandidateRank {
+                    tier: CandidateTier::Main,
+                    visible: false,
+                    area: 50_000,
+                },
+                "tier1_hidden",
+            ),
+        ];
+        assert_eq!(
+            select_best_candidate(&with_main_hidden).map(|(_, id)| id),
+            Some("tier1_hidden")
+        );
     }
 }
