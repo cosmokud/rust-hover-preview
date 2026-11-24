@@ -69,8 +69,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::config::config::{
-    sanitize_program_input, CustomCaptureTechnique, CustomPreset, CustomPromotionTechnique,
-    CustomScaling, CustomWindowMode, PreviewScale, TextTheme, MAX_PRESETS,
+    sanitize_program_input, CustomCaptureTechnique, CustomPlacement, CustomPreset,
+    CustomPromotionTechnique, CustomScaling, CustomWindowMode, PreviewScale, TextTheme,
+    MAX_PRESETS,
 };
 use crate::text::{text_paint, text_theme};
 use crate::CONFIG;
@@ -150,6 +151,7 @@ const ID_VOLUME_UP: i32 = 125;
 const ID_VOLUME_DOWN: i32 = 126;
 const ID_PROMOTION_TECHNIQUE: i32 = 127;
 const ID_VOLUME_ENABLED: i32 = 128;
+const ID_PLACEMENT: i32 = 129;
 const ID_STATUS: i32 = 130;
 const ID_LABEL_BASE: i32 = 140;
 
@@ -240,10 +242,33 @@ fn promotion_technique_label(technique: CustomPromotionTechnique) -> &'static st
     }
 }
 
+const PLACEMENTS: [CustomPlacement; 2] = [CustomPlacement::FollowTray, CustomPlacement::Forced];
+
+fn placement_label(placement: CustomPlacement) -> &'static str {
+    match placement {
+        CustomPlacement::FollowTray => "Tray -> Placement",
+        CustomPlacement::Forced => "Tray -> Placement + Forced",
+    }
+}
+
+const EDITOR_LABELS: [&str; 10] = [
+    "Enabled",
+    "Name",
+    "Extensions",
+    "Program",
+    "Capture Method",
+    "Promotion",
+    "Placement",
+    "Window",
+    "Scaling",
+    "Volume",
+];
+
 fn is_combo(id: u32) -> bool {
     id == ID_WINDOW_MODE as u32
         || id == ID_CAPTURE_TECHNIQUE as u32
         || id == ID_PROMOTION_TECHNIQUE as u32
+        || id == ID_PLACEMENT as u32
         || id == ID_SCALING as u32
 }
 
@@ -897,6 +922,7 @@ unsafe fn apply_theme(state: &mut State) {
             ID_WINDOW_MODE,
             ID_CAPTURE_TECHNIQUE,
             ID_PROMOTION_TECHNIQUE,
+            ID_PLACEMENT,
             ID_SCALING,
         ] {
             if let Ok(combo) = GetDlgItem(state.hwnd, id) {
@@ -1143,7 +1169,7 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
             let dpi = (unsafe { GetDpiForWindow(hwnd) } as i32).max(96);
             info.ptMinTrackSize.x = scale(680, dpi);
-            info.ptMinTrackSize.y = scale(540, dpi);
+            info.ptMinTrackSize.y = scale(590, dpi);
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -1910,18 +1936,7 @@ unsafe fn build(hwnd: HWND) -> State {
     });
 
     // Editor pane: labels & inputs (static label text set once here to avoid WM_SIZE repaints).
-    let editor_labels = [
-        "Enabled",
-        "Name",
-        "Extensions",
-        "Program",
-        "Capture Technique",
-        "Promotion Technique",
-        "Window",
-        "Scaling",
-        "Volume",
-    ];
-    for (index, label) in editor_labels.iter().enumerate() {
+    for (index, label) in EDITOR_LABELS.iter().enumerate() {
         controls.push(unsafe {
             child(
                 hwnd,
@@ -1965,6 +1980,21 @@ unsafe fn build(hwnd: HWND) -> State {
                     | CBS_HASSTRINGS as u32,
             ),
             ID_PROMOTION_TECHNIQUE,
+        )
+    });
+    controls.push(unsafe {
+        child(
+            hwnd,
+            w!("COMBOBOX"),
+            "",
+            child_style(
+                WS_TABSTOP.0
+                    | WS_VSCROLL.0
+                    | CBS_DROPDOWNLIST as u32
+                    | CBS_OWNERDRAWFIXED as u32
+                    | CBS_HASSTRINGS as u32,
+            ),
+            ID_PLACEMENT,
         )
     });
     controls.push(unsafe {
@@ -2025,7 +2055,7 @@ unsafe fn build(hwnd: HWND) -> State {
             }
         }
     }
-    for index in 0..9 {
+    for index in 0..EDITOR_LABELS.len() as i32 {
         if let Ok(lbl) = unsafe { GetDlgItem(hwnd, ID_LABEL_BASE + index) } {
             unsafe {
                 SendMessageW(
@@ -2106,6 +2136,11 @@ unsafe fn build(hwnd: HWND) -> State {
         };
     }
 
+    let placement_combo = unsafe { GetDlgItem(hwnd, ID_PLACEMENT) }.unwrap_or_default();
+    for placement in PLACEMENTS {
+        unsafe { combo_add(placement_combo, placement_label(placement)) };
+    }
+
     let scaling = unsafe { GetDlgItem(hwnd, ID_SCALING) }.unwrap_or_default();
     for (label, _) in SCALE_CHOICES {
         unsafe { combo_add(scaling, label) };
@@ -2116,6 +2151,7 @@ unsafe fn build(hwnd: HWND) -> State {
         window_mode_combo,
         capture_technique_combo,
         promotion_technique_combo,
+        placement_combo,
         scaling,
     ] {
         if !combo.0.is_null() {
@@ -4479,7 +4515,7 @@ unsafe fn lay_out(state: &mut State) {
     let field_w = (ec.right - inner - scale(4, dpi) - field_left).max(scale(140, dpi));
 
     let mut y = ec.top + inner + scale(4, dpi);
-    for index in 0..9 {
+    for index in 0..EDITOR_LABELS.len() as i32 {
         place(
             ID_LABEL_BASE + index,
             e_left,
@@ -4520,6 +4556,15 @@ unsafe fn lay_out(state: &mut State) {
 
     place(
         ID_PROMOTION_TECHNIQUE,
+        field_left,
+        y,
+        field_w,
+        row + combo_drop_height(dpi),
+    );
+    y += row + gap;
+
+    place(
+        ID_PLACEMENT,
         field_left,
         y,
         field_w,
@@ -4670,7 +4715,11 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                 unsafe { exe_changed(state) };
             }
         }
-        ID_WINDOW_MODE | ID_CAPTURE_TECHNIQUE | ID_PROMOTION_TECHNIQUE | ID_SCALING => {
+        ID_WINDOW_MODE
+        | ID_CAPTURE_TECHNIQUE
+        | ID_PROMOTION_TECHNIQUE
+        | ID_PLACEMENT
+        | ID_SCALING => {
             if notice == CBN_SELCHANGE {
                 if id == ID_WINDOW_MODE {
                     unsafe { window_mode_chosen(state) };
@@ -4678,6 +4727,8 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                     unsafe { capture_technique_chosen(state) };
                 } else if id == ID_PROMOTION_TECHNIQUE {
                     unsafe { promotion_technique_chosen(state) };
+                } else if id == ID_PLACEMENT {
+                    unsafe { placement_chosen(state) };
                 } else {
                     unsafe { scaling_chosen(state) };
                 }
@@ -4772,6 +4823,7 @@ unsafe fn fill_fields(state: &mut State) {
             ID_WINDOW_MODE,
             ID_CAPTURE_TECHNIQUE,
             ID_PROMOTION_TECHNIQUE,
+            ID_PLACEMENT,
             ID_SCALING,
         ] {
             let combo = unsafe { GetDlgItem(state.hwnd, id) }.unwrap_or_default();
@@ -4793,6 +4845,7 @@ unsafe fn fill_fields(state: &mut State) {
     let window_mode = preset.window_mode;
     let capture_technique = preset.capture_technique;
     let promotion_technique = preset.promotion_technique;
+    let placement = preset.placement;
     let scaling = preset.scaling;
     let volume_enabled = preset.volume_enabled;
     let volume = preset.volume;
@@ -4869,6 +4922,18 @@ unsafe fn fill_fields(state: &mut State) {
             LPARAM(0),
         );
 
+        let placement_combo = GetDlgItem(state.hwnd, ID_PLACEMENT).unwrap_or_default();
+        let placement_index = PLACEMENTS
+            .iter()
+            .position(|held| *held == placement)
+            .unwrap_or(0) as i32;
+        SendMessageW(
+            placement_combo,
+            CB_SETCURSEL,
+            WPARAM(placement_index as usize),
+            LPARAM(0),
+        );
+
         let combo = GetDlgItem(state.hwnd, ID_SCALING).unwrap_or_default();
         let choice = SCALE_CHOICES
             .iter()
@@ -4910,6 +4975,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_WINDOW_MODE,
         ID_CAPTURE_TECHNIQUE,
         ID_PROMOTION_TECHNIQUE,
+        ID_PLACEMENT,
         ID_SCALING,
         ID_VOLUME_ENABLED,
         ID_DELETE,
@@ -5185,6 +5251,27 @@ unsafe fn promotion_technique_chosen(state: &mut State) {
     };
     if let Some(preset) = state.presets.get_mut(index) {
         preset.promotion_technique = technique;
+    }
+    state.dirtied = true;
+}
+
+unsafe fn placement_chosen(state: &mut State) {
+    if state.loading {
+        return;
+    }
+    let Some(index) = state.selected else {
+        return;
+    };
+    let combo = unsafe { GetDlgItem(state.hwnd, ID_PLACEMENT) }.unwrap_or_default();
+    let choice = unsafe { SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+    let Some(placement) = usize::try_from(choice)
+        .ok()
+        .and_then(|choice| PLACEMENTS.get(choice).copied())
+    else {
+        return;
+    };
+    if let Some(preset) = state.presets.get_mut(index) {
+        preset.placement = placement;
     }
     state.dirtied = true;
 }
@@ -5916,6 +6003,7 @@ mod tests {
                 ID_WINDOW_MODE,
                 ID_CAPTURE_TECHNIQUE,
                 ID_PROMOTION_TECHNIQUE,
+                ID_PLACEMENT,
                 ID_SCALING,
                 ID_SCALING_UP,
                 ID_SCALING_DOWN,
@@ -6381,52 +6469,79 @@ mod tests {
                 state.dirtied = false;
             }
 
-            // Capture Technique sits directly above Promotion Technique, which sits directly above
-            // Window (both controls & labels) and follows that exact Tab order.
+            // Capture Method sits directly above Promotion, which sits directly above Placement,
+            // which sits directly above Window (both controls & labels) in that exact Tab order.
+            assert_eq!(EDITOR_LABELS[4], "Capture Method");
+            assert_eq!(EDITOR_LABELS[5], "Promotion");
+            assert_eq!(EDITOR_LABELS[6], "Placement");
+            assert_eq!(EDITOR_LABELS[7], "Window");
             let promo_combo = GetDlgItem(hwnd, ID_PROMOTION_TECHNIQUE).unwrap_or_default();
+            let place_combo = GetDlgItem(hwnd, ID_PLACEMENT).unwrap_or_default();
             let win_combo = GetDlgItem(hwnd, ID_WINDOW_MODE).unwrap_or_default();
             let browse_btn = GetDlgItem(hwnd, ID_BROWSE).unwrap_or_default();
-            let (mut cap_rc, mut promo_rc, mut win_rc) =
-                (RECT::default(), RECT::default(), RECT::default());
+            let (mut cap_rc, mut promo_rc, mut place_rc, mut win_rc) = (
+                RECT::default(),
+                RECT::default(),
+                RECT::default(),
+                RECT::default(),
+            );
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(combo, &mut cap_rc);
             let _ =
                 windows::Win32::UI::WindowsAndMessaging::GetWindowRect(promo_combo, &mut promo_rc);
+            let _ =
+                windows::Win32::UI::WindowsAndMessaging::GetWindowRect(place_combo, &mut place_rc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(win_combo, &mut win_rc);
             assert!(
-                cap_rc.top < promo_rc.top && promo_rc.top < win_rc.top,
-                "Row order must be Capture Technique ({}) < Promotion Technique ({}) < Window ({})",
+                cap_rc.top < promo_rc.top && promo_rc.top < place_rc.top && place_rc.top < win_rc.top,
+                "Row order must be Capture Method ({}) < Promotion ({}) < Placement ({}) < Window ({})",
                 cap_rc.top,
                 promo_rc.top,
+                place_rc.top,
                 win_rc.top
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, browse_btn, false).ok(),
                 Some(combo),
-                "Tab from Browse must move to Capture Technique"
+                "Tab from Browse must move to Capture Method"
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, combo, false).ok(),
                 Some(promo_combo),
-                "Tab from Capture Technique must move to Promotion Technique"
+                "Tab from Capture Method must move to Promotion"
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, promo_combo, false).ok(),
+                Some(place_combo),
+                "Tab from Promotion must move to Placement"
+            );
+            assert_eq!(
+                GetNextDlgTabItem(hwnd, place_combo, false).ok(),
                 Some(win_combo),
-                "Tab from Promotion Technique must move to Window"
+                "Tab from Placement must move to Window"
             );
 
-            // Label 4 ("Capture Technique") < Label 5 ("Promotion Technique") < Label 6 ("Window").
+            // Labels 4..=7: Capture Method < Promotion < Placement < Window.
             let cap_label = GetDlgItem(hwnd, ID_LABEL_BASE + 4).unwrap_or_default();
             let promo_label = GetDlgItem(hwnd, ID_LABEL_BASE + 5).unwrap_or_default();
-            let win_label = GetDlgItem(hwnd, ID_LABEL_BASE + 6).unwrap_or_default();
-            let (mut lrc, mut plrc, mut wlrc) = (RECT::default(), RECT::default(), RECT::default());
+            let place_label = GetDlgItem(hwnd, ID_LABEL_BASE + 6).unwrap_or_default();
+            let win_label = GetDlgItem(hwnd, ID_LABEL_BASE + 7).unwrap_or_default();
+            let (mut lrc, mut plrc, mut plcrc, mut wlrc) = (
+                RECT::default(),
+                RECT::default(),
+                RECT::default(),
+                RECT::default(),
+            );
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(cap_label, &mut lrc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(promo_label, &mut plrc);
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(place_label, &mut plcrc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(win_label, &mut wlrc);
-            assert!(lrc.top < plrc.top && plrc.top < wlrc.top);
+            assert!(
+                lrc.top < plrc.top && plrc.top < plcrc.top && plcrc.top < wlrc.top,
+                "Label order must match row order"
+            );
             assert!(
                 plrc.right - plrc.left >= scale(140, state.dpi),
-                "Promotion Technique label width {}px too narrow",
+                "Label width {}px too narrow",
                 plrc.right - plrc.left
             );
 
@@ -6483,6 +6598,54 @@ mod tests {
                 SendMessageW(combo, CB_SETCURSEL, WPARAM(idx), LPARAM(0));
                 command(state, ID_PROMOTION_TECHNIQUE, CBN_SELCHANGE);
                 assert_eq!(state.presets[0].promotion_technique, expected);
+                assert!(state.dirtied);
+                state.dirtied = false;
+            }
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn placement_combo_selects_and_updates_preset_placement() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.presets.clear();
+            state.presets.push(CustomPreset::named("PlaceTest"));
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
+
+            let combo = GetDlgItem(hwnd, ID_PLACEMENT).unwrap_or_default();
+            assert!(IsWindowEnabled(combo).as_bool());
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                0,
+                "defaults to FollowTray (index 0)"
+            );
+            assert_eq!(state.presets[0].placement, CustomPlacement::FollowTray);
+
+            assert_eq!(PLACEMENTS.len(), 2);
+            assert_eq!(PLACEMENTS[0], CustomPlacement::FollowTray);
+            assert_eq!(
+                placement_label(CustomPlacement::FollowTray),
+                "Tray -> Placement"
+            );
+            assert_eq!(PLACEMENTS[1], CustomPlacement::Forced);
+            assert_eq!(
+                placement_label(CustomPlacement::Forced),
+                "Tray -> Placement + Forced"
+            );
+
+            for (idx, expected) in PLACEMENTS.iter().copied().enumerate() {
+                SendMessageW(combo, CB_SETCURSEL, WPARAM(idx), LPARAM(0));
+                command(state, ID_PLACEMENT, CBN_SELCHANGE);
+                assert_eq!(state.presets[0].placement, expected);
                 assert!(state.dirtied);
                 state.dirtied = false;
             }

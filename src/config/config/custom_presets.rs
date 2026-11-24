@@ -165,6 +165,33 @@ impl CustomPromotionTechnique {
     }
 }
 
+/// How a custom preview positions the target window relative to `Tray -> Placement`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomPlacement {
+    /// Default: trust the program to honor `Tray -> Placement` coordinates.
+    #[default]
+    FollowTray,
+    /// Aggressively enforce `Tray -> Placement` across initial show, size constraints, and drift.
+    Forced,
+}
+
+impl CustomPlacement {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FollowTray => "tray",
+            Self::Forced => "tray_forced",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "tray" | "follow_tray" | "follow-tray" => Some(Self::FollowTray),
+            "tray_forced" | "tray-forced" | "forced" => Some(Self::Forced),
+            _ => None,
+        }
+    }
+}
+
 /// How a custom preview is sized: either following `Tray -> Scaling` for the hovered file's kind,
 /// or an explicit per-preset override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -231,6 +258,8 @@ pub struct CustomPreset {
     pub capture_technique: CustomCaptureTechnique,
     /// Promotion technique used when pinning / opening this preset's file.
     pub promotion_technique: CustomPromotionTechnique,
+    /// Placement strategy used for this preset's preview window.
+    pub placement: CustomPlacement,
     /// How large the preview is drawn in the hover: following `Tray -> Scaling` by default, or an
     /// explicit per-preset share of the room.
     pub scaling: CustomScaling,
@@ -250,6 +279,7 @@ impl Default for CustomPreset {
             window_mode: CustomWindowMode::default(),
             capture_technique: CustomCaptureTechnique::default(),
             promotion_technique: CustomPromotionTechnique::default(),
+            placement: CustomPlacement::default(),
             scaling: CustomScaling::default(),
             volume_enabled: false,
             volume: DEFAULT_AUDIO_VOLUME,
@@ -406,6 +436,11 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
             "promotion_technique",
             Some(preset.promotion_technique.as_str().to_string()),
         );
+        ini.set(
+            &section,
+            "placement",
+            Some(preset.placement.as_str().to_string()),
+        );
         ini.set(&section, "scaling", Some(preset.scaling.as_str()));
         ini.set(
             &section,
@@ -495,6 +530,11 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         if let Some(technique) = ini.get(section, "promotion_technique") {
             if let Some(parsed) = CustomPromotionTechnique::from_str(&technique) {
                 preset.promotion_technique = parsed;
+            }
+        }
+        if let Some(placement) = ini.get(section, "placement") {
+            if let Some(parsed) = CustomPlacement::from_str(&placement) {
+                preset.placement = parsed;
             }
         }
         if let Some(scaling) = ini.get(section, "scaling") {
@@ -988,6 +1028,54 @@ mod tests {
                 p.promotion_technique,
                 CustomPromotionTechnique::DirectPromotion
             );
+        }
+    }
+
+    #[test]
+    fn placement_round_trips_and_defaults_to_follow_tray() {
+        assert_eq!(CustomPlacement::default(), CustomPlacement::FollowTray);
+        assert_eq!(
+            CustomPreset::named("Fresh").placement,
+            CustomPlacement::FollowTray
+        );
+        let cases = [
+            (CustomPlacement::FollowTray, "tray"),
+            (CustomPlacement::Forced, "tray_forced"),
+        ];
+        for (placement, expected_str) in cases {
+            let mut preset = CustomPreset::named("PlaceTest");
+            preset.exe = "viewer.exe".into();
+            preset.set_extensions_text("png");
+            preset.placement = placement;
+
+            let cfg = config_with(vec![preset]);
+            let mut ini = Ini::new();
+            write_all(&cfg, &mut ini);
+            assert_eq!(
+                ini.get("custom:placetest", "placement").as_deref(),
+                Some(expected_str)
+            );
+
+            let mut read = AppConfig::default();
+            read_all(&ini, &mut read);
+            assert_eq!(read.custom_presets[0].placement, placement);
+        }
+
+        // Missing or unknown value falls back to FollowTray.
+        let mut legacy = Ini::new();
+        legacy.set("custom:missing", "name", Some("Missing".into()));
+        legacy.set("custom:missing", "exe", Some("a.exe".into()));
+        legacy.set("custom:missing", "extensions", Some("png".into()));
+        legacy.set("custom:unknown", "name", Some("Unknown".into()));
+        legacy.set("custom:unknown", "exe", Some("b.exe".into()));
+        legacy.set("custom:unknown", "extensions", Some("png".into()));
+        legacy.set("custom:unknown", "placement", Some("bogus".into()));
+
+        let mut read = AppConfig::default();
+        read_all(&legacy, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        for p in &read.custom_presets {
+            assert_eq!(p.placement, CustomPlacement::FollowTray);
         }
     }
 

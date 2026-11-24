@@ -32,8 +32,9 @@ pub use app_config::AppConfig;
 #[cfg(test)]
 pub(crate) use custom_presets::read_all as custom_presets_read_for_test;
 pub use custom_presets::{
-    preset_for as custom_preset_for, sanitize_program_input, CustomCaptureTechnique, CustomPreset,
-    CustomPromotionTechnique, CustomScaling, CustomWindowMode, MAX_PRESETS,
+    preset_for as custom_preset_for, sanitize_program_input, CustomCaptureTechnique,
+    CustomPlacement, CustomPreset, CustomPromotionTechnique, CustomScaling, CustomWindowMode,
+    MAX_PRESETS,
 };
 pub use engines_in_effect::{latch_engines, office_engine_in_effect, video_engine_in_effect};
 #[cfg(test)]

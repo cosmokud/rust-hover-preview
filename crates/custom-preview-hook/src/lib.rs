@@ -8,7 +8,7 @@
 
 use core::ffi::c_void;
 use core::ptr;
-use core::sync::atomic::{AtomicI32, AtomicIsize, AtomicPtr, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicIsize, AtomicPtr, AtomicU32, AtomicU8, Ordering};
 
 pub const HOOK_MAGIC: u32 = 0x5248_5048;
 pub const HOOK_VERSION: u32 = 1;
@@ -20,14 +20,23 @@ const DLL_PROCESS_DETACH: u32 = 0;
 
 const FILE_MAP_ALL_ACCESS: u32 = 0x000F_001F;
 
+const HCBT_MOVESIZE: i32 = 0;
+const HCBT_MINMAX: i32 = 1;
 const HCBT_CREATEWND: i32 = 3;
 const HCBT_ACTIVATE: i32 = 5;
+
+const SW_MAXIMIZE: u32 = 3;
 
 const WM_CREATE: u32 = 0x0001;
 const WM_SHOWWINDOW: u32 = 0x0018;
 const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 const WM_NCCREATE: u32 = 0x0081;
 const WM_NCDESTROY: u32 = 0x0082;
+const WM_SYSCOMMAND: u32 = 0x0112;
+
+const SC_SIZE: usize = 0xF000;
+const SC_MOVE: usize = 0xF010;
+const SC_MAXIMIZE: usize = 0xF030;
 
 const SUBCLASS_ID: usize = 0x5248_5048;
 
@@ -62,6 +71,15 @@ pub struct HookSharedState {
     pub h: AtomicI32,
     pub captured_hwnd: AtomicIsize,
     pub hook_hits: AtomicU32,
+    pub forced_placement: AtomicU8,
+}
+
+#[repr(C)]
+struct HookRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
 }
 
 #[repr(C)]
@@ -261,6 +279,32 @@ unsafe fn set_cloak(hwnd: isize, cloak: bool) {
     };
 }
 
+#[inline]
+unsafe fn is_captured_or_top_level(state: &HookSharedState, hwnd: isize) -> bool {
+    state.captured_hwnd.load(Ordering::Acquire) == hwnd || unsafe { is_top_level_non_tool(hwnd) }
+}
+
+#[inline]
+unsafe fn apply_locked_window_pos(state: &HookSharedState, wp: *mut WindowPos) {
+    if wp.is_null() || state.rect_locked.load(Ordering::Acquire) != 1 {
+        return;
+    }
+    unsafe {
+        (*wp).hwnd_insert_after = HWND_BOTTOM;
+        (*wp).flags = ((*wp).flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
+        (*wp).x = state.x.load(Ordering::Acquire);
+        (*wp).y = state.y.load(Ordering::Acquire);
+        (*wp).flags &= !SWP_NOMOVE;
+        let w = state.w.load(Ordering::Acquire);
+        let h = state.h.load(Ordering::Acquire);
+        if w > 0 && h > 0 {
+            (*wp).cx = w;
+            (*wp).cy = h;
+            (*wp).flags &= !SWP_NOSIZE;
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "system" fn rhp_cbt_proc(code: i32, wparam: usize, lparam: isize) -> isize {
     if code >= 0 {
@@ -292,6 +336,33 @@ pub unsafe extern "system" fn rhp_cbt_proc(code: i32, wparam: usize, lparam: isi
                         }
                     }
                 }
+            } else if code == HCBT_MINMAX
+                && state.forced_placement.load(Ordering::Acquire) == 1
+                && state.rect_locked.load(Ordering::Acquire) == 1
+                && (lparam as u32 & 0xFFFF) == SW_MAXIMIZE
+                && unsafe { is_captured_or_top_level(state, wparam as isize) }
+            {
+                state.hook_hits.fetch_add(1, Ordering::Relaxed);
+                return 1;
+            } else if code == HCBT_MOVESIZE
+                && state.forced_placement.load(Ordering::Acquire) == 1
+                && state.rect_locked.load(Ordering::Acquire) == 1
+                && unsafe { is_captured_or_top_level(state, wparam as isize) }
+            {
+                let rc = lparam as *mut HookRect;
+                let w = state.w.load(Ordering::Acquire);
+                let h = state.h.load(Ordering::Acquire);
+                if !rc.is_null() && w > 0 && h > 0 {
+                    let x = state.x.load(Ordering::Acquire);
+                    let y = state.y.load(Ordering::Acquire);
+                    unsafe {
+                        (*rc).left = x;
+                        (*rc).top = y;
+                        (*rc).right = x + w;
+                        (*rc).bottom = y + h;
+                    }
+                    state.hook_hits.fetch_add(1, Ordering::Relaxed);
+                }
             } else if code == HCBT_ACTIVATE && state.cloak_enabled.load(Ordering::Acquire) == 1 {
                 return 1;
             }
@@ -321,27 +392,21 @@ unsafe extern "system" fn rhp_subclass_proc(
             state.hook_hits.fetch_add(1, Ordering::Relaxed);
             return 0;
         }
+        if msg == WM_SYSCOMMAND
+            && state.forced_placement.load(Ordering::Acquire) == 1
+            && state.rect_locked.load(Ordering::Acquire) == 1
+        {
+            let cmd = wparam & 0xFFF0;
+            if matches!(cmd, SC_SIZE | SC_MOVE | SC_MAXIMIZE) {
+                state.hook_hits.fetch_add(1, Ordering::Relaxed);
+                return 0;
+            }
+        }
         if msg == WM_WINDOWPOSCHANGING {
             if state.cloak_enabled.load(Ordering::Acquire) == 1 {
                 unsafe { set_cloak(hwnd, true) };
             }
-            let wp = lparam as *mut WindowPos;
-            if !wp.is_null() && state.rect_locked.load(Ordering::Acquire) == 1 {
-                unsafe {
-                    (*wp).hwnd_insert_after = HWND_BOTTOM;
-                    (*wp).flags = ((*wp).flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
-                    (*wp).x = state.x.load(Ordering::Acquire);
-                    (*wp).y = state.y.load(Ordering::Acquire);
-                    (*wp).flags &= !SWP_NOMOVE;
-                    let w = state.w.load(Ordering::Acquire);
-                    let h = state.h.load(Ordering::Acquire);
-                    if w > 0 && h > 0 {
-                        (*wp).cx = w;
-                        (*wp).cy = h;
-                        (*wp).flags &= !SWP_NOSIZE;
-                    }
-                }
-            }
+            unsafe { apply_locked_window_pos(state, lparam as *mut WindowPos) };
         }
     }
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
@@ -411,22 +476,7 @@ pub unsafe extern "system" fn rhp_callwnd_proc(code: i32, wparam: usize, lparam:
                                     SetWindowSubclass(hwnd, rhp_subclass_proc, SUBCLASS_ID, 0)
                                 };
                             }
-                            if !wp.is_null() && state.rect_locked.load(Ordering::Acquire) == 1 {
-                                unsafe {
-                                    (*wp).hwnd_insert_after = HWND_BOTTOM;
-                                    (*wp).flags = ((*wp).flags & !SWP_NOZORDER) | SWP_NOACTIVATE;
-                                    (*wp).x = state.x.load(Ordering::Acquire);
-                                    (*wp).y = state.y.load(Ordering::Acquire);
-                                    (*wp).flags &= !SWP_NOMOVE;
-                                    let w = state.w.load(Ordering::Acquire);
-                                    let h = state.h.load(Ordering::Acquire);
-                                    if w > 0 && h > 0 {
-                                        (*wp).cx = w;
-                                        (*wp).cy = h;
-                                        (*wp).flags &= !SWP_NOSIZE;
-                                    }
-                                }
-                            }
+                            unsafe { apply_locked_window_pos(state, wp) };
                         }
                     }
                 }

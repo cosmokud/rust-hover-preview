@@ -256,6 +256,8 @@ pub struct PreviewCursorHover {
     pub custom: bool,
     /// Whether a custom preview is currently live (not included in `any()`).
     pub custom_active: bool,
+    /// Whether a Forced-placement custom preview is in its brief handoff/settle window (not in `any()`).
+    pub custom_settling: bool,
 }
 
 impl PreviewCursorHover {
@@ -265,6 +267,7 @@ impl PreviewCursorHover {
         engine: false,
         custom: false,
         custom_active: false,
+        custom_settling: false,
     };
 
     pub fn any(self) -> bool {
@@ -283,6 +286,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
     // its surface is asked for by its own handle: it is the same preview to the pointer.
     let engine_hwnd = webview_preview::showing_hwnd();
     let custom_active = super::custom_preview::has_live_preview();
+    let custom_settling = custom_active && super::custom_preview::is_forced_settling();
 
     // PREVIEW_HWND is created once at startup and never cleared, so visibility
     // is what tells us whether the layered window is actually on screen.
@@ -309,6 +313,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
         if GetCursorPos(&mut cursor_pos).is_err() {
             return PreviewCursorHover {
                 custom_active,
+                custom_settling,
                 ..PreviewCursorHover::NONE
             };
         }
@@ -320,6 +325,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
             return PreviewCursorHover {
                 custom,
                 custom_active,
+                custom_settling,
                 ..PreviewCursorHover::NONE
             };
         }
@@ -355,6 +361,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
             engine,
             custom,
             custom_active,
+            custom_settling,
         }
     }
 }

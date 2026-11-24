@@ -1975,6 +1975,7 @@ pub(crate) fn cursor_preview_hover() -> PreviewCursorHover {
         engine: published & 4 != 0,
         custom: published & 8 != 0,
         custom_active: published & 16 != 0,
+        custom_settling: published & 32 != 0,
     }
 }
 
@@ -1985,7 +1986,8 @@ pub(crate) fn publish_preview_cursor_hover(hover: PreviewCursorHover) {
         | (u32::from(hover.video) << 1)
         | (u32::from(hover.engine) << 2)
         | (u32::from(hover.custom) << 3)
-        | (u32::from(hover.custom_active) << 4);
+        | (u32::from(hover.custom_active) << 4)
+        | (u32::from(hover.custom_settling) << 5);
 
     PREVIEW_HOVER.store(published, Ordering::Release);
 }
@@ -4900,6 +4902,7 @@ mod tests {
             engine: false,
             custom: false,
             custom_active: true,
+            custom_settling: false,
         };
         assert!(
             !active_only.any(),
@@ -4909,16 +4912,36 @@ mod tests {
         assert_eq!(PREVIEW_HOVER.load(Ordering::Acquire), 1 << 4);
         assert_eq!(cursor_preview_hover(), active_only);
 
+        let settling_only = PreviewCursorHover {
+            image: false,
+            video: false,
+            engine: false,
+            custom: false,
+            custom_active: true,
+            custom_settling: true,
+        };
+        assert!(
+            !settling_only.any(),
+            "custom_settling alone must not count as over_any_preview"
+        );
+        publish_preview_cursor_hover(settling_only);
+        assert_eq!(PREVIEW_HOVER.load(Ordering::Acquire), (1 << 4) | (1 << 5));
+        assert_eq!(cursor_preview_hover(), settling_only);
+
         let hit_and_active = PreviewCursorHover {
             image: false,
             video: false,
             engine: false,
             custom: true,
             custom_active: true,
+            custom_settling: true,
         };
         assert!(hit_and_active.any(), "custom hit must count in any()");
         publish_preview_cursor_hover(hit_and_active);
-        assert_eq!(PREVIEW_HOVER.load(Ordering::Acquire), (1 << 3) | (1 << 4));
+        assert_eq!(
+            PREVIEW_HOVER.load(Ordering::Acquire),
+            (1 << 3) | (1 << 4) | (1 << 5)
+        );
         assert_eq!(cursor_preview_hover(), hit_and_active);
 
         let all = PreviewCursorHover {
@@ -4927,9 +4950,10 @@ mod tests {
             engine: true,
             custom: true,
             custom_active: true,
+            custom_settling: true,
         };
         publish_preview_cursor_hover(all);
-        assert_eq!(PREVIEW_HOVER.load(Ordering::Acquire), 0b1_1111);
+        assert_eq!(PREVIEW_HOVER.load(Ordering::Acquire), 0b11_1111);
         assert_eq!(cursor_preview_hover(), all);
 
         publish_preview_cursor_hover(previous);

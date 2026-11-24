@@ -118,7 +118,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, AtomicU8, Ordering,
+};
 use std::sync::{Arc, Mutex, Once};
 use std::time::{Duration, Instant};
 
@@ -162,22 +164,22 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow,
     GetLayeredWindowAttributes, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
     GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, IsZoomed, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
+    IsWindowVisible, IsZoomed, MoveWindow, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
     RegisterClassExW, RegisterWindowMessageW, SendMessageTimeoutW, SetForegroundWindow,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
     SetWindowsHookExW, ShowWindow, TranslateMessage, UnhookWindowsHookEx, WindowFromPoint,
     CHILDID_SELF, EVENT_OBJECT_CREATE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GA_ROOT,
     GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HHOOK, HOOKPROC, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
     LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE,
-    QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE, WH_CALLWNDPROC, WH_CBT, WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
-    WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
-    WS_THICKFRAME,
+    QS_ALLINPUT, SET_WINDOW_POS_FLAGS, SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WH_CALLWNDPROC, WH_CBT, WINDOWPLACEMENT,
+    WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZE,
+    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 
 use super::audio_session;
@@ -196,8 +198,9 @@ use super::preview_scale::{animated_scale_for, fit_reduced, HoverScales};
 use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
 use crate::config::config::{
-    custom_preset_for, CustomCaptureTechnique, CustomPreset, CustomPromotionTechnique,
-    CustomScaling, CustomWindowMode, PreviewScale, PreviewType, DEFAULT_AUDIO_SCALE,
+    custom_preset_for, CustomCaptureTechnique, CustomPlacement, CustomPreset,
+    CustomPromotionTechnique, CustomScaling, CustomWindowMode, PreviewScale, PreviewType,
+    DEFAULT_AUDIO_SCALE,
 };
 use crate::readers::{pdf_preview, svg_preview, video_player};
 use crate::CONFIG;
@@ -235,6 +238,12 @@ const THE_SMALLEST_PICTURE: i64 = 64 * 64;
 /// itself: a window shown again by its own program, or restored by it, is one the Shell would
 /// compose at the place the program chose rather than at the hover's.
 const KEEP_POLL: Duration = Duration::from_millis(40);
+const FORCED_POLL: Duration = Duration::from_millis(8);
+const FORCED_STEADY_POLL: Duration = Duration::from_millis(16);
+const FORCED_FAST_POLL_WINDOW: Duration = Duration::from_millis(1500);
+const FORCED_SETTLE_STABLE: Duration = Duration::from_millis(200);
+const FORCED_SETTLE_CAP: Duration = Duration::from_millis(1200);
+const FORCED_CURSOR_STANDOFF_PX: i32 = 12;
 
 /// Neutral dark backdrop painted on the host where the target window does not fill the box.
 const HOST_BACKDROP: COLORREF = COLORREF(0x0020_2020);
@@ -285,6 +294,7 @@ pub(super) enum Where {
 /// Where the hover on screen is to be drawn. `None` is no hover.
 struct Want {
     at: Where,
+    placement: CustomPlacement,
 }
 
 /// Per-preview Job Object with `KILL_ON_JOB_CLOSE` while previewing; `detach()` clears the flag
@@ -407,6 +417,8 @@ struct Launch {
     launch_filetime: u64,
     /// Monotonic timestamp captured immediately before `CreateProcessW`.
     launched_at: Instant,
+    /// Preset placement mode (`FollowTray` vs `Forced`).
+    placement: CustomPlacement,
     /// Which launch this is, so that a worker begun for an earlier one stands down.
     id: u64,
 }
@@ -447,6 +459,8 @@ static PROGRAM: Mutex<Option<Program>> = Mutex::new(None);
 /// Lock-free flag indicating a custom preview launch/hover is live (set in `show`, cleared in
 /// `end_the_program` / `try_detach_active_preview`).
 static LIVE: AtomicBool = AtomicBool::new(false);
+/// Lock-free flag indicating a `CustomPlacement::Forced` launch is in its initial settle/snap window.
+static FORCED_SETTLING: AtomicBool = AtomicBool::new(false);
 /// Launched child PID for the currently active custom preview.
 static LAUNCHED_PID: AtomicU32 = AtomicU32::new(0);
 /// Newly-created PIDs owned by the active custom preview (updated by `run_it`, cleared on teardown/detach).
@@ -464,6 +478,11 @@ pub(super) fn is_showing() -> bool {
 /// Lock-free check whether a custom preview is currently live (and not being promoted/detached).
 pub(super) fn has_live_preview() -> bool {
     !DETACHING.load(Ordering::Acquire) && LIVE.load(Ordering::Acquire)
+}
+
+/// Lock-free check whether a `Forced`-placement custom preview is currently settling/snapping.
+pub(super) fn is_forced_settling() -> bool {
+    !DETACHING.load(Ordering::Acquire) && FORCED_SETTLING.load(Ordering::Acquire)
 }
 
 fn point_in_rect(pt: POINT, rect: RECT) -> bool {
@@ -574,6 +593,11 @@ pub(super) fn cursor_is_over_preview(pt: POINT) -> bool {
         }
     }
 
+    // Check 2 & 3 (SOURCE / OWNED_PIDS) are deferred while Forced placement is settling its window off cursor.
+    if FORCED_SETTLING.load(Ordering::Acquire) {
+        return false;
+    }
+
     // Check 2: Visible uncloaked on-screen SOURCE rect (catches DirectWindow and startup flashes).
     let source_raw = SOURCE.load(Ordering::Acquire);
     if source_raw != 0 {
@@ -671,6 +695,8 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         return false;
     };
 
+    let placement = preset.placement;
+
     // **The same program is not begun twice.** A hover of this file that this app's program is
     // already drawing is put back up wherever the hand now is — which is the whole of what keeps
     // the program's own first window from being a launch loop (see the module note).
@@ -686,7 +712,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         });
     if the_same_program {
         if let Ok(mut want) = WANT.lock() {
-            *want = Some(Want { at });
+            *want = Some(Want { at, placement });
         }
         LIVE.store(true, Ordering::Release);
         return true;
@@ -717,8 +743,12 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let (process, pid, hook_session, capture_technique) = if capture_technique
         == CustomCaptureTechnique::InProcessHook
     {
-        let Some((proc_handle, pid, session)) = launch_in_process_hook(&exe, path, provisional)
-        else {
+        let Some((proc_handle, pid, session)) = launch_in_process_hook(
+            &exe,
+            path,
+            provisional,
+            placement == CustomPlacement::Forced,
+        ) else {
             return false;
         };
         let effective = if session.is_some() {
@@ -759,7 +789,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         });
     }
     if let Ok(mut want) = WANT.lock() {
-        *want = Some(Want { at });
+        *want = Some(Want { at, placement });
     }
     LAUNCHED_PID.store(pid, Ordering::Release);
     if let Ok(mut owned) = OWNED_PIDS.lock() {
@@ -768,6 +798,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             .into_iter()
             .collect();
     }
+    FORCED_SETTLING.store(placement == CustomPlacement::Forced, Ordering::Release);
     LIVE.store(true, Ordering::Release);
     if let Ok(mut slot) = ACTIVE_CAPTURE_TECHNIQUE.lock() {
         *slot = capture_technique;
@@ -792,6 +823,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         processes_before,
         launch_filetime,
         launched_at,
+        placement,
         id,
     };
     // The window is carried as a number: `HWND` is a pointer and a pointer is not `Send`, and
@@ -980,7 +1012,13 @@ fn try_detach_active_preview(path: &Path) -> bool {
     };
 
     // Bump LAUNCH first so `run_it` stops touching `source` and drops `InProcessHookSession`.
+    // Clear hook shared-memory locks immediately before promotion moves/restores `source_hwnd`.
     LAUNCH.fetch_add(1, Ordering::SeqCst);
+    FORCED_SETTLING.store(false, Ordering::Release);
+    let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|mut g| g.take());
+    if let Some(ref ctrl) = hook_ctrl {
+        ctrl.clear_locks_for_detach();
+    }
     LIVE.store(false, Ordering::Release);
     LAUNCHED_PID.store(0, Ordering::Release);
     if let Ok(mut owned) = OWNED_PIDS.lock() {
@@ -1006,7 +1044,6 @@ fn try_detach_active_preview(path: &Path) -> bool {
     if let Ok(mut r) = SOURCE_RESTORE_RECT.lock() {
         *r = None;
     }
-    let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|mut g| g.take());
     let host_rect = LAST_HOST_RECT.lock().ok().and_then(|mut g| g.take());
     let orig_style = SOURCE_ORIGINAL_STYLE.lock().ok().and_then(|mut g| g.take());
     let orig_ex_style = SOURCE_ORIGINAL_EX_STYLE
@@ -1312,6 +1349,7 @@ fn merge_owned_pids_to_end(inputs: OwnedPidInputs<'_>) -> Vec<u32> {
 fn end_the_program() {
     // First, so that a worker still waiting on the program's window stops placing and showing.
     LAUNCH.fetch_add(1, Ordering::SeqCst);
+    FORCED_SETTLING.store(false, Ordering::Release);
     LIVE.store(false, Ordering::Release);
     LAUNCHED_PID.store(0, Ordering::Release);
     SHOWN.store(false, Ordering::SeqCst);
@@ -2004,6 +2042,7 @@ fn run_it(
             // App honored `SW_HIDE`: atomically position + reveal via `SetWindowPlacement` so it never
             // flashes at its old saved coordinates.
             if let Some(target_rect) = current_target_rect() {
+                let ctx = placement_ctx_from_want(&launch, &processes, None);
                 let mode = match capture_technique {
                     CustomCaptureTechnique::OffScreen => {
                         let vscreen = virtual_screen();
@@ -2026,7 +2065,7 @@ fn run_it(
                             source_size(source, window_mode),
                         );
                         the_ask = Some(ask);
-                        park_offscreen(source, ask.0, ask.1);
+                        park_offscreen(source, ask.0, ask.1, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
                         PlacementMode::OffScreen
                     }
@@ -2050,7 +2089,7 @@ fn run_it(
                             ..Default::default()
                         };
                         let _ = unsafe { SetWindowPlacement(source, &placement) };
-                        place_direct_window(source, target_rect, window_mode);
+                        place_direct_window(source, target_rect, window_mode, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
                         PlacementMode::DirectWindow
                     }
@@ -2086,7 +2125,13 @@ fn run_it(
                         restore_foreground(launch.previous_foreground, &processes);
 
                         if invisible_layered {
-                            place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+                            place_invisible_layered(
+                                source,
+                                target_rect,
+                                window_mode,
+                                &mut the_ask,
+                                ctx,
+                            );
                             PlacementMode::InvisibleLayered
                         } else {
                             // Re-read DWM invisible border insets now that `source` is visible for exact alignment.
@@ -2097,18 +2142,30 @@ fn run_it(
                             };
                             let (wx2, wy2, ww2, wh2) =
                                 behind_host_window_rect(target_rect, insets2);
-                            let _ = unsafe {
-                                SetWindowPos(
+                            if ctx.forced {
+                                force_place_window(
                                     source,
+                                    (wx2, wy2, ww2, wh2),
                                     HWND_BOTTOM,
-                                    wx2,
-                                    wy2,
-                                    ww2,
-                                    wh2,
-                                    SWP_NOACTIVATE,
-                                )
-                            };
-                            restore_foreground(launch.previous_foreground, &processes);
+                                    SET_WINDOW_POS_FLAGS(0),
+                                    None,
+                                    launch.previous_foreground,
+                                    &processes,
+                                );
+                            } else {
+                                let _ = unsafe {
+                                    SetWindowPos(
+                                        source,
+                                        HWND_BOTTOM,
+                                        wx2,
+                                        wy2,
+                                        ww2,
+                                        wh2,
+                                        SWP_NOACTIVATE,
+                                    )
+                                };
+                                restore_foreground(launch.previous_foreground, &processes);
+                            }
                             let _ = unsafe { InvalidateRect(source, None, false) };
                             let _ = unsafe { UpdateWindow(source) };
 
@@ -2120,7 +2177,7 @@ fn run_it(
                                     source_size(source, window_mode),
                                 );
                                 the_ask = Some(ask);
-                                park_offscreen(source, ask.0, ask.1);
+                                park_offscreen(source, ask.0, ask.1, ctx);
                                 PlacementMode::OffScreen
                             }
                         }
@@ -2132,9 +2189,10 @@ fn run_it(
                 expected_rect = window_rect(source);
             }
         } else if let Some(target_rect) = current_target_rect() {
+            let ctx = placement_ctx_from_want(&launch, &processes, None);
             // App ignored `SW_HIDE`: apply the selected capture technique immediately.
             placed_mode = Some(if invisible_layered {
-                place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+                place_invisible_layered(source, target_rect, window_mode, &mut the_ask, ctx);
                 restore_foreground(launch.previous_foreground, &processes);
                 PlacementMode::InvisibleLayered
             } else {
@@ -2143,8 +2201,7 @@ fn run_it(
                     capture_technique,
                     target_rect,
                     window_mode,
-                    launch.previous_foreground,
-                    &processes,
+                    ctx,
                     &mut the_ask,
                     placed_mode.zip(placed_host_rect),
                 )
@@ -2204,13 +2261,21 @@ fn run_it(
             // Ignore self-triggered LOCATIONCHANGE from our own SetWindowPos.
             let raw_source_moved = drain_settle_events(source, &launch, &processes);
             let source_moved = raw_source_moved && window_rect(source) != expected_rect;
+            let ctx = placement_ctx_from_want(&launch, &processes, None);
 
             let needs_resnap = source_moved
                 || placed_host_rect != Some(target_rect)
+                || (ctx.forced && unsafe { IsZoomed(source) }.as_bool())
                 || match placed_mode {
                     Some(PlacementMode::InvisibleLayered | PlacementMode::DirectWindow) => false,
                     Some(PlacementMode::BehindHost) => !aligned_behind_host(source, target_rect),
-                    Some(PlacementMode::OffScreen) => !parked(source),
+                    Some(PlacementMode::OffScreen) => should_repark_offscreen(
+                        source,
+                        expected_rect,
+                        ctx.forced,
+                        ctx.avoid_cursor,
+                        false,
+                    ),
                     None => true,
                 };
             if needs_resnap {
@@ -2218,7 +2283,7 @@ fn run_it(
                     the_ask = None;
                 }
                 placed_mode = Some(if invisible_layered {
-                    place_invisible_layered(source, target_rect, window_mode, &mut the_ask);
+                    place_invisible_layered(source, target_rect, window_mode, &mut the_ask, ctx);
                     restore_foreground(launch.previous_foreground, &processes);
                     PlacementMode::InvisibleLayered
                 } else {
@@ -2227,8 +2292,7 @@ fn run_it(
                         capture_technique,
                         target_rect,
                         window_mode,
-                        launch.previous_foreground,
-                        &processes,
+                        ctx,
                         &mut the_ask,
                         placed_mode.zip(placed_host_rect),
                     )
@@ -2319,6 +2383,52 @@ fn run_it(
         drop(source_proc);
     }
 
+    let mut revealed_at: Option<Instant> = None;
+    let mut off_cursor_since: Option<Instant> = None;
+
+    let forced_poll_duration =
+        |forced: bool, launched_at: Instant, revealed: Option<Instant>| -> Duration {
+            if !forced {
+                return KEEP_POLL;
+            }
+            if launched_at.elapsed() < FORCED_FAST_POLL_WINDOW
+                || revealed.is_some_and(|t| t.elapsed() < FORCED_FAST_POLL_WINDOW)
+            {
+                FORCED_POLL
+            } else {
+                FORCED_STEADY_POLL
+            }
+        };
+
+    let update_forced_settling =
+        |forced: bool,
+         preview_shown: bool,
+         cursor_pt: Option<POINT>,
+         off_cursor_since: &mut Option<Instant>,
+         revealed_at: &mut Option<Instant>| {
+            if preview_shown && revealed_at.is_none() {
+                *revealed_at = Some(Instant::now());
+            }
+            if !forced || !FORCED_SETTLING.load(Ordering::Acquire) {
+                return;
+            }
+            if launch.launched_at.elapsed() >= FORCED_SETTLE_CAP {
+                FORCED_SETTLING.store(false, Ordering::Release);
+                return;
+            }
+            let source_off_cursor = visible_frame_rect(source)
+                .or_else(|| window_rect(source))
+                .is_some_and(|r| cursor_pt.is_none_or(|pt| !point_in_rect(pt, r)));
+            if preview_shown && source_off_cursor {
+                let started = *off_cursor_since.get_or_insert_with(Instant::now);
+                if started.elapsed() >= FORCED_SETTLE_STABLE {
+                    FORCED_SETTLING.store(false, Ordering::Release);
+                }
+            } else {
+                *off_cursor_since = None;
+            }
+        };
+
     loop {
         if !is_current(launch.id) {
             return;
@@ -2332,17 +2442,15 @@ fn run_it(
             return;
         }
 
-        let at = WANT
-            .lock()
-            .ok()
-            .and_then(|want| want.as_ref().map(|want| want.at));
-        let Some(at) = at else {
+        let Some((at, placement)) = current_want_snapshot() else {
             // Re-check after reading WANT: open_fully/end_the_program bump LAUNCH before clearing WANT.
             if is_current(launch.id) {
                 end_the_program();
             }
             return;
         };
+        let forced = placement == CustomPlacement::Forced;
+        let cursor_pt = where_cursor(at);
 
         // Hide secondary splash/dialog windows belonging strictly to `processes` (never by exe name).
         census(
@@ -2366,6 +2474,12 @@ fn run_it(
                 last_volume_apply = Instant::now();
             }
         }
+        let ctx = PlacementContext {
+            forced,
+            avoid_cursor: cursor_pt,
+            previous_foreground: launch.previous_foreground,
+            processes: &processes,
+        };
 
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
             if !is_current(launch.id) {
@@ -2401,17 +2515,34 @@ fn run_it(
                 }
             }
             hide_the_host();
-            std::thread::sleep(KEEP_POLL);
+            std::thread::sleep(forced_poll_duration(
+                forced,
+                launch.launched_at,
+                revealed_at,
+            ));
             continue;
         };
         let (x, y) = (layout.pos_x, layout.pos_y);
         let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
         let host_rect = (x, y, width, height);
-        if let Ok(mut slot) = LAST_HOST_RECT.lock() {
-            *slot = Some(host_rect);
+        if !(forced
+            && placed_mode == Some(PlacementMode::DirectWindow)
+            && placed_host_rect == Some(host_rect))
+        {
+            if let Ok(mut slot) = LAST_HOST_RECT.lock() {
+                *slot = Some(host_rect);
+            }
         }
 
         if let Some(ref session) = hook_session {
+            if !is_current(launch.id) || DETACHING.load(Ordering::Acquire) {
+                return;
+            }
+            session
+                .view
+                .state()
+                .forced_placement
+                .store(u8::from(forced), Ordering::Release);
             let needs_reposition = session.view.is_cloaked()
                 || placed_mode.is_none()
                 || placed_host_rect != Some(host_rect);
@@ -2438,15 +2569,143 @@ fn run_it(
                     window_mode,
                     &mut staged,
                 );
-                std::thread::sleep(KEEP_POLL);
-                continue;
+            } else if forced {
+                match placed_mode {
+                    Some(PlacementMode::BehindHost) => {
+                        if !aligned_behind_host(source, host_rect)
+                            || unsafe { IsZoomed(source) }.as_bool()
+                            || window_rect(source) != expected_rect
+                        {
+                            let insets = if window_mode == CustomWindowMode::Normal {
+                                dwm_frame_insets(source)
+                            } else {
+                                (0, 0, 0, 0)
+                            };
+                            let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
+                            session.view.set_rect(wx, wy, ww, wh);
+                            force_place_window(
+                                source,
+                                (wx, wy, ww, wh),
+                                HWND_BOTTOM,
+                                SET_WINDOW_POS_FLAGS(0),
+                                None,
+                                launch.previous_foreground,
+                                &processes,
+                            );
+                            if aligned_behind_host(source, host_rect) {
+                                expected_rect = window_rect(source);
+                            } else {
+                                let ask =
+                                    the_ask_for((width, height), source_size(source, window_mode));
+                                the_ask = Some(ask);
+                                session
+                                    .view
+                                    .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+                                force_place_window(
+                                    source,
+                                    (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                                    HWND_BOTTOM,
+                                    SET_WINDOW_POS_FLAGS(0),
+                                    None,
+                                    launch.previous_foreground,
+                                    &processes,
+                                );
+                                nudge_clamped_offscreen_off_cursor(
+                                    source,
+                                    Some(&session.view),
+                                    cursor_pt,
+                                    launch.previous_foreground,
+                                    &processes,
+                                );
+                                placed_mode = Some(PlacementMode::OffScreen);
+                                expected_rect = window_rect(source);
+                            }
+                        }
+                    }
+                    Some(PlacementMode::OffScreen) => {
+                        if should_repark_offscreen(
+                            source,
+                            expected_rect,
+                            forced,
+                            cursor_pt,
+                            session.view.is_cloaked(),
+                        ) {
+                            let ask = the_ask.unwrap_or_else(|| {
+                                the_ask_for((width, height), source_size(source, window_mode))
+                            });
+                            the_ask = Some(ask);
+                            session
+                                .view
+                                .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+                            force_place_window(
+                                source,
+                                (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                                HWND_BOTTOM,
+                                SET_WINDOW_POS_FLAGS(0),
+                                None,
+                                launch.previous_foreground,
+                                &processes,
+                            );
+                            nudge_clamped_offscreen_off_cursor(
+                                source,
+                                Some(&session.view),
+                                cursor_pt,
+                                launch.previous_foreground,
+                                &processes,
+                            );
+                            expected_rect = window_rect(source);
+                        } else if forced
+                            && !is_window_offscreen(source)
+                            && FORCED_SETTLING.load(Ordering::Acquire)
+                        {
+                            nudge_clamped_offscreen_off_cursor(
+                                source,
+                                Some(&session.view),
+                                cursor_pt,
+                                launch.previous_foreground,
+                                &processes,
+                            );
+                            expected_rect = window_rect(source);
+                        }
+                    }
+                    Some(PlacementMode::InvisibleLayered) => {
+                        keep_source_invisible(source.0 as isize);
+                        if window_rect(source) != expected_rect
+                            || unsafe { IsZoomed(source) }.as_bool()
+                        {
+                            place_invisible_layered(
+                                source,
+                                host_rect,
+                                window_mode,
+                                &mut the_ask,
+                                ctx,
+                            );
+                            expected_rect = window_rect(source);
+                        }
+                    }
+                    Some(PlacementMode::DirectWindow) | None => {}
+                }
             }
+            let preview_shown = SHOWN.load(Ordering::Acquire);
+            update_forced_settling(
+                forced,
+                preview_shown,
+                cursor_pt,
+                &mut off_cursor_since,
+                &mut revealed_at,
+            );
+            std::thread::sleep(forced_poll_duration(
+                forced,
+                launch.launched_at,
+                revealed_at,
+            ));
+            continue;
         } else if placed_mode.is_none() || placed_host_rect != Some(host_rect) {
             if placed_host_rect.is_some_and(|p| p.2 != host_rect.2 || p.3 != host_rect.3) {
                 the_ask = None;
             }
             placed_mode = Some(if invisible_layered {
-                place_invisible_layered(source, host_rect, window_mode, &mut the_ask);
+                place_invisible_layered(source, host_rect, window_mode, &mut the_ask, ctx);
                 restore_foreground(launch.previous_foreground, &processes);
                 PlacementMode::InvisibleLayered
             } else {
@@ -2455,8 +2714,7 @@ fn run_it(
                     capture_technique,
                     host_rect,
                     window_mode,
-                    launch.previous_foreground,
-                    &processes,
+                    ctx,
                     &mut the_ask,
                     placed_mode.zip(placed_host_rect),
                 )
@@ -2467,33 +2725,60 @@ fn run_it(
             match placed_mode {
                 Some(PlacementMode::InvisibleLayered) => {
                     keep_source_invisible(source.0 as isize);
-                    if window_rect(source) != expected_rect {
-                        place_invisible_layered(source, host_rect, window_mode, &mut the_ask);
+                    if window_rect(source) != expected_rect
+                        || (forced && unsafe { IsZoomed(source) }.as_bool())
+                    {
+                        place_invisible_layered(source, host_rect, window_mode, &mut the_ask, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
                         expected_rect = window_rect(source);
                     }
                 }
                 Some(PlacementMode::DirectWindow) => {
                     apply_direct_window_style(source);
-                    if window_rect(source) != expected_rect {
-                        place_direct_window(source, host_rect, window_mode);
+                    let cur_rect = window_rect(source);
+                    let overlaps_cursor = forced
+                        && cursor_pt.is_some_and(|c| cur_rect.is_some_and(|r| point_in_rect(c, r)));
+                    if cur_rect != expected_rect
+                        || (forced && unsafe { IsZoomed(source) }.as_bool())
+                        || overlaps_cursor
+                    {
+                        place_direct_window(source, host_rect, window_mode, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
                         expected_rect = window_rect(source);
                     }
                 }
-                Some(PlacementMode::BehindHost) if !aligned_behind_host(source, host_rect) => {
-                    if !place_behind_host(source, host_rect, window_mode) {
+                Some(PlacementMode::BehindHost)
+                    if !aligned_behind_host(source, host_rect)
+                        || (forced && unsafe { IsZoomed(source) }.as_bool()) =>
+                {
+                    if !place_behind_host(source, host_rect, window_mode, ctx) {
                         let ask = the_ask_for((width, height), source_size(source, window_mode));
                         the_ask = Some(ask);
-                        park_offscreen(source, ask.0, ask.1);
+                        park_offscreen(source, ask.0, ask.1, ctx);
                         placed_mode = Some(PlacementMode::OffScreen);
                     }
                     restore_foreground(launch.previous_foreground, &processes);
+                    expected_rect = window_rect(source);
                 }
-                Some(PlacementMode::OffScreen) if !parked(source) => {
-                    let ask = the_ask.unwrap_or((width, height));
-                    park_offscreen(source, ask.0, ask.1);
-                    restore_foreground(launch.previous_foreground, &processes);
+                Some(PlacementMode::OffScreen) => {
+                    if should_repark_offscreen(source, expected_rect, forced, cursor_pt, false) {
+                        let ask = the_ask.unwrap_or((width, height));
+                        park_offscreen(source, ask.0, ask.1, ctx);
+                        restore_foreground(launch.previous_foreground, &processes);
+                        expected_rect = window_rect(source);
+                    } else if forced
+                        && !is_window_offscreen(source)
+                        && FORCED_SETTLING.load(Ordering::Acquire)
+                    {
+                        nudge_clamped_offscreen_off_cursor(
+                            source,
+                            None,
+                            cursor_pt,
+                            launch.previous_foreground,
+                            &processes,
+                        );
+                        expected_rect = window_rect(source);
+                    }
                 }
                 _ => {}
             }
@@ -2501,7 +2786,19 @@ fn run_it(
 
         if !uses_dwm_host(capture_technique) {
             // DirectWindow shows `source` directly as HWND_TOPMOST; never register thumbnail or show host.
-            std::thread::sleep(KEEP_POLL);
+            let direct_shown = placed_mode == Some(PlacementMode::DirectWindow);
+            update_forced_settling(
+                forced,
+                direct_shown,
+                cursor_pt,
+                &mut off_cursor_since,
+                &mut revealed_at,
+            );
+            std::thread::sleep(forced_poll_duration(
+                forced,
+                launch.launched_at,
+                revealed_at,
+            ));
             continue;
         }
 
@@ -2520,7 +2817,18 @@ fn run_it(
                 return;
             }
             hide_the_host();
-            std::thread::sleep(KEEP_POLL);
+            update_forced_settling(
+                forced,
+                false,
+                cursor_pt,
+                &mut off_cursor_since,
+                &mut revealed_at,
+            );
+            std::thread::sleep(forced_poll_duration(
+                forced,
+                launch.launched_at,
+                revealed_at,
+            ));
             continue;
         }
 
@@ -2577,7 +2885,18 @@ fn run_it(
             }
         }
 
-        std::thread::sleep(KEEP_POLL);
+        update_forced_settling(
+            forced,
+            SHOWN.load(Ordering::Acquire),
+            cursor_pt,
+            &mut off_cursor_since,
+            &mut revealed_at,
+        );
+        std::thread::sleep(forced_poll_duration(
+            forced,
+            launch.launched_at,
+            revealed_at,
+        ));
     }
 }
 
@@ -2881,11 +3200,192 @@ fn apply_direct_window_style(window: HWND) {
     }
 }
 
+fn where_cursor(at: Where) -> Option<POINT> {
+    match at {
+        Where::Pointer { cursor, .. } => Some(POINT {
+            x: cursor.0,
+            y: cursor.1,
+        }),
+        Where::Item { .. } => None,
+    }
+}
+
+fn work_area_rect(pt: POINT) -> RECT {
+    let bounds = work_area_at(pt.x, pt.y);
+    RECT {
+        left: bounds.left,
+        top: bounds.top,
+        right: bounds.right,
+        bottom: bounds.bottom,
+    }
+}
+
+/// If `actual` overlaps `cursor`, pick the nearest shifted `(x, y)` inside `work` that keeps
+/// `actual`'s size clear of `cursor` by `standoff` pixels. Returns `None` if already clear or unshiftable.
+fn shift_rect_off_cursor(
+    actual: RECT,
+    cursor: POINT,
+    work: RECT,
+    standoff: i32,
+) -> Option<(i32, i32)> {
+    if !point_in_rect(cursor, actual) {
+        return None;
+    }
+    let aw = (actual.right - actual.left).max(1);
+    let ah = (actual.bottom - actual.top).max(1);
+    let min_x = work.left;
+    let max_x = (work.right - aw).max(work.left);
+    let min_y = work.top;
+    let max_y = (work.bottom - ah).max(work.top);
+    let clamped_x = actual.left.clamp(min_x, max_x);
+    let clamped_y = actual.top.clamp(min_y, max_y);
+
+    let candidates = [
+        ((cursor.x + standoff).clamp(min_x, max_x), clamped_y),
+        ((cursor.x - standoff - aw).clamp(min_x, max_x), clamped_y),
+        (clamped_x, (cursor.y + standoff).clamp(min_y, max_y)),
+        (clamped_x, (cursor.y - standoff - ah).clamp(min_y, max_y)),
+    ];
+
+    candidates
+        .into_iter()
+        .filter(|&(cx, cy)| {
+            !point_in_rect(
+                cursor,
+                RECT {
+                    left: cx,
+                    top: cy,
+                    right: cx + aw,
+                    bottom: cy + ah,
+                },
+            )
+        })
+        .min_by_key(|&(cx, cy)| (cx - actual.left).abs() + (cy - actual.top).abs())
+}
+
+#[derive(Clone, Copy)]
+struct PlacementContext<'a> {
+    forced: bool,
+    avoid_cursor: Option<POINT>,
+    previous_foreground: isize,
+    processes: &'a [u32],
+}
+
+fn force_place_window(
+    hwnd: HWND,
+    target_rect: (i32, i32, i32, i32),
+    z_order: HWND,
+    extra_flags: SET_WINDOW_POS_FLAGS,
+    avoid_cursor: Option<POINT>,
+    previous_foreground: isize,
+    processes: &[u32],
+) {
+    let (tx, ty, tw, th) = target_rect;
+    let (tw, th) = (tw.max(1), th.max(1));
+    if unsafe { IsZoomed(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool() {
+        let target = RECT {
+            left: tx,
+            top: ty,
+            right: tx + tw,
+            bottom: ty + th,
+        };
+        let rc_normal = if is_off_screen(&target, virtual_screen()) {
+            target
+        } else {
+            workspace_rect_for_screen(target)
+        };
+        let placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            flags: WINDOWPLACEMENT_FLAGS(0),
+            showCmd: SW_SHOWNOACTIVATE.0 as u32,
+            rcNormalPosition: rc_normal,
+            ..Default::default()
+        };
+        let _ = unsafe { SetWindowPlacement(hwnd, &placement) };
+    }
+
+    let cur_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+    let max_min = WS_MAXIMIZE.0 | WS_MINIMIZE.0;
+    if (cur_style & max_min) != 0 {
+        let _ = unsafe { SetWindowLongPtrW(hwnd, GWL_STYLE, (cur_style & !max_min) as isize) };
+    }
+
+    let base_flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | extra_flags;
+    let _ = unsafe { SetWindowPos(hwnd, z_order, tx, ty, tw, th, base_flags) };
+
+    if window_rect(hwnd).is_some_and(|r| r.left != tx || r.top != ty) {
+        let size_ignored = (extra_flags.0 & SWP_NOSIZE.0) != 0;
+        let cur_size = window_rect(hwnd)
+            .map(|r| ((r.right - r.left).max(1), (r.bottom - r.top).max(1)))
+            .unwrap_or((tw, th));
+        let (mw, mh) = if size_ignored { cur_size } else { (tw, th) };
+        let _ = unsafe { MoveWindow(hwnd, tx, ty, mw, mh, true) };
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                z_order,
+                tx,
+                ty,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | extra_flags,
+            )
+        };
+    }
+
+    if let Some(cursor) = avoid_cursor {
+        if let Some(actual) = window_rect(hwnd) {
+            let work = work_area_rect(cursor);
+            if let Some((sx, sy)) =
+                shift_rect_off_cursor(actual, cursor, work, FORCED_CURSOR_STANDOFF_PX)
+            {
+                let _ = unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        z_order,
+                        sx,
+                        sy,
+                        0,
+                        0,
+                        SWP_NOSIZE
+                            | SWP_NOACTIVATE
+                            | SWP_NOOWNERZORDER
+                            | SWP_NOSENDCHANGING
+                            | extra_flags,
+                    )
+                };
+            }
+        }
+    }
+
+    restore_foreground(previous_foreground, processes);
+}
+
+/// Compute `LAST_HOST_RECT` after forced `DirectWindow` placement: keep `host_rect` when
+/// unshifted, or adopt the actual placed/shifted window rect when moved off-target/off-cursor.
+fn shifted_direct_host_rect(
+    intended_outer: (i32, i32, i32, i32),
+    actual_window_rect: RECT,
+    host_rect: (i32, i32, i32, i32),
+) -> (i32, i32, i32, i32) {
+    if actual_window_rect.left != intended_outer.0 || actual_window_rect.top != intended_outer.1 {
+        (
+            actual_window_rect.left,
+            actual_window_rect.top,
+            (actual_window_rect.right - actual_window_rect.left).max(1),
+            (actual_window_rect.bottom - actual_window_rect.top).max(1),
+        )
+    } else {
+        host_rect
+    }
+}
+
 /// Place `window` directly at `host_rect` as `HWND_TOPMOST` click-through (no DWM host/thumbnail).
 fn place_direct_window(
     window: HWND,
     host_rect: (i32, i32, i32, i32),
     window_mode: CustomWindowMode,
+    ctx: PlacementContext<'_>,
 ) {
     apply_direct_window_style(window);
     let insets = if window_mode == CustomWindowMode::Normal {
@@ -2895,25 +3395,55 @@ fn place_direct_window(
     };
     let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
 
-    if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
-        let placement = WINDOWPLACEMENT {
-            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-            flags: WINDOWPLACEMENT_FLAGS(0),
-            showCmd: SW_SHOWNOACTIVATE.0 as u32,
-            rcNormalPosition: workspace_rect_for_screen(RECT {
-                left: wx,
-                top: wy,
-                right: wx + ww,
-                bottom: wy + wh,
-            }),
-            ..Default::default()
-        };
-        let _ = unsafe { SetWindowPlacement(window, &placement) };
-    }
+    if ctx.forced {
+        force_place_window(
+            window,
+            (wx, wy, ww, wh),
+            HWND_TOPMOST,
+            SET_WINDOW_POS_FLAGS(0),
+            ctx.avoid_cursor,
+            ctx.previous_foreground,
+            ctx.processes,
+        );
+        if !unsafe { IsWindowVisible(window) }.as_bool() {
+            let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+            force_place_window(
+                window,
+                (wx, wy, ww, wh),
+                HWND_TOPMOST,
+                SET_WINDOW_POS_FLAGS(0),
+                ctx.avoid_cursor,
+                ctx.previous_foreground,
+                ctx.processes,
+            );
+        }
+        if let Some(actual) = window_rect(window) {
+            let synced = shifted_direct_host_rect((wx, wy, ww, wh), actual, host_rect);
+            if let Ok(mut slot) = LAST_HOST_RECT.lock() {
+                *slot = Some(synced);
+            }
+        }
+    } else {
+        if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
+            let placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                flags: WINDOWPLACEMENT_FLAGS(0),
+                showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                rcNormalPosition: workspace_rect_for_screen(RECT {
+                    left: wx,
+                    top: wy,
+                    right: wx + ww,
+                    bottom: wy + wh,
+                }),
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(window, &placement) };
+        }
 
-    let _ = unsafe { SetWindowPos(window, HWND_TOPMOST, wx, wy, ww, wh, SWP_NOACTIVATE) };
-    if !unsafe { IsWindowVisible(window) }.as_bool() {
-        let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        let _ = unsafe { SetWindowPos(window, HWND_TOPMOST, wx, wy, ww, wh, SWP_NOACTIVATE) };
+        if !unsafe { IsWindowVisible(window) }.as_bool() {
+            let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        }
     }
     let _ = unsafe { InvalidateRect(window, None, false) };
     let _ = unsafe { UpdateWindow(window) };
@@ -3055,6 +3585,7 @@ fn place_invisible_layered(
     host_rect: (i32, i32, i32, i32),
     window_mode: CustomWindowMode,
     the_ask: &mut Option<(i32, i32)>,
+    ctx: PlacementContext<'_>,
 ) {
     keep_source_invisible(window.0 as isize);
     let (hx, hy, hw, hh) = host_rect;
@@ -3066,23 +3597,35 @@ fn place_invisible_layered(
     };
     let (wx, wy, ww, wh) = behind_host_window_rect((hx, hy, tw, th), insets);
 
-    if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
-        let placement = WINDOWPLACEMENT {
-            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-            flags: WINDOWPLACEMENT_FLAGS(0),
-            showCmd: SW_SHOWNOACTIVATE.0 as u32,
-            rcNormalPosition: workspace_rect_for_screen(RECT {
-                left: wx,
-                top: wy,
-                right: wx + ww,
-                bottom: wy + wh,
-            }),
-            ..Default::default()
-        };
-        let _ = unsafe { SetWindowPlacement(window, &placement) };
-    }
+    if ctx.forced {
+        force_place_window(
+            window,
+            (wx, wy, ww, wh),
+            HWND_BOTTOM,
+            SET_WINDOW_POS_FLAGS(0),
+            ctx.avoid_cursor,
+            ctx.previous_foreground,
+            ctx.processes,
+        );
+    } else {
+        if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
+            let placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                flags: WINDOWPLACEMENT_FLAGS(0),
+                showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                rcNormalPosition: workspace_rect_for_screen(RECT {
+                    left: wx,
+                    top: wy,
+                    right: wx + ww,
+                    bottom: wy + wh,
+                }),
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(window, &placement) };
+        }
 
-    let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+        let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+    }
 
     // If app's min-size floor refused `(tw, th)`, resize on-monitor to `the_ask_for` keeping aspect ratio.
     let taken = source_size(window, window_mode);
@@ -3090,11 +3633,37 @@ fn place_invisible_layered(
     if ask != (tw, th) {
         *the_ask = (ask != (hw, hh)).then_some(ask);
         let (wx2, wy2, ww2, wh2) = behind_host_window_rect((hx, hy, ask.0, ask.1), insets);
-        let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE) };
+        if ctx.forced {
+            force_place_window(
+                window,
+                (wx2, wy2, ww2, wh2),
+                HWND_BOTTOM,
+                SET_WINDOW_POS_FLAGS(0),
+                ctx.avoid_cursor,
+                ctx.previous_foreground,
+                ctx.processes,
+            );
+        } else {
+            let _ =
+                unsafe { SetWindowPos(window, HWND_BOTTOM, wx2, wy2, ww2, wh2, SWP_NOACTIVATE) };
+        }
     }
 
     if !unsafe { IsWindowVisible(window) }.as_bool() {
         let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        if ctx.forced {
+            let (cw, ch) = the_ask.unwrap_or((hw, hh));
+            let (wx3, wy3, ww3, wh3) = behind_host_window_rect((hx, hy, cw, ch), insets);
+            force_place_window(
+                window,
+                (wx3, wy3, ww3, wh3),
+                HWND_BOTTOM,
+                SET_WINDOW_POS_FLAGS(0),
+                ctx.avoid_cursor,
+                ctx.previous_foreground,
+                ctx.processes,
+            );
+        }
     }
     keep_source_invisible(window.0 as isize);
     let _ = unsafe { InvalidateRect(window, None, false) };
@@ -3265,6 +3834,7 @@ fn place_behind_host(
     window: HWND,
     host_rect: (i32, i32, i32, i32),
     window_mode: CustomWindowMode,
+    ctx: PlacementContext<'_>,
 ) -> bool {
     let insets = if window_mode == CustomWindowMode::Normal {
         dwm_frame_insets(window)
@@ -3273,26 +3843,50 @@ fn place_behind_host(
     };
     let (wx, wy, ww, wh) = behind_host_window_rect(host_rect, insets);
 
-    if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
-        let placement = WINDOWPLACEMENT {
-            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-            flags: WINDOWPLACEMENT_FLAGS(0),
-            showCmd: SW_SHOWNOACTIVATE.0 as u32,
-            rcNormalPosition: workspace_rect_for_screen(RECT {
-                left: wx,
-                top: wy,
-                right: wx + ww,
-                bottom: wy + wh,
-            }),
-            ..Default::default()
-        };
-        let _ = unsafe { SetWindowPlacement(window, &placement) };
-    }
+    if ctx.forced {
+        force_place_window(
+            window,
+            (wx, wy, ww, wh),
+            HWND_BOTTOM,
+            SET_WINDOW_POS_FLAGS(0),
+            None,
+            ctx.previous_foreground,
+            ctx.processes,
+        );
+        if !unsafe { IsWindowVisible(window) }.as_bool() {
+            let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+            force_place_window(
+                window,
+                (wx, wy, ww, wh),
+                HWND_BOTTOM,
+                SET_WINDOW_POS_FLAGS(0),
+                None,
+                ctx.previous_foreground,
+                ctx.processes,
+            );
+        }
+    } else {
+        if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
+            let placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                flags: WINDOWPLACEMENT_FLAGS(0),
+                showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                rcNormalPosition: workspace_rect_for_screen(RECT {
+                    left: wx,
+                    top: wy,
+                    right: wx + ww,
+                    bottom: wy + wh,
+                }),
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(window, &placement) };
+        }
 
-    let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+        let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
 
-    if !unsafe { IsWindowVisible(window) }.as_bool() {
-        let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        if !unsafe { IsWindowVisible(window) }.as_bool() {
+            let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        }
     }
 
     let _ = unsafe { InvalidateRect(window, None, false) };
@@ -3326,6 +3920,105 @@ fn parked(window: HWND) -> bool {
         && unsafe { IsWindowVisible(window) }.as_bool()
         && !unsafe { IsZoomed(window) }.as_bool()
         && !unsafe { IsIconic(window) }.as_bool()
+}
+
+/// True when `window` is either DWM-cloaked by the hook or non-topmost (strictly behind topmost `host`).
+fn is_window_behind_host(window: HWND, cloaked: bool) -> bool {
+    if cloaked {
+        return true;
+    }
+    let ex = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) } as u32;
+    (ex & WS_EX_TOPMOST.0) == 0
+}
+
+/// True when an `OffScreen`-placed window needs another offscreen park attempt.
+/// Avoids 8ms `STAGE_COORD` <-> monitor-clamp ping-pong when the app already clamped the previous
+/// park attempt on-screen at `expected_rect`, off-cursor (or handled by caller nudge), and
+/// cloaked or behind `host`.
+fn should_repark_offscreen_state(
+    needs_window_restore: bool,
+    cur_rect: Option<RECT>,
+    expected_rect: Option<RECT>,
+    vscreen: RECT,
+    forced: bool,
+    cursor_pt: Option<POINT>,
+    cloaked_or_behind_host: bool,
+) -> bool {
+    if needs_window_restore {
+        return true;
+    }
+    if cur_rect.is_some_and(|r| is_off_screen(&r, vscreen)) {
+        return false;
+    }
+    let same_rect = cur_rect.is_some() && cur_rect == expected_rect;
+    let clamped_onscreen = cur_rect.is_some_and(|r| !is_off_screen(&r, vscreen));
+    let off_cursor = cursor_pt.is_none_or(|pt| cur_rect.is_some_and(|r| !point_in_rect(pt, r)));
+    !(same_rect && clamped_onscreen && cloaked_or_behind_host && (off_cursor || forced))
+}
+
+fn should_repark_offscreen(
+    window: HWND,
+    expected_rect: Option<RECT>,
+    forced: bool,
+    cursor_pt: Option<POINT>,
+    cloaked: bool,
+) -> bool {
+    let is_zoomed = unsafe { IsZoomed(window) }.as_bool();
+    let is_iconic = unsafe { IsIconic(window) }.as_bool();
+    let is_visible = unsafe { IsWindowVisible(window) }.as_bool();
+    let cur_rect = window_rect(window);
+    let vscreen = virtual_screen();
+    should_repark_offscreen_state(
+        is_zoomed || is_iconic || !is_visible,
+        cur_rect,
+        expected_rect,
+        vscreen,
+        forced,
+        cursor_pt,
+        is_window_behind_host(window, cloaked),
+    )
+}
+
+/// If an off-screen parking attempt was clamped onto the monitor and now overlaps `cursor_pt`,
+/// shift `window` once off cursor at `HWND_BOTTOM` without bouncing back to `STAGE_COORD`.
+fn nudge_clamped_offscreen_off_cursor(
+    window: HWND,
+    view: Option<&HookSharedView>,
+    cursor_pt: Option<POINT>,
+    previous_foreground: isize,
+    processes: &[u32],
+) {
+    if is_window_offscreen(window) {
+        return;
+    }
+    let (Some(cursor), Some(actual)) = (cursor_pt, window_rect(window)) else {
+        return;
+    };
+    let work = work_area_rect(cursor);
+    let Some((sx, sy)) = shift_rect_off_cursor(actual, cursor, work, FORCED_CURSOR_STANDOFF_PX)
+    else {
+        return;
+    };
+    if let Some(view) = view {
+        view.set_rect(
+            sx,
+            sy,
+            (actual.right - actual.left).max(1),
+            (actual.bottom - actual.top).max(1),
+        );
+    }
+    let _ = unsafe {
+        SetWindowPos(
+            window,
+            HWND_BOTTOM,
+            sx,
+            sy,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING,
+        )
+    };
+    restore_foreground(previous_foreground, processes);
 }
 
 /// True only when primary parking `SetWindowPos` failed or primary coords overlap `vscreen`.
@@ -3388,7 +4081,7 @@ fn push_offscreen(window: HWND) {
 }
 
 /// Fallback off-screen park when `window`'s minimum size exceeds `host`.
-fn park_offscreen(window: HWND, width: i32, height: i32) {
+fn park_offscreen(window: HWND, width: i32, height: i32, ctx: PlacementContext<'_>) {
     let vscreen = virtual_screen();
     let (px, py) = parking_origin(vscreen);
     let target = RECT {
@@ -3398,35 +4091,80 @@ fn park_offscreen(window: HWND, width: i32, height: i32) {
         bottom: py + height,
     };
 
-    if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
-        let placement = WINDOWPLACEMENT {
-            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-            showCmd: SW_SHOWNOACTIVATE.0 as u32,
-            rcNormalPosition: target,
-            ..Default::default()
-        };
-        let _ = unsafe { SetWindowPlacement(window, &placement) };
-    }
-
-    let swp_ok =
-        unsafe { SetWindowPos(window, HWND_BOTTOM, px, py, width, height, SWP_NOACTIVATE) }.is_ok();
-
-    if should_try_fallback_parking(swp_ok, (px, py), window_rect(window), vscreen) {
-        let _ = unsafe {
-            SetWindowPos(
+    if ctx.forced {
+        force_place_window(
+            window,
+            (px, py, width, height),
+            HWND_BOTTOM,
+            SET_WINDOW_POS_FLAGS(0),
+            None,
+            ctx.previous_foreground,
+            ctx.processes,
+        );
+        if should_try_fallback_parking(true, (px, py), window_rect(window), vscreen) {
+            force_place_window(
                 window,
+                (FALLBACK_PARKING, FALLBACK_PARKING, width, height),
                 HWND_BOTTOM,
-                FALLBACK_PARKING,
-                FALLBACK_PARKING,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOACTIVATE,
-            )
-        };
-    }
+                SWP_NOSIZE,
+                None,
+                ctx.previous_foreground,
+                ctx.processes,
+            );
+        }
+        if !unsafe { IsWindowVisible(window) }.as_bool() {
+            let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+            if !is_window_offscreen(window) {
+                force_place_window(
+                    window,
+                    (px, py, width, height),
+                    HWND_BOTTOM,
+                    SET_WINDOW_POS_FLAGS(0),
+                    None,
+                    ctx.previous_foreground,
+                    ctx.processes,
+                );
+            }
+        }
+        nudge_clamped_offscreen_off_cursor(
+            window,
+            None,
+            ctx.avoid_cursor,
+            ctx.previous_foreground,
+            ctx.processes,
+        );
+    } else {
+        if unsafe { IsZoomed(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
+            let placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                rcNormalPosition: target,
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(window, &placement) };
+        }
 
-    if !unsafe { IsWindowVisible(window) }.as_bool() {
-        let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        let swp_ok =
+            unsafe { SetWindowPos(window, HWND_BOTTOM, px, py, width, height, SWP_NOACTIVATE) }
+                .is_ok();
+
+        if should_try_fallback_parking(swp_ok, (px, py), window_rect(window), vscreen) {
+            let _ = unsafe {
+                SetWindowPos(
+                    window,
+                    HWND_BOTTOM,
+                    FALLBACK_PARKING,
+                    FALLBACK_PARKING,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            };
+        }
+
+        if !unsafe { IsWindowVisible(window) }.as_bool() {
+            let _ = unsafe { ShowWindow(window, SW_SHOWNOACTIVATE) };
+        }
     }
 
     let _ = unsafe { InvalidateRect(window, None, false) };
@@ -3482,14 +4220,12 @@ fn decide_snap_action(
 }
 
 /// Snap `source` according to `technique` and restore focus.
-#[allow(clippy::too_many_arguments)]
 fn snap_source(
     source: HWND,
     technique: CustomCaptureTechnique,
     target_rect: (i32, i32, i32, i32),
     window_mode: CustomWindowMode,
-    previous_foreground: isize,
-    processes: &[u32],
+    ctx: PlacementContext<'_>,
     the_ask: &mut Option<(i32, i32)>,
     prior: Option<(PlacementMode, (i32, i32, i32, i32))>,
 ) -> PlacementMode {
@@ -3502,13 +4238,13 @@ fn snap_source(
         target_rect,
     ) {
         SnapAction::KeepInvisibleLayered => {
-            place_invisible_layered(source, target_rect, window_mode, the_ask);
-            restore_foreground(previous_foreground, processes);
+            place_invisible_layered(source, target_rect, window_mode, the_ask, ctx);
+            restore_foreground(ctx.previous_foreground, ctx.processes);
             PlacementMode::InvisibleLayered
         }
         SnapAction::PlaceDirectWindow => {
-            place_direct_window(source, target_rect, window_mode);
-            restore_foreground(previous_foreground, processes);
+            place_direct_window(source, target_rect, window_mode, ctx);
+            restore_foreground(ctx.previous_foreground, ctx.processes);
             PlacementMode::DirectWindow
         }
         SnapAction::KeepOffScreen => PlacementMode::OffScreen,
@@ -3520,12 +4256,12 @@ fn snap_source(
                 )
             });
             *the_ask = Some(ask);
-            park_offscreen(source, ask.0, ask.1);
-            restore_foreground(previous_foreground, processes);
+            park_offscreen(source, ask.0, ask.1, ctx);
+            restore_foreground(ctx.previous_foreground, ctx.processes);
             PlacementMode::OffScreen
         }
         SnapAction::TryBehindHost => {
-            let mode = if place_behind_host(source, target_rect, window_mode) {
+            let mode = if place_behind_host(source, target_rect, window_mode, ctx) {
                 *the_ask = None;
                 PlacementMode::BehindHost
             } else {
@@ -3534,10 +4270,10 @@ fn snap_source(
                     source_size(source, window_mode),
                 );
                 *the_ask = Some(ask);
-                park_offscreen(source, ask.0, ask.1);
+                park_offscreen(source, ask.0, ask.1, ctx);
                 PlacementMode::OffScreen
             };
-            restore_foreground(previous_foreground, processes);
+            restore_foreground(ctx.previous_foreground, ctx.processes);
             mode
         }
     }
@@ -4174,6 +4910,30 @@ struct OffscreenStagedState<'a> {
     registered: &'a mut isize,
 }
 
+fn current_want_snapshot() -> Option<(Where, CustomPlacement)> {
+    WANT.lock()
+        .ok()
+        .and_then(|want| want.as_ref().map(|w| (w.at, w.placement)))
+}
+
+fn placement_ctx_from_want<'a>(
+    launch: &Launch,
+    processes: &'a [u32],
+    at: Option<Where>,
+) -> PlacementContext<'a> {
+    let want = current_want_snapshot();
+    let forced = want
+        .map(|(_, p)| p == CustomPlacement::Forced)
+        .unwrap_or(launch.placement == CustomPlacement::Forced);
+    let avoid_cursor = at.or_else(|| want.map(|(w, _)| w)).and_then(where_cursor);
+    PlacementContext {
+        forced,
+        avoid_cursor,
+        previous_foreground: launch.previous_foreground,
+        processes,
+    }
+}
+
 /// Strictly isolated stage -> settle at `(STAGE_COORD, STAGE_COORD)` -> reveal phase for `OffscreenStaged`.
 /// Returns `false` if launch was superseded or `source` was destroyed.
 #[allow(clippy::too_many_arguments)]
@@ -4190,6 +4950,7 @@ fn run_offscreen_staged_settle_and_reveal(
     current_target_rect: &dyn Fn() -> Option<(i32, i32, i32, i32)>,
     state: &mut OffscreenStagedState<'_>,
 ) -> bool {
+    let forced = launch.placement == CustomPlacement::Forced;
     let vscreen = virtual_screen();
     let initial_target = current_target_rect();
     // Save an on-screen restore rect for reused non-owned windows so teardown never leaves them at STAGE_COORD.
@@ -4231,6 +4992,33 @@ fn run_offscreen_staged_settle_and_reveal(
     };
     let settle_guard = WinEventGuard(settle_hook);
 
+    let stage_now = || {
+        if forced {
+            force_place_window(
+                source,
+                (STAGE_COORD, STAGE_COORD, stage_w, stage_h),
+                HWND_BOTTOM,
+                SET_WINDOW_POS_FLAGS(0),
+                None,
+                launch.previous_foreground,
+                processes,
+            );
+        } else {
+            let _ = unsafe {
+                SetWindowPos(
+                    source,
+                    HWND_BOTTOM,
+                    STAGE_COORD,
+                    STAGE_COORD,
+                    stage_w,
+                    stage_h,
+                    SWP_NOACTIVATE,
+                )
+            };
+            restore_foreground(launch.previous_foreground, processes);
+        }
+    };
+
     if was_hidden {
         // Reveal atomically at `(STAGE_COORD, STAGE_COORD)` so zero pixels ever appear on-screen.
         let placement = WINDOWPLACEMENT {
@@ -4241,18 +5029,7 @@ fn run_offscreen_staged_settle_and_reveal(
             ..Default::default()
         };
         let _ = unsafe { SetWindowPlacement(source, &placement) };
-        let _ = unsafe {
-            SetWindowPos(
-                source,
-                HWND_BOTTOM,
-                STAGE_COORD,
-                STAGE_COORD,
-                stage_w,
-                stage_h,
-                SWP_NOACTIVATE,
-            )
-        };
-        restore_foreground(launch.previous_foreground, processes);
+        stage_now();
     } else {
         if unsafe { IsZoomed(source) }.as_bool() || unsafe { IsIconic(source) }.as_bool() {
             let placement = WINDOWPLACEMENT {
@@ -4264,18 +5041,7 @@ fn run_offscreen_staged_settle_and_reveal(
             };
             let _ = unsafe { SetWindowPlacement(source, &placement) };
         }
-        let _ = unsafe {
-            SetWindowPos(
-                source,
-                HWND_BOTTOM,
-                STAGE_COORD,
-                STAGE_COORD,
-                stage_w,
-                stage_h,
-                SWP_NOACTIVATE,
-            )
-        };
-        restore_foreground(launch.previous_foreground, processes);
+        stage_now();
     }
 
     // Suppress any owned companion windows strictly in `processes`.
@@ -4319,23 +5085,13 @@ fn run_offscreen_staged_settle_and_reveal(
         let raw_moved = drain_settle_events(source, launch, processes);
         let cur_rect = window_rect(source);
         let drifted = (raw_moved && cur_rect != staged_expected)
-            || cur_rect.is_some_and(|r| !is_off_screen(&r, vscreen));
+            || cur_rect.is_some_and(|r| !is_off_screen(&r, vscreen))
+            || (forced && unsafe { IsZoomed(source) }.as_bool());
         if drifted {
-            let _ = unsafe {
-                SetWindowPos(
-                    source,
-                    HWND_BOTTOM,
-                    STAGE_COORD,
-                    STAGE_COORD,
-                    stage_w,
-                    stage_h,
-                    SWP_NOACTIVATE,
-                )
-            };
-            restore_foreground(launch.previous_foreground, processes);
+            stage_now();
             let _ = drain_settle_events(source, launch, processes);
             staged_expected = window_rect(source);
-            if staged_expected.is_some_and(|r| !is_off_screen(&r, vscreen)) {
+            if !forced && staged_expected.is_some_and(|r| !is_off_screen(&r, vscreen)) {
                 break;
             }
             last_activity = Instant::now();
@@ -4399,14 +5155,29 @@ fn run_offscreen_staged_settle_and_reveal(
     }
     let (hx, hy, hw, hh) = host_rect;
 
+    let ctx = placement_ctx_from_want(launch, processes, None);
+
     // Branch A: try `WS_EX_LAYERED` + `LWA_ALPHA = 1` WHILE STILL AT `(STAGE_COORD, STAGE_COORD)`.
     if make_source_invisible(source.0 as isize) {
         *state.invisible_layered = true;
         SOURCE_INVISIBLE_LAYERED.store(true, Ordering::SeqCst);
-        place_invisible_layered(source, host_rect, window_mode, state.the_ask);
+        place_invisible_layered(source, host_rect, window_mode, state.the_ask, ctx);
         if window_rect(source).is_some_and(|r| is_off_screen(&r, vscreen)) {
             let (aw, ah) = state.the_ask.unwrap_or((hw, hh));
-            let _ = unsafe { SetWindowPos(source, HWND_BOTTOM, hx, hy, aw, ah, SWP_NOACTIVATE) };
+            if ctx.forced {
+                force_place_window(
+                    source,
+                    (hx, hy, aw, ah),
+                    HWND_BOTTOM,
+                    SET_WINDOW_POS_FLAGS(0),
+                    ctx.avoid_cursor,
+                    launch.previous_foreground,
+                    processes,
+                );
+            } else {
+                let _ =
+                    unsafe { SetWindowPos(source, HWND_BOTTOM, hx, hy, aw, ah, SWP_NOACTIVATE) };
+            }
             let _ = unsafe { InvalidateRect(source, None, false) };
             let _ = unsafe { UpdateWindow(source) };
         }
@@ -4495,22 +5266,34 @@ fn run_offscreen_staged_settle_and_reveal(
     }
 
     // 3. Move `source` straight onto real screen behind the already-visible `host`.
-    let mode = if place_behind_host(source, host_rect, window_mode) {
+    let mode = if place_behind_host(source, host_rect, window_mode, ctx) {
         PlacementMode::BehindHost
     } else {
         let ask = the_ask_for((hw, hh), source_size(source, window_mode));
         *state.the_ask = Some(ask);
-        let _ = unsafe {
-            SetWindowPos(
+        if ctx.forced {
+            force_place_window(
                 source,
+                (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
                 HWND_BOTTOM,
-                STAGE_COORD,
-                STAGE_COORD,
-                ask.0,
-                ask.1,
-                SWP_NOACTIVATE,
-            )
-        };
+                SET_WINDOW_POS_FLAGS(0),
+                None,
+                launch.previous_foreground,
+                processes,
+            );
+        } else {
+            let _ = unsafe {
+                SetWindowPos(
+                    source,
+                    HWND_BOTTOM,
+                    STAGE_COORD,
+                    STAGE_COORD,
+                    ask.0,
+                    ask.1,
+                    SWP_NOACTIVATE,
+                )
+            };
+        }
         let _ = unsafe { InvalidateRect(source, None, false) };
         let _ = unsafe { UpdateWindow(source) };
         PlacementMode::OffScreen
@@ -4545,6 +5328,7 @@ struct HookSharedState {
     h: AtomicI32,
     captured_hwnd: AtomicIsize,
     hook_hits: AtomicU32,
+    forced_placement: AtomicU8,
 }
 
 /// Shared memory mapping for `InProcessHook`; safe to clone across `hide()` and worker thread.
@@ -4575,6 +5359,7 @@ impl HookSharedView {
         pid: u32,
         provisional: Option<(i32, i32, i32, i32)>,
         uncloak_msg: u32,
+        forced: bool,
     ) -> Option<Self> {
         let name = wide_null(OsStr::new(&format!("Local\\RhpCustomPreviewHook_{pid}")));
         let size = std::mem::size_of::<HookSharedState>() as u32;
@@ -4618,6 +5403,7 @@ impl HookSharedView {
                 h: AtomicI32::new(h),
                 captured_hwnd: AtomicIsize::new(0),
                 hook_hits: AtomicU32::new(0),
+                forced_placement: AtomicU8::new(u8::from(forced)),
             });
         }
         Some(Self {
@@ -4711,11 +5497,17 @@ impl HookSharedView {
         }
     }
 
-    /// Clear cloak + rect lock and synchronously remove the in-process subclass hook (`CMD_DETACH`).
-    fn detach_sync(&self, hwnd: HWND) -> bool {
+    /// Clear cloak + rect and forced-placement locks before promotion moves or restores `hwnd`.
+    fn clear_locks_for_detach(&self) {
         let s = self.state();
         s.cloak_enabled.store(0, Ordering::Release);
+        s.forced_placement.store(0, Ordering::Release);
         s.rect_locked.store(0, Ordering::Release);
+    }
+
+    /// Clear cloak + locks and synchronously remove the in-process subclass hook (`CMD_DETACH`).
+    fn detach_sync(&self, hwnd: HWND) -> bool {
+        self.clear_locks_for_detach();
         if hwnd.0.is_null() || !unsafe { IsWindow(hwnd) }.as_bool() {
             return false;
         }
@@ -4865,6 +5657,7 @@ fn launch_in_process_hook(
     exe: &str,
     path: &Path,
     provisional: Option<(i32, i32, i32, i32)>,
+    forced: bool,
 ) -> Option<(OwnedHandle, u32, Option<InProcessHookSession>)> {
     let Some((hmod, cbt_proc, cwp_proc)) = load_hook_dll() else {
         let (proc_handle, pid) = launch(
@@ -4920,7 +5713,7 @@ fn launch_in_process_hook(
     let pid = pi.dwProcessId;
     let tid = pi.dwThreadId;
     let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
-    let view = HookSharedView::create(pid, provisional, uncloak_msg).map(Arc::new);
+    let view = HookSharedView::create(pid, provisional, uncloak_msg, forced).map(Arc::new);
 
     // Attempt hook install before `ResumeThread`; if Win11 rejects a suspended thread before
     // `W32THREAD` init (`ERROR_INVALID_THREAD_ID`), spin-yield 30ms (sub-0.1ms attach; avoids
@@ -5113,6 +5906,7 @@ fn reveal_in_process_hook(
     if let Ok(mut slot) = LAST_HOST_RECT.lock() {
         *slot = Some(host_rect);
     }
+    let ctx = placement_ctx_from_want(launch, processes, None);
     // Late-hooked fallback (`hook_hits == 0`): source is not cloaked; use InvisibleLayered if active.
     if session.view.hook_hits() == 0 && *state.invisible_layered {
         session
@@ -5120,7 +5914,7 @@ fn reveal_in_process_hook(
             .state()
             .cloak_enabled
             .store(0, Ordering::Release);
-        place_invisible_layered(source, host_rect, window_mode, state.the_ask);
+        place_invisible_layered(source, host_rect, window_mode, state.the_ask, ctx);
         restore_foreground(launch.previous_foreground, processes);
         *state.placed_mode = Some(PlacementMode::InvisibleLayered);
         *state.placed_host_rect = Some(host_rect);
@@ -5141,27 +5935,39 @@ fn reveal_in_process_hook(
     if !session.view.is_cloaked() {
         let _ = session.view.cloak_sync(source);
     }
-    if unsafe { IsZoomed(source) }.as_bool() || unsafe { IsIconic(source) }.as_bool() {
-        let placement = WINDOWPLACEMENT {
-            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
-            flags: WINDOWPLACEMENT_FLAGS(0),
-            showCmd: SW_SHOWNOACTIVATE.0 as u32,
-            rcNormalPosition: stage_workspace_rect(ww, wh),
-            ..Default::default()
-        };
-        let _ = unsafe { SetWindowPlacement(source, &placement) };
-    }
-    let _ = unsafe {
-        SetWindowPos(
+    if ctx.forced {
+        force_place_window(
             source,
+            (STAGE_COORD, STAGE_COORD, ww, wh),
             HWND_BOTTOM,
-            STAGE_COORD,
-            STAGE_COORD,
-            ww,
-            wh,
-            SWP_NOACTIVATE,
-        )
-    };
+            SET_WINDOW_POS_FLAGS(0),
+            None,
+            launch.previous_foreground,
+            processes,
+        );
+    } else {
+        if unsafe { IsZoomed(source) }.as_bool() || unsafe { IsIconic(source) }.as_bool() {
+            let placement = WINDOWPLACEMENT {
+                length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                flags: WINDOWPLACEMENT_FLAGS(0),
+                showCmd: SW_SHOWNOACTIVATE.0 as u32,
+                rcNormalPosition: stage_workspace_rect(ww, wh),
+                ..Default::default()
+            };
+            let _ = unsafe { SetWindowPlacement(source, &placement) };
+        }
+        let _ = unsafe {
+            SetWindowPos(
+                source,
+                HWND_BOTTOM,
+                STAGE_COORD,
+                STAGE_COORD,
+                ww,
+                wh,
+                SWP_NOACTIVATE,
+            )
+        };
+    }
     if !unsafe { IsWindowVisible(source) }.as_bool() {
         let _ = unsafe { ShowWindow(source, SW_SHOWNOACTIVATE) };
     }
@@ -5181,17 +5987,29 @@ fn reveal_in_process_hook(
         session
             .view
             .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
-        let _ = unsafe {
-            SetWindowPos(
+        if ctx.forced {
+            force_place_window(
                 source,
+                (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
                 HWND_BOTTOM,
-                STAGE_COORD,
-                STAGE_COORD,
-                ask.0,
-                ask.1,
-                SWP_NOACTIVATE,
-            )
-        };
+                SET_WINDOW_POS_FLAGS(0),
+                None,
+                launch.previous_foreground,
+                processes,
+            );
+        } else {
+            let _ = unsafe {
+                SetWindowPos(
+                    source,
+                    HWND_BOTTOM,
+                    STAGE_COORD,
+                    STAGE_COORD,
+                    ask.0,
+                    ask.1,
+                    SWP_NOACTIVATE,
+                )
+            };
+        }
     }
 
     // Size `host`, register thumbnail, and show opaque topmost `host` FIRST.
@@ -5255,13 +6073,92 @@ fn reveal_in_process_hook(
 
     let mode = if fits_host {
         session.view.set_rect(wx, wy, ww, wh);
-        let _ = unsafe { SetWindowPos(source, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
-        session.view.uncloak_sync(source);
-        let _ = unsafe { InvalidateRect(source, None, false) };
-        let _ = unsafe { UpdateWindow(source) };
-        PlacementMode::BehindHost
+        if ctx.forced {
+            force_place_window(
+                source,
+                (wx, wy, ww, wh),
+                HWND_BOTTOM,
+                SET_WINDOW_POS_FLAGS(0),
+                None,
+                launch.previous_foreground,
+                processes,
+            );
+            session.view.uncloak_sync(source);
+            if !aligned_behind_host(source, host_rect) {
+                force_place_window(
+                    source,
+                    (wx, wy, ww, wh),
+                    HWND_BOTTOM,
+                    SET_WINDOW_POS_FLAGS(0),
+                    None,
+                    launch.previous_foreground,
+                    processes,
+                );
+            }
+            if aligned_behind_host(source, host_rect) {
+                let _ = unsafe { InvalidateRect(source, None, false) };
+                let _ = unsafe { UpdateWindow(source) };
+                PlacementMode::BehindHost
+            } else {
+                let ask = the_ask_for((hw, hh), source_size(source, window_mode));
+                *state.the_ask = Some(ask);
+                session
+                    .view
+                    .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+                force_place_window(
+                    source,
+                    (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                    HWND_BOTTOM,
+                    SET_WINDOW_POS_FLAGS(0),
+                    None,
+                    launch.previous_foreground,
+                    processes,
+                );
+                nudge_clamped_offscreen_off_cursor(
+                    source,
+                    Some(&session.view),
+                    ctx.avoid_cursor,
+                    launch.previous_foreground,
+                    processes,
+                );
+                let _ = unsafe { InvalidateRect(source, None, false) };
+                let _ = unsafe { UpdateWindow(source) };
+                PlacementMode::OffScreen
+            }
+        } else {
+            let _ = unsafe { SetWindowPos(source, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
+            session.view.uncloak_sync(source);
+            let _ = unsafe { InvalidateRect(source, None, false) };
+            let _ = unsafe { UpdateWindow(source) };
+            PlacementMode::BehindHost
+        }
     } else {
         session.view.uncloak_sync(source);
+        if ctx.forced && !is_window_offscreen(source) {
+            let ask = state
+                .the_ask
+                .unwrap_or_else(|| the_ask_for((hw, hh), source_size(source, window_mode)));
+            *state.the_ask = Some(ask);
+            session
+                .view
+                .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
+            force_place_window(
+                source,
+                (STAGE_COORD, STAGE_COORD, ask.0, ask.1),
+                HWND_BOTTOM,
+                SET_WINDOW_POS_FLAGS(0),
+                None,
+                launch.previous_foreground,
+                processes,
+            );
+            nudge_clamped_offscreen_off_cursor(
+                source,
+                Some(&session.view),
+                ctx.avoid_cursor,
+                launch.previous_foreground,
+                processes,
+            );
+        }
         let _ = unsafe { InvalidateRect(source, None, false) };
         let _ = unsafe { UpdateWindow(source) };
         PlacementMode::OffScreen
@@ -5390,8 +6287,24 @@ fn run_in_process_hook_settle_and_reveal(
         session.view.set_rect(STAGE_COORD, STAGE_COORD, ww, wh);
 
         let cur = window_rect(source);
-        if cur != last_rect {
-            last_rect = cur;
+        if cur != last_rect
+            || (launch.placement == CustomPlacement::Forced
+                && unsafe { IsZoomed(source) }.as_bool())
+        {
+            if launch.placement == CustomPlacement::Forced {
+                let _ = unsafe {
+                    SetWindowPos(
+                        source,
+                        HWND_BOTTOM,
+                        STAGE_COORD,
+                        STAGE_COORD,
+                        ww,
+                        wh,
+                        SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING,
+                    )
+                };
+            }
+            last_rect = window_rect(source);
             last_change = Instant::now();
         } else if last_change.elapsed() >= Duration::from_millis(100) {
             let answered = unsafe {
@@ -6826,12 +7739,13 @@ mod tests {
         let pid = std::process::id();
         let msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
         assert_ne!(msg, 0);
-        let view = HookSharedView::create(pid, Some((120, 80, 640, 480)), msg)
+        let view = HookSharedView::create(pid, Some((120, 80, 640, 480)), msg, true)
             .expect("HookSharedView::create must succeed");
         assert_eq!(std::mem::size_of::<HookSharedState>(), 56);
         assert_eq!(view.state().magic, HOOK_MAGIC);
         assert_eq!(view.state().version, HOOK_VERSION);
         assert_eq!(view.state().target_pid, pid);
+        assert_eq!(view.state().forced_placement.load(Ordering::Acquire), 1);
         assert!(view.is_cloaked());
         assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 1);
         assert_eq!(view.state().x.load(Ordering::Acquire), STAGE_COORD);
@@ -6979,12 +7893,13 @@ mod tests {
         assert_eq!(view.state().x.load(Ordering::Acquire), STAGE_COORD);
         assert_eq!(view.state().y.load(Ordering::Acquire), STAGE_COORD);
 
-        // CMD_DETACH clears cloak_enabled + rect_locked and removes the in-process subclass hook.
+        // CMD_DETACH clears cloak_enabled + forced_placement + rect_locked and removes the subclass hook.
         assert!(
             view.detach_sync(main_hwnd),
             "detach_sync must deliver CMD_DETACH synchronously and increment hook_hits"
         );
         assert_eq!(view.state().cloak_enabled.load(Ordering::Acquire), 0);
+        assert_eq!(view.state().forced_placement.load(Ordering::Acquire), 0);
         assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 0);
         let _ = unsafe {
             SetWindowPos(
@@ -7097,6 +8012,7 @@ mod tests {
         if let Ok(mut w) = WANT.lock() {
             *w = Some(Want {
                 at: pointer((100, 100)),
+                placement: CustomPlacement::FollowTray,
             });
         }
         LIVE.store(true, Ordering::Release);
@@ -7132,6 +8048,7 @@ mod tests {
         if let Ok(mut w) = WANT.lock() {
             *w = Some(Want {
                 at: pointer((120, 120)),
+                placement: CustomPlacement::FollowTray,
             });
         }
         LIVE.store(true, Ordering::Release);
@@ -7282,12 +8199,263 @@ mod tests {
             y: STAGE_COORD + 10
         }));
 
+        // During FORCED_SETTLING, Check 1 (visible HOST rect) STILL triggers immediately, while
+        // SOURCE / OWNED_PIDS (Checks 2 & 3) are deferred until settling finishes.
+        // Place on_screen_hwnd disjoint from LAST_HOST_RECT ([hx..hx+400, hy..hy+300]) inside bounds.
+        let sx = bounds.left + 40;
+        let sy = hy;
+        let on_screen_pt = POINT {
+            x: sx + 80,
+            y: sy + 50,
+        };
+        let on_screen_hwnd = unsafe {
+            windows::Win32::UI::WindowsAndMessaging::CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("OnScreen"),
+                WS_CAPTION | windows::Win32::UI::WindowsAndMessaging::WS_VISIBLE,
+                sx,
+                sy,
+                220,
+                160,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create visible on-screen window")
+        };
+        SOURCE.store(on_screen_hwnd.0 as isize, Ordering::SeqCst);
+        SOURCE_INVISIBLE_LAYERED.store(false, Ordering::SeqCst);
+        FORCED_SETTLING.store(true, Ordering::Release);
+        assert!(is_forced_settling());
+        assert!(cursor_is_over_preview(POINT {
+            x: hx + 10,
+            y: hy + 10
+        }));
+        assert!(!cursor_is_over_preview(on_screen_pt));
+        FORCED_SETTLING.store(false, Ordering::Release);
+        assert!(!is_forced_settling());
+        assert!(cursor_is_over_preview(on_screen_pt));
+
         end_the_program();
+        assert!(!FORCED_SETTLING.load(Ordering::Acquire));
         assert!(!cursor_is_over_preview(POINT {
             x: hx + 10,
             y: hy + 10
         }));
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(on_screen_hwnd) };
         let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hidden_hwnd) };
+    }
+
+    #[test]
+    fn forced_placement_min_size_cursor_shift_keeps_window_off_cursor() {
+        let work = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        let cursor = POINT { x: 500, y: 400 };
+
+        // Already clear of cursor -> returns None.
+        let clear = RECT {
+            left: 520,
+            top: 200,
+            right: 920,
+            bottom: 500,
+        };
+        assert_eq!(shift_rect_off_cursor(clear, cursor, work, 12), None);
+
+        // App enforced wide minimum width overlapping cursor from the left -> shifts cleanly off cursor.
+        let overlapping = RECT {
+            left: 200,
+            top: 300,
+            right: 750,
+            bottom: 700,
+        };
+        let (sx, sy) = shift_rect_off_cursor(overlapping, cursor, work, 12)
+            .expect("overlapping min-size rect must shift away from cursor");
+        let shifted = RECT {
+            left: sx,
+            top: sy,
+            right: sx + (overlapping.right - overlapping.left),
+            bottom: sy + (overlapping.bottom - overlapping.top),
+        };
+        assert!(!point_in_rect(cursor, shifted));
+        assert!(shifted.left >= work.left && shifted.right <= work.right);
+        assert!(shifted.top >= work.top && shifted.bottom <= work.bottom);
+
+        // Work-area-filling minimum size -> cannot move off cursor, returns None gracefully.
+        let fullscreen = work;
+        assert_eq!(shift_rect_off_cursor(fullscreen, cursor, work, 12), None);
+    }
+
+    #[test]
+    fn forced_direct_window_syncs_last_host_rect_and_offscreen_avoids_stage_oscillation() {
+        let host_rect = (300, 200, 360, 240);
+        // Unshifted rect preserves exact host_rect; shifted rect adopts actual placed coords.
+        assert_eq!(
+            shifted_direct_host_rect(
+                host_rect,
+                RECT {
+                    left: 300,
+                    top: 200,
+                    right: 660,
+                    bottom: 440,
+                },
+                host_rect,
+            ),
+            host_rect
+        );
+        assert_eq!(
+            shifted_direct_host_rect(
+                host_rect,
+                RECT {
+                    left: 720,
+                    top: 200,
+                    right: 1120,
+                    bottom: 500,
+                },
+                host_rect,
+            ),
+            (720, 200, 400, 300)
+        );
+
+        // End-to-end forced DirectWindow overlapping cursor shifts off-cursor and updates LAST_HOST_RECT.
+        let bounds = work_area_at(0, 0);
+        let hx = bounds.left + 300;
+        let hy = bounds.top + 200;
+        let test_host = (hx, hy, 320, 220);
+        let cursor = POINT {
+            x: hx + 80,
+            y: hy + 80,
+        };
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("DirectShift"),
+                WS_POPUP,
+                hx,
+                hy,
+                320,
+                220,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create DirectWindow test hwnd")
+        };
+        if let Ok(mut slot) = LAST_HOST_RECT.lock() {
+            *slot = None;
+        }
+        place_direct_window(
+            hwnd,
+            test_host,
+            CustomWindowMode::Borderless,
+            PlacementContext {
+                forced: true,
+                avoid_cursor: Some(cursor),
+                previous_foreground: 0,
+                processes: &[],
+            },
+        );
+        let actual = window_rect(hwnd).expect("actual DirectWindow rect");
+        assert!(!point_in_rect(cursor, actual));
+        assert_eq!(
+            LAST_HOST_RECT.lock().unwrap().take(),
+            Some((
+                actual.left,
+                actual.top,
+                (actual.right - actual.left).max(1),
+                (actual.bottom - actual.top).max(1),
+            ))
+        );
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+
+        // HookSharedView::clear_locks_for_detach immediately zeroes cloak, forced_placement, and rect_locked.
+        let msg = unsafe { RegisterWindowMessageW(w!("RhpDetachLocksUnitTest")) };
+        let view = HookSharedView::create(0xDEAD_BEEF, Some((100, 100, 320, 240)), msg, true)
+            .expect("create HookSharedView");
+        assert_eq!(view.state().cloak_enabled.load(Ordering::Acquire), 1);
+        assert_eq!(view.state().forced_placement.load(Ordering::Acquire), 1);
+        assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 1);
+        view.clear_locks_for_detach();
+        assert_eq!(view.state().cloak_enabled.load(Ordering::Acquire), 0);
+        assert_eq!(view.state().forced_placement.load(Ordering::Acquire), 0);
+        assert_eq!(view.state().rect_locked.load(Ordering::Acquire), 0);
+
+        // Offscreen clamp guard avoids 8ms STAGE_COORD oscillation when already settled off-cursor behind host.
+        let vscreen = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let offscreen_parked = RECT {
+            left: STAGE_COORD,
+            top: STAGE_COORD,
+            right: STAGE_COORD + 400,
+            bottom: STAGE_COORD + 300,
+        };
+        let clamped = RECT {
+            left: 100,
+            top: 100,
+            right: 900,
+            bottom: 700,
+        };
+        let off_cursor = Some(POINT { x: 50, y: 50 });
+        assert!(!should_repark_offscreen_state(
+            false,
+            Some(offscreen_parked),
+            Some(offscreen_parked),
+            vscreen,
+            true,
+            off_cursor,
+            true,
+        ));
+        assert!(!should_repark_offscreen_state(
+            false,
+            Some(clamped),
+            Some(clamped),
+            vscreen,
+            true,
+            off_cursor,
+            true,
+        ));
+        // Drifted rect, zoomed/hidden, or uncloaked+topmost must still repark.
+        assert!(should_repark_offscreen_state(
+            false,
+            Some(RECT {
+                left: 140,
+                ..clamped
+            }),
+            Some(clamped),
+            vscreen,
+            true,
+            off_cursor,
+            true,
+        ));
+        assert!(should_repark_offscreen_state(
+            true,
+            Some(clamped),
+            Some(clamped),
+            vscreen,
+            true,
+            off_cursor,
+            true,
+        ));
+        assert!(should_repark_offscreen_state(
+            false,
+            Some(clamped),
+            Some(clamped),
+            vscreen,
+            true,
+            off_cursor,
+            false,
+        ));
     }
 
     #[test]
@@ -7415,6 +8583,7 @@ mod tests {
         if let Ok(mut w) = WANT.lock() {
             *w = Some(Want {
                 at: pointer((target_x, target_y)),
+                placement: CustomPlacement::FollowTray,
             });
         }
         SOURCE.store(hwnd.0 as isize, Ordering::SeqCst);
@@ -7617,6 +8786,7 @@ mod tests {
                     cursor: (0, 0),
                     avoid: None,
                 },
+                placement: CustomPlacement::FollowTray,
             });
         }
         SHOWN.store(true, Ordering::SeqCst);
