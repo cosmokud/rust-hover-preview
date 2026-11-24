@@ -341,7 +341,10 @@ jobs:
           # fixture does. This says that something behind the reference names an account
           # directory and stops; `cargo test --test no_path_leaks` names the commit, and is
           # the place to look, since this job asks for nothing heavier than an answer.
-          if git log --format='%H%n%an%n%ae%n%cn%n%ce%n%B' FETCH_HEAD | grep -qE "$SHAPES"; then
+          # into a file, not `| grep -q`: grep's early exit SIGPIPEs git, and pipefail turns
+          # that into 141, which an `if` reads as "no match" — a leak waved through.
+          git log --format='%H%n%an%n%ae%n%cn%n%ce%n%B' FETCH_HEAD > commit-messages.txt
+          if grep -qE "$SHAPES" commit-messages.txt; then
             echo "::error::a commit message behind ${REF} names a profile directory, which is named after the account that owns it"
             echo "::error::cargo test --test no_path_leaks names the commit"
             exit 1
