@@ -157,11 +157,12 @@ use windows::Win32::System::Memory::{
     MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
 };
 use windows::Win32::System::Threading::{
-    CreateProcessW, GetProcessTimes, IsWow64Process, OpenProcess, QueryFullProcessImageNameW,
-    ResumeThread, TerminateProcess, WaitForInputIdle, WaitForSingleObject, CREATE_SUSPENDED,
-    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
+    CreateProcessW, GetProcessTimes, GetThreadId, IsWow64Process, OpenProcess,
+    QueryFullProcessImageNameW, ResumeThread, TerminateProcess, WaitForInputIdle,
+    WaitForSingleObject, CREATE_SUSPENDED, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+    PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTF_USEPOSITION,
+    STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW, THREAD_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
@@ -5876,9 +5877,77 @@ fn is_cloaked_by_pre_hook(pre_hook: Option<&InProcessHookSession>, pid: u32) -> 
     })
 }
 
+type NtGetNextThreadFn = unsafe extern "system" fn(
+    process: HANDLE,
+    thread: HANDLE,
+    desired_access: u32,
+    handle_attributes: u32,
+    flags: u32,
+    new_thread: *mut HANDLE,
+) -> i32;
+
+fn nt_get_next_thread_fn() -> Option<NtGetNextThreadFn> {
+    static FN: std::sync::OnceLock<Option<NtGetNextThreadFn>> = std::sync::OnceLock::new();
+    *FN.get_or_init(|| unsafe {
+        let ntdll = GetModuleHandleW(w!("ntdll.dll")).ok()?;
+        let proc = GetProcAddress(ntdll, PCSTR(c"NtGetNextThread".as_ptr().cast()))?;
+        // SAFETY: `NtGetNextThread` exported by ntdll.dll matches `NtGetNextThreadFn` ABI.
+        Some(std::mem::transmute::<
+            unsafe extern "system" fn() -> isize,
+            NtGetNextThreadFn,
+        >(proc))
+    })
+}
+
+fn threads_of_process_via_nt(pid: u32) -> Option<Vec<u32>> {
+    if pid == 0 {
+        return Some(Vec::new());
+    }
+    let nt_get_next_thread = nt_get_next_thread_fn()?;
+    let proc_handle = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, pid) }.ok()?;
+    let mut tids = Vec::new();
+    let mut prev = HANDLE::default();
+    for _ in 0..1024 {
+        let mut next = HANDLE::default();
+        let status = unsafe {
+            nt_get_next_thread(
+                proc_handle,
+                prev,
+                THREAD_QUERY_LIMITED_INFORMATION.0,
+                0,
+                0,
+                &mut next,
+            )
+        };
+        if !prev.is_invalid() && !prev.0.is_null() {
+            let _ = unsafe { CloseHandle(prev) };
+        }
+        prev = HANDLE::default();
+        if status < 0 || next.is_invalid() || next.0.is_null() {
+            if !next.is_invalid() && !next.0.is_null() {
+                let _ = unsafe { CloseHandle(next) };
+            }
+            break;
+        }
+        let tid = unsafe { GetThreadId(next) };
+        if tid != 0 {
+            tids.push(tid);
+        }
+        prev = next;
+    }
+    if !prev.is_invalid() && !prev.0.is_null() {
+        let _ = unsafe { CloseHandle(prev) };
+    }
+    let _ = unsafe { CloseHandle(proc_handle) };
+    Some(tids)
+}
+
 fn threads_of_process(pid: u32) -> Vec<u32> {
     if pid == 0 {
         return Vec::new();
+    }
+    if let Some(tids) = threads_of_process_via_nt(pid) {
+        return tids;
     }
     let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }) else {
         return Vec::new();
@@ -6054,17 +6123,21 @@ impl JobChildPreHook {
         let attach_start = Instant::now();
         let do_tight_retry = session.hooks.is_empty() && self.tight_attempted_pids.insert(pid);
         if do_tight_retry {
-            let tight_deadline = attach_start + Duration::from_millis(80);
+            let tight_deadline = attach_start + Duration::from_millis(60);
+            let enum_start = Instant::now();
             let mut tids = threads_of_process(pid);
-            let mut last_enum = attach_start;
+            let mut enum_ms = enum_start.elapsed().as_millis();
+            let mut last_enum = Instant::now();
             let mut attempts: u32 = 0;
             let mut last_err: Option<(&'static str, u32)> = None;
-            while Instant::now() < tight_deadline {
+            while !tids.is_empty() && Instant::now() < tight_deadline {
                 if !launch_still_wanted(launch) {
                     return;
                 }
                 if last_enum.elapsed() >= Duration::from_millis(5) {
+                    let re_start = Instant::now();
                     tids = threads_of_process(pid);
+                    enum_ms = enum_ms.max(re_start.elapsed().as_millis());
                     last_enum = Instant::now();
                     if tids.is_empty() {
                         break;
@@ -6085,12 +6158,13 @@ impl JobChildPreHook {
                             self.hooked_tids.insert(tid);
                             session.hooks.push((tid, cbt, cwp));
                             cp_trace!(
-                                "pre_attach_job_child: ok id={} pid={} tid={} hooks={} attempts={} elapsed_ms={}",
+                                "pre_attach_job_child: ok id={} pid={} tid={} hooks={} attempts={} enum_ms={} elapsed_ms={}",
                                 launch.id,
                                 pid,
                                 tid,
                                 session.hooks.len(),
                                 attempts,
+                                enum_ms,
                                 attach_start.elapsed().as_millis()
                             );
                             return;
@@ -6104,10 +6178,11 @@ impl JobChildPreHook {
             }
             if session.hooks.is_empty() {
                 cp_trace!(
-                    "pre_attach_job_child: tight_retry_timeout id={} pid={} attempts={} elapsed_ms={} tids={} last_err={:?}",
+                    "pre_attach_job_child: tight_retry_timeout id={} pid={} attempts={} enum_ms={} elapsed_ms={} tids={} last_err={:?}",
                     launch.id,
                     pid,
                     attempts,
+                    enum_ms,
                     attach_start.elapsed().as_millis(),
                     tids.len(),
                     last_err
@@ -6116,7 +6191,10 @@ impl JobChildPreHook {
             return;
         }
 
-        for tid in threads_of_process(pid) {
+        let enum_start = Instant::now();
+        let tids = threads_of_process(pid);
+        let enum_ms = enum_start.elapsed().as_millis();
+        for tid in tids {
             if self.hooked_tids.contains(&tid) {
                 continue;
             }
@@ -6125,11 +6203,12 @@ impl JobChildPreHook {
                     self.hooked_tids.insert(tid);
                     session.hooks.push((tid, cbt, cwp));
                     cp_trace!(
-                        "pre_attach_job_child: ok id={} pid={} tid={} hooks={} attempts=1 elapsed_ms={}",
+                        "pre_attach_job_child: ok id={} pid={} tid={} hooks={} attempts=1 enum_ms={} elapsed_ms={}",
                         launch.id,
                         pid,
                         tid,
                         session.hooks.len(),
+                        enum_ms,
                         attach_start.elapsed().as_millis()
                     );
                 }
@@ -12081,7 +12160,14 @@ mod tests {
     #[test]
     fn threads_of_process_precloak_and_hook_candidate_selection() {
         assert!(threads_of_process(0).is_empty());
+        assert_eq!(threads_of_process_via_nt(0), Some(Vec::new()));
         let my_tid = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+        let nt_tids = threads_of_process_via_nt(std::process::id())
+            .expect("NtGetNextThread must enumerate threads of current process");
+        assert!(
+            nt_tids.contains(&my_tid),
+            "threads_of_process_via_nt(self) {nt_tids:?} must include current thread {my_tid}"
+        );
         let my_tids = threads_of_process(std::process::id());
         assert!(
             my_tids.contains(&my_tid),
