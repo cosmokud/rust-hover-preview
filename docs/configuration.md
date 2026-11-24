@@ -168,6 +168,34 @@ spinner_delay_ms=250
   - A name the text lists hold is still refused while `text_dont_preview_secrets` is on, the lists being a question about names and that setting a question about what the name holds.
 - Which engine plays a sound is the machine's answer rather than a setting: the media engine Windows has is asked first and an installed FFmpeg second.
 
+### Custom previews
+
+- `custom_preview_enabled`: `true` (default) lets the presets below claim files. Off, every preset is left written and nothing is previewed by one.
+- `custom_preset_order`: the order the presets are listed in, top first — and therefore the precedence between two presets that claim one extension. Written by the editor; a preset missing from it is listed after the ones it names.
+- Each preset is a section of its own, `[custom:<name>]`:
+
+```ini
+[custom:Paint]
+name=Paint
+enabled=true
+exe=C:\Windows\System32\mspaint.exe
+extensions=jpg, png
+window_mode=normal
+capture_technique=in_process_hook
+promotion_technique=direct_promotion
+scaling=tray
+volume_enabled=false
+volume=100
+```
+
+  - `exe` — the program. A quoted path is accepted, as is the one a **Copy as path** puts on the clipboard.
+  - `extensions` — the names it claims, without dots.
+  - `window_mode` — `normal` (the program's own frame) or `borderless`.
+  - `capture_technique` — how the program's window is kept out of sight while it is previewed: `in_process_hook` (default; needs `custom_preview_hook.dll` beside the executable and falls back to `invisible_layered` without it), `invisible_layered`, `behind_host`, `off_screen`, `direct_window`, `offscreen_staged`.
+  - `promotion_technique` — what the pin key does: `direct_promotion` (default; the live preview window is let go and raised) or `open_as_new_process`.
+  - `scaling` — `tray` (default; follow the file's own kind's scaling row) or any share the tray offers: `fit`, `screen 100`, `screen 75`, `screen 50`, or a percentage such as `200`.
+  - `volume_enabled` / `volume` — whether this app sets the program's Windows mixer level, and the level itself. Off by default, so the mixer keeps the program.
+
 ### Video and audio
 
 - `video_loop` / `audio_loop`: whether a hovered film or sound goes round at the end of its file. Both default `true`; off, it stops at the end.

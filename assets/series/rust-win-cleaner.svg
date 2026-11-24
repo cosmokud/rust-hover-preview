@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="icon-clip">
+      <rect width="512" height="512" rx="114.25" ry="114.25"/>
+    </clipPath>
+    <filter id="text-shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity="0.36"/>
+    </filter>
+    <linearGradient id="bg-0" x1="56.8" y1="33.7" x2="166.2" y2="173.6" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4defc9"/>
+      <stop offset="100%" stop-color="#17cfbb"/>
+    </linearGradient>
+    <linearGradient id="bg-1" x1="292.5" y1="7.3" x2="393.1" y2="135.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#17d1bb"/>
+      <stop offset="50%" stop-color="#13c5b7"/>
+      <stop offset="100%" stop-color="#0ba7ad"/>
+    </linearGradient>
+    <linearGradient id="bg-2" x1="217.6" y1="165.6" x2="351.0" y2="350.4" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0cb5b4"/>
+      <stop offset="100%" stop-color="#037a96"/>
+    </linearGradient>
+    <linearGradient id="bg-3" x1="286.3" y1="336.6" x2="370.8" y2="454.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#03708d"/>
+      <stop offset="100%" stop-color="#024c70"/>
+    </linearGradient>
+    <linearGradient id="bg-4" x1="389.0" y1="433.9" x2="433.1" y2="494.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#003659"/>
+      <stop offset="100%" stop-color="#002b4e"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#icon-clip)">
+    <rect width="512" height="512" fill="url(#bg-0)"/>
+    <path d="M -29.9,382.9 C 45.4,226.8 208.9,108.8 308.7,-30.0 L 560,-30.0 L 560,560 L -29.9,560 Z" fill="url(#bg-1)"/>
+    <path d="M -29.7,353.1 C 127.0,178.8 331.4,95.9 541.7,67.2 L 560,67.2 L 560,560 L -29.7,560 Z" fill="url(#bg-2)"/>
+    <path d="M 118.9,542.0 Q 322.9,335.2 541.8,139.3 L 560,139.3 L 560,560 L 118.9,560 Z" fill="url(#bg-3)"/>
+    <path d="M 244.3,542.0 Q 377.1,424.2 541.9,354.5 L 560,354.5 L 560,560 L 244.3,560 Z" fill="url(#bg-4)"/>
+    <g filter="url(#text-shadow)" fill="#ffffff">
+      <text x="59.4" y="374.1" font-family="'Dubai', 'Segoe UI', Arial, sans-serif" font-weight="700" font-size="364.0" stroke="#ffffff" stroke-width="5.9" stroke-linejoin="miter">R</text>
+      <text x="335.4" y="369.2" font-family="'M PLUS 1p', 'Segoe UI', Arial, sans-serif" font-weight="800" font-size="135.4" letter-spacing="-3" transform="scale(0.8297, 1)">WC</text>
+    </g>
+  </g>
+</svg>
