@@ -3,6 +3,10 @@
 //! Runs on its own thread (opened from tray `WM_COMMAND`), single instance via `OPEN`/`WINDOW`.
 //! Uses native Win32 child controls (`EDIT`, `LISTBOX`, `COMBOBOX`, `msctls_trackbar32`,
 //! owner-drawn `BUTTON`) painted with the active `TextTheme` palette and live theme switching.
+//!
+//! **The one question it asks is asked in this app's own card** (`ui::ask_card`), not in a message
+//! box: a delete cannot be undone, and the window asks it with the same rounded card, fonts and
+//! theme as the rest of itself — and with no sound from the platform.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Once;
@@ -74,6 +78,7 @@ use crate::config::config::{
     TextTheme, MAX_PRESETS,
 };
 use crate::text::{text_paint, text_theme};
+use crate::ui::ask_card::{self, Question};
 use crate::CONFIG;
 
 const CLASS_NAME: PCWSTR = w!("RustHoverPreviewCustomPreview");
@@ -306,35 +311,35 @@ enum TitlebarButton {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Palette {
-    page: COLORREF,
-    titlebar: COLORREF,
-    card: COLORREF,
-    field: COLORREF,
-    field_disabled: COLORREF,
-    border: COLORREF,
-    ink: COLORREF,
-    label: COLORREF,
-    muted: COLORREF,
-    accent: COLORREF,
-    accent_hover: COLORREF,
-    accent_press: COLORREF,
-    accent_text: COLORREF,
-    number: COLORREF,
-    button_bg: COLORREF,
-    button_hover: COLORREF,
-    button_press: COLORREF,
-    button_disabled: COLORREF,
-    danger: COLORREF,
-    danger_bg: COLORREF,
-    danger_text: COLORREF,
-    danger_on_fill: COLORREF,
-    danger_hover: COLORREF,
-    slider_track: COLORREF,
-    dark: bool,
+pub(super) struct Palette {
+    pub(super) page: COLORREF,
+    pub(super) titlebar: COLORREF,
+    pub(super) card: COLORREF,
+    pub(super) field: COLORREF,
+    pub(super) field_disabled: COLORREF,
+    pub(super) border: COLORREF,
+    pub(super) ink: COLORREF,
+    pub(super) label: COLORREF,
+    pub(super) muted: COLORREF,
+    pub(super) accent: COLORREF,
+    pub(super) accent_hover: COLORREF,
+    pub(super) accent_press: COLORREF,
+    pub(super) accent_text: COLORREF,
+    pub(super) number: COLORREF,
+    pub(super) button_bg: COLORREF,
+    pub(super) button_hover: COLORREF,
+    pub(super) button_press: COLORREF,
+    pub(super) button_disabled: COLORREF,
+    pub(super) danger: COLORREF,
+    pub(super) danger_bg: COLORREF,
+    pub(super) danger_text: COLORREF,
+    pub(super) danger_on_fill: COLORREF,
+    pub(super) danger_hover: COLORREF,
+    pub(super) slider_track: COLORREF,
+    pub(super) dark: bool,
 }
 
-fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
+pub(super) fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     COLORREF(u32::from(r) | (u32::from(g) << 8) | (u32::from(b) << 16))
 }
 
@@ -342,7 +347,7 @@ fn rgb_arr(c: [u8; 3]) -> COLORREF {
     rgb(c[0], c[1], c[2])
 }
 
-fn mix(a: COLORREF, b: COLORREF, share: u32) -> COLORREF {
+pub(super) fn mix(a: COLORREF, b: COLORREF, share: u32) -> COLORREF {
     let part = |shift: u32| -> u8 {
         let one = (a.0 >> shift) & 0xFF;
         let two = (b.0 >> shift) & 0xFF;
@@ -353,7 +358,7 @@ fn mix(a: COLORREF, b: COLORREF, share: u32) -> COLORREF {
 
 impl Palette {
     /// Matches audio-card / `ChromePalette` tokens from the active `TextTheme`.
-    fn of(theme: TextTheme) -> Self {
+    pub(super) fn of(theme: TextTheme) -> Self {
         let (bg, fg, accent_arr, number_arr) = match text_theme::loaded(theme) {
             Some(loaded) => {
                 let bg = text_paint::rgb(loaded.background());
@@ -624,7 +629,7 @@ impl LayoutRects {
     }
 }
 
-fn pt_in_rect(r: RECT, x: i32, y: i32) -> bool {
+pub(super) fn pt_in_rect(r: RECT, x: i32, y: i32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
@@ -637,6 +642,9 @@ struct State {
     drag: Option<usize>,
     /// A field of the open preset has been edited and not yet written (see `autosave`).
     dirtied: bool,
+    /// The preset the delete question the card is asking is about, by name, between the ask and its
+    /// answer (`delete_selected`).
+    delete_pending: Option<String>,
     loading: bool,
     palette: Palette,
     font: HFONT,
@@ -780,7 +788,7 @@ fn presets_now() -> Vec<CustomPreset> {
         .unwrap_or_default()
 }
 
-fn theme_now() -> TextTheme {
+pub(super) fn theme_now() -> TextTheme {
     CONFIG
         .lock()
         .map(|config| config.theme)
@@ -1864,7 +1872,7 @@ unsafe fn state_of(hwnd: HWND) -> Option<&'static mut State> {
     unsafe { raw.as_mut() }
 }
 
-fn scale(value: i32, dpi: i32) -> i32 {
+pub(super) fn scale(value: i32, dpi: i32) -> i32 {
     (value * dpi + 48) / 96
 }
 
@@ -1872,7 +1880,7 @@ fn child_style(extra: u32) -> WINDOW_STYLE {
     WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_CLIPSIBLINGS.0 | extra)
 }
 
-unsafe fn make_font(dpi: i32, size: i32, weight: i32) -> HFONT {
+pub(super) unsafe fn make_font(dpi: i32, size: i32, weight: i32) -> HFONT {
     let face = wide("Segoe UI");
     unsafe {
         CreateFontW(
@@ -1909,6 +1917,7 @@ unsafe fn build(hwnd: HWND) -> State {
         shown: Vec::new(),
         drag: None,
         dirtied: false,
+        delete_pending: None,
         loading: false,
         palette,
         font,
@@ -5523,24 +5532,90 @@ unsafe fn volume_typed(state: &mut State) {
     }
 }
 
+/// The delete the footer's `Delete` button asks about, as a question over this window.
+///
+/// **Nothing is removed or written here.** The question is a card of its own on a window of its own
+/// (`ask_card`), and its answer comes back as a message once that window is gone — the click that
+/// answers it destroys the window it was clicked in, so it cannot hand its answer over on the way
+/// out. What is in flight is the *name* of the preset the question is about, kept in the window state
+/// where the answer finds it (`delete_pending`); a second ask while one is up is not made at all.
+///
+/// The one thing written first is the field the user was in: it is a value the preset does not hold
+/// yet, and the card names the preset's own extensions and program — so what the card says is what
+/// the file holds, and the editor's own deactivation, which the card causes, writes nothing after the
+/// answer.
 unsafe fn delete_selected(state: &mut State) {
-    let Some(index) = state.selected else {
-        return;
-    };
-    let Some(preset) = state.presets.get(index) else {
-        return;
-    };
-    // Asked before anything is removed: the preset's section leaves `config.ini` with the autosave
-    // that follows, and nothing here can put it back.
-    let confirmed = crate::app::dialogs::confirm_delete_preset(
-        state.hwnd,
-        &preset.name,
-        &preset.extensions_text(),
-        &preset.exe,
-    );
-    if !confirmed {
+    if ask_card::is_asking() {
         return;
     }
+    let Some(preset) = state.selected.and_then(|index| state.presets.get(index)) else {
+        return;
+    };
+    let pending = preset.name.clone();
+    let question = Question::new(
+        "Delete this preset?",
+        &delete_question_text(&preset.name, &preset.extensions_text(), &preset.exe),
+        "Delete",
+    );
+
+    unsafe { autosave(state) };
+
+    state.delete_pending = Some(pending);
+    let answer = ask_card::ask(state.hwnd, &question);
+    match answer {
+        Some(true) => unsafe { delete_confirmed(state.hwnd) },
+        Some(false) => unsafe { focused_after_a_question(state.hwnd) },
+        // No card was made: the question was never asked, so nothing is decided and the preset the
+        // window was on is left selected.
+        None => {
+            state.delete_pending = None;
+        }
+    }
+}
+
+/// What the delete question says: the preset that would go, its extensions and its program, and the
+/// one thing a yes cannot undo.
+fn delete_question_text(name: &str, extensions: &str, exe: &str) -> String {
+    let mut text = format!("The preset \"{name}\" would be removed.");
+
+    let mut facts: Vec<String> = Vec::new();
+    let extensions = extensions.trim();
+    if !extensions.is_empty() {
+        facts.push(format!("Extensions: {extensions}"));
+    }
+    let exe = exe.trim();
+    if !exe.is_empty() {
+        facts.push(format!("Program: {exe}"));
+    }
+    if !facts.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&facts.join("\n"));
+    }
+
+    text.push_str(
+        "\n\nIts section leaves config.ini with the save that follows, and nothing here puts it \
+         back. Your other presets and settings are not touched.",
+    );
+    text
+}
+
+/// Take the preset the question was about out of the window, now that it has been answered, and
+/// write the window out — the section leaves `config.ini` with the autosave that follows.
+///
+/// The preset is found by the name the card named rather than by the row it stood on: the answer
+/// only removes one of the two if they still agree, and a list rebuilt in between the ask and the
+/// answer would otherwise take a preset nobody was asked about.
+unsafe fn delete_confirmed(hwnd: HWND) {
+    let Some(state) = (unsafe { state_of(hwnd) }) else {
+        return;
+    };
+    let Some(name) = state.delete_pending.take() else {
+        return;
+    };
+    let Some(index) = state.presets.iter().position(|preset| preset.name == name) else {
+        return;
+    };
+
     state.presets.remove(index);
     state.selected = if state.presets.is_empty() {
         None
@@ -5551,6 +5626,26 @@ unsafe fn delete_selected(state: &mut State) {
     unsafe { fill_fields(state) };
     state.dirtied = true;
     unsafe { autosave(state) };
+}
+
+/// Put the editor back together after a question was answered with nothing: the keyboard goes back
+/// to the button that asked it, and the window is repainted — its fields were disabled for the
+/// length of the question, and what that left on screen is a window with its boxes greyed out.
+unsafe fn focused_after_a_question(hwnd: HWND) {
+    let Some(state) = (unsafe { state_of(hwnd) }) else {
+        return;
+    };
+    let pending = state.delete_pending.take();
+    if let Some(name) = pending {
+        if let Some(index) = state.presets.iter().position(|preset| preset.name == name) {
+            state.selected = Some(index);
+        }
+    }
+    unsafe { fill_fields(state) };
+    if let Ok(button) = unsafe { GetDlgItem(hwnd, ID_DELETE) } {
+        let _ = unsafe { SetFocus(button) };
+    }
+    let _ = unsafe { InvalidateRect(hwnd, None, false) };
 }
 
 unsafe fn browse(state: &mut State) {
@@ -6156,6 +6251,119 @@ mod tests {
                     .collect::<Vec<_>>(),
                 vec!["Painted"]
             );
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// What the delete question says: the preset, its extensions and its program — the three things
+    /// the card names — and the one consequence a yes cannot undo. Nothing of the window's own is in
+    /// it, so the words are the preset's, not the code's.
+    #[test]
+    fn the_delete_question_names_the_preset_its_extensions_and_its_program() {
+        let text = delete_question_text(
+            "PDF docs",
+            ".pdf, .xps",
+            "  C:\\Program Files\\SumatraPDF\\SumatraPDF.exe  ",
+        );
+        assert!(
+            text.contains("\"PDF docs\""),
+            "the preset is not named: {text}"
+        );
+        assert!(text.contains("Extensions: .pdf, .xps"), "{text}");
+        assert!(
+            text.contains("Program: C:\\Program Files\\SumatraPDF\\SumatraPDF.exe"),
+            "the program is not named, or is named with its pad: {text}"
+        );
+        assert!(
+            text.contains("config.ini"),
+            "what a yes does to the file is not said: {text}"
+        );
+
+        // A preset with neither is a question about its name alone: an empty `Extensions:` line is a
+        // line that says nothing and takes a row of the card.
+        let bare = delete_question_text("Painted", "", "   ");
+        assert!(!bare.contains("Extensions:"), "{bare}");
+        assert!(!bare.contains("Program:"), "{bare}");
+        assert!(bare.contains("\"Painted\""));
+    }
+
+    /// The preset the card named is the one taken, and the window moves to the row that took its
+    /// place (`delete_confirmed`). The two presets that surround it stay.
+    #[test]
+    fn the_preset_the_card_named_is_the_one_that_goes() {
+        let folder = crate::config::config::ConfigFolderOfItsOwn::take();
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            let mut first = CustomPreset::named("First");
+            first.exe = "C:/first.exe".into();
+            let mut second = CustomPreset::named("Second");
+            second.exe = "C:/second.exe".into();
+            let mut third = CustomPreset::named("Third");
+            third.exe = "C:/third.exe".into();
+            state.presets = vec![first, second, third];
+            state.selected = Some(1);
+            rebuild_list(state);
+            fill_fields(state);
+
+            state.delete_pending = Some("Second".to_string());
+            delete_confirmed(hwnd);
+
+            assert_eq!(
+                state
+                    .presets
+                    .iter()
+                    .map(|preset| preset.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["First", "Third"],
+                "the preset the question named is not the one that went"
+            );
+            assert_eq!(
+                state.selected,
+                Some(1),
+                "the window did not move to the row the delete left"
+            );
+            assert!(state.delete_pending.is_none(), "the answer was not taken");
+
+            // And the file is what the window holds: the section left with the autosave.
+            let written = std::fs::read_to_string(folder.config_file()).unwrap_or_default();
+            assert!(!written.contains("custom:second"), "{written}");
+            assert!(written.contains("custom:first"), "{written}");
+            assert!(written.contains("custom:third"), "{written}");
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// An answer that takes nothing away leaves everything as it was — including the row the window
+    /// was on, which the card took the focus from (`focused_after_a_question`).
+    #[test]
+    fn an_answer_that_changes_nothing_takes_nothing_away() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.presets = vec![CustomPreset::named("First"), CustomPreset::named("Second")];
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
+            state.delete_pending = Some("First".to_string());
+
+            focused_after_a_question(hwnd);
+
+            assert_eq!(state.presets.len(), 2, "a no took a preset with it");
+            assert_eq!(state.selected, Some(0), "the window lost its row to a no");
+            assert!(state.delete_pending.is_none(), "the answer was not taken");
 
             let _ = DestroyWindow(hwnd);
         }
