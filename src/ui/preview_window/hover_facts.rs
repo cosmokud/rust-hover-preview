@@ -240,7 +240,7 @@ pub(super) fn measured_off_the_tick(
 }
 
 /// Which preview surface the pointer is currently on.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreviewCursorHover {
     pub image: bool,
     pub video: bool,
@@ -251,6 +251,11 @@ pub struct PreviewCursorHover {
     /// that runs is not a picture: its own rectangle holds the pointer instead, which is a
     /// question asked of the hold and not of this surface (see `preview_pointer_hold`).
     pub engine: bool,
+    /// Pointer hits an active custom preview (`HOST`, `SOURCE`, or any visible uncloaked
+    /// window owned by the spawned custom `.exe`).
+    pub custom: bool,
+    /// Whether a custom preview is currently live (not included in `any()`).
+    pub custom_active: bool,
 }
 
 impl PreviewCursorHover {
@@ -258,10 +263,12 @@ impl PreviewCursorHover {
         image: false,
         video: false,
         engine: false,
+        custom: false,
+        custom_active: false,
     };
 
     pub fn any(self) -> bool {
-        self.image || self.video || self.engine
+        self.image || self.video || self.engine || self.custom
     }
 }
 
@@ -275,6 +282,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
     // A document is drawn by the engine, in a window of its own rather than this app's, so
     // its surface is asked for by its own handle: it is the same preview to the pointer.
     let engine_hwnd = webview_preview::showing_hwnd();
+    let custom_active = super::custom_preview::has_live_preview();
 
     // PREVIEW_HWND is created once at startup and never cleared, so visibility
     // is what tells us whether the layered window is actually on screen.
@@ -290,7 +298,7 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
         || (!pin_lifecycle::is_deferred_preview_hide_pending()
             && preview_hwnd != 0
             && unsafe { IsWindowVisible(HWND(preview_hwnd as *mut _)).as_bool() });
-    if !preview_visible && video_hwnd == 0 && video_pid == 0 && engine_hwnd == 0 {
+    if !preview_visible && video_hwnd == 0 && video_pid == 0 && engine_hwnd == 0 && !custom_active {
         return PreviewCursorHover::NONE;
     }
 
@@ -299,12 +307,21 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
 
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&mut cursor_pos).is_err() {
-            return PreviewCursorHover::NONE;
+            return PreviewCursorHover {
+                custom_active,
+                ..PreviewCursorHover::NONE
+            };
         }
+
+        let custom = custom_active && super::custom_preview::cursor_is_over_preview(cursor_pos);
 
         let hwnd_under_cursor = WindowFromPoint(cursor_pos);
         if hwnd_under_cursor.is_invalid() {
-            return PreviewCursorHover::NONE;
+            return PreviewCursorHover {
+                custom,
+                custom_active,
+                ..PreviewCursorHover::NONE
+            };
         }
 
         let hwnd_ptr = hwnd_under_cursor.0 as isize;
@@ -336,6 +353,8 @@ pub fn cursor_preview_hover() -> PreviewCursorHover {
             image,
             video,
             engine,
+            custom,
+            custom_active,
         }
     }
 }

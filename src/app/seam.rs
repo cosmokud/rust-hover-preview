@@ -1973,14 +1973,19 @@ pub(crate) fn cursor_preview_hover() -> PreviewCursorHover {
         image: published & 1 != 0,
         video: published & 2 != 0,
         engine: published & 4 != 0,
+        custom: published & 8 != 0,
+        custom_active: published & 16 != 0,
     }
 }
 
 /// Publish which surface the pointer is on, from the tick that is allowed to ask the desktop (see
 /// `PREVIEW_HOVER`).
 pub(crate) fn publish_preview_cursor_hover(hover: PreviewCursorHover) {
-    let published =
-        u32::from(hover.image) | u32::from(hover.video) << 1 | u32::from(hover.engine) << 2;
+    let published = u32::from(hover.image)
+        | (u32::from(hover.video) << 1)
+        | (u32::from(hover.engine) << 2)
+        | (u32::from(hover.custom) << 3)
+        | (u32::from(hover.custom_active) << 4);
 
     PREVIEW_HOVER.store(published, Ordering::Release);
 }
@@ -4881,5 +4886,52 @@ mod tests {
         assert!(seam.has_live_viewer_excluding(&[10, 20], |pid| pid == 30));
         // Once detached viewer 30 exits -> idle allowed.
         assert!(!seam.has_live_viewer_excluding(&[10, 20], |_| false));
+    }
+
+    #[test]
+    fn preview_cursor_hover_packs_and_unpacks_custom_and_custom_active_bits() {
+        let _the_section_is_mine = the_one_section();
+
+        let previous = cursor_preview_hover();
+
+        let active_only = PreviewCursorHover {
+            image: false,
+            video: false,
+            engine: false,
+            custom: false,
+            custom_active: true,
+        };
+        assert!(
+            !active_only.any(),
+            "custom_active alone must not count as over_any_preview"
+        );
+        publish_preview_cursor_hover(active_only);
+        assert_eq!(PREVIEW_HOVER.load(Ordering::Acquire), 1 << 4);
+        assert_eq!(cursor_preview_hover(), active_only);
+
+        let hit_and_active = PreviewCursorHover {
+            image: false,
+            video: false,
+            engine: false,
+            custom: true,
+            custom_active: true,
+        };
+        assert!(hit_and_active.any(), "custom hit must count in any()");
+        publish_preview_cursor_hover(hit_and_active);
+        assert_eq!(PREVIEW_HOVER.load(Ordering::Acquire), (1 << 3) | (1 << 4));
+        assert_eq!(cursor_preview_hover(), hit_and_active);
+
+        let all = PreviewCursorHover {
+            image: true,
+            video: true,
+            engine: true,
+            custom: true,
+            custom_active: true,
+        };
+        publish_preview_cursor_hover(all);
+        assert_eq!(PREVIEW_HOVER.load(Ordering::Acquire), 0b1_1111);
+        assert_eq!(cursor_preview_hover(), all);
+
+        publish_preview_cursor_hover(previous);
     }
 }

@@ -77,11 +77,34 @@ fn publish_listing_switches(c: &AppConfig) {
     crate::app::seam::publish_q_dir_previews(c.q_dir_previews);
 }
 
+/// Cache enabled usable custom presets paired with whether their `.exe` resolves on disk,
+/// evaluated once per `config_generation()` change so steady-state ticks stay lock- and I/O-free.
+fn cache_custom_presets(
+    cfg: &crate::config::config::AppConfig,
+) -> Vec<(crate::config::config::CustomPreset, bool)> {
+    if !cfg.custom_preview_enabled {
+        return Vec::new();
+    }
+    cfg.custom_presets
+        .iter()
+        .filter(|preset| preset.enabled && preset.is_usable())
+        .map(|preset| {
+            let exe_resolves = preset
+                .exe_path()
+                .and_then(crate::ui::preview_window::custom_preview_resolved_exe)
+                .is_some();
+            (preset.clone(), exe_resolves)
+        })
+        .collect()
+}
+
 /// Generation-cached `HookConfigSnapshot`: zero locks on steady-state ticks; refreshes once
 /// whenever `seam::config_generation()` advances.
 pub(super) struct CachedHookConfig {
     generation: u64,
     snapshot: HookConfigSnapshot,
+    custom_preview_enabled: bool,
+    custom_presets: Vec<(crate::config::config::CustomPreset, bool)>,
 }
 
 impl CachedHookConfig {
@@ -89,9 +112,12 @@ impl CachedHookConfig {
         let generation = crate::app::seam::config_generation();
         let cfg = crate::config::snapshot();
         publish_listing_switches(&cfg);
+        let custom_presets = cache_custom_presets(&cfg);
         Self {
             generation,
             snapshot: HookConfigSnapshot::from_config(&cfg),
+            custom_preview_enabled: cfg.custom_preview_enabled,
+            custom_presets,
         }
     }
 
@@ -101,9 +127,23 @@ impl CachedHookConfig {
             let cfg = crate::config::snapshot();
             publish_listing_switches(&cfg);
             self.snapshot = HookConfigSnapshot::from_config(&cfg);
+            self.custom_preview_enabled = cfg.custom_preview_enabled;
+            self.custom_presets = cache_custom_presets(&cfg);
             self.generation = generation;
         }
         self.snapshot
+    }
+
+    /// Mirrors `custom_preview::show()` routing: selects the first enabled usable preset claiming
+    /// `path`, returning `true` only when its executable resolves on disk so missing-`.exe`
+    /// fallback to built-in previews stays completely untouched.
+    pub(super) fn is_custom_preview(&self, path: &Path) -> bool {
+        self.custom_preview_enabled
+            && self
+                .custom_presets
+                .iter()
+                .find(|(preset, _)| preset.claims(path))
+                .is_some_and(|(_, exe_resolves)| *exe_resolves)
     }
 }
 
@@ -152,6 +192,13 @@ pub(super) struct HookSession {
     pub(super) last_state_check: Instant,
     pub(super) current_state: ExplorerState,
     pub(super) explorer_probe_backoff_until: Option<Instant>,
+
+    pub(super) custom_preview_blocked_file: Option<PathBuf>,
+    pub(super) custom_preview_dismissed_pos: Option<(i32, i32)>,
+    pub(super) custom_missing_file_streak: u8,
+    pub(super) last_custom_guard_check: Option<Instant>,
+    pub(super) last_orphan_custom_hide: Option<Instant>,
+    pub(super) was_custom_preview_active: bool,
 }
 
 impl HookSession {
@@ -193,7 +240,89 @@ impl HookSession {
             last_state_check: now,
             current_state: initial_state,
             explorer_probe_backoff_until: None,
+            custom_preview_blocked_file: None,
+            custom_preview_dismissed_pos: None,
+            custom_missing_file_streak: 0,
+            last_custom_guard_check: None,
+            last_orphan_custom_hide: None,
+            was_custom_preview_active: false,
         }
+    }
+
+    pub(super) fn is_keyboard_hover(&self) -> bool {
+        self.is_keyboard_hover
+    }
+
+    /// Latch `path` and `cursor_pos` after a custom preview cursor-hit or focus-loss dismiss so
+    /// it cannot enter a spawn-close-respawn loop while the pointer stays on the file or spot.
+    pub(super) fn block_custom_preview(&mut self, path: PathBuf, cursor_pos: (i32, i32)) {
+        self.custom_preview_blocked_file = Some(path);
+        self.custom_preview_dismissed_pos = Some(cursor_pos);
+    }
+
+    /// True ONLY for custom previews (`is_custom == true`) when `path` is still latched or the
+    /// cursor has not moved beyond `move_threshold` from a custom-preview dismissal point.
+    pub(super) fn is_custom_preview_blocked(
+        &self,
+        path: &Path,
+        is_custom: bool,
+        cursor_pos: (i32, i32),
+        move_threshold: i32,
+    ) -> bool {
+        if !is_custom {
+            return false;
+        }
+        if self
+            .custom_preview_blocked_file
+            .as_deref()
+            .is_some_and(|blocked| same_path(blocked, path))
+        {
+            return true;
+        }
+        self.custom_preview_dismissed_pos.is_some_and(|pos| {
+            (cursor_pos.0 - pos.0).abs() <= move_threshold
+                && (cursor_pos.1 - pos.1).abs() <= move_threshold
+        })
+    }
+
+    /// Clear `custom_preview_dismissed_pos` once cursor moves `> move_threshold`, and clear
+    /// `custom_preview_blocked_file` ONLY when `!custom_still_active` AND either:
+    /// - `probed_file` is `Some(other)` where `other != blocked`, OR
+    /// - `probed_file` is `None`, `over_explorer` is `true` (cursor is over Explorer space rather
+    ///   than a still-closing `.exe` window), and `custom_preview_dismissed_pos` is `None`.
+    pub(super) fn update_custom_preview_block(
+        &mut self,
+        probed_file: Option<&Path>,
+        cursor_pos: (i32, i32),
+        move_threshold: i32,
+        custom_still_active: bool,
+        over_explorer: bool,
+    ) {
+        if let Some(pos) = self.custom_preview_dismissed_pos {
+            if (cursor_pos.0 - pos.0).abs() > move_threshold
+                || (cursor_pos.1 - pos.1).abs() > move_threshold
+            {
+                self.custom_preview_dismissed_pos = None;
+            }
+        }
+        if !custom_still_active {
+            if let Some(blocked) = self.custom_preview_blocked_file.as_deref() {
+                let should_clear = match probed_file {
+                    Some(probed) => !same_path(blocked, probed),
+                    None => over_explorer && self.custom_preview_dismissed_pos.is_none(),
+                };
+                if should_clear {
+                    self.custom_preview_blocked_file = None;
+                }
+            }
+        }
+    }
+
+    pub(super) fn clear_custom_preview_guard(&mut self) {
+        self.custom_preview_blocked_file = None;
+        self.custom_preview_dismissed_pos = None;
+        self.custom_missing_file_streak = 0;
+        self.last_custom_guard_check = None;
     }
 
     pub(super) fn has_active_preview(&self) -> bool {
@@ -209,6 +338,8 @@ impl HookSession {
         self.last_file = None;
         self.hover_item_box = None;
         self.video_hover_guard_until = None;
+        self.custom_missing_file_streak = 0;
+        self.last_custom_guard_check = None;
     }
 
     /// Clear active keyboard-hover fields together.
@@ -252,6 +383,7 @@ impl HookSession {
         self.last_cursor_location = None;
         self.scroll_since_move = false;
         self.engine_page_drag = false;
+        self.clear_custom_preview_guard();
         self.explorer_probe_backoff_until = Some(now + Duration::from_millis(backoff_ms));
     }
 
@@ -279,6 +411,8 @@ impl HookSession {
         self.suspended_initial_focus = None;
         self.scroll_since_move = false;
         self.engine_page_drag = false;
+        self.clear_custom_preview_guard();
+        self.last_orphan_custom_hide = None;
         should_hide
     }
 
@@ -292,6 +426,8 @@ impl HookSession {
         self.keyboard_screen_owner = false;
         self.scroll_since_move = false;
         self.engine_page_drag = false;
+        self.clear_custom_preview_guard();
+        self.last_orphan_custom_hide = None;
 
         if handed_off {
             if let Some(pos) = cursor_pos {
@@ -336,6 +472,7 @@ impl HookSession {
         self.pointer_pause.clear();
         self.stationary_search_miss_started_at = None;
         self.scroll_since_move = false;
+        self.clear_custom_preview_guard();
         should_hide
     }
 
@@ -359,6 +496,7 @@ impl HookSession {
         self.stationary_hover_probe_done = false;
         self.scroll_since_move = false;
         self.engine_page_drag = false;
+        self.clear_custom_preview_guard();
         should_hide
     }
 
@@ -411,6 +549,7 @@ impl HookSession {
         self.clear_mouse_hover();
         self.suppressed.clear();
         self.hover_start = None;
+        self.clear_custom_preview_guard();
     }
 }
 
@@ -605,5 +744,139 @@ mod tests {
         assert_eq!(updated.hover_delay_ms, new_delay);
         assert!(!updated.pin_update_enabled);
         assert!(updated.pin_update_on_hover);
+    }
+
+    #[test]
+    fn custom_preview_anti_loop_latch_blocks_and_clears_strictly_on_custom_files() {
+        let now = Instant::now();
+        let mut s = HookSession::new(now, 0, ExplorerState::ActiveFocus);
+        let custom_file = PathBuf::from(r"C:\work\sample.custom");
+        let custom_file_upper = PathBuf::from(r"C:\WORK\SAMPLE.CUSTOM");
+        let other_custom = PathBuf::from(r"C:\work\other.custom");
+        let builtin_file = PathBuf::from(r"C:\work\photo.png");
+
+        // Block custom file at cursor pos (200, 300).
+        s.block_custom_preview(custom_file.clone(), (200, 300));
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (200, 300), 5));
+        assert!(s.is_custom_preview_blocked(&custom_file_upper, true, (200, 300), 5));
+
+        // Never affects non-custom previews, even at the exact dismissed position.
+        assert!(!s.is_custom_preview_blocked(&builtin_file, false, (200, 300), 5));
+        assert!(!s.is_custom_preview_blocked(&custom_file, false, (200, 300), 5));
+
+        // Stationary jitter within move_threshold also blocks another custom file at dismissed_pos.
+        assert!(s.is_custom_preview_blocked(&other_custom, true, (203, 297), 5));
+
+        // Moving > move_threshold clears dismissed_pos, allowing other_custom, while keeping blocked_file.
+        s.update_custom_preview_block(Some(&custom_file), (220, 300), 5, true, true);
+        assert!(s.custom_preview_dismissed_pos.is_none());
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (220, 300), 5));
+        assert!(!s.is_custom_preview_blocked(&other_custom, true, (220, 300), 5));
+
+        // Does NOT clear while custom_still_active == true, even when probed_file is None or other_custom.
+        s.update_custom_preview_block(None, (220, 300), 5, true, true);
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (220, 300), 5));
+        s.update_custom_preview_block(Some(&other_custom), (220, 300), 5, true, true);
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (220, 300), 5));
+
+        // Does NOT clear while still on the same custom file even when !custom_still_active.
+        s.update_custom_preview_block(Some(&custom_file_upper), (220, 300), 5, false, true);
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (220, 300), 5));
+
+        // Closing-window race: !custom_still_active & probed_file == None over a closing .exe window
+        // (over_explorer == false) MUST NOT prematurely clear blocked_file.
+        s.block_custom_preview(custom_file.clone(), (200, 300));
+        s.update_custom_preview_block(None, (200, 300), 5, false, false);
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (200, 300), 5));
+
+        // Even with over_explorer == true, staying at dismissed_pos keeps blocked_file latched.
+        s.update_custom_preview_block(None, (202, 300), 5, false, true);
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (202, 300), 5));
+
+        // Moving > move_threshold while STILL over a closing .exe (over_explorer == false)
+        // clears dismissed_pos, yet still keeps blocked_file until Explorer space is reached.
+        s.update_custom_preview_block(None, (220, 300), 5, false, false);
+        assert!(s.custom_preview_dismissed_pos.is_none());
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (220, 300), 5));
+
+        // Clears once !custom_still_active, over_explorer == true, probed_file == None, and dismissed_pos is None.
+        s.update_custom_preview_block(None, (220, 300), 5, false, true);
+        assert!(!s.is_custom_preview_blocked(&custom_file, true, (220, 300), 5));
+
+        // Focus loss preserves custom block latch across focus-steal -> regain-focus.
+        s.last_file = Some(custom_file.clone());
+        s.block_custom_preview(custom_file.clone(), (150, 150));
+        assert!(s.reset_for_focus_loss());
+        assert!(s.is_custom_preview_blocked(&custom_file, true, (150, 150), 5));
+
+        // Pin resume clears the custom guard cleanly.
+        s.reset_for_pin_resume(false, None);
+        assert!(!s.is_custom_preview_blocked(&custom_file, true, (150, 150), 5));
+    }
+
+    #[test]
+    fn cached_hook_config_ignores_presets_whose_exe_is_missing_on_disk() {
+        use crate::config::config::CustomPreset;
+
+        struct RestoreCustomPresets {
+            enabled: bool,
+            presets: Vec<CustomPreset>,
+            _folder: crate::config::config::ConfigFolderOfItsOwn,
+        }
+        impl Drop for RestoreCustomPresets {
+            fn drop(&mut self) {
+                let enabled = self.enabled;
+                let presets = self.presets.clone();
+                crate::config::commit_config(|cfg| {
+                    cfg.custom_preview_enabled = enabled;
+                    cfg.custom_presets = presets;
+                });
+            }
+        }
+
+        let folder = crate::config::config::ConfigFolderOfItsOwn::take();
+        let initial = crate::config::snapshot();
+        let _restore = RestoreCustomPresets {
+            enabled: initial.custom_preview_enabled,
+            presets: initial.custom_presets,
+            _folder: folder,
+        };
+
+        let mut missing_exe = CustomPreset::named("MissingExe");
+        missing_exe.exe = r"C:\no-such-dir-rhp-test\missing_viewer.exe".into();
+        missing_exe.extensions = vec!["png".into()];
+        missing_exe.enabled = true;
+
+        let mut missing_shadowed_by_real = CustomPreset::named("ShadowedPngReal");
+        missing_shadowed_by_real.exe = "cmd.exe".into();
+        missing_shadowed_by_real.extensions = vec!["png".into()];
+        missing_shadowed_by_real.enabled = true;
+
+        let mut real_exe = CustomPreset::named("RealExe");
+        real_exe.exe = "cmd.exe".into();
+        real_exe.extensions = vec!["xyzcustom".into()];
+        real_exe.enabled = true;
+
+        crate::config::commit_config(|cfg| {
+            cfg.custom_preview_enabled = true;
+            cfg.custom_presets = vec![missing_exe, missing_shadowed_by_real, real_exe];
+        });
+
+        let mut cached = CachedHookConfig::capture_initial();
+        let png = PathBuf::from(r"C:\work\photo.png");
+        let custom = PathBuf::from(r"C:\work\model.xyzcustom");
+
+        // `missing_exe` claims `.png` first just like `custom_preview::show()`, whose `resolved()`
+        // returns None -> falls back to built-in preview -> must NOT be treated as custom preview.
+        assert!(!cached.is_custom_preview(&png));
+        // `cmd.exe` resolves on PATH -> treated as custom preview.
+        assert!(cached.is_custom_preview(&custom));
+
+        // Fixing the `.png` preset executable advances config_generation and updates cached result.
+        crate::config::commit_config(|cfg| {
+            cfg.custom_presets[0].exe = "cmd.exe".into();
+        });
+        let _ = cached.current();
+        assert!(cached.is_custom_preview(&png));
     }
 }

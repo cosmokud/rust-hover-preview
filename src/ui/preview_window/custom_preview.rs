@@ -125,11 +125,11 @@ use std::time::{Duration, Instant};
 use windows::core::{w, PCSTR, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, FreeLibrary, BOOL, COLORREF, FILETIME, HANDLE, HINSTANCE, HMODULE, HWND,
-    INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+    INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmFlush, DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
-    DwmSetWindowAttribute, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties,
+    DwmSetWindowAttribute, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWMWA_CLOAKED,
     DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED, DWM_THUMBNAIL_PROPERTIES,
     DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
@@ -159,24 +159,25 @@ use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVE
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, BringWindowToTop, CreateWindowExW, DefWindowProcW, DispatchMessageW,
-    EnumWindows, GetClassNameW, GetClientRect, GetForegroundWindow, GetLayeredWindowAttributes,
-    GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
-    GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
-    MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW, RegisterClassExW,
-    RegisterWindowMessageW, SendMessageTimeoutW, SetForegroundWindow, SetLayeredWindowAttributes,
-    SetWindowLongPtrW, SetWindowPlacement, SetWindowPos, SetWindowsHookExW, ShowWindow,
-    TranslateMessage, UnhookWindowsHookEx, CHILDID_SELF, EVENT_OBJECT_CREATE,
-    EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HHOOK,
-    HOOKPROC, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
-    LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, SMTO_ABORTIFHUNG,
-    SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-    SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE, WH_CALLWNDPROC, WH_CBT,
-    WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_APP, WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
-    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    EnumWindows, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow,
+    GetLayeredWindowAttributes, GetSystemMetrics, GetWindow, GetWindowLongPtrW, GetWindowPlacement,
+    GetWindowRect, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow,
+    IsWindowVisible, IsZoomed, MsgWaitForMultipleObjectsEx, PeekMessageW, PostMessageW,
+    RegisterClassExW, RegisterWindowMessageW, SendMessageTimeoutW, SetForegroundWindow,
+    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement, SetWindowPos,
+    SetWindowsHookExW, ShowWindow, TranslateMessage, UnhookWindowsHookEx, WindowFromPoint,
+    CHILDID_SELF, EVENT_OBJECT_CREATE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_SHOW, GA_ROOT,
+    GWL_EXSTYLE, GWL_STYLE, GW_OWNER, HHOOK, HOOKPROC, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST,
+    LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, MSG, MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE,
+    QS_ALLINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE,
+    SW_SHOWNOACTIVATE, WH_CALLWNDPROC, WH_CBT, WINDOWPLACEMENT, WINDOWPLACEMENT_FLAGS,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
+    WM_CLOSE, WM_ERASEBKGND, WM_NCDESTROY, WM_NULL, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU,
+    WS_THICKFRAME,
 };
 
 use super::audio_session;
@@ -234,15 +235,6 @@ const THE_SMALLEST_PICTURE: i64 = 64 * 64;
 /// itself: a window shown again by its own program, or restored by it, is one the Shell would
 /// compose at the place the program chose rather than at the hover's.
 const KEEP_POLL: Duration = Duration::from_millis(40);
-
-/// How long a program outlives the hover that started it.
-///
-/// **This is what makes a hover that flickers a hover rather than a launch loop.** The program's
-/// own window is on the desktop for the moment between its first `ShowWindow` and this app's own
-/// hide of it, and a window under the hand is a hover taken down: the hover comes back a moment
-/// later, and it is this long a moment. Long enough to cover it, short enough that a program the
-/// user has stopped hovering is not left running.
-const LINGER: Duration = Duration::from_secs(2);
 
 /// Neutral dark backdrop painted on the host where the target window does not fill the box.
 const HOST_BACKDROP: COLORREF = COLORREF(0x0020_2020);
@@ -374,15 +366,13 @@ impl Drop for PreviewJob {
 
 /// The program this app started, while it is up: the file it was begun for, the program itself,
 /// and the process it is.
-///
-/// It is not the hover's: it outlives one by [`LINGER`], and it is what a hover that comes back
-/// finds rather than a second launch (see the module note).
 struct Program {
     path: PathBuf,
     exe: String,
     process: Arc<OwnedHandle>,
     pid: u32,
     job: Option<PreviewJob>,
+    processes_before: Vec<u32>,
 }
 
 /// What one launch is: the process it began, the image that program runs under, and the windows
@@ -452,8 +442,15 @@ static ACTIVE_WINDOW_MODE: Mutex<CustomWindowMode> = Mutex::new(CustomWindowMode
 static THUMBNAIL: Mutex<isize> = Mutex::new(0);
 /// The hover on screen, while there is one.
 static WANT: Mutex<Option<Want>> = Mutex::new(None);
-/// The program this app started for it, which outlives the hover by [`LINGER`].
+/// The program this app started for it, active while the hover is live.
 static PROGRAM: Mutex<Option<Program>> = Mutex::new(None);
+/// Lock-free flag indicating a custom preview launch/hover is live (set in `show`, cleared in
+/// `end_the_program` / `try_detach_active_preview`).
+static LIVE: AtomicBool = AtomicBool::new(false);
+/// Launched child PID for the currently active custom preview.
+static LAUNCHED_PID: AtomicU32 = AtomicU32::new(0);
+/// Newly-created PIDs owned by the active custom preview (updated by `run_it`, cleared on teardown/detach).
+static OWNED_PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 /// How many programs have been begun: a worker that was begun for an earlier one is one whose
 /// program has been ended, and it neither places nor shows anything.
 static LAUNCH: AtomicU64 = AtomicU64::new(0);
@@ -462,6 +459,171 @@ static CLASS_REGISTERED: Once = Once::new();
 /// Whether a custom preview is on screen.
 pub(super) fn is_showing() -> bool {
     WANT.lock().map(|want| want.is_some()).unwrap_or(false)
+}
+
+/// Lock-free check whether a custom preview is currently live (and not being promoted/detached).
+pub(super) fn has_live_preview() -> bool {
+    !DETACHING.load(Ordering::Acquire) && LIVE.load(Ordering::Acquire)
+}
+
+fn point_in_rect(pt: POINT, rect: RECT) -> bool {
+    rect.right > rect.left
+        && rect.bottom > rect.top
+        && pt.x >= rect.left
+        && pt.x < rect.right
+        && pt.y >= rect.top
+        && pt.y < rect.bottom
+}
+
+fn point_in_xywh(pt: POINT, rect: (i32, i32, i32, i32)) -> bool {
+    rect.2 > 0
+        && rect.3 > 0
+        && pt.x >= rect.0
+        && pt.x < rect.0 + rect.2
+        && pt.y >= rect.1
+        && pt.y < rect.1 + rect.3
+}
+
+fn is_rect_visible_on_screen(rect: RECT, vscreen: RECT) -> bool {
+    rect.right > rect.left
+        && rect.bottom > rect.top
+        && !is_at_stage_coord(rect)
+        && !is_off_screen(&rect, vscreen)
+}
+
+/// True when `hwnd` is visible, uncloaked, non-zero-alpha, and positioned on the virtual screen
+/// (excludes hidden, cloaked, invisible-layered, and offscreen-staged helper/preview windows).
+fn window_is_visible_on_screen(hwnd: HWND) -> bool {
+    if hwnd.0.is_null() || !unsafe { IsWindow(hwnd) }.as_bool() {
+        return false;
+    }
+    if !unsafe { IsWindowVisible(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool() {
+        return false;
+    }
+
+    let mut cloaked: u32 = 0;
+    if unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            &mut cloaked as *mut u32 as *mut _,
+            std::mem::size_of::<u32>() as u32,
+        )
+    }
+    .is_ok()
+        && cloaked != 0
+    {
+        return false;
+    }
+
+    let source_raw = SOURCE.load(Ordering::Acquire);
+    if hwnd.0 as isize == source_raw && SOURCE_INVISIBLE_LAYERED.load(Ordering::Acquire) {
+        return false;
+    }
+
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    if (ex_style & WS_EX_LAYERED.0) != 0
+        && layered_alpha_flags(hwnd)
+            .is_some_and(|(alpha, flags)| (flags.0 & LWA_ALPHA.0) != 0 && alpha == 0)
+    {
+        return false;
+    }
+
+    window_rect(hwnd).is_some_and(|r| is_rect_visible_on_screen(r, virtual_screen()))
+}
+
+fn is_active_owned_pid(pid: u32, my_pid: u32) -> bool {
+    if pid == 0 || pid == my_pid {
+        return false;
+    }
+    if LAUNCHED_PID.load(Ordering::Acquire) == pid {
+        return true;
+    }
+    if SOURCE_IS_NEW.load(Ordering::Acquire) && SOURCE_PID.load(Ordering::Acquire) == pid {
+        return true;
+    }
+    OWNED_PIDS
+        .lock()
+        .ok()
+        .is_some_and(|pids| pids.contains(&pid))
+}
+
+/// True when cursor `pt` hits the visible custom preview `HOST` rect, visible uncloaked `SOURCE`
+/// rect (handles `WS_EX_TRANSPARENT` / `DirectWindow`), or any visible uncloaked window owned by
+/// the spawned custom `.exe` / its newly created PIDs.
+pub(super) fn cursor_is_over_preview(pt: POINT) -> bool {
+    if !has_live_preview() {
+        return false;
+    }
+
+    // Check 1: Visible HOST rect (handles WS_EX_TRANSPARENT where WindowFromPoint skips HOST).
+    if SHOWN.load(Ordering::Acquire) {
+        if let Ok(guard) = LAST_HOST_RECT.lock() {
+            if guard.is_some_and(|r| point_in_xywh(pt, r)) {
+                return true;
+            }
+        }
+        let host_raw = HOST.load(Ordering::Acquire);
+        if host_raw != 0 {
+            let host_hwnd = HWND(host_raw as *mut _);
+            if window_is_visible_on_screen(host_hwnd)
+                && window_rect(host_hwnd).is_some_and(|r| point_in_rect(pt, r))
+            {
+                return true;
+            }
+        }
+    }
+
+    // Check 2: Visible uncloaked on-screen SOURCE rect (catches DirectWindow and startup flashes).
+    let source_raw = SOURCE.load(Ordering::Acquire);
+    if source_raw != 0 {
+        let source_hwnd = HWND(source_raw as *mut _);
+        if window_is_visible_on_screen(source_hwnd)
+            && visible_frame_rect(source_hwnd).is_some_and(|r| point_in_rect(pt, r))
+        {
+            return true;
+        }
+    }
+
+    // Check 3: WindowFromPoint and its GA_ROOT ancestor against HOST, SOURCE, and owned PIDs.
+    let wfp = unsafe { WindowFromPoint(pt) };
+    if !wfp.is_invalid() && !wfp.0.is_null() {
+        let root = unsafe { GetAncestor(wfp, GA_ROOT) };
+        let root = if root.is_invalid() || root.0.is_null() {
+            wfp
+        } else {
+            root
+        };
+        let wfp_raw = wfp.0 as isize;
+        let root_raw = root.0 as isize;
+
+        let host_raw = HOST.load(Ordering::Acquire);
+        if host_raw != 0
+            && SHOWN.load(Ordering::Acquire)
+            && (wfp_raw == host_raw || root_raw == host_raw)
+            && window_is_visible_on_screen(HWND(host_raw as *mut _))
+        {
+            return true;
+        }
+
+        if source_raw != 0
+            && (wfp_raw == source_raw || root_raw == source_raw)
+            && window_is_visible_on_screen(HWND(source_raw as *mut _))
+        {
+            return true;
+        }
+
+        let my_pid = std::process::id();
+        let wfp_pid = pid_of(wfp);
+        let root_pid = pid_of(root);
+        if (is_active_owned_pid(wfp_pid, my_pid) || is_active_owned_pid(root_pid, my_pid))
+            && window_is_visible_on_screen(root)
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Active hovered custom preview path (`WANT` is `Some` and `PROGRAM` is held).
@@ -526,6 +688,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         if let Ok(mut want) = WANT.lock() {
             *want = Some(Want { at });
         }
+        LIVE.store(true, Ordering::Release);
         return true;
     }
 
@@ -592,11 +755,20 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             process: Arc::clone(&process),
             pid,
             job,
+            processes_before: processes_before.clone(),
         });
     }
     if let Ok(mut want) = WANT.lock() {
         *want = Some(Want { at });
     }
+    LAUNCHED_PID.store(pid, Ordering::Release);
+    if let Ok(mut owned) = OWNED_PIDS.lock() {
+        *owned = (pid != 0 && pid != std::process::id())
+            .then_some(pid)
+            .into_iter()
+            .collect();
+    }
+    LIVE.store(true, Ordering::Release);
     if let Ok(mut slot) = ACTIVE_CAPTURE_TECHNIQUE.lock() {
         *slot = capture_technique;
     }
@@ -639,47 +811,13 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     true
 }
 
-/// Take the hover down: the host leaves the screen, and the program is kept a moment in case the
-/// hover comes straight back (see [`LINGER`]).
-///
-/// **Nothing is killed here.** A hide that killed the program would make every flicker of the
-/// hover a launch, and the program's own window is what makes it flicker.
+/// Take the hover down immediately: tears down the host and spawned preview program unless a
+/// promote/detach is currently in flight.
 pub(super) fn hide() {
-    if let Ok(mut want) = WANT.lock() {
-        *want = None;
+    if DETACHING.load(Ordering::Acquire) {
+        return;
     }
-    let hook_ctrl = ACTIVE_HOOK_CONTROL.lock().ok().and_then(|g| g.clone());
-    if let Some(ctrl) = hook_ctrl {
-        let source = SOURCE.load(Ordering::SeqCst);
-        ctrl.stage_offscreen();
-        let cloaked = source != 0 && ctrl.cloak_sync(HWND(source as *mut _));
-        if !cloaked {
-            if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
-                keep_source_invisible(source);
-            } else if source != 0 {
-                let hwnd = HWND(source as *mut _);
-                if unsafe { IsWindow(hwnd) }.as_bool() {
-                    let _ = unsafe {
-                        SetWindowPos(
-                            hwnd,
-                            HWND_BOTTOM,
-                            STAGE_COORD,
-                            STAGE_COORD,
-                            0,
-                            0,
-                            SWP_NOSIZE | SWP_NOACTIVATE,
-                        )
-                    };
-                }
-            }
-        }
-    } else if SOURCE_INVISIBLE_LAYERED.load(Ordering::SeqCst) {
-        keep_source_invisible(SOURCE.load(Ordering::SeqCst));
-    } else {
-        // Push on-monitor source off-screen before hiding host so it never flashes on desktop during LINGER.
-        park_source_offscreen_now();
-    }
-    hide_the_host();
+    end_the_program();
 }
 
 /// Open the file with the program its preset names, as the program's own window — the whole of
@@ -843,6 +981,11 @@ fn try_detach_active_preview(path: &Path) -> bool {
 
     // Bump LAUNCH first so `run_it` stops touching `source` and drops `InProcessHookSession`.
     LAUNCH.fetch_add(1, Ordering::SeqCst);
+    LIVE.store(false, Ordering::Release);
+    LAUNCHED_PID.store(0, Ordering::Release);
+    if let Ok(mut owned) = OWNED_PIDS.lock() {
+        owned.clear();
+    }
     if let Ok(mut want) = WANT.lock() {
         *want = None;
     }
@@ -1112,21 +1255,77 @@ pub(super) fn open_fully(path: &Path) -> bool {
     )
 }
 
+struct OwnedPidInputs<'a> {
+    launched_pid: u32,
+    launched_tree: &'a [u32],
+    source_pid: u32,
+    source_is_new: bool,
+    source_tree: &'a [u32],
+    tracked_owned: &'a [u32],
+    processes_before: &'a [u32],
+    my_pid: u32,
+}
+
+fn merge_owned_pids_to_end(inputs: OwnedPidInputs<'_>) -> Vec<u32> {
+    let OwnedPidInputs {
+        launched_pid,
+        launched_tree,
+        source_pid,
+        source_is_new,
+        source_tree,
+        tracked_owned,
+        processes_before,
+        my_pid,
+    } = inputs;
+    let mut pids = Vec::new();
+    let mut push_if_owned = |pid: u32, allow_if_launched: bool| {
+        if pid == 0 || pid == my_pid {
+            return;
+        }
+        if !allow_if_launched && processes_before.contains(&pid) {
+            return;
+        }
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    };
+
+    if launched_pid != 0 {
+        push_if_owned(launched_pid, true);
+        for &pid in launched_tree {
+            push_if_owned(pid, pid == launched_pid);
+        }
+    }
+    if source_is_new && source_pid != 0 {
+        push_if_owned(source_pid, false);
+        for &pid in source_tree {
+            push_if_owned(pid, false);
+        }
+    }
+    for &pid in tracked_owned {
+        push_if_owned(pid, pid == launched_pid && launched_pid != 0);
+    }
+    pids
+}
+
 /// End the program, its window's registration, and the hover it was drawing.
 fn end_the_program() {
     // First, so that a worker still waiting on the program's window stops placing and showing.
     LAUNCH.fetch_add(1, Ordering::SeqCst);
+    LIVE.store(false, Ordering::Release);
+    LAUNCHED_PID.store(0, Ordering::Release);
+    SHOWN.store(false, Ordering::SeqCst);
 
     if let Ok(mut want) = WANT.lock() {
         *want = None;
     }
 
     let program = PROGRAM.lock().ok().and_then(|mut held| held.take());
-    let launched_pid = program.as_ref().map(|program| program.pid).unwrap_or(0);
-    if let Some(program) = program {
-        let _ = unsafe { TerminateProcess(HANDLE(program.process.as_raw_handle()), 1) };
-        engine_processes::forget(program.pid);
-    }
+    let tracked_owned = OWNED_PIDS
+        .lock()
+        .ok()
+        .map(|mut held| std::mem::take(&mut *held))
+        .unwrap_or_default();
 
     // **The window this app asked for is closed, and the process that opened it is ended only
     // where the launch is what made it.** A packaged program's window belongs to a process this
@@ -1172,8 +1371,43 @@ fn end_the_program() {
             let _ = unsafe { PostMessageW(source, WM_CLOSE, WPARAM(0), LPARAM(0)) };
         }
     }
-    if source_is_new && source_pid != 0 && source_pid != launched_pid {
-        end_process(source_pid);
+
+    let my_pid = std::process::id();
+    let launched_pid = program.as_ref().map(|program| program.pid).unwrap_or(0);
+    let processes_before = program
+        .as_ref()
+        .map(|program| program.processes_before.as_slice())
+        .unwrap_or(&[]);
+    let launched_tree = if launched_pid != 0 && launched_pid != my_pid {
+        process_tree(launched_pid)
+    } else {
+        Vec::new()
+    };
+    let source_tree = if source_is_new && source_pid != 0 && source_pid != my_pid {
+        process_tree(source_pid)
+    } else {
+        Vec::new()
+    };
+    let pids_to_end = merge_owned_pids_to_end(OwnedPidInputs {
+        launched_pid,
+        launched_tree: &launched_tree,
+        source_pid,
+        source_is_new,
+        source_tree: &source_tree,
+        tracked_owned: &tracked_owned,
+        processes_before,
+        my_pid,
+    });
+
+    if let Some(program) = program {
+        if program.pid != 0 && program.pid != my_pid {
+            let _ = unsafe { TerminateProcess(HANDLE(program.process.as_raw_handle()), 1) };
+            engine_processes::forget(program.pid);
+        }
+        // Dropping `program` drops `PreviewJob` (triggering `KILL_ON_JOB_CLOSE`).
+    }
+    for pid in pids_to_end {
+        end_process(pid);
     }
 
     let thumbnail = THUMBNAIL
@@ -1245,7 +1479,7 @@ fn bypass_placement() -> bool {
 /// never a search — so a preset that says `mspaint.exe` is a launch the desktop refuses, which is
 /// a preview with nothing on screen. The search `Command` would have done is done here instead,
 /// so a preset that names a program is a preset that runs.
-fn resolved(exe: &str) -> Option<String> {
+pub(crate) fn resolved(exe: &str) -> Option<String> {
     // **Trimmed of the quotes a paste brings.** The field is written as it was pasted — Ctrl+Shift+C
     // hands over `"C:\Program Files\IrfanView\i_view64.exe"` — and nothing compared here is a path
     // while the quotes are still around it.
@@ -1531,11 +1765,66 @@ fn is_current(id: u64) -> bool {
     LAUNCH.load(Ordering::SeqCst) == id
 }
 
-/// Find the program's window, keep the box and the picture in step with the hover, and keep the
-/// window parked until the hover has been gone for [`LINGER`].
-///
-/// **One worker per program**, not per hover: the hover can come and go while the program is
-/// starting, and what that must cost is a hidden host and a kept window rather than a launch.
+fn launch_still_wanted(launch: &Launch) -> bool {
+    is_current(launch.id) && is_showing()
+}
+
+fn update_owned_pids_if_current(launch: &Launch, pids: &[u32]) {
+    let my_pid = std::process::id();
+    let filtered: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|&pid| {
+            pid != 0
+                && pid != my_pid
+                && (pid == launch.pid || !launch.processes_before.contains(&pid))
+        })
+        .collect();
+    if let Ok(mut owned) = OWNED_PIDS.lock() {
+        if is_current(launch.id) {
+            *owned = filtered;
+        }
+    }
+}
+
+/// End `launch.pid` and any newly spawned descendants, excluding pre-launch and self PIDs.
+fn sweep_launch_tree(launch: &Launch) {
+    let my_pid = std::process::id();
+    if launch.pid != 0 && launch.pid != my_pid {
+        for pid in process_tree(launch.pid) {
+            if pid != 0
+                && pid != my_pid
+                && (pid == launch.pid || !launch.processes_before.contains(&pid))
+            {
+                end_process(pid);
+            }
+        }
+    }
+}
+
+/// Clean up a newly discovered `source` window (and its new process tree if newly spawned) when
+/// a launch is aborted concurrently by `hide()` / `end_the_program()`.
+fn cleanup_aborted_source(source: HWND, launch: &Launch) {
+    let my_pid = std::process::id();
+    let mut source_pid = 0u32;
+    if !source.0.is_null() && unsafe { IsWindow(source) }.as_bool() {
+        source_pid = pid_of(source);
+        let _ = unsafe { PostMessageW(source, WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    }
+    let source_is_new =
+        source_pid != 0 && source_pid != my_pid && !launch.processes_before.contains(&source_pid);
+    if source_is_new {
+        for pid in process_tree(source_pid) {
+            if pid != 0 && pid != my_pid && !launch.processes_before.contains(&pid) {
+                end_process(pid);
+            }
+        }
+    }
+    sweep_launch_tree(launch);
+}
+
+/// Find the program's window and keep the box and the picture in step with the hover until the
+/// hover ends.
 fn run_it(
     host: HWND,
     launch: Launch,
@@ -1553,13 +1842,19 @@ fn run_it(
         wait_for_a_window(&launch)
     }) else {
         // A program that made no window is a preview with nothing to show: it goes, and the host
-        // is already off the screen.
+        // is already off the screen. Even if `hide()`/`end_the_program()` already invalidated this
+        // launch concurrently, sweep `launch.pid` so children spawned during the final sleep cannot leak.
         if is_current(launch.id) {
             end_the_program();
         }
+        sweep_launch_tree(&launch);
         return;
     };
-    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+    if !launch_still_wanted(&launch) || !unsafe { IsWindow(source) }.as_bool() {
+        cleanup_aborted_source(source, &launch);
+        if is_current(launch.id) {
+            end_the_program();
+        }
         return;
     }
 
@@ -1585,6 +1880,7 @@ fn run_it(
 
     // Lock ownership strictly to our launched tree (+ adopted brokered tree if newly spawned).
     let mut processes = owned_pids_for(launch.pid, source_pid, source_is_new);
+    update_owned_pids_if_current(&launch, &processes);
     if let Some(vol) = volume {
         audio_session::apply_custom_preview_volume(processes.clone(), vol);
     }
@@ -1883,11 +2179,20 @@ fn run_it(
             };
 
         while Instant::now() < settle_deadline {
-            if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+            if !is_current(launch.id) {
+                return;
+            }
+            if !unsafe { IsWindow(source) }.as_bool() {
+                if is_current(launch.id) {
+                    end_the_program();
+                }
                 return;
             }
             let Some(target_rect) = current_target_rect() else {
-                break;
+                if is_current(launch.id) {
+                    end_the_program();
+                }
+                return;
             };
 
             if invisible_layered {
@@ -1970,7 +2275,13 @@ fn run_it(
                     )
                 }
                 .0 != 0;
-                if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+                if !is_current(launch.id) {
+                    return;
+                }
+                if !unsafe { IsWindow(source) }.as_bool() {
+                    if is_current(launch.id) {
+                        end_the_program();
+                    }
                     return;
                 }
                 if answered {
@@ -2008,8 +2319,6 @@ fn run_it(
         drop(source_proc);
     }
 
-    let mut lingering: Option<Instant> = None;
-
     loop {
         if !is_current(launch.id) {
             return;
@@ -2029,49 +2338,11 @@ fn run_it(
             .and_then(|want| want.as_ref().map(|want| want.at));
         let Some(at) = at else {
             // Re-check after reading WANT: open_fully/end_the_program bump LAUNCH before clearing WANT.
-            if !is_current(launch.id) {
-                return;
-            }
-            // Hover gone (LINGER): never run hide_others census so user-opened instances stay untouched.
-            let since = *lingering.get_or_insert_with(Instant::now);
-            placed_host_rect = None;
-            if let Some(ref session) = hook_session {
-                session.view.stage_offscreen();
-                if !session.view.cloak_sync(source) {
-                    if invisible_layered {
-                        keep_source_invisible(source.0 as isize);
-                    } else {
-                        placed_mode = None;
-                        let _ = unsafe {
-                            SetWindowPos(
-                                source,
-                                HWND_BOTTOM,
-                                STAGE_COORD,
-                                STAGE_COORD,
-                                0,
-                                0,
-                                SWP_NOSIZE | SWP_NOACTIVATE,
-                            )
-                        };
-                    }
-                }
-            } else if invisible_layered {
-                keep_source_invisible(source.0 as isize);
-            } else {
-                placed_mode = None;
-                if !is_window_offscreen(source) {
-                    push_offscreen(source);
-                }
-            }
-            hide_the_host();
-            if since.elapsed() >= LINGER {
+            if is_current(launch.id) {
                 end_the_program();
-                return;
             }
-            std::thread::sleep(KEEP_POLL);
-            continue;
+            return;
         };
-        lingering = None;
 
         // Hide secondary splash/dialog windows belonging strictly to `processes` (never by exe name).
         census(
@@ -2086,6 +2357,7 @@ fn run_it(
         .take();
         if tree_read.elapsed() >= Duration::from_secs(1) {
             processes = owned_pids_for(launch.pid, source_pid, source_is_new);
+            update_owned_pids_if_current(&launch, &processes);
             tree_read = Instant::now();
         }
         if let Some(vol) = volume {
@@ -3115,18 +3387,6 @@ fn push_offscreen(window: HWND) {
     }
 }
 
-/// Synchronously push active `SOURCE` off-screen before hiding `host`.
-fn park_source_offscreen_now() {
-    let source = SOURCE.load(Ordering::SeqCst);
-    if source == 0 {
-        return;
-    }
-    let hwnd = HWND(source as *mut _);
-    if unsafe { IsWindow(hwnd) }.as_bool() && !is_window_offscreen(hwnd) {
-        push_offscreen(hwnd);
-    }
-}
-
 /// Fallback off-screen park when `window`'s minimum size exceeds `host`.
 fn park_offscreen(window: HWND, width: i32, height: i32) {
     let vscreen = virtual_screen();
@@ -3699,6 +3959,7 @@ fn stage_candidate_offscreen(hwnd: HWND, w: i32, h: i32) {
 fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
     let mut processes = process_tree(launch.pid);
+    update_owned_pids_if_current(launch, &processes);
     let mut read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
@@ -3790,7 +4051,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
     };
 
     while Instant::now() < deadline {
-        if !is_current(launch.id) {
+        if !launch_still_wanted(launch) {
             return None;
         }
         if let Some(window) = check_now(
@@ -3799,11 +4060,16 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
             &mut creation_times,
             &mut first_hidden,
         ) {
+            if !launch_still_wanted(launch) {
+                cleanup_aborted_source(window, launch);
+                return None;
+            }
             return Some(window);
         }
 
         if read.elapsed() >= TREE_POLL {
             processes = process_tree(launch.pid);
+            update_owned_pids_if_current(launch, &processes);
             read = Instant::now();
         }
 
@@ -3871,16 +4137,29 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
                 }
             });
             if matched {
+                if !launch_still_wanted(launch) {
+                    return None;
+                }
                 if let Some(window) = check_now(
                     &processes,
                     &mut images,
                     &mut creation_times,
                     &mut first_hidden,
                 ) {
+                    if !launch_still_wanted(launch) {
+                        cleanup_aborted_source(window, launch);
+                        return None;
+                    }
                     return Some(window);
                 }
             }
         }
+    }
+    if !launch_still_wanted(launch) {
+        if let Some((_, hwnd)) = first_hidden {
+            cleanup_aborted_source(hwnd, launch);
+        }
+        return None;
     }
     first_hidden.map(|(_, hwnd)| hwnd)
 }
@@ -4021,11 +4300,20 @@ fn run_offscreen_staged_settle_and_reveal(
     let settle_deadline = settle_start + Duration::from_millis(550);
 
     while !stage_refused && Instant::now() < settle_deadline {
-        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+        if !is_current(launch.id) {
+            return false;
+        }
+        if !unsafe { IsWindow(source) }.as_bool() {
+            if is_current(launch.id) {
+                end_the_program();
+            }
             return false;
         }
         if current_target_rect().is_none() {
-            break;
+            if is_current(launch.id) {
+                end_the_program();
+            }
+            return false;
         }
 
         let raw_moved = drain_settle_events(source, launch, processes);
@@ -4064,7 +4352,13 @@ fn run_offscreen_staged_settle_and_reveal(
                 )
             }
             .0 != 0;
-            if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+            if !is_current(launch.id) {
+                return false;
+            }
+            if !unsafe { IsWindow(source) }.as_bool() {
+                if is_current(launch.id) {
+                    end_the_program();
+                }
                 return false;
             }
             if answered && window_rect(source) == staged_expected {
@@ -4084,12 +4378,21 @@ fn run_offscreen_staged_settle_and_reveal(
     }
     drop(settle_guard);
 
-    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+    if !is_current(launch.id) {
+        return false;
+    }
+    if !unsafe { IsWindow(source) }.as_bool() {
+        if is_current(launch.id) {
+            end_the_program();
+        }
         return false;
     }
 
     let Some(host_rect) = current_target_rect() else {
-        return true;
+        if is_current(launch.id) {
+            end_the_program();
+        }
+        return false;
     };
     if let Ok(mut slot) = LAST_HOST_RECT.lock() {
         *slot = Some(host_rect);
@@ -4703,13 +5006,14 @@ fn wait_for_a_window_in_process_hook(
 ) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
     let mut processes = process_tree(launch.pid);
+    update_owned_pids_if_current(launch, &processes);
     let mut read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut first_candidate: Option<(Instant, HWND)> = None;
 
     while Instant::now() < deadline {
-        if !is_current(launch.id) {
+        if !launch_still_wanted(launch) {
             return None;
         }
         let valid_captured = session
@@ -4728,41 +5032,67 @@ fn wait_for_a_window_in_process_hook(
                 allow_image_fallback: false,
             },
         );
-        if let Some((shown_area, shown_hwnd)) = look.shown {
+        let found = if let Some((shown_area, shown_hwnd)) = look.shown {
             if let Some((cap_area, true, cap_hwnd)) = valid_captured {
                 if cap_area > shown_area {
-                    return Some(cap_hwnd);
+                    Some(cap_hwnd)
+                } else {
+                    Some(shown_hwnd)
                 }
+            } else {
+                Some(shown_hwnd)
             }
-            return Some(shown_hwnd);
-        }
-
-        let best_hidden = look.found.iter().copied().max_by_key(|(area, _)| *area);
-        if let Some((cap_area, true, cap_hwnd)) = valid_captured {
-            if let Some((hidden_area, hidden_hwnd)) = best_hidden {
-                if hidden_area > cap_area {
-                    return Some(hidden_hwnd);
+        } else {
+            let best_hidden = look.found.iter().copied().max_by_key(|(area, _)| *area);
+            if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+                if let Some((hidden_area, hidden_hwnd)) = best_hidden {
+                    if hidden_area > cap_area {
+                        Some(hidden_hwnd)
+                    } else if cap_area >= THE_SMALLEST_PICTURE {
+                        Some(cap_hwnd)
+                    } else {
+                        None
+                    }
+                } else if cap_area >= THE_SMALLEST_PICTURE {
+                    Some(cap_hwnd)
+                } else {
+                    None
                 }
+            } else if let Some((_, hidden)) = best_hidden {
+                let entry = first_candidate.get_or_insert_with(|| (Instant::now(), hidden));
+                entry.1 = hidden;
+                if entry.0.elapsed() >= Duration::from_millis(40) {
+                    Some(hidden)
+                } else {
+                    None
+                }
+            } else {
+                if let Some((_, _, cap_hwnd)) = valid_captured {
+                    first_candidate.get_or_insert_with(|| (Instant::now(), cap_hwnd));
+                }
+                None
             }
-            if cap_area >= THE_SMALLEST_PICTURE {
-                return Some(cap_hwnd);
+        };
+        if let Some(window) = found {
+            if !launch_still_wanted(launch) {
+                cleanup_aborted_source(window, launch);
+                return None;
             }
-        }
-        if let Some((_, hidden)) = best_hidden {
-            let entry = first_candidate.get_or_insert_with(|| (Instant::now(), hidden));
-            entry.1 = hidden;
-            if entry.0.elapsed() >= Duration::from_millis(40) {
-                return Some(hidden);
-            }
-        } else if let Some((_, _, cap_hwnd)) = valid_captured {
-            first_candidate.get_or_insert_with(|| (Instant::now(), cap_hwnd));
+            return Some(window);
         }
 
         if read.elapsed() >= TREE_POLL {
             processes = process_tree(launch.pid);
+            update_owned_pids_if_current(launch, &processes);
             read = Instant::now();
         }
         std::thread::sleep(Duration::from_millis(5));
+    }
+    if !launch_still_wanted(launch) {
+        if let Some((_, hwnd)) = first_candidate {
+            cleanup_aborted_source(hwnd, launch);
+        }
+        return None;
     }
     first_candidate
         .map(|(_, hwnd)| hwnd)
@@ -4980,8 +5310,10 @@ fn run_in_process_hook_settle_and_reveal(
 
     if was_hidden {
         let Some(target_rect) = current_target_rect() else {
-            // Hover already left while window is still hidden; never show it.
-            return true;
+            if is_current(launch.id) {
+                end_the_program();
+            }
+            return false;
         };
         session.view.ensure_cloaked_and_locked();
         let insets = if window_mode == CustomWindowMode::Normal {
@@ -5030,7 +5362,13 @@ fn run_in_process_hook_settle_and_reveal(
     let mut last_change = settle_start;
 
     while Instant::now() < settle_deadline {
-        if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+        if !is_current(launch.id) {
+            return false;
+        }
+        if !unsafe { IsWindow(source) }.as_bool() {
+            if is_current(launch.id) {
+                end_the_program();
+            }
             return false;
         }
         let Some(target_rect) = current_target_rect() else {
@@ -5038,7 +5376,10 @@ fn run_in_process_hook_settle_and_reveal(
                 return false;
             }
             cloak_or_park(*state.invisible_layered);
-            return true;
+            if is_current(launch.id) {
+                end_the_program();
+            }
+            return false;
         };
         let insets = if window_mode == CustomWindowMode::Normal {
             dwm_frame_insets(source)
@@ -5065,7 +5406,13 @@ fn run_in_process_hook_settle_and_reveal(
                 )
             }
             .0 != 0;
-            if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+            if !is_current(launch.id) {
+                return false;
+            }
+            if !unsafe { IsWindow(source) }.as_bool() {
+                if is_current(launch.id) {
+                    end_the_program();
+                }
                 return false;
             }
             if answered && window_rect(source) == last_rect {
@@ -5075,12 +5422,21 @@ fn run_in_process_hook_settle_and_reveal(
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    if !is_current(launch.id) || !unsafe { IsWindow(source) }.as_bool() {
+    if !is_current(launch.id) {
+        return false;
+    }
+    if !unsafe { IsWindow(source) }.as_bool() {
+        if is_current(launch.id) {
+            end_the_program();
+        }
         return false;
     }
     let Some(host_rect) = current_target_rect() else {
         cloak_or_park(*state.invisible_layered);
-        return true;
+        if is_current(launch.id) {
+            end_the_program();
+        }
+        return false;
     };
     reveal_in_process_hook(
         host,
@@ -5100,6 +5456,7 @@ fn run_in_process_hook_settle_and_reveal(
 fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let deadline = Instant::now() + WINDOW_WAIT;
     let mut processes = process_tree(launch.pid);
+    update_owned_pids_if_current(launch, &processes);
     let mut read = Instant::now();
     let mut images: HashMap<u32, Option<String>> = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
@@ -5150,7 +5507,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
         }
         if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
             wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 250);
-            if !is_current(launch.id) {
+            if !launch_still_wanted(launch) {
                 return None;
             }
             let look2 = census(
@@ -5196,7 +5553,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
         }
         if let Some((_, hidden)) = look.found.iter().copied().max_by_key(|(area, _)| *area) {
             wait_for_input_idle_handle(HANDLE(launch.process.as_raw_handle()), 250);
-            if !is_current(launch.id) {
+            if !launch_still_wanted(launch) {
                 return None;
             }
             let look2 = census(
@@ -5223,16 +5580,21 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     };
 
     while Instant::now() < deadline {
-        if !is_current(launch.id) {
+        if !launch_still_wanted(launch) {
             return None;
         }
 
         if let Some(window) = check_now(&processes, &mut images, &mut creation_times) {
+            if !launch_still_wanted(launch) {
+                cleanup_aborted_source(window, launch);
+                return None;
+            }
             return Some(window);
         }
 
         if read.elapsed() >= TREE_POLL {
             processes = process_tree(launch.pid);
+            update_owned_pids_if_current(launch, &processes);
             read = Instant::now();
         }
 
@@ -5301,7 +5663,14 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                 }
             });
             if matched {
+                if !launch_still_wanted(launch) {
+                    return None;
+                }
                 if let Some(window) = check_now(&processes, &mut images, &mut creation_times) {
+                    if !launch_still_wanted(launch) {
+                        cleanup_aborted_source(window, launch);
+                        return None;
+                    }
                     return Some(window);
                 }
             }
@@ -5358,6 +5727,9 @@ unsafe fn process_creation_time(pid: u32) -> Option<u64> {
 /// a viewer and its renderer — is a program whose window is not the one the launched id owns, and
 /// the tree is what finds it.
 fn process_tree(pid: u32) -> Vec<u32> {
+    if pid == 0 {
+        return Vec::new();
+    }
     /// How many processes are looked up: a tree is a handful, and a bound keeps a snapshot walk
     /// that cannot end a walk that does.
     const THE_LOOKUPS: usize = 8;
@@ -6701,6 +7073,7 @@ mod tests {
             process: Arc::new(unsafe { OwnedHandle::from_raw_handle(handle.0) }),
             pid: 0,
             job: None,
+            processes_before: Vec::new(),
         }
     }
 
@@ -6709,19 +7082,15 @@ mod tests {
         let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let path = PathBuf::from("sample.custom");
 
-        if let Ok(mut w) = WANT.lock() {
-            *w = None;
-        }
-        if let Ok(mut p) = PROGRAM.lock() {
-            *p = None;
-        }
+        end_the_program();
         assert_eq!(active_path(), None);
         assert!(!is_active());
+        assert!(!has_live_preview());
 
         if let Ok(mut p) = PROGRAM.lock() {
             *p = Some(dummy_program(path.clone()));
         }
-        // Program lingering without WANT must not report active.
+        // Program without WANT must not report active.
         assert_eq!(active_path(), None);
         assert!(!is_active());
 
@@ -6730,8 +7099,10 @@ mod tests {
                 at: pointer((100, 100)),
             });
         }
+        LIVE.store(true, Ordering::Release);
         assert_eq!(active_path().as_deref(), Some(path.as_path()));
         assert!(is_active());
+        assert!(has_live_preview());
 
         // Pin-press routing must emit PinCold for the active custom preview path.
         assert!(matches!(
@@ -6742,11 +7113,181 @@ mod tests {
         hide();
         assert_eq!(active_path(), None);
         assert!(!is_active());
+        assert!(!has_live_preview());
+        assert!(WANT.lock().unwrap().is_none());
+        assert!(PROGRAM.lock().unwrap().is_none());
+        assert!(OWNED_PIDS.lock().unwrap().is_empty());
         assert!(pin_request_if_active().is_none());
+    }
 
+    #[test]
+    fn hide_while_detaching_preserves_promoted_state_and_owned_pid_cleanup_excludes_preexisting() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        end_the_program();
+
+        let path = PathBuf::from("detach-guard.custom");
         if let Ok(mut p) = PROGRAM.lock() {
-            *p = None;
+            *p = Some(dummy_program(path.clone()));
         }
+        if let Ok(mut w) = WANT.lock() {
+            *w = Some(Want {
+                at: pointer((120, 120)),
+            });
+        }
+        LIVE.store(true, Ordering::Release);
+        if let Ok(mut owned) = OWNED_PIDS.lock() {
+            *owned = vec![4001, 4002];
+        }
+
+        // While DETACHING is true, hide() must return immediately without touching state.
+        DETACHING.store(true, Ordering::SeqCst);
+        assert!(!has_live_preview());
+        hide();
+        assert_eq!(active_path().as_deref(), Some(path.as_path()));
+        assert!(PROGRAM.lock().unwrap().is_some());
+        assert_eq!(*OWNED_PIDS.lock().unwrap(), vec![4001, 4002]);
+        DETACHING.store(false, Ordering::SeqCst);
+        assert!(has_live_preview());
+
+        // Once DETACHING clears, hide() tears down immediately.
+        hide();
+        assert!(!has_live_preview());
+        assert!(PROGRAM.lock().unwrap().is_none());
+        assert!(OWNED_PIDS.lock().unwrap().is_empty());
+
+        // Owned PID merge must include launched/new source trees + tracked PIDs, and never pre-existing or own PID.
+        let merged_new = merge_owned_pids_to_end(OwnedPidInputs {
+            launched_pid: 100,
+            launched_tree: &[100, 101, 500, 999],
+            source_pid: 200,
+            source_is_new: true,
+            source_tree: &[200, 201, 500],
+            tracked_owned: &[300, 500, 999],
+            processes_before: &[500, 100],
+            my_pid: 999,
+        });
+        assert_eq!(merged_new, vec![100, 101, 200, 201, 300]);
+
+        // Reused broker (!source_is_new) must NEVER terminate source_pid or its tree.
+        let merged_reused = merge_owned_pids_to_end(OwnedPidInputs {
+            launched_pid: 100,
+            launched_tree: &[100, 101],
+            source_pid: 500,
+            source_is_new: false,
+            source_tree: &[500, 501],
+            tracked_owned: &[300],
+            processes_before: &[500],
+            my_pid: 999,
+        });
+        assert_eq!(merged_reused, vec![100, 101, 300]);
+    }
+
+    #[test]
+    fn custom_preview_rect_and_visibility_helpers_filter_staging_and_offscreen() {
+        let _guard = TEST_STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        end_the_program();
+
+        let vscreen = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        assert!(point_in_xywh(
+            POINT { x: 100, y: 100 },
+            (100, 100, 200, 150)
+        ));
+        assert!(!point_in_xywh(
+            POINT { x: 300, y: 100 },
+            (100, 100, 200, 150)
+        ));
+        assert!(!point_in_xywh(
+            POINT { x: 150, y: 250 },
+            (100, 100, 200, 150)
+        ));
+        assert!(!point_in_xywh(POINT { x: 100, y: 100 }, (100, 100, 0, 150)));
+
+        let onscreen = RECT {
+            left: 200,
+            top: 150,
+            right: 500,
+            bottom: 450,
+        };
+        assert!(point_in_rect(POINT { x: 200, y: 150 }, onscreen));
+        assert!(!point_in_rect(POINT { x: 500, y: 450 }, onscreen));
+        assert!(is_rect_visible_on_screen(onscreen, vscreen));
+
+        let staged = stage_rect(400, 300);
+        assert!(!is_rect_visible_on_screen(staged, vscreen));
+        assert!(!is_rect_visible_on_screen(
+            RECT {
+                left: 2000,
+                top: 100,
+                right: 2400,
+                bottom: 400,
+            },
+            vscreen
+        ));
+        assert!(!is_rect_visible_on_screen(
+            RECT {
+                left: 100,
+                top: 100,
+                right: 100,
+                bottom: 200,
+            },
+            vscreen
+        ));
+
+        // cursor_is_over_preview matches visible HOST rect (SHOWN + LAST_HOST_RECT) and ignores invisible/staged SOURCE.
+        let bounds = work_area_at(0, 0);
+        let hx = bounds.left + 300;
+        let hy = bounds.top + 200;
+        let hidden_hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(INVISIBLE_EX_STYLE),
+                w!("STATIC"),
+                w!("Hidden Staging"),
+                WS_CAPTION,
+                STAGE_COORD,
+                STAGE_COORD,
+                320,
+                240,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("create hidden staging window")
+        };
+        SOURCE.store(hidden_hwnd.0 as isize, Ordering::SeqCst);
+        SOURCE_INVISIBLE_LAYERED.store(true, Ordering::SeqCst);
+        assert!(!window_is_visible_on_screen(hidden_hwnd));
+
+        LIVE.store(true, Ordering::Release);
+        SHOWN.store(true, Ordering::SeqCst);
+        if let Ok(mut r) = LAST_HOST_RECT.lock() {
+            *r = Some((hx, hy, 400, 300));
+        }
+        assert!(cursor_is_over_preview(POINT {
+            x: hx + 10,
+            y: hy + 10
+        }));
+        assert!(!cursor_is_over_preview(POINT {
+            x: hx - 5,
+            y: hy + 10
+        }));
+        // Staging coordinates must not trigger cursor_is_over_preview.
+        assert!(!cursor_is_over_preview(POINT {
+            x: STAGE_COORD + 10,
+            y: STAGE_COORD + 10
+        }));
+
+        end_the_program();
+        assert!(!cursor_is_over_preview(POINT {
+            x: hx + 10,
+            y: hy + 10
+        }));
+        let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hidden_hwnd) };
     }
 
     #[test]
