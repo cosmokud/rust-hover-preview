@@ -112,7 +112,7 @@
 //! it (see [`open_fully`]).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
@@ -132,14 +132,18 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::{
     DwmFlush, DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
-    DwmSetWindowAttribute, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWMWA_CLOAKED,
-    DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED, DWM_THUMBNAIL_PROPERTIES,
-    DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
+    DwmSetWindowAttribute, DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWMWA_CLOAK,
+    DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED,
+    DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION,
+    DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteObject, FillRect, GetMonitorInfoW, GetStockObject, InvalidateRect,
     MonitorFromRect, UpdateWindow, HBRUSH, HGDIOBJ, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     NULL_BRUSH,
+};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
 };
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList,
@@ -1769,6 +1773,7 @@ fn try_detach_active_preview(path: &Path) -> bool {
     if let Some(ctrl) = hook_ctrl {
         let _ = ctrl.detach_sync(source_hwnd);
     }
+    let _ = set_window_cloak(source_hwnd, false);
     if window_mode == CustomWindowMode::Borderless {
         if let Some(style) = orig_style {
             let _ = unsafe { SetWindowLongPtrW(source_hwnd, GWL_STYLE, style) };
@@ -2120,6 +2125,7 @@ fn end_the_program() {
                 if let Some(ref ctrl) = hook_ctrl {
                     let _ = ctrl.detach_sync(source);
                 }
+                let _ = set_window_cloak(source, false);
             }
             if let Some(target) = restore_rect {
                 if window_rect(source).is_some_and(|cur| {
@@ -2590,12 +2596,18 @@ fn sweep_launch_tree(launch: &Launch) {
 fn cleanup_aborted_source(source: HWND, launch: &Launch) {
     let my_pid = std::process::id();
     let mut source_pid = 0u32;
-    if !source.0.is_null() && unsafe { IsWindow(source) }.as_bool() {
+    let is_window = !source.0.is_null() && unsafe { IsWindow(source) }.as_bool();
+    if is_window {
         source_pid = pid_of(source);
-        let _ = unsafe { PostMessageW(source, WM_CLOSE, WPARAM(0), LPARAM(0)) };
     }
     let source_is_new =
         source_pid != 0 && source_pid != my_pid && !launch.processes_before.contains(&source_pid);
+    if is_window {
+        if !source_is_new {
+            let _ = set_window_cloak(source, false);
+        }
+        let _ = unsafe { PostMessageW(source, WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    }
     if source_is_new {
         for pid in process_tree(source_pid) {
             if pid != 0 && pid != my_pid && !launch.processes_before.contains(&pid) {
@@ -2613,20 +2625,20 @@ fn run_it(
     launch: Launch,
     scaling: CustomScaling,
     window_mode: CustomWindowMode,
-    capture_technique: CustomCaptureTechnique,
+    mut capture_technique: CustomCaptureTechnique,
     volume: Option<u32>,
     mut hook_session: Option<InProcessHookSession>,
 ) {
-    let Some(source) = (if capture_technique == CustomCaptureTechnique::InProcessHook {
+    let Some(discovered) = (if capture_technique == CustomCaptureTechnique::InProcessHook {
         if let Some(ref session) = hook_session {
-            wait_for_a_window_in_process_hook(&launch, session)
+            wait_for_a_window_in_process_hook(&launch, session, capture_technique)
         } else {
-            wait_for_a_window(&launch)
+            wait_for_a_window(&launch, capture_technique)
         }
     } else if capture_technique == CustomCaptureTechnique::OffscreenStaged {
-        wait_for_a_window_offscreen_staged(&launch)
+        wait_for_a_window_offscreen_staged(&launch, capture_technique)
     } else {
-        wait_for_a_window(&launch)
+        wait_for_a_window(&launch, capture_technique)
     }) else {
         cp_trace!(
             "run_it: no_window_found id={} pid={} cap={:?} hook_hits={:?}",
@@ -2644,6 +2656,13 @@ fn run_it(
         sweep_launch_tree(&launch);
         return;
     };
+    let source = discovered.hwnd;
+    let mut pre_cloaked = discovered.pre_cloaked;
+    if hook_session.is_none() {
+        hook_session = discovered.hook_session;
+    } else if let Some(extra) = discovered.hook_session {
+        extra.view.clear_locks_for_detach();
+    }
     if !launch_still_wanted(&launch) || !unsafe { IsWindow(source) }.as_bool() {
         cp_trace!(
             "run_it: aborted_after_find id={} hwnd=0x{:x} still_wanted={} is_window={}",
@@ -2652,6 +2671,11 @@ fn run_it(
             launch_still_wanted(&launch),
             unsafe { IsWindow(source) }.as_bool()
         );
+        if let Some(ref session) = hook_session {
+            session.view.clear_locks_for_detach();
+            let _ = session.view.detach_sync(source);
+        }
+        drop(hook_session.take());
         cleanup_aborted_source(source, &launch);
         if is_current(launch.id) {
             end_the_program();
@@ -2680,6 +2704,20 @@ fn run_it(
         audio_session::apply_custom_preview_volume(processes.clone(), vol);
     }
     let mut last_volume_apply = Instant::now();
+
+    // If discovery pre-attached `custom_preview_hook.dll` directly onto the 64-bit grandchild,
+    // promote `capture_technique` back to `InProcessHook` BEFORE checking `tries_invisible_layered`.
+    if launch.requested_capture == CustomCaptureTechnique::InProcessHook
+        && capture_technique != CustomCaptureTechnique::InProcessHook
+        && hook_session
+            .as_ref()
+            .is_some_and(|session| session.pid == source_pid && !session.hooks.is_empty())
+    {
+        capture_technique = CustomCaptureTechnique::InProcessHook;
+        if let Ok(mut slot) = ACTIVE_CAPTURE_TECHNIQUE.lock() {
+            *slot = capture_technique;
+        }
+    }
 
     // Visible app (ignored `SW_HIDE`): make 1/255 invisible BEFORE any style/size/move changes
     // when technique is `InvisibleLayered`.
@@ -2760,7 +2798,6 @@ fn run_it(
     // Ensure hook covers secondary UI threads and child/brokered PIDs (including 64-bit
     // grandchildren spawned by 32-bit stubs) BEFORE modifying window styles, and register the
     // active SHM handle for detach/hide.
-    let mut capture_technique = capture_technique;
     let wants_hook_session = uses_hook_enforcement(launch.placement)
         || launch.requested_capture == CustomCaptureTechnique::InProcessHook;
     if wants_hook_session {
@@ -2779,8 +2816,9 @@ fn run_it(
             .as_ref()
             .is_some_and(|session| session.pid == source_pid);
         if same_pid_hooked {
+            let mut hooked_ok = true;
             if let Some(ref mut session) = hook_session {
-                if source_tid != 0 && (source_tid != launch.tid || session.hooks.is_empty()) {
+                if source_tid != 0 && !session.hooks.iter().any(|&(t, _, _)| t == source_tid) {
                     let attached = session.attach_thread(source_tid);
                     cp_trace!(
                         "run_it: attach_secondary_thread id={} pid={} tid={} launch_tid={} ok={}",
@@ -2790,10 +2828,22 @@ fn run_it(
                         launch.tid,
                         attached
                     );
+                    hooked_ok = !session.hooks.is_empty();
+                } else {
+                    hooked_ok = !session.hooks.is_empty();
                 }
+            }
+            if !hooked_ok {
+                if let Some(ref session) = hook_session {
+                    session.view.clear_locks_for_detach();
+                }
+                drop(hook_session.take());
             }
         } else {
             let prev_pid = hook_session.as_ref().map(|s| s.pid);
+            if let Some(ref session) = hook_session {
+                session.view.clear_locks_for_detach();
+            }
             drop(hook_session.take());
             let should_dynamic_attach = source_pid != 0
                 && source_tid != 0
@@ -2911,6 +2961,7 @@ fn run_it(
         if let Some(ref session) = hook_session {
             let mut staged = OffscreenStagedState {
                 invisible_layered: &mut invisible_layered,
+                pre_cloaked: &mut pre_cloaked,
                 placed_mode: &mut placed_mode,
                 placed_host_rect: &mut placed_host_rect,
                 expected_rect: &mut expected_rect,
@@ -2937,6 +2988,7 @@ fn run_it(
     } else if capture_technique == CustomCaptureTechnique::OffscreenStaged {
         let mut staged = OffscreenStagedState {
             invisible_layered: &mut invisible_layered,
+            pre_cloaked: &mut pre_cloaked,
             placed_mode: &mut placed_mode,
             placed_host_rect: &mut placed_host_rect,
             expected_rect: &mut expected_rect,
@@ -3573,6 +3625,7 @@ fn run_it(
                 }
                 let mut staged = OffscreenStagedState {
                     invisible_layered: &mut invisible_layered,
+                    pre_cloaked: &mut pre_cloaked,
                     placed_mode: &mut placed_mode,
                     placed_host_rect: &mut placed_host_rect,
                     expected_rect: &mut expected_rect,
@@ -3931,6 +3984,10 @@ fn run_it(
         if !uses_dwm_host(capture_technique) {
             // DirectWindow shows `source` directly as HWND_TOPMOST; never register thumbnail or show host.
             let direct_shown = placed_mode == Some(PlacementMode::DirectWindow);
+            if direct_shown && pre_cloaked {
+                let _ = set_window_cloak(source, false);
+                pre_cloaked = false;
+            }
             update_forced_settling(
                 forced,
                 direct_shown,
@@ -4036,8 +4093,26 @@ fn run_it(
                 && !SHOWN.load(Ordering::SeqCst)
             {
                 SHOWN.store(true, Ordering::SeqCst);
-                let _ =
-                    unsafe { PostMessageW(host, WM_THE_PICTURE_IS_READY, WPARAM(0), LPARAM(0)) };
+                if pre_cloaked {
+                    let _ = unsafe {
+                        SendMessageTimeoutW(
+                            host,
+                            WM_THE_PICTURE_IS_READY,
+                            WPARAM(0),
+                            LPARAM(0),
+                            SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                            100,
+                            None,
+                        )
+                    };
+                    let _ = unsafe { DwmFlush() };
+                    let _ = set_window_cloak(source, false);
+                    pre_cloaked = false;
+                } else {
+                    let _ = unsafe {
+                        PostMessageW(host, WM_THE_PICTURE_IS_READY, WPARAM(0), LPARAM(0))
+                    };
+                }
                 cp_trace!(
                     "run_it: std_shown id={} host={:?} picture={:?} placed={:?}",
                     launch.id,
@@ -5754,10 +5829,11 @@ fn discovery_processes(launch: &Launch) -> Vec<u32> {
     found
 }
 
-fn merge_active_job_pids(launch: &Launch, processes: &mut Vec<u32>) -> bool {
+fn refresh_job_pids(launch: &Launch, processes: &mut Vec<u32>) -> Vec<u32> {
     let my_pid = std::process::id();
+    let job_pids = active_job_pids(launch.id);
     let mut changed = false;
-    for pid in active_job_pids(launch.id) {
+    for &pid in &job_pids {
         if pid != 0 && pid != my_pid && !processes.contains(&pid) {
             processes.push(pid);
             changed = true;
@@ -5766,7 +5842,272 @@ fn merge_active_job_pids(launch: &Launch, processes: &mut Vec<u32>) -> bool {
     if changed {
         update_owned_pids_if_current(launch, processes);
     }
-    changed
+    job_pids
+}
+
+fn set_window_cloak(hwnd: HWND, cloak: bool) -> bool {
+    if hwnd.0.is_null() || !unsafe { IsWindow(hwnd) }.as_bool() {
+        return false;
+    }
+    let val: u32 = u32::from(cloak);
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            &val as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        )
+    }
+    .is_ok()
+}
+
+fn is_precloak_candidate(hwnd: HWND) -> bool {
+    if hwnd.0.is_null() || !unsafe { IsWindow(hwnd) }.as_bool() {
+        return false;
+    }
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    (style & WS_CHILD.0) == 0 && (ex_style & WS_EX_TOOLWINDOW.0) == 0 && !owner_is_blocking(hwnd)
+}
+
+fn is_cloaked_by_pre_hook(pre_hook: Option<&InProcessHookSession>, pid: u32) -> bool {
+    pre_hook.is_some_and(|session| {
+        session.pid == pid && session.view.is_cloaked() && session.view.hook_hits() > 0
+    })
+}
+
+fn threads_of_process(pid: u32) -> Vec<u32> {
+    if pid == 0 {
+        return Vec::new();
+    }
+    let Ok(snapshot) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }) else {
+        return Vec::new();
+    };
+    let mut entry = THREADENTRY32 {
+        dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+        ..Default::default()
+    };
+    let mut tids = Vec::new();
+    if unsafe { Thread32First(snapshot, &mut entry) }.is_ok() {
+        loop {
+            if entry.th32OwnerProcessID == pid && entry.th32ThreadID != 0 {
+                tids.push(entry.th32ThreadID);
+            }
+            if unsafe { Thread32Next(snapshot, &mut entry) }.is_err() {
+                break;
+            }
+        }
+    }
+    let _ = unsafe { CloseHandle(snapshot) };
+    tids
+}
+
+struct DiscoveredWindow {
+    hwnd: HWND,
+    hook_session: Option<InProcessHookSession>,
+    pre_cloaked: bool,
+}
+
+struct PreCloakTracker {
+    enabled: bool,
+    cloaked_hwnds: HashSet<isize>,
+}
+
+impl PreCloakTracker {
+    fn new(requested_capture: CustomCaptureTechnique) -> Self {
+        Self {
+            enabled: requested_capture != CustomCaptureTechnique::DirectWindow,
+            cloaked_hwnds: HashSet::new(),
+        }
+    }
+
+    fn try_cloak(&mut self, hwnd: HWND, pre_hook: Option<&InProcessHookSession>, pid: u32) {
+        if !self.enabled || pid == 0 || is_cloaked_by_pre_hook(pre_hook, pid) {
+            return;
+        }
+        let raw = hwnd.0 as isize;
+        if !self.cloaked_hwnds.contains(&raw) && set_window_cloak(hwnd, true) {
+            self.cloaked_hwnds.insert(raw);
+        }
+    }
+
+    fn finish_with_winner(
+        &mut self,
+        winner: HWND,
+        pre_hook: Option<&InProcessHookSession>,
+        winner_pid: u32,
+    ) -> bool {
+        self.try_cloak(winner, pre_hook, winner_pid);
+        let winner_raw = winner.0 as isize;
+        let winner_cloaked = self.cloaked_hwnds.contains(&winner_raw);
+        for raw in self.cloaked_hwnds.drain() {
+            if raw != winner_raw {
+                let _ = set_window_cloak(HWND(raw as *mut _), false);
+            }
+        }
+        winner_cloaked
+    }
+}
+
+impl Drop for PreCloakTracker {
+    fn drop(&mut self) {
+        for raw in self.cloaked_hwnds.drain() {
+            let _ = set_window_cloak(HWND(raw as *mut _), false);
+        }
+    }
+}
+
+/// Pre-attaches `custom_preview_hook.dll` onto 64-bit `PreviewJob` child processes during
+/// discovery so stub-spawned grandchildren are hooked & cloaked before `CreateWindowExW` runs.
+struct JobChildPreHook {
+    enabled: bool,
+    dll_missing: bool,
+    desired_capture: CustomCaptureTechnique,
+    placement: CustomPlacement,
+    initial_hook_rect: Option<(i32, i32, i32, i32)>,
+    pre_hook: Option<InProcessHookSession>,
+    hooked_tids: HashSet<u32>,
+    wow64_cache: HashMap<u32, Option<bool>>,
+    logged_errs: HashSet<(u32, u32, u32)>,
+}
+
+impl JobChildPreHook {
+    fn new(launch: &Launch, effective_capture: CustomCaptureTechnique) -> Self {
+        let wants_hook = launch.requested_capture == CustomCaptureTechnique::InProcessHook
+            || uses_hook_enforcement(launch.placement);
+        let desired_capture = if launch.requested_capture == CustomCaptureTechnique::InProcessHook {
+            CustomCaptureTechnique::InProcessHook
+        } else {
+            effective_capture
+        };
+        Self {
+            enabled: wants_hook,
+            dll_missing: false,
+            desired_capture,
+            placement: launch.placement,
+            initial_hook_rect: launch.provisional,
+            pre_hook: None,
+            hooked_tids: HashSet::new(),
+            wow64_cache: HashMap::new(),
+            logged_errs: HashSet::new(),
+        }
+    }
+
+    fn poll(&mut self, launch: &Launch, job_pids: &[u32]) {
+        if !self.enabled || self.dll_missing || job_pids.is_empty() {
+            return;
+        }
+        if self
+            .pre_hook
+            .as_ref()
+            .is_some_and(|session| session.hooks.is_empty() && !job_pids.contains(&session.pid))
+        {
+            if let Some(stale) = self.pre_hook.take() {
+                stale.view.clear_locks_for_detach();
+            }
+            self.hooked_tids.clear();
+        }
+        let my_pid = std::process::id();
+        if self.pre_hook.is_none() {
+            for &child_pid in job_pids {
+                if child_pid == 0 || child_pid == launch.pid || child_pid == my_pid {
+                    continue;
+                }
+                let wow64 = *self
+                    .wow64_cache
+                    .entry(child_pid)
+                    .or_insert_with(|| pid_is_wow64(child_pid));
+                if wow64 != Some(false) {
+                    continue;
+                }
+                let Some((hmod, _, _)) = load_hook_dll() else {
+                    self.dll_missing = true;
+                    return;
+                };
+                let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
+                let init =
+                    hook_init_for(self.desired_capture, self.placement, self.initial_hook_rect);
+                let Some(view) = HookSharedView::create(child_pid, init, uncloak_msg).map(Arc::new)
+                else {
+                    let _ = unsafe { FreeLibrary(hmod) };
+                    continue;
+                };
+                self.pre_hook = Some(InProcessHookSession {
+                    pid: child_pid,
+                    view,
+                    hooks: Vec::new(),
+                    dll_module: hmod,
+                });
+                break;
+            }
+        }
+        let Some(ref mut session) = self.pre_hook else {
+            return;
+        };
+        let pid = session.pid;
+        let Some((cbt_proc, cwp_proc)) = hook_procs_from_module(session.dll_module) else {
+            return;
+        };
+        for tid in threads_of_process(pid) {
+            if self.hooked_tids.contains(&tid) {
+                continue;
+            }
+            match try_attach_thread_hooks_result(session.dll_module, cbt_proc, cwp_proc, tid) {
+                Ok((cbt, cwp)) => {
+                    self.hooked_tids.insert(tid);
+                    session.hooks.push((tid, cbt, cwp));
+                    cp_trace!(
+                        "pre_attach_job_child: ok id={} pid={} tid={} hooks={}",
+                        launch.id,
+                        pid,
+                        tid,
+                        session.hooks.len()
+                    );
+                }
+                Err((stage, err)) => {
+                    // err=87 (`ERROR_INVALID_PARAMETER`) means USER32 is not initialized yet; retry next 5ms tick.
+                    if err != 87 && self.logged_errs.insert((pid, tid, err)) {
+                        cp_trace!(
+                            "pre_attach_job_child: err id={} pid={} tid={} stage={} err={}",
+                            launch.id,
+                            pid,
+                            tid,
+                            stage,
+                            err
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn session(&self) -> Option<&InProcessHookSession> {
+        self.pre_hook.as_ref()
+    }
+
+    fn captured_hwnd(&self) -> Option<HWND> {
+        self.pre_hook.as_ref().and_then(|s| s.view.captured_hwnd())
+    }
+
+    fn take_for_pid(&mut self, pid: u32) -> Option<InProcessHookSession> {
+        let matches = self.pre_hook.as_ref().is_some_and(|s| s.pid == pid);
+        if matches {
+            self.pre_hook.take()
+        } else {
+            if let Some(stale) = self.pre_hook.take() {
+                stale.view.clear_locks_for_detach();
+            }
+            None
+        }
+    }
+}
+
+impl Drop for JobChildPreHook {
+    fn drop(&mut self) {
+        if let Some(stale) = self.pre_hook.take() {
+            stale.view.clear_locks_for_detach();
+        }
+    }
 }
 
 /// Owned PID set after adoption: launched tree union active job PIDs union adopted brokered tree (only if newly spawned).
@@ -6042,7 +6383,10 @@ fn stage_candidate_offscreen(hwnd: HWND, w: i32, h: i32) {
 
 /// Non-blocking window discovery for `OffscreenStaged`: never calls `WaitForInputIdle`, stages
 /// candidates at `(STAGE_COORD, STAGE_COORD)` on CREATE/SHOW, adopts hidden candidates after 40ms.
-fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
+fn wait_for_a_window_offscreen_staged(
+    launch: &Launch,
+    effective_capture: CustomCaptureTechnique,
+) -> Option<DiscoveredWindow> {
     let deadline = Instant::now() + WINDOW_WAIT;
     let mut processes = discovery_processes(launch);
     update_owned_pids_if_current(launch, &processes);
@@ -6050,6 +6394,10 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
     let mut images: ProcessImages = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut first_hidden: Option<(Instant, HWND)> = None;
+    let mut pre_cloak = PreCloakTracker::new(launch.requested_capture);
+    let mut pre_hook = JobChildPreHook::new(launch, effective_capture);
+    let initial_job_pids = active_job_pids(launch.id);
+    pre_hook.poll(launch, &initial_job_pids);
     let (stage_w, stage_h) = launch
         .provisional
         .map(|(_, _, w, h)| (w.max(1), h.max(1)))
@@ -6082,7 +6430,9 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
     let check_now = |processes: &[u32],
                      images: &mut ProcessImages,
                      creation_times: &mut HashMap<u32, Option<u64>>,
-                     first_hidden: &mut Option<(Instant, HWND)>|
+                     first_hidden: &mut Option<(Instant, HWND)>,
+                     pre_cloak: &mut PreCloakTracker,
+                     pre_hook: &JobChildPreHook|
      -> Option<HWND> {
         let tree_only = OwnershipMode::Discover {
             allow_image_fallback: false,
@@ -6097,6 +6447,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
             tree_only,
         );
         if let Some((rank, window)) = look.best_candidate() {
+            pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
             if rank.visible {
                 return Some(window);
             }
@@ -6124,6 +6475,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
             with_fallback,
         );
         if let Some((rank, window)) = look.best_candidate() {
+            pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
             if rank.visible {
                 return Some(window);
             }
@@ -6136,16 +6488,34 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
         None
     };
 
+    let finish_found = |window: HWND,
+                        pre_cloak: &mut PreCloakTracker,
+                        pre_hook: &mut JobChildPreHook|
+     -> DiscoveredWindow {
+        let winner_pid = pid_of(window);
+        let hook_session = pre_hook.take_for_pid(winner_pid);
+        let pre_cloaked = pre_cloak.finish_with_winner(window, hook_session.as_ref(), winner_pid);
+        DiscoveredWindow {
+            hwnd: window,
+            hook_session,
+            pre_cloaked,
+        }
+    };
+
     while Instant::now() < deadline {
         if !launch_still_wanted(launch) {
             cp_trace!("wait_staged: aborted_loop id={}", launch.id);
             return None;
         }
+        let job_pids = refresh_job_pids(launch, &mut processes);
+        pre_hook.poll(launch, &job_pids);
         if let Some(window) = check_now(
             &processes,
             &mut images,
             &mut creation_times,
             &mut first_hidden,
+            &mut pre_cloak,
+            &pre_hook,
         ) {
             if !launch_still_wanted(launch) {
                 cp_trace!(
@@ -6156,7 +6526,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
                 cleanup_aborted_source(window, launch);
                 return None;
             }
-            return Some(window);
+            return Some(finish_found(window, &mut pre_cloak, &mut pre_hook));
         }
 
         if read.elapsed() >= TREE_POLL {
@@ -6196,7 +6566,8 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
                         continue;
                     }
                     if !processes.contains(&pid) {
-                        merge_active_job_pids(launch, &mut processes);
+                        let job_pids = refresh_job_pids(launch, &mut processes);
+                        pre_hook.poll(launch, &job_pids);
                     }
                     let belongs = discovery_match_for_pid(
                         pid,
@@ -6209,6 +6580,9 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
                     .is_some();
                     if belongs {
                         if event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW {
+                            if is_precloak_candidate(hwnd) {
+                                pre_cloak.try_cloak(hwnd, pre_hook.session(), pid);
+                            }
                             stage_candidate_offscreen(hwnd, stage_w, stage_h);
                             restore_foreground(launch.previous_foreground, &processes);
                         }
@@ -6226,6 +6600,8 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
                     &mut images,
                     &mut creation_times,
                     &mut first_hidden,
+                    &mut pre_cloak,
+                    &pre_hook,
                 ) {
                     if !launch_still_wanted(launch) {
                         cp_trace!(
@@ -6236,7 +6612,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
                         cleanup_aborted_source(window, launch);
                         return None;
                     }
-                    return Some(window);
+                    return Some(finish_found(window, &mut pre_cloak, &mut pre_hook));
                 }
             }
         }
@@ -6258,11 +6634,12 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
         first_hidden.map(|(_, h)| h.0 as usize),
         processes
     );
-    first_hidden.map(|(_, hwnd)| hwnd)
+    first_hidden.map(|(_, hwnd)| finish_found(hwnd, &mut pre_cloak, &mut pre_hook))
 }
 
 struct OffscreenStagedState<'a> {
     invisible_layered: &'a mut bool,
+    pre_cloaked: &'a mut bool,
     placed_mode: &'a mut Option<PlacementMode>,
     placed_host_rect: &'a mut Option<(i32, i32, i32, i32)>,
     expected_rect: &'a mut Option<RECT>,
@@ -6689,6 +7066,11 @@ fn run_offscreen_staged_settle_and_reveal(
         PlacementMode::OffScreen
     };
     restore_foreground(launch.previous_foreground, processes);
+    if *state.pre_cloaked {
+        let _ = unsafe { DwmFlush() };
+        let _ = set_window_cloak(source, false);
+        *state.pre_cloaked = false;
+    }
     *state.placed_mode = Some(mode);
     *state.placed_host_rect = Some(host_rect);
     *state.expected_rect = window_rect(source);
@@ -7586,18 +7968,58 @@ fn validate_captured_hwnd(hwnd: HWND) -> Option<(i64, bool, HWND)> {
     }
 }
 
+fn select_hook_or_census_candidate(
+    best: Option<(CandidateRank, HWND)>,
+    valid_captured: Option<(i64, bool, HWND)>,
+    first_candidate: &mut Option<(Instant, HWND)>,
+    hidden_settle: Duration,
+) -> Option<HWND> {
+    if let Some((rank, best_hwnd)) = best {
+        if rank.visible {
+            if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+                if cap_area > rank.area {
+                    Some(cap_hwnd)
+                } else {
+                    Some(best_hwnd)
+                }
+            } else {
+                Some(best_hwnd)
+            }
+        } else if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+            if rank.area > cap_area {
+                Some(best_hwnd)
+            } else if cap_area >= THE_SMALLEST_PICTURE {
+                Some(cap_hwnd)
+            } else {
+                None
+            }
+        } else {
+            let entry = first_candidate.get_or_insert_with(|| (Instant::now(), best_hwnd));
+            entry.1 = best_hwnd;
+            (entry.0.elapsed() >= hidden_settle).then_some(best_hwnd)
+        }
+    } else if let Some((cap_area, true, cap_hwnd)) = valid_captured {
+        (cap_area >= THE_SMALLEST_PICTURE).then_some(cap_hwnd)
+    } else {
+        if let Some((_, _, cap_hwnd)) = valid_captured {
+            first_candidate.get_or_insert_with(|| (Instant::now(), cap_hwnd));
+        }
+        None
+    }
+}
+
 /// Fast discovery for `InProcessHook`: validates `session.captured_hwnd` alongside `census` and
 /// prefers a larger titled main window in `processes` when one exists.
 fn wait_for_a_window_in_process_hook(
     launch: &Launch,
     session: &InProcessHookSession,
-) -> Option<HWND> {
+    effective_capture: CustomCaptureTechnique,
+) -> Option<DiscoveredWindow> {
     let started = Instant::now();
     let deadline = started + WINDOW_WAIT;
     let mut processes = discovery_processes(launch);
     update_owned_pids_if_current(launch, &processes);
     let mut read = started;
-    let mut job_read = started;
     let mut images: ProcessImages = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut first_candidate: Option<(Instant, HWND)> = None;
@@ -7612,10 +8034,7 @@ fn wait_for_a_window_in_process_hook(
             );
             return None;
         }
-        if job_read.elapsed() >= Duration::from_millis(25) {
-            merge_active_job_pids(launch, &mut processes);
-            job_read = Instant::now();
-        }
+        let _ = refresh_job_pids(launch, &mut processes);
         let valid_captured = session
             .view
             .captured_hwnd()
@@ -7652,46 +8071,12 @@ fn wait_for_a_window_in_process_hook(
             best = look_fb.best_candidate();
         }
 
-        let found = if let Some((rank, best_hwnd)) = best {
-            if rank.visible {
-                if let Some((cap_area, true, cap_hwnd)) = valid_captured {
-                    if cap_area > rank.area {
-                        Some(cap_hwnd)
-                    } else {
-                        Some(best_hwnd)
-                    }
-                } else {
-                    Some(best_hwnd)
-                }
-            } else if let Some((cap_area, true, cap_hwnd)) = valid_captured {
-                if rank.area > cap_area {
-                    Some(best_hwnd)
-                } else if cap_area >= THE_SMALLEST_PICTURE {
-                    Some(cap_hwnd)
-                } else {
-                    None
-                }
-            } else {
-                let entry = first_candidate.get_or_insert_with(|| (Instant::now(), best_hwnd));
-                entry.1 = best_hwnd;
-                if entry.0.elapsed() >= Duration::from_millis(40) {
-                    Some(best_hwnd)
-                } else {
-                    None
-                }
-            }
-        } else if let Some((cap_area, true, cap_hwnd)) = valid_captured {
-            if cap_area >= THE_SMALLEST_PICTURE {
-                Some(cap_hwnd)
-            } else {
-                None
-            }
-        } else {
-            if let Some((_, _, cap_hwnd)) = valid_captured {
-                first_candidate.get_or_insert_with(|| (Instant::now(), cap_hwnd));
-            }
-            None
-        };
+        let found = select_hook_or_census_candidate(
+            best,
+            valid_captured,
+            &mut first_candidate,
+            Duration::from_millis(40),
+        );
         if let Some(window) = found {
             if !launch_still_wanted(launch) {
                 cp_trace!(
@@ -7711,7 +8096,11 @@ fn wait_for_a_window_in_process_hook(
                 session.view.captured_hwnd().map(|h| h.0 as usize),
                 launch.launched_at.elapsed().as_millis()
             );
-            return Some(window);
+            return Some(DiscoveredWindow {
+                hwnd: window,
+                hook_session: None,
+                pre_cloaked: false,
+            });
         }
 
         maybe_trace_300ms_no_match(
@@ -7727,7 +8116,6 @@ fn wait_for_a_window_in_process_hook(
             processes = discovery_processes(launch);
             update_owned_pids_if_current(launch, &processes);
             read = Instant::now();
-            job_read = read;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -7751,8 +8139,12 @@ fn wait_for_a_window_in_process_hook(
         processes
     );
     first_candidate
-        .map(|(_, hwnd)| hwnd)
-        .or_else(|| wait_for_a_window(launch))
+        .map(|(_, hwnd)| DiscoveredWindow {
+            hwnd,
+            hook_session: None,
+            pre_cloaked: false,
+        })
+        .or_else(|| wait_for_a_window(launch, effective_capture))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7790,6 +8182,10 @@ fn reveal_in_process_hook(
             .store(0, Ordering::Release);
         let fallback_ctx = PlacementContext { hook: None, ..ctx };
         place_invisible_layered(source, host_rect, window_mode, state.the_ask, fallback_ctx);
+        if *state.pre_cloaked {
+            let _ = set_window_cloak(source, false);
+            *state.pre_cloaked = false;
+        }
         restore_foreground(launch.previous_foreground, processes);
         *state.placed_mode = Some(PlacementMode::InvisibleLayered);
         *state.placed_host_rect = Some(host_rect);
@@ -8047,6 +8443,10 @@ fn reveal_in_process_hook(
                 no_shift_ctx,
             );
             session.view.uncloak_sync(source);
+            if *state.pre_cloaked {
+                let _ = set_window_cloak(source, false);
+                *state.pre_cloaked = false;
+            }
             if !aligned_behind_host(source, host_rect) {
                 cp_trace!(
                     "reveal_hook: behind_host_retry id={} cur_win={:?} cur_vis={:?} host={:?}",
@@ -8108,12 +8508,20 @@ fn reveal_in_process_hook(
         } else {
             let _ = unsafe { SetWindowPos(source, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
             session.view.uncloak_sync(source);
+            if *state.pre_cloaked {
+                let _ = set_window_cloak(source, false);
+                *state.pre_cloaked = false;
+            }
             let _ = unsafe { InvalidateRect(source, None, false) };
             let _ = unsafe { UpdateWindow(source) };
             PlacementMode::BehindHost
         }
     } else {
         session.view.uncloak_sync(source);
+        if *state.pre_cloaked {
+            let _ = set_window_cloak(source, false);
+            *state.pre_cloaked = false;
+        }
         if ctx.forced && !is_window_offscreen(source) {
             let ask = state
                 .the_ask
@@ -8149,6 +8557,11 @@ fn reveal_in_process_hook(
     };
 
     restore_foreground(launch.previous_foreground, processes);
+    if *state.pre_cloaked {
+        let _ = unsafe { DwmFlush() };
+        let _ = set_window_cloak(source, false);
+        *state.pre_cloaked = false;
+    }
     *state.placed_mode = Some(mode);
     *state.placed_host_rect = Some(host_rect);
     *state.expected_rect = window_rect(source);
@@ -8439,7 +8852,10 @@ fn run_in_process_hook_settle_and_reveal(
 
 /// The program's window, waited for within [`WINDOW_WAIT`] via out-of-context WinEvent hook
 /// (`EVENT_OBJECT_CREATE`..`EVENT_OBJECT_SHOW`) with a 5ms `MsgWaitForMultipleObjectsEx` fallback.
-fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
+fn wait_for_a_window(
+    launch: &Launch,
+    effective_capture: CustomCaptureTechnique,
+) -> Option<DiscoveredWindow> {
     let started = Instant::now();
     let deadline = started + WINDOW_WAIT;
     let mut processes = discovery_processes(launch);
@@ -8447,7 +8863,12 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
     let mut read = started;
     let mut images: ProcessImages = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
+    let mut first_hook_candidate: Option<(Instant, HWND)> = None;
     let mut dumped_300ms = false;
+    let mut pre_cloak = PreCloakTracker::new(launch.requested_capture);
+    let mut pre_hook = JobChildPreHook::new(launch, effective_capture);
+    let initial_job_pids = active_job_pids(launch.id);
+    pre_hook.poll(launch, &initial_job_pids);
 
     WINEVENT_EVENTS.with(|q| q.borrow_mut().clear());
     let hook = unsafe {
@@ -8475,8 +8896,13 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
 
     let check_now = |processes: &[u32],
                      images: &mut ProcessImages,
-                     creation_times: &mut HashMap<u32, Option<u64>>|
+                     creation_times: &mut HashMap<u32, Option<u64>>,
+                     first_hook_candidate: &mut Option<(Instant, HWND)>,
+                     pre_cloak: &mut PreCloakTracker,
+                     pre_hook: &JobChildPreHook|
      -> Option<HWND> {
+        let valid_captured = pre_hook.captured_hwnd().and_then(validate_captured_hwnd);
+
         // Pass 1: ALWAYS check process_tree(launch.pid) + job PIDs first; never adopt sibling PIDs when tree/job has a window.
         let tree_only = OwnershipMode::Discover {
             allow_image_fallback: false,
@@ -8490,7 +8916,21 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             false,
             tree_only,
         );
-        if let Some((rank, window)) = look.best_candidate() {
+        let best = look.best_candidate();
+        if let Some((_, window)) = best {
+            pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
+        }
+        if pre_hook.session().is_some() {
+            if let Some(window) = select_hook_or_census_candidate(
+                best,
+                valid_captured,
+                first_hook_candidate,
+                Duration::from_millis(40),
+            ) {
+                pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
+                return Some(window);
+            }
+        } else if let Some((rank, window)) = best {
             if rank.visible {
                 return Some(window);
             }
@@ -8507,7 +8947,11 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                 false,
                 tree_only,
             );
-            return look2.best_candidate().map(|(_, w)| w).or(Some(window));
+            let chosen = look2.best_candidate().map(|(_, w)| w).or(Some(window));
+            if let Some(w) = chosen {
+                pre_cloak.try_cloak(w, pre_hook.session(), pid_of(w));
+            }
+            return chosen;
         }
 
         // Pass 2: Brokered/packaged app + same-install-dir stub fallback ONLY when tree/job has
@@ -8527,7 +8971,23 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             false,
             with_fallback,
         );
-        if let Some((rank, window)) = look.best_candidate() {
+        let best_fb = look.best_candidate();
+        if let Some((_, window)) = best_fb {
+            pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
+        }
+        if pre_hook.session().is_some() {
+            if let Some(window) = select_hook_or_census_candidate(
+                best_fb,
+                valid_captured,
+                first_hook_candidate,
+                Duration::from_millis(40),
+            ) {
+                pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
+                return Some(window);
+            }
+            return None;
+        }
+        if let Some((rank, window)) = best_fb {
             if rank.visible {
                 return Some(window);
             }
@@ -8544,9 +9004,27 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                 false,
                 with_fallback,
             );
-            return look2.best_candidate().map(|(_, w)| w).or(Some(window));
+            let chosen = look2.best_candidate().map(|(_, w)| w).or(Some(window));
+            if let Some(w) = chosen {
+                pre_cloak.try_cloak(w, pre_hook.session(), pid_of(w));
+            }
+            return chosen;
         }
         None
+    };
+
+    let finish_found = |window: HWND,
+                        pre_cloak: &mut PreCloakTracker,
+                        pre_hook: &mut JobChildPreHook|
+     -> DiscoveredWindow {
+        let winner_pid = pid_of(window);
+        let hook_session = pre_hook.take_for_pid(winner_pid);
+        let pre_cloaked = pre_cloak.finish_with_winner(window, hook_session.as_ref(), winner_pid);
+        DiscoveredWindow {
+            hwnd: window,
+            hook_session,
+            pre_cloaked,
+        }
     };
 
     while Instant::now() < deadline {
@@ -8555,17 +9033,29 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             return None;
         }
 
-        if let Some(window) = check_now(&processes, &mut images, &mut creation_times) {
+        let job_pids = refresh_job_pids(launch, &mut processes);
+        pre_hook.poll(launch, &job_pids);
+
+        if let Some(window) = check_now(
+            &processes,
+            &mut images,
+            &mut creation_times,
+            &mut first_hook_candidate,
+            &mut pre_cloak,
+            &pre_hook,
+        ) {
             if !launch_still_wanted(launch) {
                 cp_trace!(
                     "wait_std: aborted_after_check id={} hwnd=0x{:x}",
                     launch.id,
                     window.0 as usize
                 );
+                drop(pre_hook);
+                drop(pre_cloak);
                 cleanup_aborted_source(window, launch);
                 return None;
             }
-            return Some(window);
+            return Some(finish_found(window, &mut pre_cloak, &mut pre_hook));
         }
         maybe_trace_300ms_no_match(
             "wait_std",
@@ -8613,7 +9103,8 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                         continue;
                     }
                     if !processes.contains(&pid) {
-                        merge_active_job_pids(launch, &mut processes);
+                        let job_pids = refresh_job_pids(launch, &mut processes);
+                        pre_hook.poll(launch, &job_pids);
                     }
                     let belongs = discovery_match_for_pid(
                         pid,
@@ -8625,9 +9116,14 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                     )
                     .is_some();
                     if belongs {
-                        if event == EVENT_OBJECT_CREATE {
-                            if let Some(provisional) = launch.provisional {
-                                preposition_hidden_candidate(hwnd, provisional);
+                        if event == EVENT_OBJECT_CREATE || event == EVENT_OBJECT_SHOW {
+                            if is_precloak_candidate(hwnd) {
+                                pre_cloak.try_cloak(hwnd, pre_hook.session(), pid);
+                            }
+                            if event == EVENT_OBJECT_CREATE {
+                                if let Some(provisional) = launch.provisional {
+                                    preposition_hidden_candidate(hwnd, provisional);
+                                }
                             }
                         }
                         matched = true;
@@ -8639,17 +9135,26 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
                     cp_trace!("wait_std: aborted_msg id={}", launch.id);
                     return None;
                 }
-                if let Some(window) = check_now(&processes, &mut images, &mut creation_times) {
+                if let Some(window) = check_now(
+                    &processes,
+                    &mut images,
+                    &mut creation_times,
+                    &mut first_hook_candidate,
+                    &mut pre_cloak,
+                    &pre_hook,
+                ) {
                     if !launch_still_wanted(launch) {
                         cp_trace!(
                             "wait_std: aborted_msg_after_check id={} hwnd=0x{:x}",
                             launch.id,
                             window.0 as usize
                         );
+                        drop(pre_hook);
+                        drop(pre_cloak);
                         cleanup_aborted_source(window, launch);
                         return None;
                     }
-                    return Some(window);
+                    return Some(finish_found(window, &mut pre_cloak, &mut pre_hook));
                 }
             }
         }
@@ -11491,5 +11996,54 @@ mod tests {
             vec![4201, 4202, u32::MAX]
         };
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn threads_of_process_precloak_and_hook_candidate_selection() {
+        assert!(threads_of_process(0).is_empty());
+        let my_tid = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+        let my_tids = threads_of_process(std::process::id());
+        assert!(
+            my_tids.contains(&my_tid),
+            "threads_of_process(self) {my_tids:?} must include current thread {my_tid}"
+        );
+
+        let direct_tracker = PreCloakTracker::new(CustomCaptureTechnique::DirectWindow);
+        assert!(!direct_tracker.enabled);
+        let hook_tracker = PreCloakTracker::new(CustomCaptureTechnique::InProcessHook);
+        assert!(hook_tracker.enabled);
+        let layered_tracker = PreCloakTracker::new(CustomCaptureTechnique::InvisibleLayered);
+        assert!(layered_tracker.enabled);
+
+        // `select_hook_or_census_candidate` immediately adopts a titled captured HWND >= 64x64
+        // when no larger visible Census window is present.
+        let cap_hwnd = HWND(0x1000 as *mut _);
+        let census_hwnd = HWND(0x2000 as *mut _);
+        let mut first_cand = None;
+        assert_eq!(
+            select_hook_or_census_candidate(
+                None,
+                Some((THE_SMALLEST_PICTURE, true, cap_hwnd)),
+                &mut first_cand,
+                Duration::from_millis(40),
+            ),
+            Some(cap_hwnd)
+        );
+        assert_eq!(
+            select_hook_or_census_candidate(
+                Some((
+                    CandidateRank {
+                        tier: CandidateTier::Main,
+                        visible: true,
+                        area: THE_SMALLEST_PICTURE + 1000,
+                    },
+                    census_hwnd,
+                )),
+                Some((THE_SMALLEST_PICTURE, true, cap_hwnd)),
+                &mut first_cand,
+                Duration::from_millis(40),
+            ),
+            Some(census_hwnd)
+        );
     }
 }

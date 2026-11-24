@@ -256,6 +256,24 @@ fn placement_label(placement: CustomPlacement) -> &'static str {
     }
 }
 
+fn placement_choice(placement: CustomPlacement, hook_dll: bool) -> &'static str {
+    match placement {
+        CustomPlacement::Hook if !hook_dll => "Tray -> Placement + Hook (.dll is missing)",
+        _ => placement_label(placement),
+    }
+}
+
+fn placement_selectable(placement: CustomPlacement, hook_dll: bool) -> bool {
+    placement != CustomPlacement::Hook || hook_dll
+}
+
+fn placement_index(placement: CustomPlacement) -> usize {
+    PLACEMENTS
+        .iter()
+        .position(|held| *held == placement)
+        .unwrap_or(0)
+}
+
 const EDITOR_LABELS: [&str; 10] = [
     "Enabled",
     "Name",
@@ -2143,7 +2161,7 @@ unsafe fn build(hwnd: HWND) -> State {
 
     let placement_combo = unsafe { GetDlgItem(hwnd, ID_PLACEMENT) }.unwrap_or_default();
     for placement in PLACEMENTS {
-        unsafe { combo_add(placement_combo, placement_label(placement)) };
+        unsafe { combo_add(placement_combo, placement_choice(placement, state.hook_dll)) };
     }
 
     let scaling = unsafe { GetDlgItem(hwnd, ID_SCALING) }.unwrap_or_default();
@@ -2722,9 +2740,13 @@ unsafe extern "system" fn combo_subclass_proc(
             // Locked rather than disabled: the combo keeps its focus and hover so the label can be
             // read, and only the pick that label names is turned down.
             let locked = unsafe { state_of(sub.parent) }.is_some_and(|state| !state.hook_dll)
-                && unsafe { GetDlgItem(sub.parent, ID_CAPTURE_TECHNIQUE) }
+                && ((unsafe { GetDlgItem(sub.parent, ID_CAPTURE_TECHNIQUE) }
                     .is_ok_and(|combo| combo == hwnd)
-                && unsafe { SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 } == 0;
+                    && unsafe { SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 } == 0)
+                    || (unsafe { GetDlgItem(sub.parent, ID_PLACEMENT) }
+                        .is_ok_and(|combo| combo == hwnd)
+                        && unsafe { SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 }
+                            == placement_index(CustomPlacement::Hook) as isize));
 
             unsafe {
                 paint_double_buffered(hwnd, |hdc, rc| {
@@ -4928,14 +4950,16 @@ unsafe fn fill_fields(state: &mut State) {
         );
 
         let placement_combo = GetDlgItem(state.hwnd, ID_PLACEMENT).unwrap_or_default();
-        let placement_index = PLACEMENTS
-            .iter()
-            .position(|held| *held == placement)
-            .unwrap_or(0) as i32;
+        let shown_placement = if !state.hook_dll && placement == CustomPlacement::Hook {
+            CustomPlacement::Forced
+        } else {
+            placement
+        };
+        let placement_idx = placement_index(shown_placement) as i32;
         SendMessageW(
             placement_combo,
             CB_SETCURSEL,
-            WPARAM(placement_index as usize),
+            WPARAM(placement_idx as usize),
             LPARAM(0),
         );
 
@@ -5275,6 +5299,15 @@ unsafe fn placement_chosen(state: &mut State) {
     else {
         return;
     };
+    if !placement_selectable(placement, state.hook_dll) {
+        let held = state.presets.get(index).map(|preset| preset.placement);
+        let show = held
+            .filter(|held| placement_selectable(*held, state.hook_dll))
+            .unwrap_or(CustomPlacement::Forced);
+        let sel_idx = placement_index(show);
+        unsafe { SendMessageW(combo, CB_SETCURSEL, WPARAM(sel_idx), LPARAM(0)) };
+        return;
+    }
     if let Some(preset) = state.presets.get_mut(index) {
         preset.placement = placement;
     }
@@ -5577,13 +5610,13 @@ unsafe fn draw_item_buffered<F: FnOnce(HDC)>(dst_dc: HDC, r: RECT, draw: F) {
     }
 }
 
-/// Whether this draw is the Capture Technique row's first pick on a machine with no hook DLL.
-///
-/// The combo asks for this once for the label it shows closed (with an `itemID` no item has) and
-/// once per row of its open menu, so both are the same pick and both are drawn the same way: the
-/// label says why, and the row does not take a click.
+/// Whether this draw is a hook-dependent pick (`In-Process Hook` or `Tray -> Placement + Hook`)
+/// on a machine with no hook DLL.
 fn capture_hook_locked(state: &State, item: &DRAWITEMSTRUCT) -> bool {
-    !state.hook_dll && item.CtlID == ID_CAPTURE_TECHNIQUE as u32 && item.itemID == 0
+    !state.hook_dll
+        && ((item.CtlID == ID_CAPTURE_TECHNIQUE as u32 && item.itemID == 0)
+            || (item.CtlID == ID_PLACEMENT as u32
+                && item.itemID == placement_index(CustomPlacement::Hook) as u32))
 }
 
 unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
@@ -6652,13 +6685,106 @@ mod tests {
                 "Tray -> Placement + Hook"
             );
 
+            assert_eq!(
+                placement_choice(CustomPlacement::Hook, false),
+                "Tray -> Placement + Hook (.dll is missing)"
+            );
+            assert_eq!(
+                placement_choice(CustomPlacement::Hook, true),
+                "Tray -> Placement + Hook"
+            );
+            assert!(!placement_selectable(CustomPlacement::Hook, false));
+            assert!(placement_selectable(CustomPlacement::Forced, false));
+            assert!(placement_selectable(CustomPlacement::Hook, true));
+
             for (idx, expected) in PLACEMENTS.iter().copied().enumerate() {
+                if !placement_selectable(expected, state.hook_dll) {
+                    continue;
+                }
                 SendMessageW(combo, CB_SETCURSEL, WPARAM(idx), LPARAM(0));
                 command(state, ID_PLACEMENT, CBN_SELCHANGE);
                 assert_eq!(state.presets[0].placement, expected);
                 assert!(state.dirtied);
                 state.dirtied = false;
             }
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn placement_hook_locks_and_falls_back_when_hook_dll_missing() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.hook_dll = false;
+            state.presets.clear();
+            state.presets.push(CustomPreset::named("MissingDllHook"));
+            state.presets[0].placement = CustomPlacement::Hook;
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
+
+            let combo = GetDlgItem(hwnd, ID_PLACEMENT).unwrap_or_default();
+            assert_eq!(
+                placement_choice(CustomPlacement::Hook, false),
+                "Tray -> Placement + Hook (.dll is missing)"
+            );
+            // fill_fields displays Forced without mutating stored Hook placement.
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                placement_index(CustomPlacement::Forced) as isize
+            );
+            assert_eq!(state.presets[0].placement, CustomPlacement::Hook);
+
+            // Owner-draw lock check matches ID_PLACEMENT Hook row when !hook_dll, not when hook_dll.
+            let hook_item = DRAWITEMSTRUCT {
+                CtlID: ID_PLACEMENT as u32,
+                itemID: placement_index(CustomPlacement::Hook) as u32,
+                ..Default::default()
+            };
+            assert!(capture_hook_locked(state, &hook_item));
+
+            // Selecting Hook snaps back to Forced without dirtying or mutating stored preset.
+            state.dirtied = false;
+            SendMessageW(
+                combo,
+                CB_SETCURSEL,
+                WPARAM(placement_index(CustomPlacement::Hook)),
+                LPARAM(0),
+            );
+            command(state, ID_PLACEMENT, CBN_SELCHANGE);
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                placement_index(CustomPlacement::Forced) as isize
+            );
+            assert_eq!(state.presets[0].placement, CustomPlacement::Hook);
+            assert!(!state.dirtied);
+
+            // If stored preset is FollowTray, selecting Hook snaps back to FollowTray.
+            state.presets[0].placement = CustomPlacement::FollowTray;
+            fill_fields(state);
+            SendMessageW(
+                combo,
+                CB_SETCURSEL,
+                WPARAM(placement_index(CustomPlacement::Hook)),
+                LPARAM(0),
+            );
+            command(state, ID_PLACEMENT, CBN_SELCHANGE);
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                placement_index(CustomPlacement::FollowTray) as isize
+            );
+            assert_eq!(state.presets[0].placement, CustomPlacement::FollowTray);
+            assert!(!state.dirtied);
+
+            // When hook_dll is present, Hook row is not locked.
+            state.hook_dll = true;
+            assert!(!capture_hook_locked(state, &hook_item));
 
             let _ = DestroyWindow(hwnd);
         }
