@@ -1,10 +1,27 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.2] - 2026-11-25
+
+### Added
+
+- **Each preset has an `Arguments` field** — the command line the program is started with on a hover and on a promotion, parsed as `CommandLineToArgvW` does (double quotes, backslashes before a quote, single-quoted groups), with `{file}` standing where the file goes — named once, twice, or in `--input={file}` — and the file appended at the end where no `{file}` is written. A hand-written `;`, `#`, `[` or `]` survives an INI round trip, and a field pasted as one wrapped run of flags (`"--fullscreen --silent"`) is unwrapped rather than handed over as one argument.
+- **`Placement` per preset** — `Tray -> Placement` (default, what every preview had before), `Tray -> Placement + Forced`, or `Tray -> Placement + Hook`: a program that puts its own window up at its own size is held at the hover's box, and the hook — with the cursor-shift standoff, the settling pass and a `CMD_ENFORCE_NOW` re-snap — is what holds one that keeps moving. A machine missing the DLL reads `(.dll is missing)` on that row and cannot take it.
+- **A launcher's real window is found, and not only the launched program's** — a preset naming a stub (Squirrel/Velopack's `app.exe`, an NSIS launcher, a 32-bit launcher that hands the file to a 64-bit program) still gets its window: discovery walks the preview's Job Object and adopts a **newly created** process whose image sits inside the program's own install folder, and candidates are ranked in tiers rather than by size alone — a titled unowned main window first, then a titled one under a hidden helper owner, then an untitled visible one, then a tool window.
+- **`custom_preview_hook.dll` attaches to job children before they resume** — 64-bit children of the preview's job are hooked while still suspended (`NtGetNextThread` enumeration, a 1 ms poll for the first 150 ms), so a window a launcher's grandchild creates is cloaked before anything of it reaches the compositor, and a hook of a launcher that will not take one falls back to the census instead of ending the hover.
+- **`RHP_CUSTOM_PREVIEW_TRACE`** writes the hover's road to `%TEMP%\rhp-custom-preview-trace.log` — the candidates the desktop answered, the window that was adopted and why, the technique's placement, hook hits and every drift — and `.env.local` is now read from beside the executable as well as from `%LOCALAPPDATA%`, so a diagnostic flag can be set without touching the machine.
 
 ### Changed
 
 - **Deleting a preset is confirmed in a card of this app's own, not in a Windows dialog** — the `Custom Preview` editor asks it on itself: a dimmed scrim over its whole window and a rounded, shadowed card on it, drawn from the same `Palette` the editor is drawn from, so it is One Dark Pro with one theme and Atom One Light with the other. Nothing of the platform is in it — no beep, no fade, no system font, no `Yes`/`No`; the text is drawn normal-weight in grayscale anti-aliasing so it is the same weight as the sentence beside it, and every border is a fill inside a fill, so a button's rounded corner is a curve rather than a stair — and the safe answer is still the default: `Enter`, `Space` and `Escape` cancel, `Tab` or an arrow moves the ring onto `Delete`, and the card losing the foreground cancels too.
+- **A preview is ended when the pointer leaves it, and never begun again at that spot** — the custom hover reports whether the pointer is on the host, on the source, or on any visible window the spawned program owns, so a `Direct Window` preview or a window still appearing is a hit as well; leaving the item, leaving Explorer, minimizing it or losing the focus takes the preview down and latches the file at that point until the hand moves, which is what stops a spawn-close-respawn loop. A forced placement that is still settling is not dismissed by the moving box, and a missing `.exe` a preset names leaves the hover to the built-in previewers rather than to a program that is not there.
+- **A preview's program never touches a console** — launched with `CREATE_NO_WINDOW` and `NUL` on all three standard handles, so a console-subsystem previewer (`mpv.exe`) neither flashes a window nor writes over an open terminal, on the hover or on an `Open as New Process` promotion.
+- **The editor's rows read `Capture Method` and `Promotion`**, and `Placement` sits between them and `Window`; the window is a little taller to hold the row.
+
+### Fixed
+
+- **The hook does not take the foreground or a size from the program** — a cloaked window answers `WM_MOUSEACTIVATE` with `MA_NOACTIVATE`, and a `HCBT_MINMAX`/`WM_SYSCOMMAND` that would maximize, minimize or resize it is refused while the rect is locked.
+- **A preview is not dismissed by its own settling window** — the cursor-exit and window-hit guards stand off while a forced placement is snapping, and the standoff is a lock-free flag rather than a window read.
+- **A program's close does not raise the terminal behind it** — the foreground is restored to the window that held it before, only where that is still what the user was on.
 
 ## [0.6.1] - 2026-11-24
 
