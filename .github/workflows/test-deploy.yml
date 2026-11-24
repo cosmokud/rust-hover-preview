@@ -206,8 +206,9 @@ jobs:
             exit 0
           fi
 
+          # no `| head`: it SIGPIPEs git under pipefail, and the step dies at 141 before the guard speaks
           newest=$(git ls-remote --tags --sort=-v:refname --refs origin 'v*' \
-            | head -n 1 | sed 's|.*refs/tags/||')
+            | sed -n '1{s|.*refs/tags/||;p}')
           if [[ -n "$newest" ]]; then
             higher=$(printf '%s\n%s\n' "$VERSION" "${newest#v}" | sort -V | tail -n 1)
             if [[ "$higher" != "$VERSION" || "$VERSION" == "${newest#v}" ]]; then
@@ -294,7 +295,8 @@ jobs:
           # The release publishes `version.txt` beside the installer and the app asks for it by
           # its own constant; a rename on either side is an update that stops being offered, and
           # stops being offered quietly.
-          asset=$(sed -n 's/.*VERSION_ASSET: &str = "\([^"]*\)".*/\1/p' src/app/updates.rs | head -n 1)
+          # awk, not `sed | head`: head's SIGPIPE would abort this under pipefail
+          asset=$(awk -F'"' '/VERSION_ASSET: &str = "/{print $2; exit}' src/app/updates.rs)
           if [[ "$asset" != "version.txt" ]]; then
             echo "::error::the app names its version asset '${asset}'; the deploy workflows write 'version.txt'"
             exit 1
