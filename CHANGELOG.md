@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.1] - 2026-11-24
+
+### Added
+
+- **The portable build is a zip, and it holds everything a launch needs** — `rust-hover-preview.exe`, the `custom_preview_hook.dll` that `In-Process Hook` loads and an empty `.portable` marker, since a lone executable could hook nothing and a copy without the marker is not portable at all.
+- **A `.portable` file beside the exe moves every folder of the app's beside it** — `config.ini`, `theme`, `engines`, `webview`, `libreoffice` and `.env.local` all answer through one root (`paths::data_root()`), kept in `rust-hover-preview\` next to the executable, so an unzipped copy leaves nothing on the machine but its caches in `%TEMP%` and the one startup entry.
+
+### Changed
+
+- **The hook DLL is found beside the exe, then in `%LOCALAPPDATA%\rust-hover-preview`** — a lone executable can be given one, and the installer now carries it as a resource rather than a `binaries` entry (which would have named it `.exe`).
+
+### Fixed
+
+- **`Capture Technique` says when the hook cannot run, and does not take that pick** — a machine without the DLL reads `In-Process Hook (.dll is missing)` where it would read `(Default)`, so a preset is never written to a technique that would silently fall back to `Invisible Layered`.
+- **A portable run is never updated by an installer** — an update in one would put the app under `%LOCALAPPDATA%` and leave the folder it was started from holding the older version, so there the `Update Available` row asks for the portable zip, both answers open the release page, and nothing is installed silently.
+
 ## [0.6.0] - 2026-11-24
 
 ### Added
