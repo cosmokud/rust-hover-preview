@@ -5290,7 +5290,18 @@ unsafe fn delete_selected(state: &mut State) {
     let Some(index) = state.selected else {
         return;
     };
-    if index >= state.presets.len() {
+    let Some(preset) = state.presets.get(index) else {
+        return;
+    };
+    // Asked before anything is removed: the preset's section leaves `config.ini` with the autosave
+    // that follows, and nothing here can put it back.
+    let confirmed = crate::app::dialogs::confirm_delete_preset(
+        state.hwnd,
+        &preset.name,
+        &preset.extensions_text(),
+        &preset.exe,
+    );
+    if !confirmed {
         return;
     }
     state.presets.remove(index);
