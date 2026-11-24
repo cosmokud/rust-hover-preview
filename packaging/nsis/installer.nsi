@@ -443,6 +443,10 @@ Section Install
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
 
+  ; The in-process hook's DLL, which a launch loads from beside this executable: it comes in as a
+  ; `resources` entry of the manifest, which keeps the name the launch looks for — a `binaries`
+  ; entry would carry it as `custom_preview_hook.exe`.
+
   ; Create resources directory structure
   {{#each resources_dirs}}
     CreateDirectory "$INSTDIR\\{{this}}"

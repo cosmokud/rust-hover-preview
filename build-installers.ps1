@@ -53,6 +53,35 @@ if ($LASTEXITCODE -ne 0) {
 $outputDir = Join-Path $repoRoot "target\packager"
 $resolvedOutputDir = [System.IO.Path]::GetFullPath($outputDir)
 
+# The portable build: the exe and the hook's DLL together, because the DLL has to sit beside the
+# executable to be loaded (`ui::preview_window::custom_preview`). One file of it, or the binary
+# alone, is a preview that silently falls back to Invisible Layered.
+$version = (& cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages |
+    Where-Object { $_.name -eq "rust-hover-preview" } |
+    Select-Object -ExpandProperty version
+if ($LASTEXITCODE -ne 0 -or -not $version) {
+    Write-Error "cargo metadata could not say what version this tree is"
+    exit 1
+}
+
+$portable = Join-Path $resolvedOutputDir "rust-hover-preview_${version}_x64-portable.zip"
+if (Test-Path -LiteralPath $portable) {
+    Remove-Item -LiteralPath $portable
+}
+$portableFiles = @("rust-hover-preview.exe", "custom_preview_hook.dll") | ForEach-Object {
+    Join-Path $repoRoot "target\github\$_"
+}
+foreach ($file in $portableFiles) {
+    if (-not (Test-Path -LiteralPath $file)) {
+        Write-Error "$file was not built, so the portable zip would not be one"
+        exit 1
+    }
+}
+Compress-Archive -LiteralPath $portableFiles -DestinationPath $portable -CompressionLevel Optimal
+Write-Host ""
+Write-Host "Portable zip:"
+Write-Host (" - " + $portable)
+
 Write-Host ""
 Write-Host "Installers generated in:"
 Write-Host $resolvedOutputDir

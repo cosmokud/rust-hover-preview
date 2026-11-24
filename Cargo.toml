@@ -309,6 +309,12 @@ out-dir = "target/packager"
 # `cargo build --release` leaves in `target/release`.
 binaries-dir = "target/github"
 before-packaging-command = "cargo build --profile github"
+# The in-process hook's DLL, which a launch loads from beside the exe
+# (`ui::preview_window::custom_preview`), and whose absence is what a machine falls back to
+# Invisible Layered for. It cannot travel in `binaries` below — that list is executables, and
+# names what it carries `<stem>.exe` — so it is a resource, under the name the launch looks for.
+# The build command above makes it: the crate is a default member.
+resources = ["target/github/custom_preview_hook.dll"]
 
 [[package.metadata.packager.binaries]]
 path = "rust-hover-preview"

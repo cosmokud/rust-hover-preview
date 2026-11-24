@@ -191,7 +191,7 @@ volume=100
   - `exe` — the program. A quoted path is accepted, as is the one a **Copy as path** puts on the clipboard.
   - `extensions` — the names it claims, without dots.
   - `window_mode` — `normal` (the program's own frame) or `borderless`.
-  - `capture_technique` — how the program's window is kept out of sight while it is previewed: `in_process_hook` (default; needs `custom_preview_hook.dll` beside the executable and falls back to `invisible_layered` without it), `invisible_layered`, `behind_host`, `off_screen`, `direct_window`, `offscreen_staged`.
+  - `capture_technique` — how the program's window is kept out of sight while it is previewed: `in_process_hook` (default; needs `custom_preview_hook.dll` beside the executable — or, for a lone executable, in `%LOCALAPPDATA%\rust-hover-preview` — and falls back to `invisible_layered` without it), `invisible_layered`, `behind_host`, `off_screen`, `direct_window`, `offscreen_staged`.
   - `promotion_technique` — what the pin key does: `direct_promotion` (default; the live preview window is let go and raised) or `open_as_new_process`.
   - `scaling` — `tray` (default; follow the file's own kind's scaling row) or any share the tray offers: `fit`, `screen 100`, `screen 75`, `screen 50`, or a percentage such as `200`.
   - `volume_enabled` / `volume` — whether this app sets the program's Windows mixer level, and the level itself. Off by default, so the mixer keeps the program.

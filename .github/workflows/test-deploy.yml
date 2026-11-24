@@ -422,9 +422,31 @@ jobs:
           if ($manifest -ne $version) {
             $problems += "Cargo.toml here says '$manifest': an app installed from it reports a version this release is not, so the update is offered again on every launch"
           }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
           $installer = "rust-hover-preview_${version}_x64-setup.exe"
           if (-not (Test-Path "target/packager/$installer")) {
             $problems += "the app would ask for '$installer' and no such file was built"
+          }
+          # The installer's copy of the DLL comes from the packaging manifest, and a machine
+          # without it falls back to Invisible Layered for every preset that asks for the hook.
+          if (-not (Select-String -Path 'Cargo.toml' -Pattern 'custom_preview_hook\.dll' -Quiet)) {
+            $problems += "the packaging manifest names no custom_preview_hook.dll: the installer would ship an In-Process Hook that cannot run"
+          }
+          # The portable zip is the only place a portable user gets the hook's DLL, which the launch
+          # loads from beside the exe: a zip holding the exe alone is an In-Process Hook that
+          # silently runs as Invisible Layered.
+          $portable = "target/packager/rust-hover-preview_${version}_x64-portable.zip"
+          if (-not (Test-Path $portable)) {
+            $problems += "no portable zip was built, so the release would carry no portable build"
+          }
+          else {
+            $entries = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $portable)).Entries.FullName
+            foreach ($needed in @('rust-hover-preview.exe', 'custom_preview_hook.dll')) {
+              if ($entries -notcontains $needed) {
+                $problems += "the portable zip carries no '$needed'"
+              }
+            }
           }
           if ($problems) {
             foreach ($problem in $problems) { Write-Host "::error::$problem" }
@@ -439,5 +461,5 @@ jobs:
           path: |
             target/packager/rust-hover-preview_*-setup.exe
             target/packager/version.txt
-            target/github/rust-hover-preview.exe
+            target/packager/rust-hover-preview_*-portable.zip
           if-no-files-found: error
