@@ -123,6 +123,15 @@ struct PinPlaylist {
     scroll: usize,
     hovered: Option<usize>,
     picked: Option<usize>,
+    /// The row a right-click named while the window's own menu is up over the band, which is the row
+    /// the card's three hand-off rows are about while it is: it is washed a shade — half of a pick's
+    /// own lift — so that the file a press on `Open in Default App`, `Open With...` or `Open Path` is
+    /// about is a row the hand can see, and it is given up with the menu it was named by (see
+    /// `name_the_row_a_menu_is_over` and `pin_menu::open_pin_menu`).
+    ///
+    /// It is not the pick: a pick is the file a `Return` plays and one the arrows step, and a
+    /// right-click asks about a file rather than choosing it.
+    named: Option<usize>,
     /// Whether the press the pointer is still holding is the band's, which is what the release that
     /// follows it is answered by.
     ///
@@ -187,6 +196,7 @@ impl Default for PinPlaylist {
             scroll: 0,
             hovered: None,
             picked: None,
+            named: None,
             pressed: false,
             selecting: false,
             resizing: None,
@@ -230,6 +240,7 @@ impl PinPlaylist {
             self.scroll = 0;
             self.hovered = None;
             self.picked = None;
+            self.named = None;
             self.pressed = false;
             self.selecting = false;
             self.marquees.clear();
@@ -276,6 +287,7 @@ impl PinPlaylist {
         let held = |row: Option<usize>| row.filter(|row| self.shown.contains(row));
         self.hovered = held(self.hovered);
         self.picked = held(self.picked);
+        self.named = held(self.named);
         self.marquees
             .retain(|marquee| self.shown.contains(&marquee.row));
 
@@ -478,14 +490,14 @@ impl PinPlaylist {
     /// on every frame a name moves: what it costs is a measure of the name at the scale it is drawn
     /// at.
     ///
-    /// **Three rows a name travels for** — the one the hand is on, the one it has picked and the one
-    /// the pin is showing — so that a name too long for its column is readable without the pointer
-    /// being held over it. A row that stops being any of the three is *let go of* rather than dropped
-    /// where it stands: its name winds back to its resting place first, which is the card's own rule
-    /// for the line beside its name (see `audio_preview::NameScroll::set_engaged`, and
-    /// `advance_the_marquees`).
+    /// **Four rows a name travels for** — the one the hand is on, the one it has picked, the one the
+    /// pin is showing and the one the card's menu is standing over — so that a name too long for its
+    /// column is readable without the pointer being held over it. A row that stops being any of the
+    /// four is *let go of* rather than dropped where it stands: its name winds back to its resting
+    /// place first, which is the card's own rule for the line beside its name (see
+    /// `audio_preview::NameScroll::set_engaged`, and `advance_the_marquees`).
     fn set_the_marquee(&mut self, layout: &pin_chrome::PlaylistLayout, scale: f32) {
-        let travelling = [self.hovered, self.picked, self.showing];
+        let travelling = [self.hovered, self.picked, self.showing, self.named];
         let room = layout.name_right - layout.text_left;
         let now = Instant::now();
 
@@ -1547,6 +1559,128 @@ pub(super) fn pin_playlist_hover_refresh(
     hover_at_the_band((top, height, width, pin.dpi as f32 / 96.0), Some((x, y)))
 }
 
+/// **The row a right-click named**, given a point on the screen while the window's own menu is up over
+/// the band: the row the card's `Open in Default App`, `Open With...` and `Open Path` rows are about
+/// from then until the menu goes, and the row the band washes a shade so that the file a hand has just
+/// asked about is the file it can see marked (see `PlaylistBand::named`).
+///
+/// `None` — for a press that landed on no row, off the band, or on the pad between two of them —
+/// names nothing, and the three rows go back to the file the pin is showing.
+///
+/// It is asked of the point the press landed rather than of the row the pointer is on, because the
+/// pointer is on the menu by the time this is asked: the panels are drawn in a window of their own
+/// over the card, and what the press was over is the one thing the menu cannot see from where it now
+/// stands.
+///
+/// Answers whether the wash moved, which is a paint the caller owes: a menu opened over a row is a
+/// band that has something new of its own to draw.
+pub(super) fn name_the_row_a_menu_is_over(hwnd: HWND, cursor: Option<(i32, i32)>) -> bool {
+    let band = pin_state().and_then(|pinned| {
+        let pin = pinned.pin()?;
+        let (top, height) = pin_playlist_band(pin)?;
+
+        Some((top, height, pin.dpi as f32 / 96.0))
+    });
+    let Some((top, height, scale)) = band else {
+        // A band that is down is a band with no row to name, and nothing is left marked for one: the
+        // wash is the menu's, and it goes with the menu.
+        return forget_the_row_a_menu_named();
+    };
+    let Some((x, y, width)) = cursor.and_then(|at| the_point_in_the_window(hwnd, at)) else {
+        return forget_the_row_a_menu_named();
+    };
+
+    let Some(named) = named_row_at_the_band((top, height, width, scale), x, y) else {
+        return forget_the_row_a_menu_named();
+    };
+
+    mark_the_row_a_menu_named(Some(named))
+}
+
+/// The row a right-click at a point of the window named, which is the row under it and nothing else:
+/// the band's own pad, the field's pill and the rows a query has hidden are all rows no press names
+/// (see `pin_chrome::playlist_row_at` and `set_the_hover`, which reads a pointer the same way).
+fn named_row_at_the_band(
+    (top, height, width, scale): (i32, i32, i32, f32),
+    x: i32,
+    y: i32,
+) -> Option<usize> {
+    let local = y - top;
+    if local < 0 || local >= height || !(0..width).contains(&x) {
+        return None;
+    }
+
+    let playlist = THE_PLAYLIST.lock().ok()?;
+    // The field floats over the last rows of the list, and a press on it is a press on the field: the
+    // menu the right-click asked for is not about a file at all (see `paint_search`).
+    let layout = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
+    if playlist.search_slide > 0.0 && pin_chrome::search_field_holds(&layout, x, local) {
+        return None;
+    }
+
+    pin_chrome::playlist_row_at(&layout, playlist.scroll, playlist.shown.len(), local)
+        .and_then(|position| playlist.row_at_position(position))
+}
+
+/// The row a right-click named, given up with the menu that named it, answering whether it came off:
+/// the semi-highlight is the panel's own mark on the band, and a panel that is gone leaves nothing
+/// behind it (see `pin_menu::close_pin_menu` and `take_pin_menu_dismiss`).
+pub(super) fn forget_the_row_a_menu_named() -> bool {
+    mark_the_row_a_menu_named(None)
+}
+
+/// The one place the row a right-click named is written, answering whether the wash moved.
+fn mark_the_row_a_menu_named(named: Option<usize>) -> bool {
+    // The band's own geometry is asked for first and the playlist's lock taken after it, which is the
+    // order the tick reads the two in: a lock taken the other way round here is a band that can meet
+    // the pin's own tick head on (see `the_band_of_the_pin`).
+    let band = the_band_of_the_pin().map(|(_, height, width, scale)| (height, width, scale));
+
+    let Ok(mut playlist) = THE_PLAYLIST.lock() else {
+        return false;
+    };
+    if playlist.named == named {
+        return false;
+    }
+
+    playlist.named = named;
+    // The row's name is one the band travels now, and the row it has let go of is a name winding back
+    // to its resting place: the semi-highlighted row is a row the band carries a long name for, the
+    // way the row the hand is on is (see `set_the_marquee`).
+    if let Some((height, width, scale)) = band {
+        let layout = pin_chrome::playlist_layout(width, height, scale, playlist.shown.len());
+        playlist.set_the_marquee(&layout, scale);
+    }
+
+    true
+}
+
+/// The file the card's three hand-off rows are about while the window's own menu is up: the row a
+/// right-click named, or nothing where it named no row, or where the band has since been put down or
+/// the row hidden by the search's query (see `name_the_row_a_menu_is_over`).
+///
+/// A pin with no such row answers with the file it is showing, which is the pin's own business rather
+/// than this one's (see `pin_menu::open_pinned_row`).
+pub(super) fn the_file_a_menu_named() -> Option<PathBuf> {
+    if !the_band_is_open() {
+        return None;
+    }
+
+    let playlist = THE_PLAYLIST.lock().ok()?;
+    let row = playlist.named?;
+    playlist
+        .shown
+        .contains(&row)
+        .then(|| playlist.order.get(row).cloned())
+        .flatten()
+}
+
+/// The row a right-click named, as a test reads it.
+#[cfg(test)]
+pub(super) fn the_row_a_menu_named() -> Option<usize> {
+    THE_PLAYLIST.lock().ok()?.named
+}
+
 /// The band's hover, written in the one place: which row a band-local row of the window is on, and
 /// the marquee that comes with it, answering whether either changed.
 ///
@@ -2043,6 +2177,7 @@ pub(super) unsafe fn paint_the_band(
         total: playlist.shown.len(),
         showing: playlist.showing,
         picked: playlist.picked,
+        named: playlist.named,
         scrolled: &scrolled,
         search: Some(search),
         note,

@@ -424,6 +424,7 @@ fn the_band_claims_its_whole_box_and_stripes_the_row_it_shows() {
             total: 2,
             showing: Some(1),
             picked: None,
+            named: None,
             scrolled: &[],
             search: None,
             note: None,
@@ -685,6 +686,7 @@ fn a_row_is_drawn_exactly_as_the_row_above_it() {
             total: 2,
             showing: None,
             picked: None,
+            named: None,
             scrolled: &[],
             search: None,
             note: None,
@@ -930,6 +932,7 @@ fn a_band_of_the_field(search: PlaylistSearch) -> (DibSurface, RECT) {
             total: 0,
             showing: None,
             picked: None,
+            named: None,
             scrolled: &[],
             search: Some(search),
             note: None,
@@ -1635,6 +1638,7 @@ fn the_room_under_the_last_row_is_a_row_peeking_and_the_pill_floats_over_the_row
                 total: rows.len(),
                 showing: None,
                 picked: None,
+                named: None,
                 scrolled: &[],
                 search: Some(PlaylistSearch {
                     text: "",
@@ -1688,5 +1692,72 @@ fn the_room_under_the_last_row_is_a_row_peeking_and_the_pill_floats_over_the_row
         over_the_rows(&paint(1.0)),
         0,
         "and a pill in sight is drawn over them: the field floats on the list rather than beside it"
+    );
+}
+
+/// **The row a right-click named is washed a shade, and a shade under a pick.** The semi-highlight is
+/// what says which file the card's own menu is about, so it has to be a mark a hand can see and a mark
+/// it can tell from the pick on the row above it: the band blends the row by half of a pick's own lift
+/// rather than the same lift, and a row that is both stays a pick (see `PlaylistBand::named`).
+#[test]
+fn the_row_a_menu_named_is_washed_a_shade_and_under_a_pick() {
+    let palette = ChromePalette::current().expect("a theme to paint in");
+    let (width, height) = (240u32, 240u32);
+    let layout = playlist_layout(width as i32, height as i32, SCALE, 3);
+    assert_eq!(layout.visible, 5, "five rows in the room of five");
+    let rows = [a_row("one"), a_row("two"), a_row("three")];
+
+    // The page, the shade a named row is washed, and the wash a picked row takes: three answers about
+    // the same three rows, drawn one after the other so that the difference between them is the whole
+    // of what this test is asking.
+    let painted = |picked: Option<usize>, named: Option<usize>| {
+        let surface = DibSurface::create(width, height).expect("a surface");
+        paint_playlist(
+            &surface,
+            &palette,
+            &PlaylistBand {
+                layout,
+                rows: &rows,
+                shown: &[0, 1, 2],
+                first: 0,
+                total: 3,
+                showing: None,
+                picked,
+                named,
+                scrolled: &[],
+                search: None,
+                note: None,
+            },
+            SCALE,
+        );
+        let pixels =
+            unsafe { std::slice::from_raw_parts(surface.bits(), (width * height * 4) as usize) };
+        // A column of the band's own pad, left of the text: what is read is the wash a row is drawn
+        // in, and nothing a name or a fact is set over.
+        let column = 2usize;
+        let row = |index: usize| {
+            let top = (layout.rows_top + index as i32 * layout.row_height) as usize + 2;
+            pixels[(top * width as usize + column) * 4..][..3].to_vec()
+        };
+        (row(0), row(1), row(2))
+    };
+
+    let (page, named, picked) = (
+        painted(None, None).1,
+        painted(None, Some(1)).1,
+        painted(Some(1), None).1,
+    );
+
+    assert_ne!(named, page, "a named row is not drawn as the page is");
+    assert_ne!(named, picked, "and not as a picked row is either");
+    assert_eq!(
+        painted(None, Some(1)).1,
+        named,
+        "the shade is the named row's and no other's: the rows above and below it are the page"
+    );
+    assert_eq!(
+        painted(Some(1), Some(1)).1,
+        picked,
+        "a row that is both the pick and the row a menu named is drawn as the pick"
     );
 }

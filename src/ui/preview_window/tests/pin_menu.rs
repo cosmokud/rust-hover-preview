@@ -198,6 +198,7 @@ fn the_menu_holds_the_settings_it_is_the_face_of() {
             "",
             "Open in Default App",
             "Open With...",
+            "Open Path",
         ]
     );
     assert!(
@@ -408,6 +409,7 @@ fn a_right_click_opens_the_menu_at_the_point_on_an_audio_pin() {
             "",
             "Open in Default App",
             "Open With...",
+            "Open Path",
         ]
     );
     assert!(
@@ -1234,6 +1236,7 @@ fn a_press_on_the_jump_row_opens_its_flyout_and_keeps_the_menu_up() {
             "",
             "Open in Default App",
             "Open With...",
+            "Open Path",
         ]
     );
 }
@@ -1871,6 +1874,7 @@ fn a_press_on_the_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
             "",
             "Open in Default App",
             "Open With...",
+            "Open Path",
         ]
     );
 }
@@ -1906,13 +1910,13 @@ fn a_press_on_the_hover_seek_row_opens_its_flyout_and_keeps_the_menu_up() {
     );
 }
 
-/// The menu's two ways out to another program are armed on the press and made on the release
-/// that follows it: the press takes the menu away and leaves the pin standing, and the hand-off
-/// waits for the button to be let go of, so the program or the Shell's list is not raised under
-/// a mouse button that is still down — which is the click the window it raised would otherwise
-/// have been given (see `pin_menu_hand_off_release`).
+/// The menu's three file rows are armed on the press and made on the release that follows it: the
+/// press takes the menu away and leaves the pin standing, and the hand-off waits for the button to be
+/// let go of, so the program, the Shell's list or Explorer's own folder window is not raised under a
+/// mouse button that is still down — which is the click the window it raised would otherwise have been
+/// given (see `pin_menu_hand_off_release`).
 #[test]
-fn a_press_on_either_way_out_to_another_program_waits_for_the_release() {
+fn a_press_on_any_of_the_three_file_rows_waits_for_the_release() {
     let _room = the_room_to_itself();
 
     let _settings = MenuSettings::put(AudioSeek::Start, PinEndOfFile::Loop, false);
@@ -1924,6 +1928,7 @@ fn a_press_on_either_way_out_to_another_program_waits_for_the_release() {
     for (label, hand_off) in [
         ("Open in Default App", PinMenuHandOff::DefaultApp),
         ("Open With...", PinMenuHandOff::OpenWithList),
+        ("Open Path", PinMenuHandOff::OpenPath),
     ] {
         with_pin(|pin| {
             pin.menu.open = true;

@@ -5232,3 +5232,177 @@ fn a_walk_step_puts_the_band_on_the_file_it_landed_on() {
     assert!(opened.is_some(), "the pin the test stood up");
     stand_pin(previous_pin);
 }
+
+/// **A right-click over a row of the band names that row, and the card's three file rows are about
+/// the file it is the row of** rather than about the file the pin is playing: the row is washed a
+/// shade so that the file a hand has just asked about is the file it can see marked, the answer the
+/// menu's `Open in Default App`, `Open With...` and `Open Path` rows are given is that file, and a
+/// right-click that lands off the rows names nothing and leaves the pin's own file to
+/// answer (see `pin_playlist::name_the_row_a_menu_is_over` and `pin_menu::open_pinned_row`).
+#[test]
+fn a_right_click_over_a_row_names_the_file_the_card_s_menu_is_about() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of two sounds a menu is asked about");
+    let sounds = [folder.join("a.mp3"), folder.join("b.mp3")];
+
+    // The pin's walk is two files of which it is showing the first, so the second is a row that names
+    // a file the pin is not already on: a menu about the file on screen would say nothing.
+    let mut standing = sound_pin();
+    standing.path = sounds[0].clone();
+    pin_playlist::toggle(&standing);
+    stand_pin(Some(standing));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        direction: 1,
+        to_the_end: None,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(
+        pin_playlist::refresh_the_rows(),
+        "the band builds the rows of the walk"
+    );
+
+    // A window standing where the pin's box says it does, so that a point on the screen is a point of
+    // the window: what a right-click names is measured against the band's own rows, and those are the
+    // window's (see `pin_input::the_point_in_the_window`).
+    let (window, band, row) = pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                (
+                    pin.window_box(),
+                    pin_playlist::pin_playlist_band(pin),
+                    pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0),
+                )
+            })
+        })
+        .expect("the pin the test stood up");
+    let (band_top, _) = band.expect("the band the hand just opened");
+    let hwnd = unsafe {
+        a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, window)
+    };
+
+    // The second row of the band, which is the file the pin is not showing.
+    let at = (window.0 + 40, window.1 + band_top + row + row / 2);
+    assert!(
+        pin_playlist::name_the_row_a_menu_is_over(hwnd, Some(at)),
+        "the row under the press is a row the band was not washing before"
+    );
+    assert_eq!(
+        pin_playlist::the_row_a_menu_named(),
+        Some(1),
+        "and it is the second row of the walk"
+    );
+    assert!(
+        pin_state()
+            .and_then(|pinned| pinned.pin().and_then(pin_playlist::pin_playlist_band))
+            .is_some(),
+        "the band is still up, so the row is one the card's rows are about"
+    );
+    assert_eq!(
+        open_pinned_row(),
+        Some(sounds[1].clone()),
+        "the file the menu hands anywhere is the row it is standing over, not the one playing"
+    );
+
+    // **A press that lands off the rows names nothing.** The band's own pad above the first row is a
+    // place of the band and no row of it, and a menu about nothing in particular is about the file the
+    // pin is showing (see `pin_playlist::named_row_at_the_band`).
+    assert!(
+        pin_playlist::name_the_row_a_menu_is_over(
+            hwnd,
+            Some((window.0 + 40, window.1 + band_top + 1))
+        ),
+        "the wash comes off a row the hand is no longer over"
+    );
+    assert_eq!(
+        pin_playlist::the_file_a_menu_named(),
+        None,
+        "a press on the pad names no row"
+    );
+    assert_eq!(
+        open_pinned_row(),
+        pinned_path(),
+        "and the file the card's rows would hand over is the pin's own, which is what the pin is\
+         showing rather than a row of the band"
+    );
+
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}
+
+/// **The row a right-click named is given up with the menu that named it**: the semi-highlight is the
+/// panel's mark on the band, so every road the panel has out of clears it — the ask that puts it away,
+/// a press that answered a row, and `Esc` (see `pin_menu::close_pin_menu` and
+/// `pin_playlist::forget_the_row_a_menu_named`).
+#[test]
+fn the_row_a_menu_named_goes_away_with_the_menu() {
+    let _room = the_room_to_itself();
+
+    let previous_pin = take_pin_for_a_test();
+    let folder = PathBuf::from("a folder of two sounds a menu is put away over");
+    let sounds = [folder.join("a.mp3"), folder.join("b.mp3")];
+
+    let mut standing = sound_pin();
+    standing.path = sounds[0].clone();
+    pin_playlist::toggle(&standing);
+    stand_pin(Some(standing));
+    stand_pin_walk(Some(PinStep {
+        at: sounds[0].clone(),
+        from: sounds[0].clone(),
+        direction: 1,
+        to_the_end: None,
+        order: sounds.to_vec(),
+        missed: 0,
+        shuffle: false,
+        progress: 0,
+        anchor: Some(crate::formats::routing::NavCategory::Audio),
+    }));
+    assert!(pin_playlist::refresh_the_rows(), "the band's rows");
+
+    let (window, band, row) = pin_state()
+        .and_then(|pinned| {
+            pinned.pin().map(|pin| {
+                (
+                    pin.window_box(),
+                    pin_playlist::pin_playlist_band(pin),
+                    pin_chrome::playlist_row_height(pin.dpi as f32 / 96.0),
+                )
+            })
+        })
+        .expect("the pin the test stood up");
+    let (band_top, _) = band.expect("the band");
+
+    // **The mark is made by opening the menu, and by nothing else**: what a hand right-clicks is the
+    // row the panel then stands over, and the panel is what says so (see `pin_menu::open_pin_menu`).
+    let hwnd = unsafe {
+        a_window_of_the_suite(WINDOW_EX_STYLE::default(), w!("STATIC"), WS_POPUP, window)
+    };
+    let at = (window.0 + 40, window.1 + band_top + row + row / 2);
+    unsafe { open_pin_menu(hwnd, at.0, at.1, PinMenuPage::Chrome) };
+    assert_eq!(
+        pin_playlist::the_row_a_menu_named(),
+        Some(1),
+        "the menu named the row it was opened over"
+    );
+
+    unsafe { close_pin_menu(hwnd) };
+    assert_eq!(
+        pin_playlist::the_row_a_menu_named(),
+        None,
+        "and the mark goes with the menu"
+    );
+
+    unsafe { put_away_a_window_of_the_suite(hwnd) };
+    let opened = pin_state().and_then(|pinned| pinned.pin().map(pin_playlist::toggle));
+    assert!(opened.is_some(), "the pin the test stood up");
+    stand_pin(previous_pin);
+}

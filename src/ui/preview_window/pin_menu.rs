@@ -93,7 +93,7 @@ pub(super) struct PinMenu {
     pub(super) pin_mode_seek_since: Option<Instant>,
 }
 
-/// Which of the menu's two ways out to another program a press has armed: the hand-off the
+/// Which of the menu's ways out to another program a press has armed: the hand-off the
 /// release makes once the button is let go of (see `pin_menu_hand_off_release`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PinMenuHandOff {
@@ -101,6 +101,10 @@ pub(super) enum PinMenuHandOff {
     DefaultApp,
     /// Show the Shell's own list of programs.
     OpenWithList,
+    /// Show the file in the folder it lives in, Explorer's own `Show in folder` — a press that
+    /// raises a window under the hand like the two above it, and so waits for the release for the
+    /// same reason (see `reveal_in_explorer`).
+    OpenPath,
 }
 
 /// Which page a right-click asks a pinned window's own menu for: the rows its chrome holds, those
@@ -362,13 +366,17 @@ pub(super) enum PinMenuRow {
     /// The Shell's own list of programs, the same dialog the card's `Open With...` button
     /// opens (see `show_open_with_dialog`).
     OpenWithList,
+    /// Open Windows Explorer on the folder the file is in — the one row here that hands nothing to
+    /// another program, and the one that leaves the card standing (see `reveal_in_explorer`).
+    OpenPath,
 }
 
 /// The rows the card's menu holds, from the top of the panel to the bottom: the band the card can
 /// grow under itself, the rule, the two ways out of the pin, the rule, the playback of the file in
 /// it, the rule again, the four settings the pin plays by — the shuffle that answers on the spot,
-/// and the three doors the flyouts hang from — and, below the last of them, the rule and the two
-/// ways out to another program, which are the card's own buttons by another name (see
+/// and the three doors the flyouts hang from — and, below the last of them, the rule and the three
+/// rows that are about a file rather than about the window: the two ways out to another program and
+/// the one that shows the file where it lives, which are the card's own buttons by another name (see
 /// `card_menu_press`).
 ///
 /// **The first row is a sound's alone**, and it is reachable on a sound's window because nothing
@@ -378,7 +386,7 @@ pub(super) enum PinMenuRow {
 ///
 /// The same three doors are what the hover timers watch and what a press on any opens (see
 /// `refresh_pin_menu`).
-const PIN_MENU_ROWS: [PinMenuRow; 18] = [
+const PIN_MENU_ROWS: [PinMenuRow; 19] = [
     PinMenuRow::Playlist,
     PinMenuRow::Separator,
     PinMenuRow::Detach,
@@ -397,6 +405,7 @@ const PIN_MENU_ROWS: [PinMenuRow; 18] = [
     PinMenuRow::Separator,
     PinMenuRow::OpenInDefaultApp,
     PinMenuRow::OpenWithList,
+    PinMenuRow::OpenPath,
 ];
 
 impl PinMenuRow {
@@ -423,6 +432,7 @@ impl PinMenuRow {
             PinMenuRow::PinModeSeek => "Pin Mode Seek",
             PinMenuRow::OpenInDefaultApp => "Open in Default App",
             PinMenuRow::OpenWithList => "Open With...",
+            PinMenuRow::OpenPath => "Open Path",
         }
     }
 
@@ -444,7 +454,8 @@ impl PinMenuRow {
             | PinMenuRow::NextFile
             | PinMenuRow::PreviousFile
             | PinMenuRow::OpenInDefaultApp
-            | PinMenuRow::OpenWithList => pin_chrome::MenuMark::None,
+            | PinMenuRow::OpenWithList
+            | PinMenuRow::OpenPath => pin_chrome::MenuMark::None,
         }
     }
 }
@@ -1008,7 +1019,14 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
         // with it: a window still holding the pointer after its menu is
         // gone is a window every click on the desktop is delivered to
         // instead of whatever the click was aimed at.
+        //
+        // **The row the right-click named goes with it**, unless a hand-off is armed: a press on one of
+        // the three file rows is about that row, and the release that makes the hand-off is what reads
+        // it — a mark cleared here would be a menu that forgot which file it was pressed for. It is put
+        // away where the hand-off is made, and by every other road out of the menu (see
+        // `pin_menu_hand_off_release` and `pin_playlist::forget_the_row_a_menu_named`).
         if !hand_off_armed {
+            pin_playlist::forget_the_row_a_menu_named();
             release_pin_capture(hwnd);
         }
     }
@@ -1021,21 +1039,29 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
     true
 }
 
-/// Make the hand-off a press on either of the menu's last two rows armed, on the release that
-/// follows it: the program the Shell starts for the file, or the Shell's own list of programs.
+/// Make the hand-off a press on one of the menu's last three rows armed, on the release that
+/// follows it: the program the Shell starts for the file, the Shell's own list of programs, or the
+/// folder the file is in.
 ///
 /// The click is taken here rather than in the press for the same reason every caption button of
-/// this app's opens on its release, and it matters more for these two than anywhere else: both
-/// raise a window under the hand, and a window raised while the mouse button is still down is a
-/// window that gets the release — a click of its own it was never offered, which is how a press
-/// on `Open in Default App` came to land in the program it started, and how the Shell's list
-/// came up with the release already spent on it.
+/// this app's opens on its release, and it matters more for these than anywhere else: each raises a
+/// window under the hand, and a window raised while the mouse button is still down is a window that
+/// gets the release — a click of its own it was never offered, which is how a press on `Open in
+/// Default App` came to land in the program it started, and how the Shell's list came up with the
+/// release already spent on it.
 ///
-/// Answers whether a hand-off was armed, and whether the press was therefore this function's.
-/// The pointer is given back here and the pin asked for its end the way the card's own two
-/// buttons ask for it (see `pin_input`'s caption release). The end is noted as a hand-off rather
-/// than a close, so that the Explorer hook does not read the file under the pointer as one the
-/// hand asked for and raise a hover over the program it started (see `note_pin_handed_off`).
+/// **The file is the row the right-click named**, where the band names one, and the file the pin is
+/// showing otherwise: a hand that right-clicked a row of the playlist asked about that row, and a
+/// hand that right-clicked anywhere else asked about what is playing (see
+/// `pin_playlist::the_file_a_menu_named`). `Open Path` is the one row of the three that leaves the
+/// pin standing — it hands nothing over, so there is nothing to get out from under: the sound goes on
+/// playing while Explorer comes up on its folder (see `reveal_in_explorer`).
+///
+/// Answers whether a hand-off was armed, and whether the press was therefore this function's. The
+/// pointer is given back here and the pin asked for its end the way the card's own two buttons ask
+/// for it (see `pin_input`'s caption release). The end is noted as a hand-off rather than a close, so
+/// that the Explorer hook does not read the file under the pointer as one the hand asked for and
+/// raise a hover over the program it started (see `note_pin_handed_off`).
 pub(super) unsafe fn pin_menu_hand_off_release(hwnd: HWND) -> bool {
     let hand_off = pin_state().and_then(|mut pinned| pinned.pin_mut()?.menu.hand_off.take());
     let Some(hand_off) = hand_off else {
@@ -1044,7 +1070,7 @@ pub(super) unsafe fn pin_menu_hand_off_release(hwnd: HWND) -> bool {
 
     let _ = ReleaseCapture();
 
-    if let Some(path) = pinned_path() {
+    if let Some(path) = open_pinned_row() {
         match hand_off {
             PinMenuHandOff::DefaultApp => open_path_with_default_app(&path, hwnd),
             // The Shell's list, carried onto the pin's own display on a thread of its own for the
@@ -1057,13 +1083,41 @@ pub(super) unsafe fn pin_menu_hand_off_release(hwnd: HWND) -> bool {
                     std::thread::spawn(move || carry_open_with_to(at, before));
                 }
             }
+            // The folder, rather than the file: Explorer comes up on it, and the pin is left exactly as
+            // it stands — no capture to give back, no end to ask for. `ShellExecuteExW`'s `explore`
+            // verb is the Shell's own, so it reuses the folder's window where one is up rather than
+            // opening a second one.
+            PinMenuHandOff::OpenPath => {
+                reveal_in_explorer(&path, hwnd);
+                // The row the menu named is the menu's mark on the band, and the menu is gone: it is put
+                // away here, where the last thing that knew which row it was has finished with it (see
+                // `pin_playlist::forget_the_row_a_menu_named`).
+                pin_playlist::forget_the_row_a_menu_named();
+                render_layered_preview(hwnd);
+                return true;
+            }
         }
         note_pin_handed_off();
         request_pin_end();
     }
 
+    // The row the menu named goes with the menu, here as well: the hand-off above was made on the file
+    // it stood for, and the pin is on its way down with it (see
+    // `pin_playlist::forget_the_row_a_menu_named`).
+    pin_playlist::forget_the_row_a_menu_named();
     render_layered_preview(hwnd);
     true
+}
+
+/// **The file the card's menu is about**: the row a right-click named while the playlist band was up
+/// under it, and the file the pin is showing where it named no row (see
+/// `pin_playlist::the_file_a_menu_named`).
+///
+/// It is asked at the release rather than at the press because a row's own file is the walk's, and
+/// the walk is the loop's: what a press named is a row, and the row a file, and nothing of the walk
+/// may be read under the pin's lock.
+pub(super) fn open_pinned_row() -> Option<PathBuf> {
+    pin_playlist::the_file_a_menu_named().or_else(pinned_path)
 }
 
 /// What a press on a row of the card's own menu means: a press on a door row opens its flyout
@@ -1177,16 +1231,32 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
             ask_pin(PinCommand::PreviousFile);
             false
         }
-        // The two ways out to another program, armed here and made on the release: the program
-        // or the Shell's list comes up under the hand, so raising it while the button is still
-        // down is raising it for the release to land on (see `pin_menu_hand_off_release`). The
-        // menu goes away as a choice's does, and the pin stays up until the button is let go of.
+        // The ways out to another program, armed here and made on the release: the program or the
+        // Shell's list comes up under the hand, so raising it while the button is still down is
+        // raising it for the release to land on (see `pin_menu_hand_off_release`). The menu goes
+        // away as a choice's does, and the pin stays up until the button is let go of.
+        //
+        // **The file they are about is the row the right-click named** where the band names one: a
+        // press on the media of a card with its playlist up asks for the row it landed beside, and
+        // the row it named is washed from the moment the menu came up, so the file the menu would
+        // hand over is the file the hand can see marked (see `pin_playlist::name_the_row_a_menu_is_over`).
+        // With no row named it is the file the pin is showing, which is what these rows have always
+        // meant.
         Some(PinMenuRow::OpenInDefaultApp) => {
             with_pin(|pin| pin.menu.hand_off = Some(PinMenuHandOff::DefaultApp));
             false
         }
         Some(PinMenuRow::OpenWithList) => {
             with_pin(|pin| pin.menu.hand_off = Some(PinMenuHandOff::OpenWithList));
+            false
+        }
+        // The file's own folder: the one row here that hands nothing over — the pin stays up and goes
+        // on playing while Explorer comes up on the folder the file is in (see
+        // `reveal_in_explorer`). Armed on the press and made on the release for the same reason the
+        // two above are: Explorer's window comes up under the hand, and a window raised while the
+        // mouse button is still down is a window that gets the release for a click of its own.
+        Some(PinMenuRow::OpenPath) => {
+            with_pin(|pin| pin.menu.hand_off = Some(PinMenuHandOff::OpenPath));
             false
         }
         // A rule is not a row a hand answers, so a press on one is nothing at all: the menu
@@ -1314,6 +1384,13 @@ pub(super) fn pin_band_is_the_models(y: i32) -> bool {
 /// point the right-click landed: a second right-click while the panel is
 /// up moves it to the new point rather than putting it away.
 ///
+/// **A right-click that lands over the playlist band names the row it landed on**, and that row is the
+/// file the menu's three file rows are about — `Open in Default App`, `Open With...` and `Open Path` —
+/// while the panel is up: it is washed a shade so that the file a hand has just asked about is the
+/// file it can see marked, and every road the panel has out of clears the mark with it (see
+/// `pin_playlist::name_the_row_a_menu_is_over`). A right-click anywhere else names no row, which is
+/// the file the pin is showing, and the band is left exactly as it was.
+///
 /// Whether the point a right-click landed at is one the menu opens for, and which of its pages it
 /// asks for, is not asked here but of the caller, which is the one that knows the window it landed
 /// in: a point on a film's transport bar belongs to the player, and one on the text of a pinned
@@ -1341,6 +1418,10 @@ pub(super) unsafe fn open_pin_menu(hwnd: HWND, x: i32, y: i32, page: PinMenuPage
         pin.menu.pin_mode_seek_since = None;
         pin.menu.hand_off = None;
     });
+    // The row the press named, marked on the band under it: it is asked of the point the press landed
+    // at, because the pointer is on the panel from here on and the panel is drawn in a window of its
+    // own over the card (see `pin_playlist::name_the_row_a_menu_is_over`).
+    pin_playlist::name_the_row_a_menu_is_over(hwnd, Some((x, y)));
     // The menu is this window's own, so the window takes the pointer while
     // it is up: a press anywhere else — another app, the taskbar — arrives
     // here first, and the first one puts the menu away rather than reaching
@@ -1451,6 +1532,10 @@ pub(super) unsafe fn close_pin_menu(hwnd: HWND) -> bool {
         }
     });
     if was_up {
+        // The row the right-click named was the menu's mark on the band, and it goes with the menu:
+        // a wash left standing over a row nothing is going to hand anywhere is a file marked for a
+        // panel that is no longer there (see `pin_playlist::forget_the_row_a_menu_named`).
+        pin_playlist::forget_the_row_a_menu_named();
         release_pin_capture(hwnd);
         render_layered_preview(hwnd);
         render_pin_menu();
@@ -1485,6 +1570,13 @@ pub(super) fn take_pin_menu_dismiss() -> bool {
             pin.menu.open = false;
         }
     });
+    if was_up {
+        // The row the menu named is given up with it, here as well as in `close_pin_menu`: the mark
+        // is the panel's, and a panel the hook's own ask has put away leaves nothing behind it. The
+        // paint that carries it off is the caller's — the ask answers `true` for it, and the tick that
+        // took the ask repaints the pin (see `pin_playlist::forget_the_row_a_menu_named`).
+        pin_playlist::forget_the_row_a_menu_named();
+    }
     let bubble_was_up = unsafe { close_pin_bubble_menu() };
     unsafe { render_pin_menu() };
 

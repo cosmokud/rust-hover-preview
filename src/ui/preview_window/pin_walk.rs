@@ -1134,6 +1134,61 @@ pub(super) unsafe fn open_path_with_default_app(path: &Path, hwnd: HWND) {
     shell_open_on(hwnd, path);
 }
 
+/// Show a file where it lives: Windows Explorer comes up on the folder holding it, which is where the
+/// card's `Open Path` row takes a hand.
+///
+/// **The Shell's own `explore` verb rather than a new window of this app's.** Handing the folder over
+/// through `ShellExecuteExW` is what makes the launch the Shell's: a folder already open in an
+/// Explorer window is taken to and reused rather than opened a second time, and the window it raises
+/// is the user's own Explorer with their own settings, not a folder view this app drew. The pin's own
+/// window goes in as the parent and its monitor as `SEE_MASK_HMONITOR`, the same context every other
+/// hand-off of this app's is made in, so a pin on a second display opens the folder there rather than
+/// on the primary one.
+///
+/// **What it does not do is end the pin.** `Open in Default App` and `Open With...` both hand the file
+/// away and take the pin down with them, because a preview left standing over the program the user
+/// just opened is in the way of it. This one hands nothing over: the sound goes on playing and the
+/// card stays where it is, and the folder comes up beside it — which is what a playlist is for
+/// (see `pin_menu::pin_menu_hand_off_release`).
+///
+/// Like the hand-off above, nothing is asked of the folder here and nothing is waited for, and the
+/// answer is read and deliberately not acted on: a folder the Shell will not open is the user's
+/// machine rather than a fault in this one.
+///
+/// # Safety
+///
+/// The verb and the folder are this function's own null-terminated buffers living past the call, and
+/// the window handle is the live preview window the press was released on; the monitor is a number
+/// read off that window and never dereferenced. Nothing is kept past the call and nothing borrowed
+/// outlives it.
+pub(super) unsafe fn reveal_in_explorer(path: &Path, hwnd: HWND) {
+    let folder = path
+        .parent()
+        .map(crate::paths::plain_path)
+        .unwrap_or_else(|| plain_path(path));
+    let folder: Vec<u16> = std::ffi::OsStr::new(&folder)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_HMONITOR | SEE_MASK_ASYNCOK,
+        hwnd,
+        lpVerb: w!("explore"),
+        lpFile: PCWSTR(folder.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        Anonymous: SHELLEXECUTEINFOW_0 {
+            hMonitor: HANDLE(monitor.0),
+        },
+        ..Default::default()
+    };
+
+    let _ = ShellExecuteExW(&mut info);
+}
+
 /// Ask the Shell to open a file on the monitor the pin is standing on, through `ShellExecuteExW`
 /// with the pin's own window as the parent and its monitor as `SEE_MASK_HMONITOR`.
 ///
