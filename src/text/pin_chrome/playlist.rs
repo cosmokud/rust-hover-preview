@@ -105,6 +105,10 @@ pub(crate) struct PlaylistBand<'a> {
     pub(crate) showing: Option<usize>,
     /// The row the hand has picked, which is the row the band washes (see `pin_playlist`).
     pub(crate) picked: Option<usize>,
+    /// The row a right-click has named while the window's own menu is up over the band: it is washed
+    /// with a shade between the page and a pick's wash, so that the file the two hand-off rows of
+    /// that menu are about is a row a hand can see (see `pin_playlist::name_the_row_a_menu_is_over`).
+    pub(crate) named: Option<usize>,
     /// The rows whose names are travelling, and how far each has been carried, in pixels to the
     /// left: the row the hand is on, the row it has picked and the row the pin is showing, any of
     /// which can be a name the column has no room for. A name on its way back to its resting place
@@ -634,6 +638,9 @@ pub(crate) fn paint_playlist(
 
     let page = palette.background;
     let wash = palette.hover(ROW_WASH);
+    // The same lift, half as far: a row the window's own menu is about rather than one the hand has
+    // picked (see `ROW_NAMED_WASH`).
+    let named_wash = palette.hover(ROW_NAMED_WASH);
     let whole = RECT {
         left: 0,
         top: 0,
@@ -727,14 +734,25 @@ pub(crate) fn paint_playlist(
         }
 
         let picked = band.picked == Some(index);
-        let under = if picked { wash } else { page };
+        // **A row the menu is standing over is washed a shade, and a row the hand has picked is
+        // washed the whole way**: the two are different things the band is saying about two rows at
+        // once — one is the file the hand is about to hand to another program, the other is the file
+        // it has named to play — so the semi-highlight is the pick's own wash laid thinner rather
+        // than the same wash, and the two read apart wherever they land on one row (see
+        // `ROW_NAMED_WASH`).
+        let named = band.named == Some(index);
+        let under = match (picked, named) {
+            (true, _) => wash,
+            (false, true) => named_wash,
+            (false, false) => page,
+        };
         let band_rect = RECT {
             left: 0,
             top,
             right: width,
             bottom,
         };
-        if picked {
+        if picked || named {
             fill_box(pixels, width, band_rect, under, 1.0);
         }
 
@@ -1464,6 +1482,11 @@ const FACTS_PIXELS: f32 = text_paint::LEVEL_FONT_PIXELS[FACTS_LEVEL as usize] as
 /// How far the wash a picked row takes lifts off the band's page, which is the lift a caption
 /// button takes under the pointer: a row is a thing a hand has chosen, not a control lit up.
 const ROW_WASH: f32 = 0.10;
+
+/// How far the wash a row a right-click has named lifts off the band's page: half the pick's own
+/// lift, because the row is one a hand is asking about rather than one it has chosen — the menu
+/// standing over it is what says the hand is on it (see `PlaylistBand::named`).
+const ROW_NAMED_WASH: f32 = 0.05;
 
 /// How far the muted ink a facts line's words and its separators are drawn in stands off the page,
 /// which is the amount the card's own facts line is muted by (see `audio_preview::page`).
