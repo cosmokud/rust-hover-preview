@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="icon-clip">
+      <rect width="512" height="512" rx="114.25" ry="114.25"/>
+    </clipPath>
+    <filter id="text-shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="14" stdDeviation="13" flood-color="#000000" flood-opacity="0.36"/>
+    </filter>
+    <linearGradient id="rim-grad" x1="0" y1="0" x2="0" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="30%" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="70%" stop-color="#ffffff" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.12"/>
+    </linearGradient>
+    <linearGradient id="bg-0" x1="68.7" y1="26.1" x2="166.9" y2="208.3" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#56cafd"/>
+      <stop offset="100%" stop-color="#229cfd"/>
+    </linearGradient>
+    <linearGradient id="bg-1" x1="306.8" y1="3.7" x2="372.0" y2="120.9" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#137efb"/>
+      <stop offset="100%" stop-color="#0c69f5"/>
+    </linearGradient>
+    <linearGradient id="bg-2" x1="106.3" y1="155.3" x2="402.9" y2="320.6" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#016ef0"/>
+      <stop offset="50%" stop-color="#024bd1"/>
+      <stop offset="100%" stop-color="#033dca"/>
+    </linearGradient>
+    <linearGradient id="bg-2-ov" x1="398.2" y1="40.7" x2="133.3" y2="516.1" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0d6aff" stop-opacity="0.18"/>
+      <stop offset="50%" stop-color="#00006b" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#007fff" stop-opacity="0.18"/>
+    </linearGradient>
+    <linearGradient id="bg-3" x1="305.9" y1="323.6" x2="395.1" y2="441.1" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0031b4"/>
+      <stop offset="100%" stop-color="#001987"/>
+    </linearGradient>
+    <linearGradient id="bg-3-ov" x1="541.1" y1="245.1" x2="188.6" y2="512.9" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0230c7" stop-opacity="0.18"/>
+      <stop offset="50%" stop-color="#03005b" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#0243be" stop-opacity="0.18"/>
+    </linearGradient>
+    <linearGradient id="bg-4" x1="382.2" y1="417.6" x2="451.4" y2="484.4" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00147a"/>
+      <stop offset="100%" stop-color="#000e71"/>
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#icon-clip)">
+    <rect width="512" height="512" fill="url(#bg-0)"/>
+    <path d="M -29.9,407.8 C 23.1,221.0 208.0,123.6 311.3,-29.7 L 560,-29.7 L 560,560 L -29.9,560 Z" fill="url(#bg-1)"/>
+    <path d="M 60.4,541.7 C -188.4,236.1 340.3,66.3 541.8,66.7 L 560,66.7 L 560,560 L 60.4,560 Z" fill="url(#bg-2)"/>
+    <path d="M 60.4,541.7 C -188.4,236.1 340.3,66.3 541.8,66.7 L 560,66.7 L 560,560 L 60.4,560 Z" fill="url(#bg-2-ov)"/>
+    <path d="M 123.1,541.9 C 247.5,385.5 412.1,271.0 541.7,121.7 L 560,121.7 L 560,560 L 123.1,560 Z" fill="url(#bg-3)"/>
+    <path d="M 123.1,541.9 C 247.5,385.5 412.1,271.0 541.7,121.7 L 560,121.7 L 560,560 L 123.1,560 Z" fill="url(#bg-3-ov)"/>
+    <path d="M 260.4,541.9 Q 370.3,403.6 542.0,360.0 L 560,360.0 L 560,560 L 260.4,560 Z" fill="url(#bg-4)"/>
+    <rect x="1.25" y="1.25" width="509.50" height="509.50" rx="113.00" ry="113.00" fill="none" stroke="url(#rim-grad)" stroke-width="2.5"/>
+    <g filter="url(#text-shadow)" fill="#ffffff">
+      <text x="62.5" y="372.1" font-family="'Dubai', 'Segoe UI', Arial, sans-serif" font-weight="700" font-size="362.5" stroke="#ffffff" stroke-width="5.9" stroke-linejoin="miter">R</text>
+      <text x="338.4" y="365.0" font-family="'M PLUS 1p', 'Segoe UI', Arial, sans-serif" font-weight="800" font-size="140.5" letter-spacing="-2" transform="scale(0.8344, 1)">HP</text>
+    </g>
+  </g>
+</svg>
