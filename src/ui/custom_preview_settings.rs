@@ -212,6 +212,22 @@ fn capture_technique_label(technique: CustomCaptureTechnique) -> &'static str {
     }
 }
 
+/// The label a pick of `technique` reads as in this build. The hook is the only technique that
+/// needs something beside the executable, and a machine without `custom_preview_hook.dll` falls
+/// back to Invisible Layered — so there it says what it will really do instead of `(Default)`.
+fn capture_technique_choice(technique: CustomCaptureTechnique, hook_dll: bool) -> &'static str {
+    match technique {
+        CustomCaptureTechnique::InProcessHook if !hook_dll => "In-Process Hook (.dll is missing)",
+        _ => capture_technique_label(technique),
+    }
+}
+
+/// What a pick of `technique` does on this machine. A pick whose label says the DLL is missing
+/// would otherwise be written into the preset and read back as a reset to index 0.
+fn capture_technique_selectable(technique: CustomCaptureTechnique, hook_dll: bool) -> bool {
+    hook_dll || technique != CustomCaptureTechnique::InProcessHook
+}
+
 const PROMOTION_TECHNIQUES: [CustomPromotionTechnique; 2] = [
     CustomPromotionTechnique::DirectPromotion,
     CustomPromotionTechnique::OpenAsNewProcess,
@@ -579,6 +595,10 @@ struct State {
     brush_card: HBRUSH,
     brush_field: HBRUSH,
     brush_field_disabled: HBRUSH,
+    /// Whether a launch would find `custom_preview_hook.dll` (see
+    /// `preview_window::custom_preview::hook_dll_present`): the hook is drawn as a locked choice
+    /// where it would not, saying so in its own label.
+    hook_dll: bool,
     dpi: i32,
     hovered_tb: Option<TitlebarButton>,
     pressed_tb: Option<TitlebarButton>,
@@ -1846,6 +1866,7 @@ unsafe fn build(hwnd: HWND) -> State {
         brush_card: unsafe { CreateSolidBrush(palette.card) },
         brush_field: unsafe { CreateSolidBrush(palette.field) },
         brush_field_disabled: unsafe { CreateSolidBrush(palette.field_disabled) },
+        hook_dll: crate::ui::preview_window::hook_dll_present(),
         dpi,
         hovered_tb: None,
         pressed_tb: None,
@@ -2066,7 +2087,12 @@ unsafe fn build(hwnd: HWND) -> State {
     let capture_technique_combo =
         unsafe { GetDlgItem(hwnd, ID_CAPTURE_TECHNIQUE) }.unwrap_or_default();
     for technique in CAPTURE_TECHNIQUES {
-        unsafe { combo_add(capture_technique_combo, capture_technique_label(technique)) };
+        unsafe {
+            combo_add(
+                capture_technique_combo,
+                capture_technique_choice(technique, state.hook_dll),
+            )
+        };
     }
 
     let promotion_technique_combo =
@@ -2652,6 +2678,12 @@ unsafe extern "system" fn combo_subclass_proc(
             let dropped =
                 unsafe { SendMessageW(hwnd, CB_GETDROPPEDSTATE, WPARAM(0), LPARAM(0)).0 } != 0;
             let active = enabled && (focused || dropped || sub.hovered);
+            // Locked rather than disabled: the combo keeps its focus and hover so the label can be
+            // read, and only the pick that label names is turned down.
+            let locked = unsafe { state_of(sub.parent) }.is_some_and(|state| !state.hook_dll)
+                && unsafe { GetDlgItem(sub.parent, ID_CAPTURE_TECHNIQUE) }
+                    .is_ok_and(|combo| combo == hwnd)
+                && unsafe { SendMessageW(hwnd, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 } == 0;
 
             unsafe {
                 paint_double_buffered(hwnd, |hdc, rc| {
@@ -2664,6 +2696,7 @@ unsafe extern "system" fn combo_subclass_proc(
                     }
 
                     let fill_col = if enabled { p.field } else { p.field_disabled };
+
                     let border_col = if active { p.accent } else { p.border };
                     let fill_brush = CreateSolidBrush(fill_col);
                     let border_pen = CreatePen(PS_SOLID, 1, border_col);
@@ -2709,7 +2742,7 @@ unsafe extern "system" fn combo_subclass_proc(
                             buf.truncate(len);
                             let mut text_rc = combo_label_rect(item, dpi);
                             SetBkMode(hdc, TRANSPARENT);
-                            SetTextColor(hdc, if enabled { p.ink } else { p.muted });
+                            SetTextColor(hdc, if enabled && !locked { p.ink } else { p.muted });
                             let old_f = if !font.0.is_null() {
                                 Some(SelectObject(hdc, HGDIOBJ(font.0)))
                             } else {
@@ -2732,7 +2765,7 @@ unsafe extern "system" fn combo_subclass_proc(
                     }
 
                     // Custom chevron on right (replaces white Win32 dropdown button).
-                    let chev_col = if !enabled {
+                    let chev_col = if !enabled || locked {
                         p.muted
                     } else if active {
                         p.ink
@@ -4809,6 +4842,20 @@ unsafe fn fill_fields(state: &mut State) {
             WPARAM(technique_index as usize),
             LPARAM(0),
         );
+        // A preset that asks for the hook on a machine without the DLL shows the fallback it gets,
+        // which is also the only change a click on that locked row could make.
+        if !state.hook_dll && capture_technique == CustomCaptureTechnique::InProcessHook {
+            let fallback = CAPTURE_TECHNIQUES
+                .iter()
+                .position(|held| *held == CustomCaptureTechnique::InvisibleLayered)
+                .unwrap_or(0) as i32;
+            SendMessageW(
+                technique_combo,
+                CB_SETCURSEL,
+                WPARAM(fallback as usize),
+                LPARAM(0),
+            );
+        }
 
         let promotion_combo = GetDlgItem(state.hwnd, ID_PROMOTION_TECHNIQUE).unwrap_or_default();
         let promotion_index = PROMOTION_TECHNIQUES
@@ -5094,6 +5141,27 @@ unsafe fn capture_technique_chosen(state: &mut State) {
     else {
         return;
     };
+    if !capture_technique_selectable(technique, state.hook_dll) {
+        // The row is drawn with the reason it is locked, and a pick of it is not a pick: put the
+        // combo back on the technique the preset holds, so the box never says one thing while the
+        // preset keeps another.
+        let held = state
+            .presets
+            .get(index)
+            .map(|preset| preset.capture_technique);
+        let show = held
+            .filter(|held| capture_technique_selectable(*held, state.hook_dll))
+            .unwrap_or(CustomCaptureTechnique::InvisibleLayered);
+        let index = CAPTURE_TECHNIQUES
+            .iter()
+            .position(|candidate| *candidate == show)
+            .unwrap_or(0);
+        unsafe { SendMessageW(combo, CB_SETCURSEL, WPARAM(index), LPARAM(0)) };
+        return;
+    }
+    if !capture_technique_selectable(technique, state.hook_dll) {
+        return;
+    }
     if let Some(preset) = state.presets.get_mut(index) {
         preset.capture_technique = technique;
     }
@@ -5417,6 +5485,15 @@ unsafe fn draw_item_buffered<F: FnOnce(HDC)>(dst_dc: HDC, r: RECT, draw: F) {
     }
 }
 
+/// Whether this draw is the Capture Technique row's first pick on a machine with no hook DLL.
+///
+/// The combo asks for this once for the label it shows closed (with an `itemID` no item has) and
+/// once per row of its open menu, so both are the same pick and both are drawn the same way: the
+/// label says why, and the row does not take a click.
+fn capture_hook_locked(state: &State, item: &DRAWITEMSTRUCT) -> bool {
+    !state.hook_dll && item.CtlID == ID_CAPTURE_TECHNIQUE as u32 && item.itemID == 0
+}
+
 unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
     let p = state.palette;
     let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
@@ -5436,7 +5513,9 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
         None
     };
 
-    let (fill, border_col, text_col) = if let Some((top, _, border, fg)) = primary_grad {
+    let (fill, border_col, text_col) = if capture_hook_locked(state, item) {
+        (p.field, p.border, p.muted)
+    } else if let Some((top, _, border, fg)) = primary_grad {
         (top, border, fg)
     } else if is_stepper(item.CtlID) {
         let raw =
@@ -5507,7 +5586,6 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
     } else {
         text_col
     };
-
     unsafe {
         draw_item_buffered(item.hDC, item.rcItem, |hdc| {
             if is_button(item.CtlID) {
@@ -6245,8 +6323,8 @@ mod tests {
             assert!(IsWindowEnabled(combo).as_bool());
             assert_eq!(
                 SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
-                0,
-                "defaults to InProcessHook (index 0)"
+                if state.hook_dll { 0 } else { 1 },
+                "InProcessHook where the DLL is there, and the fallback it would run as where not"
             );
             assert_eq!(
                 state.presets[0].capture_technique,
@@ -6259,6 +6337,23 @@ mod tests {
                 capture_technique_label(CustomCaptureTechnique::InProcessHook),
                 "In-Process Hook (Default)"
             );
+            // A machine without the DLL says so in the row's own label, and does not take the pick.
+            assert_eq!(
+                capture_technique_choice(CustomCaptureTechnique::InProcessHook, false),
+                "In-Process Hook (.dll is missing)"
+            );
+            assert!(!capture_technique_selectable(
+                CustomCaptureTechnique::InProcessHook,
+                false
+            ));
+            assert!(capture_technique_selectable(
+                CustomCaptureTechnique::InvisibleLayered,
+                false
+            ));
+            assert!(capture_technique_selectable(
+                CustomCaptureTechnique::InProcessHook,
+                true
+            ));
             assert_eq!(
                 CAPTURE_TECHNIQUES[1],
                 CustomCaptureTechnique::InvisibleLayered
@@ -6276,6 +6371,9 @@ mod tests {
                 "Off-Screen Staged (-10000 -> Reveal)"
             );
             for (idx, expected) in CAPTURE_TECHNIQUES.iter().copied().enumerate() {
+                if !capture_technique_selectable(expected, state.hook_dll) {
+                    continue;
+                }
                 SendMessageW(combo, CB_SETCURSEL, WPARAM(idx), LPARAM(0));
                 command(state, ID_CAPTURE_TECHNIQUE, CBN_SELCHANGE);
                 assert_eq!(state.presets[0].capture_technique, expected);

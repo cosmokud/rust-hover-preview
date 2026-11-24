@@ -98,6 +98,7 @@ mod bubble_stream;
 // A window handed to a process of its own: what that process opens with, and the pin's road out to
 // one (see `crate::app::detach`).
 mod custom_preview;
+pub(crate) use custom_preview::hook_dll_present;
 mod detach_open;
 mod dimensions;
 mod displays;
