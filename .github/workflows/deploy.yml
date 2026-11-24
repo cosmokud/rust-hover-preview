@@ -149,7 +149,7 @@ jobs:
           path: |
             target/packager/rust-hover-preview_*-setup.exe
             target/packager/version.txt
-            target/github/rust-hover-preview.exe
+            target/packager/rust-hover-preview_*-portable.zip
           if-no-files-found: error
 
       - name: Extract Changelog
@@ -178,4 +178,4 @@ jobs:
           files: |
             target/packager/rust-hover-preview_*-setup.exe
             target/packager/version.txt
-            target/github/rust-hover-preview.exe
+            target/packager/rust-hover-preview_*-portable.zip
