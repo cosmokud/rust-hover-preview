@@ -2,8 +2,9 @@
 //! message box asked with this app's words on its buttons.
 //!
 //! `MessageBoxW` is what asks. It is the platform's own dialog, and this app has no
-//! window to put one of its own in — the one window it owns is the tray's, which is
-//! never shown — so the box is given no owner and is set to the foreground instead.
+//! window to put one of its own in for the tray — the one window it owns is the tray's,
+//! which is never shown — so a box asked from the tray is given no owner and is set to
+//! the foreground instead, while one asked from `Custom Preview` belongs to that window.
 //! What it is not told is what its buttons mean: `Yes` and `No` are the platform's
 //! names for a question this app is not asking, and the names it does ask for are put
 //! on them as the dialog is created (see `hook`).
@@ -105,6 +106,14 @@ pub(crate) unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPA
 /// same kind of question: a reset changes a file and says so with a warning, while
 /// the question about a page changes nothing and is told as what it is.
 fn confirm(text: &str, affirmative: &str, icon: MESSAGEBOX_STYLE) -> bool {
+    ask(text, affirmative, icon, HWND::default())
+}
+
+/// The same question, asked as a child of a window that has one.
+///
+/// An owned box is modal to its owner and centred on it: a reset asked from the tray has no
+/// window to belong to, while the `Custom Preview` window is the one the answer is about.
+fn ask(text: &str, affirmative: &str, icon: MESSAGEBOX_STYLE, owner: HWND) -> bool {
     let caption = wide(CAPTION);
     let text = wide(text);
 
@@ -115,7 +124,7 @@ fn confirm(text: &str, affirmative: &str, icon: MESSAGEBOX_STYLE) -> bool {
 
     let answer = unsafe {
         MessageBoxW(
-            HWND::default(),
+            owner,
             PCWSTR(text.as_ptr()),
             PCWSTR(caption.as_ptr()),
             MB_YESNO | icon | MB_DEFBUTTON2 | MB_SETFOREGROUND,
@@ -152,6 +161,25 @@ pub(crate) fn confirm_reset_settings(changes: &[(String, String, String)]) -> bo
     text.push_str("\nYour extension lists are not touched.");
 
     confirm(&text, "Reset", MB_ICONWARNING)
+}
+
+/// What a delete from the `Custom Preview` window asks, naming the preset that would go.
+///
+/// A delete is not undoable — the preset's section leaves `config.ini` as the window's autosave
+/// writes the rest — so the question says what is lost, and the box belongs to the window whose
+/// row it is.
+pub(crate) fn confirm_delete_preset(owner: HWND, name: &str, extensions: &str, exe: &str) -> bool {
+    let mut text = format!("Delete the preset \"{name}\"?\n\n");
+    if !extensions.is_empty() {
+        text.push_str(&format!("Extensions: {extensions}\n"));
+    }
+    let exe = exe.trim();
+    if !exe.is_empty() {
+        text.push_str(&format!("Program: {exe}\n"));
+    }
+    text.push_str("\nNothing else changes, and this preset cannot be brought back from here.");
+
+    ask(&text, "Delete", MB_ICONWARNING, owner)
 }
 
 /// The question the `Reset Extension Lists` row asks, naming the lists that would go.
