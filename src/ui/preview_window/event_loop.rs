@@ -568,9 +568,7 @@ pub fn run_preview_window() {
             // preview the pointer arrives on, and a page that runs, a film and a picture are three
             // different answers to that (see `crate::app::seam::cursor_preview_hover`).
             pin_lifecycle::poll_deferred_preview_hide(Instant::now());
-            let preview_hover = cursor_preview_hover();
-            crate::app::seam::publish_preview_under_the_pointer(preview_hover.any());
-            crate::app::seam::publish_preview_cursor_hover(preview_hover);
+            publish_current_preview_hover();
             // And the box that surface stands in, and whether the page in it is one that *runs*,
             // which are the two answers the hook's hold is made of and the two it cannot ask for
             // itself: the window is this process's, and so is what the engine is showing (see
@@ -2749,6 +2747,7 @@ pub fn run_preview_window() {
                             })
                         {
                             custom_preview::hide();
+                            publish_current_preview_hover();
                         }
                         if latest_preview_msg.is_none() {
                             // A painted preview's colors are in its frame — the
@@ -4283,6 +4282,7 @@ pub fn run_preview_window() {
                                 avoid,
                             },
                         ) {
+                            publish_current_preview_hover();
                             continue;
                         }
                         // Remember where this preview was opened from: the region
@@ -4408,6 +4408,7 @@ pub fn run_preview_window() {
                                 columns,
                             },
                         ) {
+                            publish_current_preview_hover();
                             continue;
                         }
 
@@ -4483,6 +4484,7 @@ pub fn run_preview_window() {
                         // A custom preview is a window of this hover's as much as this one is,
                         // and it goes with it (see `custom_preview`).
                         custom_preview::hide();
+                        publish_current_preview_hover();
                         // A pin that stands in a window of its own is not the hover this message
                         // was posted for: the dismissal (or the abandoned load above) can be in
                         // the channel before the take-up, and a hide already queued must not
@@ -4571,6 +4573,7 @@ pub fn run_preview_window() {
                         // way the listing would and this preview goes: the user asked for the
                         // file, not for a picture of it (see `custom_preview::open_fully`).
                         if custom_preview::open_fully(&path) {
+                            publish_current_preview_hover();
                             if pinned() {
                                 request_pin_end();
                             }
@@ -5629,6 +5632,9 @@ pub fn run_preview_window() {
                 // on window input at once, so a drag never queues behind it (see
                 // `wait_preview_channel`).
                 let mut wait_ms = wait_before_the_next_tick(true, false, pinned());
+                if custom_preview::has_live_preview() {
+                    wait_ms = wait_ms.min(FRAME_WAIT_MS);
+                }
                 if let Some(rem) = pin_lifecycle::deferred_preview_hide_remaining_ms(Instant::now())
                 {
                     wait_ms = wait_ms.min(rem);
@@ -5682,6 +5688,9 @@ pub fn run_preview_window() {
                         || pin_fps_is_moving(),
                     pinned(),
                 );
+                if custom_preview::has_live_preview() {
+                    wait_ms = wait_ms.min(FRAME_WAIT_MS);
+                }
                 if let Some(rem) = pin_lifecycle::deferred_preview_hide_remaining_ms(Instant::now())
                 {
                     wait_ms = wait_ms.min(rem);
@@ -5826,6 +5835,12 @@ unsafe fn apply_config_reload_diff(
             *latest_preview_msg = Some(replay);
         }
     }
+}
+
+fn publish_current_preview_hover() {
+    let preview_hover = cursor_preview_hover();
+    crate::app::seam::publish_preview_under_the_pointer(preview_hover.any());
+    crate::app::seam::publish_preview_cursor_hover(preview_hover);
 }
 
 #[cfg(test)]

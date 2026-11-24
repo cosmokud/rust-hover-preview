@@ -45,6 +45,8 @@ pub fn run_explorer_hook() {
     const VIDEO_HOVER_DISMISS_GRACE_MS: u64 = 350;
     const STATIONARY_SEARCH_MISS_HIDE_MS: u64 = 180;
     const VIDEO_PROCESS_SWEEP_MS: u64 = 1000;
+    const CUSTOM_GUARD_RECHECK_MS: u64 = 50;
+    const ORPHAN_CUSTOM_HIDE_THROTTLE_MS: u64 = 100;
 
     let mut cached_config = CachedHookConfig::capture_initial();
     let mut last_display_signature = current_display_signature();
@@ -448,8 +450,17 @@ pub fn run_explorer_hook() {
         let hover_delay = Duration::from_millis(hover_delay_ms);
         let settling_delay = Duration::from_millis(settling_delay_ms);
 
+        let active_is_custom_for_state = !session.is_keyboard_hover()
+            && session
+                .last_file
+                .as_deref()
+                .is_some_and(|path| cached_config.is_custom_preview(path));
+
         // Determine sleep duration and whether to recheck state based on current state
-        let (sleep_ms, state_recheck_ms) = explorer_pace(session.current_state, tick_ms);
+        let (sleep_ms, mut state_recheck_ms) = explorer_pace(session.current_state, tick_ms);
+        if active_is_custom_for_state {
+            state_recheck_ms = state_recheck_ms.min(CUSTOM_GUARD_RECHECK_MS);
+        }
 
         // Periodically re-evaluate the state
         if session.last_state_check.elapsed() > Duration::from_millis(state_recheck_ms) {
@@ -472,6 +483,18 @@ pub fn run_explorer_hook() {
             ExplorerState::NoExplorerWindows
             | ExplorerState::AllMinimized
             | ExplorerState::HiddenByForeground => {
+                if active_is_custom_for_state {
+                    let mut pos = POINT::default();
+                    let cursor_tuple = if unsafe { GetCursorPos(&mut pos) }.is_ok() {
+                        (pos.x, pos.y)
+                    } else {
+                        (session.last_cursor_pos.x, session.last_cursor_pos.y)
+                    };
+                    if let Some(file) = session.last_file.clone() {
+                        session.block_custom_preview(file, cursor_tuple);
+                    }
+                    session.last_orphan_custom_hide = Some(Instant::now());
+                }
                 if session.reset_for_focus_loss() {
                     hide_preview();
                 }
@@ -497,6 +520,15 @@ pub fn run_explorer_hook() {
                     .is_some_and(|pointer| preview_pointer_hold(pointer.point.x, pointer.point.y));
 
                 if !over_explorer && !holds_pointer {
+                    if active_is_custom_for_state {
+                        let cursor_tuple = pointer
+                            .map(|p| (p.point.x, p.point.y))
+                            .unwrap_or((session.last_cursor_pos.x, session.last_cursor_pos.y));
+                        if let Some(file) = session.last_file.clone() {
+                            session.block_custom_preview(file, cursor_tuple);
+                        }
+                        session.last_orphan_custom_hide = Some(Instant::now());
+                    }
                     if session.reset_for_focus_loss() {
                         hide_preview();
                     }
@@ -770,18 +802,45 @@ pub fn run_explorer_hook() {
             // — for a document or a specimen, or a page that runs — the engine's window,
             // which is asked for by its own handle because a document drawn by a browser
             // is still a preview of this app's (see `cursor_preview_hover`).
+            let active_is_custom = !session.is_keyboard_hover()
+                && session
+                    .last_file
+                    .as_deref()
+                    .is_some_and(|path| cached_config.is_custom_preview(path));
+            let pointer_frozen =
+                session.is_keyboard_hover() || session.pointer_pause.freezes_pointer();
+            let raw_hover = if !pointer_frozen {
+                cursor_preview_hover()
+            } else {
+                PreviewCursorHover::NONE
+            };
+            let custom_now_active = raw_hover.custom || raw_hover.custom_active;
+            if session.was_custom_preview_active && !custom_now_active {
+                session.was_custom_preview_active = false;
+                if session.custom_preview_blocked_file.is_some() {
+                    session.stationary_hover_probe_done = false;
+                }
+            } else if custom_now_active {
+                session.was_custom_preview_active = true;
+            }
+
             let preview_hover = if should_probe_preview_hover(
-                session.is_keyboard_hover || session.pointer_pause.freezes_pointer(),
+                pointer_frozen,
                 session.last_file.is_some(),
                 session.suppress_preview_until_cursor_leaves_preview,
-            ) {
-                cursor_preview_hover()
+            ) || (!pointer_frozen
+                && (active_is_custom
+                    || (!session.is_keyboard_hover()
+                        && (session.custom_preview_blocked_file.is_some() || raw_hover.custom))))
+            {
+                raw_hover
             } else {
                 PreviewCursorHover::NONE
             };
             let over_image_preview = preview_hover.image;
             let over_engine_preview = preview_hover.engine;
             let over_video_preview = preview_hover.video;
+            let over_custom_preview = preview_hover.custom && !session.is_keyboard_hover();
             let over_any_preview = preview_hover.any();
 
             // A preview that holds the pointer is the exception to that rule: while
@@ -794,11 +853,24 @@ pub fn run_explorer_hook() {
                 .unwrap_or(false);
             let should_dismiss_for_preview_hover = ((over_image_preview || over_engine_preview)
                 && !pointer_hold)
-                || (over_video_preview && !guard_active);
+                || (over_video_preview && !guard_active)
+                || over_custom_preview;
 
             if should_dismiss_for_preview_hover
                 || (session.suppress_preview_until_cursor_leaves_preview && over_any_preview)
             {
+                if over_custom_preview {
+                    if let Some(file) = session
+                        .last_file
+                        .clone()
+                        .filter(|f| cached_config.is_custom_preview(f))
+                    {
+                        session.block_custom_preview(file, (cursor_pos.x, cursor_pos.y));
+                    } else {
+                        session.custom_preview_dismissed_pos = Some((cursor_pos.x, cursor_pos.y));
+                    }
+                    session.last_orphan_custom_hide = Some(Instant::now());
+                }
                 session.reset_for_preview_hover_dismiss(Instant::now());
                 hide_preview();
                 continue;
@@ -810,6 +882,21 @@ pub fn run_explorer_hook() {
                 session.hover_start = Some(Instant::now());
                 session.last_cursor_pos = cursor_pos;
                 continue;
+            }
+
+            // Orphan safety net: no custom preview .exe may remain alive when nothing is hovered.
+            if raw_hover.custom_active
+                && !raw_hover.custom
+                && session.last_file.is_none()
+                && session.keyboard_file.is_none()
+                && !session.is_keyboard_hover()
+                && !crate::app::seam::the_pin_is_up()
+                && session.last_orphan_custom_hide.is_none_or(|t| {
+                    t.elapsed() >= Duration::from_millis(ORPHAN_CUSTOM_HIDE_THROTTLE_MS)
+                })
+            {
+                session.last_orphan_custom_hide = Some(Instant::now());
+                hide_preview();
             }
 
             // Detect folder/navigation changes and suspend preview until user input.
@@ -1060,7 +1147,16 @@ pub fn run_explorer_hook() {
                 session.allow_keyboard_preview_on_first_observation = true;
 
                 if let Some(suppressed_file) = session.suppressed.file.clone() {
-                    if let Some(current_file) = get_file_under_cursor(&mut resolver, &pointer) {
+                    let probed = get_file_under_cursor(&mut resolver, &pointer);
+                    let over_explorer = is_cursor_over_explorer_full(pointer.window);
+                    session.update_custom_preview_block(
+                        probed.as_deref(),
+                        (cursor_pos.x, cursor_pos.y),
+                        move_threshold,
+                        raw_hover.custom || raw_hover.custom_active,
+                        over_explorer,
+                    );
+                    if let Some(current_file) = probed {
                         if same_path(&suppressed_file, &current_file) {
                             session.hover_start = Some(Instant::now());
                             continue;
@@ -1068,55 +1164,140 @@ pub fn run_explorer_hook() {
                         session.suppressed.clear();
                         session.stationary_search_miss_started_at = None;
                     }
+                } else if session.custom_preview_blocked_file.is_some()
+                    && session.last_file.is_none()
+                {
+                    let probed = get_file_under_cursor(&mut resolver, &pointer);
+                    let over_explorer = is_cursor_over_explorer_full(pointer.window);
+                    session.update_custom_preview_block(
+                        probed.as_deref(),
+                        (cursor_pos.x, cursor_pos.y),
+                        move_threshold,
+                        raw_hover.custom || raw_hover.custom_active,
+                        over_explorer,
+                    );
                 }
 
                 // While moving (including list scrolling), avoid heavy accessibility
                 // resolution and wait until hover is stable before probing media.
                 if session.last_file.is_some() {
-                    let mut keep_while_pointer_held = false;
-                    if let Some(current_file) = get_file_under_cursor(&mut resolver, &pointer) {
-                        if session
+                    let active_is_custom = !session.is_keyboard_hover()
+                        && session
                             .last_file
-                            .as_ref()
-                            .map(|last| same_path(last, &current_file))
-                            .unwrap_or(false)
-                        {
-                            session.hover_start = Some(Instant::now());
-                            continue;
-                        }
-                        // Another file is under the pointer, so this is a hover like
-                        // any other and the preview gives way to it — even while the
-                        // pointer is inside a scrollable preview's region, which is
-                        // why the check below is the "no file at all" case only.
-                        session.suppressed.clear();
-                        session.stationary_search_miss_started_at = None;
-                    } else if pointer_hold {
-                        // Nothing under the pointer: it is on its way to (or on) the
-                        // preview, or on the spinner standing in for one, which is
-                        // not the user leaving the file it shows.
-                        keep_while_pointer_held = true;
-                    } else if read_failure_is_the_same_item(
-                        session.hover_item_box,
-                        pointer_item_box(),
-                        cursor_pos,
-                    ) {
-                        // A read that came back with nothing, from the item the preview on
-                        // screen is about: what failed is the asking — a walk out through the
-                        // shell on a volume slow to answer, a view busy drawing the item it
-                        // was just asked for — so the preview is kept with the question asked
-                        // again, rather than taken down for a look that failed and put back a
-                        // moment later, which is a blink. A read that came back with nothing
-                        // from *another* item is a look at an item with no preview of its own,
-                        // which is a pointer that has left the file this preview is about: the
-                        // preview goes (see `read_failure_is_the_same_item`).
-                        keep_while_pointer_held = true;
-                    } else if let Some(file) = session.last_file.clone() {
-                        session.suppressed.suppress(file);
-                    }
+                            .as_deref()
+                            .is_some_and(|path| cached_config.is_custom_preview(path));
 
-                    if !keep_while_pointer_held {
-                        hide_preview();
-                        session.clear_mouse_hover();
+                    if active_is_custom {
+                        let mut keep_custom = false;
+                        let probed = get_file_under_cursor(&mut resolver, &pointer);
+                        let over_explorer = is_cursor_over_explorer_full(pointer.window);
+                        session.update_custom_preview_block(
+                            probed.as_deref(),
+                            (cursor_pos.x, cursor_pos.y),
+                            move_threshold,
+                            raw_hover.custom || raw_hover.custom_active,
+                            over_explorer,
+                        );
+                        let inside_item = session
+                            .hover_item_box
+                            .is_some_and(|b| point_in_box(cursor_pos, b));
+
+                        if let Some(current_file) = probed {
+                            if session
+                                .last_file
+                                .as_ref()
+                                .is_some_and(|last| same_path(last, &current_file))
+                            {
+                                if over_explorer {
+                                    session.custom_missing_file_streak = 0;
+                                    session.hover_start = Some(Instant::now());
+                                    continue;
+                                }
+                                dismiss_custom_preview(
+                                    &mut session,
+                                    (cursor_pos.x, cursor_pos.y),
+                                    true,
+                                    true,
+                                );
+                            } else {
+                                dismiss_custom_preview(
+                                    &mut session,
+                                    (cursor_pos.x, cursor_pos.y),
+                                    false,
+                                    false,
+                                );
+                            }
+                        } else if !over_explorer || !inside_item {
+                            dismiss_custom_preview(
+                                &mut session,
+                                (cursor_pos.x, cursor_pos.y),
+                                !over_explorer,
+                                true,
+                            );
+                        } else {
+                            session.custom_missing_file_streak =
+                                session.custom_missing_file_streak.saturating_add(1);
+                            if session.custom_missing_file_streak >= 2 {
+                                dismiss_custom_preview(
+                                    &mut session,
+                                    (cursor_pos.x, cursor_pos.y),
+                                    true,
+                                    true,
+                                );
+                            } else {
+                                keep_custom = true;
+                            }
+                        }
+
+                        if !keep_custom {
+                            session.hover_start = Some(Instant::now());
+                        }
+                    } else {
+                        let mut keep_while_pointer_held = false;
+                        if let Some(current_file) = get_file_under_cursor(&mut resolver, &pointer) {
+                            if session
+                                .last_file
+                                .as_ref()
+                                .map(|last| same_path(last, &current_file))
+                                .unwrap_or(false)
+                            {
+                                session.hover_start = Some(Instant::now());
+                                continue;
+                            }
+                            // Another file is under the pointer, so this is a hover like
+                            // any other and the preview gives way to it — even while the
+                            // pointer is inside a scrollable preview's region, which is
+                            // why the check below is the "no file at all" case only.
+                            session.suppressed.clear();
+                            session.stationary_search_miss_started_at = None;
+                        } else if pointer_hold {
+                            // Nothing under the pointer: it is on its way to (or on) the
+                            // preview, or on the spinner standing in for one, which is
+                            // not the user leaving the file it shows.
+                            keep_while_pointer_held = true;
+                        } else if read_failure_is_the_same_item(
+                            session.hover_item_box,
+                            pointer_item_box(),
+                            cursor_pos,
+                        ) {
+                            // A read that came back with nothing, from the item the preview on
+                            // screen is about: what failed is the asking — a walk out through the
+                            // shell on a volume slow to answer, a view busy drawing the item it
+                            // was just asked for — so the preview is kept with the question asked
+                            // again, rather than taken down for a look that failed and put back a
+                            // moment later, which is a blink. A read that came back with nothing
+                            // from *another* item is a look at an item with no preview of its own,
+                            // which is a pointer that has left the file this preview is about: the
+                            // preview goes (see `read_failure_is_the_same_item`).
+                            keep_while_pointer_held = true;
+                        } else if let Some(file) = session.last_file.clone() {
+                            session.suppressed.suppress(file);
+                        }
+
+                        if !keep_while_pointer_held {
+                            hide_preview();
+                            session.clear_mouse_hover();
+                        }
                     }
                 }
                 // The clock the hover below is measured against is restarted by the move,
@@ -1203,6 +1384,7 @@ pub fn run_explorer_hook() {
                                     session.keyboard_file = Some(path.clone());
                                     session.is_keyboard_hover = true;
                                     session.keyboard_screen_owner = true;
+                                    session.clear_custom_preview_guard();
                                     session.suppress_preview_until_cursor_leaves_preview = false;
                                     session.pointer_pause.watch_for_box();
                                     session.video_hover_guard_until = if is_video_file(&path) {
@@ -1272,6 +1454,7 @@ pub fn run_explorer_hook() {
                                 session.keyboard_file = Some(path.clone());
                                 session.is_keyboard_hover = true;
                                 session.keyboard_screen_owner = true;
+                                session.clear_custom_preview_guard();
                                 session.suppress_preview_until_cursor_leaves_preview = false;
                                 session.pointer_pause.watch_for_box();
                                 session.video_hover_guard_until = if is_video_file(&path) {
@@ -1313,6 +1496,98 @@ pub fn run_explorer_hook() {
                 }
             }
 
+            // Stationary cursor re-verification ONLY for active custom previews: closes immediately
+            // if cursor exited the item/Explorer or another file shifted under a stationary cursor.
+            if !moved
+                && !session.is_keyboard_hover()
+                && session
+                    .last_file
+                    .as_deref()
+                    .is_some_and(|path| cached_config.is_custom_preview(path))
+            {
+                let over_explorer = is_cursor_over_explorer_full(pointer.window);
+                let inside_item = session
+                    .hover_item_box
+                    .is_some_and(|b| point_in_box(cursor_pos, b));
+                if !over_explorer || (session.hover_item_box.is_some() && !inside_item) {
+                    dismiss_custom_preview(
+                        &mut session,
+                        (cursor_pos.x, cursor_pos.y),
+                        !over_explorer,
+                        true,
+                    );
+                    session.stationary_hover_probe_done = false;
+                    session.hover_start = Some(Instant::now());
+                    continue;
+                }
+
+                let guard_due = session
+                    .last_custom_guard_check
+                    .is_none_or(|t| t.elapsed() >= Duration::from_millis(CUSTOM_GUARD_RECHECK_MS));
+                if guard_due {
+                    session.last_custom_guard_check = Some(Instant::now());
+                    resolver.forget_item();
+                    let probed = get_file_under_cursor(&mut resolver, &pointer);
+                    session.update_custom_preview_block(
+                        probed.as_deref(),
+                        (cursor_pos.x, cursor_pos.y),
+                        move_threshold,
+                        raw_hover.custom || raw_hover.custom_active,
+                        over_explorer,
+                    );
+                    match probed {
+                        Some(ref current_file)
+                            if session
+                                .last_file
+                                .as_ref()
+                                .is_some_and(|last| same_path(last, current_file)) =>
+                        {
+                            session.custom_missing_file_streak = 0;
+                            if let Some(fresh_box) = pointer_item_box() {
+                                session.hover_item_box = Some(fresh_box);
+                            }
+                        }
+                        Some(_) => {
+                            dismiss_custom_preview(
+                                &mut session,
+                                (cursor_pos.x, cursor_pos.y),
+                                false,
+                                false,
+                            );
+                            session.stationary_hover_probe_done = false;
+                            session.hover_start = Some(Instant::now());
+                            continue;
+                        }
+                        None => {
+                            if !inside_item {
+                                dismiss_custom_preview(
+                                    &mut session,
+                                    (cursor_pos.x, cursor_pos.y),
+                                    false,
+                                    true,
+                                );
+                                session.stationary_hover_probe_done = false;
+                                session.hover_start = Some(Instant::now());
+                                continue;
+                            }
+                            session.custom_missing_file_streak =
+                                session.custom_missing_file_streak.saturating_add(1);
+                            if session.custom_missing_file_streak >= 2 {
+                                dismiss_custom_preview(
+                                    &mut session,
+                                    (cursor_pos.x, cursor_pos.y),
+                                    true,
+                                    true,
+                                );
+                                session.stationary_hover_probe_done = false;
+                                session.hover_start = Some(Instant::now());
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
             if session.is_keyboard_hover
                 || (prioritize_keyboard && session.keyboard_screen_owner)
                 || session.pointer_pause.freezes_pointer()
@@ -1350,6 +1625,14 @@ pub fn run_explorer_hook() {
 
                     // Try to get file under cursor
                     let resolved = get_file_under_cursor(&mut resolver, &pointer);
+                    let over_explorer = is_cursor_over_explorer_full(pointer.window);
+                    session.update_custom_preview_block(
+                        resolved.as_deref(),
+                        (cursor_pos.x, cursor_pos.y),
+                        move_threshold,
+                        raw_hover.custom || raw_hover.custom_active,
+                        over_explorer,
+                    );
                     // One probe per parked cursor: this one closes the latch, and the
                     // events that make the file under the cursor a new question — a
                     // move, a wheel tick, a folder change — are what reopen it.
@@ -1362,6 +1645,14 @@ pub fn run_explorer_hook() {
                             .map(|last| same_path(last, &file_path))
                             .unwrap_or(false)
                         {
+                            if session.is_custom_preview_blocked(
+                                &file_path,
+                                cached_config.is_custom_preview(&file_path),
+                                (cursor_pos.x, cursor_pos.y),
+                                move_threshold,
+                            ) {
+                                continue;
+                            }
                             if session.suppressed.matches(&file_path) {
                                 let required_delay = hover_delay_ms.max(same_file_rehover_delay_ms);
                                 if !session.suppressed.rehover_allowed(required_delay) {
@@ -1376,6 +1667,8 @@ pub fn run_explorer_hook() {
                             session.suppressed.clear();
                             session.stationary_search_miss_started_at = None;
                             session.last_file = Some(file_path.clone());
+                            session.custom_missing_file_streak = 0;
+                            session.last_custom_guard_check = Some(Instant::now());
                             // The item this preview is about, as the view drew it: what a
                             // later read that comes back with nothing is compared against
                             // (see `read_failure_is_the_same_item`). The look above is the
@@ -1454,6 +1747,30 @@ pub fn run_explorer_hook() {
 
     // Release COM objects explicitly before `_com` drops (`CoUninitialize` runs only if init succeeded).
     drop(resolver);
+}
+
+/// Dismiss an active custom mouse hover immediately and optionally latch/suppress the hovered path.
+fn dismiss_custom_preview(
+    session: &mut HookSession,
+    cursor_pos: (i32, i32),
+    block: bool,
+    suppress: bool,
+) {
+    if let Some(file) = session.last_file.clone() {
+        if block {
+            session.block_custom_preview(file.clone(), cursor_pos);
+        }
+        if suppress {
+            session.suppressed.suppress(file);
+        }
+    }
+    if !suppress {
+        session.suppressed.clear();
+        session.stationary_search_miss_started_at = None;
+    }
+    session.last_orphan_custom_hide = Some(Instant::now());
+    hide_preview();
+    session.clear_mouse_hover();
 }
 
 /// Answer what the preview side has asked of this one since the last time it asked — a setting turned
