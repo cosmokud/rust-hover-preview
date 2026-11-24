@@ -2819,6 +2819,14 @@ unsafe fn install_list_subclass(list: HWND, parent: HWND) {
     unsafe { SetWindowLongPtrW(list, GWLP_USERDATA, data as isize) };
 }
 
+/// The preset a list row's status pill belongs to, or `None` for a draw that is no row at all.
+///
+/// A box with no item to draw — an empty list just clicked — asks for the focus rectangle with
+/// `itemID == u32::MAX`, and a pill drawn there sits on the empty field.
+fn row_pill_row(item_id: u32, shown: &[usize]) -> Option<usize> {
+    shown.get(usize::try_from(item_id).ok()?).copied()
+}
+
 fn list_row_pill_rect(item_rect: RECT, dpi: u32) -> RECT {
     let dpi = dpi as i32;
     let pill_w = scale(32, dpi);
@@ -5619,7 +5627,10 @@ unsafe fn draw_item(state: &State, item: &DRAWITEMSTRUCT) -> usize {
             } else {
                 item.rcItem
             };
-            if item.CtlID == ID_LIST as u32 {
+            let pill_row = (item.CtlID == ID_LIST as u32)
+                .then(|| row_pill_row(item.itemID, &state.shown))
+                .flatten();
+            if pill_row.is_some() {
                 let mut pill_rc = list_row_pill_rect(item.rcItem, dpi as u32);
                 let pill_w = (pill_rc.right - pill_rc.left).max(1);
                 let pill_h = (pill_rc.bottom - pill_rc.top).max(1);
@@ -6463,6 +6474,18 @@ mod tests {
             let bot_gap = row.bottom - pill.bottom;
             assert!((top_gap - bot_gap).abs() <= 1);
         }
+    }
+
+    #[test]
+    fn a_pill_is_only_drawn_on_a_row_that_holds_a_preset() {
+        let shown = [3usize, 7];
+        assert_eq!(row_pill_row(0, &shown), Some(3));
+        assert_eq!(row_pill_row(1, &shown), Some(7));
+        // An empty list just clicked asks for the focus rectangle as `u32::MAX`, and a row past
+        // the last preset has no pill either.
+        assert_eq!(row_pill_row(u32::MAX, &shown), None);
+        assert_eq!(row_pill_row(u32::MAX, &[]), None);
+        assert_eq!(row_pill_row(2, &shown), None);
     }
 
     #[test]
