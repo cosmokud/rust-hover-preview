@@ -152,8 +152,8 @@ use windows::Win32::System::Memory::{
     MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
 };
 use windows::Win32::System::Threading::{
-    CreateProcessW, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, ResumeThread,
-    TerminateProcess, WaitForInputIdle, WaitForSingleObject, CREATE_SUSPENDED,
+    CreateProcessW, GetProcessTimes, IsWow64Process, OpenProcess, QueryFullProcessImageNameW,
+    ResumeThread, TerminateProcess, WaitForInputIdle, WaitForSingleObject, CREATE_SUSPENDED,
     PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
@@ -724,6 +724,191 @@ pub(super) fn pin_request_if_active() -> Option<super::PreviewMessage> {
     active_path().map(|path| super::PreviewMessage::PinCold { path })
 }
 
+/// Env-gated diagnostic trace (`RHP_CUSTOM_PREVIEW_TRACE`) writing to `%TEMP%\rhp-custom-preview-trace.log`.
+/// Truncates once per process via `STARTED: Once` and incurs only an `AtomicBool` load when unset.
+mod trace {
+    use std::ffi::OsStr;
+    use std::fs::{File, OpenOptions};
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, Once};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static READ: Once = Once::new();
+    static ASKED: AtomicBool = AtomicBool::new(false);
+    static STARTED: Once = Once::new();
+    static FILE_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(super) fn env_flag_enabled(val: Option<&OsStr>) -> bool {
+        let Some(val) = val else {
+            return false;
+        };
+        let s = val.to_string_lossy();
+        let trimmed = s.trim();
+        !trimmed.is_empty() && trimmed != "0" && !trimmed.eq_ignore_ascii_case("false")
+    }
+
+    pub(super) fn enabled() -> bool {
+        READ.call_once(|| {
+            let on = env_flag_enabled(std::env::var_os("RHP_CUSTOM_PREVIEW_TRACE").as_deref());
+            ASKED.store(on, Ordering::Relaxed);
+        });
+        ASKED.load(Ordering::Relaxed)
+    }
+
+    pub(super) fn log_path() -> PathBuf {
+        std::env::temp_dir().join("rhp-custom-preview-trace.log")
+    }
+
+    pub(super) fn write_with_once(once: &Once, path: &Path, line: &str) {
+        let _guard = FILE_LOCK.lock().ok();
+        once.call_once(|| {
+            let _ = File::create(path);
+        });
+        let since_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default();
+        let secs = since_epoch.as_secs();
+        let millis = since_epoch.subsec_millis();
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{secs}.{millis:03} {line}");
+            let _ = file.flush();
+        }
+    }
+
+    pub(super) fn record(line: &str) {
+        if !enabled() {
+            return;
+        }
+        write_with_once(&STARTED, &log_path(), line);
+    }
+}
+
+macro_rules! cp_trace {
+    ($($arg:tt)*) => {
+        if trace::enabled() {
+            trace::record(&format!($($arg)*));
+        }
+    };
+}
+
+fn win_err() -> u32 {
+    unsafe { GetLastError().0 }
+}
+
+fn path_basename(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<none>".to_owned())
+}
+
+fn hwnd_class_name(hwnd: HWND) -> String {
+    let mut buf = [0u16; 128];
+    let len = unsafe { GetClassNameW(hwnd, &mut buf) } as usize;
+    String::from_utf16_lossy(&buf[..len.min(buf.len())])
+}
+
+fn process_is_wow64(handle: HANDLE) -> Option<bool> {
+    let mut wow64 = BOOL(0);
+    unsafe { IsWow64Process(handle, &mut wow64) }
+        .is_ok()
+        .then_some(wow64.as_bool())
+}
+
+fn pid_is_wow64(pid: u32) -> Option<bool> {
+    if pid == 0 {
+        return None;
+    }
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let owned = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+    process_is_wow64(HANDLE(owned.as_raw_handle()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn trace_window_diag(
+    label: &str,
+    hwnd: HWND,
+    source_pid: u32,
+    source_tid: u32,
+    source_is_new: bool,
+    hook_hits: Option<u32>,
+    captured_hwnd: Option<isize>,
+    extra: &str,
+) {
+    if !trace::enabled() {
+        return;
+    }
+    let owner = unsafe { GetWindow(hwnd, GW_OWNER) }.map_or(0usize, |h| h.0 as usize);
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
+    let zoomed = unsafe { IsZoomed(hwnd) }.as_bool();
+    let iconic = unsafe { IsIconic(hwnd) }.as_bool();
+    let class = hwnd_class_name(hwnd);
+    let wow64 = pid_is_wow64(source_pid);
+    let win_rect = window_rect(hwnd);
+    let vis_rect = visible_frame_rect(hwnd);
+    cp_trace!(
+        "{label}: hwnd=0x{:x} pid={} tid={} is_new={} wow64={:?} class={:?} style=0x{:x} ex=0x{:x} owner=0x{:x} vis={} zoom={} min={} win={:?} vis_rect={:?} hook_hits={:?} cap_hwnd={:?}{extra}",
+        hwnd.0 as usize,
+        source_pid,
+        source_tid,
+        source_is_new,
+        wow64,
+        class,
+        style,
+        ex_style,
+        owner,
+        visible,
+        zoomed,
+        iconic,
+        win_rect,
+        vis_rect,
+        hook_hits,
+        captured_hwnd,
+    );
+}
+
+type RectTuple = (i32, i32, i32, i32);
+type DriftSig = (Option<RectTuple>, RectTuple);
+
+#[allow(clippy::too_many_arguments)]
+fn trace_drift(
+    count: &mut u32,
+    last_sig: &mut Option<DriftSig>,
+    id: u64,
+    reason: &str,
+    hwnd: HWND,
+    expected: Option<RECT>,
+    host_rect: RectTuple,
+    hook_hits: Option<u32>,
+) {
+    if !trace::enabled() {
+        return;
+    }
+    let cur = window_rect(hwnd);
+    let cur_tuple = cur.map(|r| (r.left, r.top, r.right - r.left, r.bottom - r.top));
+    let sig = (cur_tuple, host_rect);
+    if *count < 12 || *last_sig != Some(sig) {
+        cp_trace!(
+            "drift[{}]: id={} reason={} hwnd=0x{:x} cur={:?} vis={:?} expected={:?} host={:?} zoom={} hook_hits={:?}",
+            *count,
+            id,
+            reason,
+            hwnd.0 as usize,
+            cur,
+            visible_frame_rect(hwnd),
+            expected,
+            host_rect,
+            unsafe { IsZoomed(hwnd) }.as_bool(),
+            hook_hits
+        );
+        *last_sig = Some(sig);
+    }
+    *count = count.saturating_add(1);
+}
+
 /// Show `path` in the program its preset names, at the box that preset's scale and the tray's
 /// placement ask for.
 ///
@@ -740,6 +925,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     };
 
     let Some(exe) = preset.exe_path().and_then(resolved) else {
+        cp_trace!("show: exe_missing path={}", path_basename(path));
         // A preset whose program is not there is one no preview can be made of, and the hover is
         // left to whatever else this app would have done with the file.
         hide();
@@ -766,6 +952,13 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             *want = Some(Want { at, placement });
         }
         LIVE.store(true, Ordering::Release);
+        cp_trace!(
+            "show: reuse path={} exe={} placement={:?} cursor={:?}",
+            path_basename(path),
+            path_basename(Path::new(&exe)),
+            placement,
+            where_cursor(at)
+        );
         return true;
     }
 
@@ -781,7 +974,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 
     let scaling = preset.scaling;
     let window_mode = preset.window_mode;
-    let capture_technique = preset.capture_technique;
+    let requested_capture = preset.capture_technique;
     let volume = preset.volume_enabled.then_some(preset.volume);
     let initial_own = base_size(path);
     let provisional = initial_own.and_then(|own| {
@@ -796,31 +989,51 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 
     let launch_filetime = current_filetime_u64();
     let launched_at = Instant::now();
-    let (process, pid, tid, hook_session, capture_technique) = if capture_technique
+    let (process, pid, tid, hook_session, capture_technique) = if requested_capture
         == CustomCaptureTechnique::InProcessHook
         || uses_hook_enforcement(placement)
     {
-        let init = hook_init_for(capture_technique, placement, hook_provisional);
+        let init = hook_init_for(requested_capture, placement, hook_provisional);
         let Some((proc_handle, pid, tid, session)) =
-            launch_with_hook(&exe, path, hook_provisional, capture_technique, init)
+            launch_with_hook(&exe, path, hook_provisional, requested_capture, init)
         else {
+            cp_trace!(
+                "show: launch_with_hook_failed path={} exe={} req_cap={:?} placement={:?}",
+                path_basename(path),
+                path_basename(Path::new(&exe)),
+                requested_capture,
+                placement
+            );
             return false;
         };
         let effective =
-            if capture_technique == CustomCaptureTechnique::InProcessHook && session.is_none() {
+            if requested_capture == CustomCaptureTechnique::InProcessHook && session.is_none() {
                 CustomCaptureTechnique::InvisibleLayered
             } else {
-                capture_technique
+                requested_capture
             };
         (proc_handle, pid, tid, session, effective)
     } else {
-        let Some((proc_handle, pid)) = launch(&exe, path, provisional, capture_technique) else {
+        let Some((proc_handle, pid)) = launch(&exe, path, provisional, requested_capture) else {
+            cp_trace!(
+                "show: launch_failed path={} exe={} req_cap={:?} placement={:?}",
+                path_basename(path),
+                path_basename(Path::new(&exe)),
+                requested_capture,
+                placement
+            );
             return false;
         };
-        (proc_handle, pid, 0, None, capture_technique)
+        (proc_handle, pid, 0, None, requested_capture)
     };
     let process = Arc::new(process);
     let Some(host) = (unsafe { ensure_host() }) else {
+        cp_trace!(
+            "show: ensure_host_failed path={} exe={} pid={}",
+            path_basename(path),
+            path_basename(Path::new(&exe)),
+            pid
+        );
         drop(hook_session);
         let _ = unsafe { TerminateProcess(HANDLE(process.as_raw_handle()), 1) };
         return false;
@@ -866,6 +1079,25 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     // Read after the launch is written down, so a worker begun for it is current exactly when it
     // is the program on screen.
     let id = LAUNCH.fetch_add(1, Ordering::SeqCst) + 1;
+    cp_trace!(
+        "show: launch id={} path={} exe={} req_cap={:?} cap={:?} placement={:?} win_mode={:?} scaling={:?} own={:?} prov={:?} hook_prov={:?} pid={} tid={} hook_session={} packaged={} cursor={:?}",
+        id,
+        path_basename(path),
+        exe_file,
+        requested_capture,
+        capture_technique,
+        placement,
+        window_mode,
+        scaling,
+        initial_own,
+        provisional,
+        hook_provisional,
+        pid,
+        tid,
+        hook_session.is_some(),
+        packaged_broker,
+        where_cursor(at)
+    );
     let launch = Launch {
         path: path.to_path_buf(),
         initial_own,
@@ -903,7 +1135,12 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 /// Take the hover down immediately: tears down the host and spawned preview program unless a
 /// promote/detach is currently in flight.
 pub(super) fn hide() {
-    if DETACHING.load(Ordering::Acquire) {
+    let detaching = DETACHING.load(Ordering::Acquire);
+    let showing = is_showing();
+    if detaching || showing {
+        cp_trace!("hide: detaching={} showing={}", detaching, showing);
+    }
+    if detaching {
         return;
     }
     end_the_program();
@@ -1447,6 +1684,17 @@ fn end_the_program() {
         *ex = None;
     }
     let restore_rect = SOURCE_RESTORE_RECT.lock().ok().and_then(|mut r| r.take());
+    if program.is_some() || source != 0 || !tracked_owned.is_empty() {
+        cp_trace!(
+            "end_the_program: has_program={} source=0x{:x} source_pid={} source_is_new={} owned_pids={:?} restore_rect={:?}",
+            program.is_some(),
+            source as usize,
+            source_pid,
+            source_is_new,
+            tracked_owned,
+            restore_rect
+        );
+    }
     if source != 0 {
         let source = HWND(source as *mut _);
         if unsafe { IsWindow(source) }.as_bool() {
@@ -1949,6 +2197,13 @@ fn run_it(
     } else {
         wait_for_a_window(&launch)
     }) else {
+        cp_trace!(
+            "run_it: no_window_found id={} pid={} cap={:?} hook_hits={:?}",
+            launch.id,
+            launch.pid,
+            capture_technique,
+            hook_session.as_ref().map(|s| s.view.hook_hits())
+        );
         // A program that made no window is a preview with nothing to show: it goes, and the host
         // is already off the screen. Even if `hide()`/`end_the_program()` already invalidated this
         // launch concurrently, sweep `launch.pid` so children spawned during the final sleep cannot leak.
@@ -1959,6 +2214,13 @@ fn run_it(
         return;
     };
     if !launch_still_wanted(&launch) || !unsafe { IsWindow(source) }.as_bool() {
+        cp_trace!(
+            "run_it: aborted_after_find id={} hwnd=0x{:x} still_wanted={} is_window={}",
+            launch.id,
+            source.0 as usize,
+            launch_still_wanted(&launch),
+            unsafe { IsWindow(source) }.as_bool()
+        );
         cleanup_aborted_source(source, &launch);
         if is_current(launch.id) {
             end_the_program();
@@ -2004,6 +2266,25 @@ fn run_it(
     let own = launch.initial_own.unwrap_or_else(|| own_size(source));
     let scale = resolve_scale(&launch.path, scaling);
 
+    if trace::enabled() {
+        let extra = format!(
+            " id={} launch_pid={} launch_tid={} was_hidden={} inv_layered={} own={:?} scale={:?}",
+            launch.id, launch.pid, launch.tid, was_hidden, invisible_layered, own, scale
+        );
+        trace_window_diag(
+            "discovered",
+            source,
+            source_pid,
+            source_tid,
+            source_is_new,
+            hook_session.as_ref().map(|s| s.view.hook_hits()),
+            hook_session
+                .as_ref()
+                .and_then(|s| s.view.captured_hwnd().map(|h| h.0 as isize)),
+            &extra,
+        );
+    }
+
     let current_target_rect = || -> Option<(i32, i32, i32, i32)> {
         let at = WANT
             .lock()
@@ -2024,11 +2305,28 @@ fn run_it(
         if same_pid_hooked {
             if let Some(ref mut session) = hook_session {
                 if source_tid != 0 && (source_tid != launch.tid || session.hooks.is_empty()) {
-                    let _ = session.attach_thread(source_tid);
+                    let attached = session.attach_thread(source_tid);
+                    cp_trace!(
+                        "run_it: attach_secondary_thread id={} pid={} tid={} launch_tid={} ok={}",
+                        launch.id,
+                        source_pid,
+                        source_tid,
+                        launch.tid,
+                        attached
+                    );
                 }
             }
         } else if source_pid != 0 && source_tid != 0 {
-            if let Some(dynamic) = attach_dynamic_hook_session(source_pid, source_tid, init) {
+            let dynamic = attach_dynamic_hook_session(source_pid, source_tid, init);
+            cp_trace!(
+                "run_it: attach_dynamic_session id={} prev_pid={:?} src_pid={} src_tid={} ok={}",
+                launch.id,
+                hook_session.as_ref().map(|s| s.pid),
+                source_pid,
+                source_tid,
+                dynamic.is_some()
+            );
+            if let Some(dynamic) = dynamic {
                 hook_session = Some(dynamic);
             }
         }
@@ -2050,9 +2348,38 @@ fn run_it(
                 .view
                 .set_rect(init.rect.0, init.rect.1, init.rect.2, init.rect.3);
             if capture_technique != CustomCaptureTechnique::InProcessHook {
-                let _ = session.view.enforce_now_sync(source);
+                let enforced = session.view.enforce_now_sync(source);
+                cp_trace!(
+                    "run_it: initial_enforce_non_inprocess id={} cap={:?} ok={} init_rect={:?}",
+                    launch.id,
+                    capture_technique,
+                    enforced,
+                    init.rect
+                );
             }
         }
+        cp_trace!(
+            "run_it: hook_ready id={} hook_pid={} hooks_len={} hits={} rect=({},{},{},{}) forced={} cloak={} z_mode={}",
+            launch.id,
+            session.pid,
+            session.hooks.len(),
+            session.view.hook_hits(),
+            session.view.state().x.load(Ordering::Relaxed),
+            session.view.state().y.load(Ordering::Relaxed),
+            session.view.state().w.load(Ordering::Relaxed),
+            session.view.state().h.load(Ordering::Relaxed),
+            session.view.state().forced_placement.load(Ordering::Relaxed),
+            session.view.is_cloaked(),
+            session.view.state().z_order_mode.load(Ordering::Relaxed)
+        );
+    } else if uses_hook_enforcement(launch.placement) {
+        cp_trace!(
+            "run_it: no_hook_session id={} src_pid={} src_tid={} cap={:?}",
+            launch.id,
+            source_pid,
+            source_tid,
+            capture_technique
+        );
     }
 
     // Normal mode keeps target chrome/styles untouched; Borderless strips frame chrome.
@@ -2544,6 +2871,11 @@ fn run_it(
             }
             if launch.launched_at.elapsed() >= FORCED_SETTLE_CAP {
                 FORCED_SETTLING.store(false, Ordering::Release);
+                cp_trace!(
+                    "forced_settling: cleared id={} reason=cap elapsed_ms={}",
+                    launch.id,
+                    launch.launched_at.elapsed().as_millis()
+                );
                 return;
             }
             let source_off_cursor = visible_frame_rect(source)
@@ -2553,17 +2885,33 @@ fn run_it(
                 let started = *off_cursor_since.get_or_insert_with(Instant::now);
                 if started.elapsed() >= FORCED_SETTLE_STABLE {
                     FORCED_SETTLING.store(false, Ordering::Release);
+                    cp_trace!(
+                        "forced_settling: cleared id={} reason=stable stable_ms={} total_ms={}",
+                        launch.id,
+                        started.elapsed().as_millis(),
+                        launch.launched_at.elapsed().as_millis()
+                    );
                 }
             } else {
                 *off_cursor_since = None;
             }
         };
 
+    let mut drift_count: u32 = 0;
+    let mut last_drift_sig: Option<DriftSig> = None;
+    let mut was_layout_none = false;
+
     loop {
         if !is_current(launch.id) {
+            cp_trace!("run_it: exit reason=superseded id={}", launch.id);
             return;
         }
         if !unsafe { IsWindow(source) }.as_bool() {
+            cp_trace!(
+                "run_it: exit reason=window_destroyed id={} hwnd=0x{:x}",
+                launch.id,
+                source.0 as usize
+            );
             // A program that closed its own window has nothing left to draw, and nothing left to
             // keep: it is ended here rather than left running behind a hover that shows nothing.
             if is_current(launch.id) {
@@ -2573,6 +2921,11 @@ fn run_it(
         }
 
         let Some((at, placement)) = current_want_snapshot() else {
+            cp_trace!(
+                "run_it: exit reason=want_cleared id={} hwnd=0x{:x}",
+                launch.id,
+                source.0 as usize
+            );
             // Re-check after reading WANT: open_fully/end_the_program bump LAUNCH before clearing WANT.
             if is_current(launch.id) {
                 end_the_program();
@@ -2619,6 +2972,15 @@ fn run_it(
         let Some(layout) = layout_for(at, own, scale, follow_cursor(), bypass_placement()) else {
             if !is_current(launch.id) {
                 return;
+            }
+            if !was_layout_none {
+                was_layout_none = true;
+                cp_trace!(
+                    "run_it: layout_none id={} own={:?} scale={:?}",
+                    launch.id,
+                    own,
+                    scale
+                );
             }
             placed_host_rect = None;
             if capture_technique == CustomCaptureTechnique::InProcessHook {
@@ -2668,6 +3030,7 @@ fn run_it(
             ));
             continue;
         };
+        was_layout_none = false;
         let (x, y) = (layout.pos_x, layout.pos_y);
         let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
         let host_rect = (x, y, width, height);
@@ -2695,6 +3058,14 @@ fn run_it(
                 || placed_mode.is_none()
                 || placed_host_rect != Some(host_rect);
             if needs_reposition {
+                cp_trace!(
+                    "run_it: inprocess_reposition id={} cloaked={} mode={:?} prev_host={:?} host={:?}",
+                    launch.id,
+                    session.view.is_cloaked(),
+                    placed_mode,
+                    placed_host_rect,
+                    host_rect
+                );
                 if placed_host_rect.is_some_and(|p| p.2 != host_rect.2 || p.3 != host_rect.3) {
                     the_ask = None;
                 }
@@ -2724,6 +3095,16 @@ fn run_it(
                             || unsafe { IsZoomed(source) }.as_bool()
                             || window_rect(source) != expected_rect
                         {
+                            trace_drift(
+                                &mut drift_count,
+                                &mut last_drift_sig,
+                                launch.id,
+                                "inprocess_behind_host_drift",
+                                source,
+                                expected_rect,
+                                host_rect,
+                                Some(session.view.hook_hits()),
+                            );
                             let insets = if window_mode == CustomWindowMode::Normal {
                                 dwm_frame_insets(source)
                             } else {
@@ -2753,6 +3134,12 @@ fn run_it(
                             } else {
                                 let ask =
                                     the_ask_for((width, height), source_size(source, window_mode));
+                                cp_trace!(
+                                    "run_it: inprocess_behind_host_fallback_offscreen id={} host={:?} ask={:?}",
+                                    launch.id,
+                                    host_rect,
+                                    ask
+                                );
                                 the_ask = Some(ask);
                                 session
                                     .view
@@ -2790,6 +3177,16 @@ fn run_it(
                             cursor_pt,
                             session.view.is_cloaked(),
                         ) {
+                            trace_drift(
+                                &mut drift_count,
+                                &mut last_drift_sig,
+                                launch.id,
+                                "inprocess_offscreen_repark",
+                                source,
+                                expected_rect,
+                                host_rect,
+                                Some(session.view.hook_hits()),
+                            );
                             let ask = the_ask.unwrap_or_else(|| {
                                 the_ask_for((width, height), source_size(source, window_mode))
                             });
@@ -2825,6 +3222,16 @@ fn run_it(
                             && !is_window_offscreen(source)
                             && FORCED_SETTLING.load(Ordering::Acquire)
                         {
+                            trace_drift(
+                                &mut drift_count,
+                                &mut last_drift_sig,
+                                launch.id,
+                                "inprocess_offscreen_nudge",
+                                source,
+                                expected_rect,
+                                host_rect,
+                                Some(session.view.hook_hits()),
+                            );
                             nudge_clamped_offscreen_off_cursor(
                                 source,
                                 Some(&session.view),
@@ -2840,6 +3247,16 @@ fn run_it(
                         if window_rect(source) != expected_rect
                             || unsafe { IsZoomed(source) }.as_bool()
                         {
+                            trace_drift(
+                                &mut drift_count,
+                                &mut last_drift_sig,
+                                launch.id,
+                                "inprocess_inv_layered_drift",
+                                source,
+                                expected_rect,
+                                host_rect,
+                                Some(session.view.hook_hits()),
+                            );
                             place_invisible_layered(
                                 source,
                                 host_rect,
@@ -2888,6 +3305,14 @@ fn run_it(
             });
             placed_host_rect = Some(host_rect);
             expected_rect = window_rect(source);
+            cp_trace!(
+                "run_it: std_placed id={} cap={:?} mode={:?} host={:?} expected={:?}",
+                launch.id,
+                capture_technique,
+                placed_mode,
+                host_rect,
+                expected_rect
+            );
         } else {
             match placed_mode {
                 Some(PlacementMode::InvisibleLayered) => {
@@ -2895,6 +3320,16 @@ fn run_it(
                     if window_rect(source) != expected_rect
                         || (forced && unsafe { IsZoomed(source) }.as_bool())
                     {
+                        trace_drift(
+                            &mut drift_count,
+                            &mut last_drift_sig,
+                            launch.id,
+                            "std_inv_layered_drift",
+                            source,
+                            expected_rect,
+                            host_rect,
+                            active_hook_view.map(|v| v.hook_hits()),
+                        );
                         place_invisible_layered(source, host_rect, window_mode, &mut the_ask, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
                         expected_rect = window_rect(source);
@@ -2909,6 +3344,16 @@ fn run_it(
                         || (forced && unsafe { IsZoomed(source) }.as_bool())
                         || overlaps_cursor
                     {
+                        trace_drift(
+                            &mut drift_count,
+                            &mut last_drift_sig,
+                            launch.id,
+                            "std_direct_drift",
+                            source,
+                            expected_rect,
+                            host_rect,
+                            active_hook_view.map(|v| v.hook_hits()),
+                        );
                         place_direct_window(source, host_rect, window_mode, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
                         expected_rect = window_rect(source);
@@ -2918,6 +3363,16 @@ fn run_it(
                     if !aligned_behind_host(source, host_rect)
                         || (forced && unsafe { IsZoomed(source) }.as_bool()) =>
                 {
+                    trace_drift(
+                        &mut drift_count,
+                        &mut last_drift_sig,
+                        launch.id,
+                        "std_behind_host_drift",
+                        source,
+                        expected_rect,
+                        host_rect,
+                        active_hook_view.map(|v| v.hook_hits()),
+                    );
                     if !place_behind_host(source, host_rect, window_mode, ctx) {
                         let ask = the_ask_for((width, height), source_size(source, window_mode));
                         the_ask = Some(ask);
@@ -2929,6 +3384,16 @@ fn run_it(
                 }
                 Some(PlacementMode::OffScreen) => {
                     if should_repark_offscreen(source, expected_rect, forced, cursor_pt, false) {
+                        trace_drift(
+                            &mut drift_count,
+                            &mut last_drift_sig,
+                            launch.id,
+                            "std_offscreen_repark",
+                            source,
+                            expected_rect,
+                            host_rect,
+                            active_hook_view.map(|v| v.hook_hits()),
+                        );
                         let ask = the_ask.unwrap_or((width, height));
                         park_offscreen(source, ask.0, ask.1, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
@@ -2937,6 +3402,16 @@ fn run_it(
                         && !is_window_offscreen(source)
                         && FORCED_SETTLING.load(Ordering::Acquire)
                     {
+                        trace_drift(
+                            &mut drift_count,
+                            &mut last_drift_sig,
+                            launch.id,
+                            "std_offscreen_nudge",
+                            source,
+                            expected_rect,
+                            host_rect,
+                            active_hook_view.map(|v| v.hook_hits()),
+                        );
                         nudge_clamped_offscreen_off_cursor(
                             source,
                             active_hook_view,
@@ -3016,10 +3491,22 @@ fn run_it(
         }
 
         if registered == 0 {
-            if let Ok(registration) = unsafe { DwmRegisterThumbnail(host, source) } {
-                registered = registration;
-                if let Ok(mut held) = THUMBNAIL.lock() {
-                    *held = registration;
+            match unsafe { DwmRegisterThumbnail(host, source) } {
+                Ok(registration) => {
+                    registered = registration;
+                    if let Ok(mut held) = THUMBNAIL.lock() {
+                        *held = registration;
+                    }
+                    cp_trace!(
+                        "run_it: std_dwm_register id={} reg=0x{:x} host=0x{:x} src=0x{:x}",
+                        launch.id,
+                        registration as usize,
+                        host.0 as usize,
+                        source.0 as usize
+                    );
+                }
+                Err(e) => {
+                    cp_trace!("run_it: std_dwm_register_err id={} err={:?}", launch.id, e);
                 }
             }
         }
@@ -3049,6 +3536,13 @@ fn run_it(
                 SHOWN.store(true, Ordering::SeqCst);
                 let _ =
                     unsafe { PostMessageW(host, WM_THE_PICTURE_IS_READY, WPARAM(0), LPARAM(0)) };
+                cp_trace!(
+                    "run_it: std_shown id={} host={:?} picture={:?} placed={:?}",
+                    launch.id,
+                    host_rect,
+                    picture,
+                    placed_mode
+                );
             }
         }
 
@@ -3474,8 +3968,17 @@ fn force_place_window(
     extra_flags: SET_WINDOW_POS_FLAGS,
     ctx: PlacementContext<'_>,
 ) {
+    let tracing = trace::enabled();
+    let before_rect = if tracing { window_rect(hwnd) } else { None };
+    let before_vis = if tracing {
+        visible_frame_rect(hwnd)
+    } else {
+        None
+    };
+
     let (tx, ty, tw, th) = target_rect;
     let (tw, th) = (tw.max(1), th.max(1));
+    let mut placement_res: Option<(bool, u32)> = None;
     if unsafe { IsZoomed(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool() {
         let target = RECT {
             left: tx,
@@ -3495,7 +3998,9 @@ fn force_place_window(
             rcNormalPosition: rc_normal,
             ..Default::default()
         };
-        let _ = unsafe { SetWindowPlacement(hwnd, &placement) };
+        let ok = unsafe { SetWindowPlacement(hwnd, &placement) }.is_ok();
+        let err = if ok { 0 } else { win_err() };
+        placement_res = Some((ok, err));
     }
 
     let cur_style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
@@ -3505,16 +4010,19 @@ fn force_place_window(
     }
 
     let base_flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | extra_flags;
-    let _ = unsafe { SetWindowPos(hwnd, z_order, tx, ty, tw, th, base_flags) };
+    let pos1_ok = unsafe { SetWindowPos(hwnd, z_order, tx, ty, tw, th, base_flags) }.is_ok();
+    let pos1_err = if pos1_ok { 0 } else { win_err() };
 
+    let mut mv_res: Option<(bool, u32, bool, u32)> = None;
     if window_rect(hwnd).is_some_and(|r| r.left != tx || r.top != ty) {
         let size_ignored = (extra_flags.0 & SWP_NOSIZE.0) != 0;
         let cur_size = window_rect(hwnd)
             .map(|r| ((r.right - r.left).max(1), (r.bottom - r.top).max(1)))
             .unwrap_or((tw, th));
         let (mw, mh) = if size_ignored { cur_size } else { (tw, th) };
-        let _ = unsafe { MoveWindow(hwnd, tx, ty, mw, mh, true) };
-        let _ = unsafe {
+        let mv_ok = unsafe { MoveWindow(hwnd, tx, ty, mw, mh, true) }.is_ok();
+        let mv_err = if mv_ok { 0 } else { win_err() };
+        let pos2_ok = unsafe {
             SetWindowPos(
                 hwnd,
                 z_order,
@@ -3524,9 +4032,13 @@ fn force_place_window(
                 0,
                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOSENDCHANGING | extra_flags,
             )
-        };
+        }
+        .is_ok();
+        let pos2_err = if pos2_ok { 0 } else { win_err() };
+        mv_res = Some((mv_ok, mv_err, pos2_ok, pos2_err));
     }
 
+    let mut shift_res: Option<(i32, i32, bool, u32)> = None;
     if let Some(cursor) = ctx.avoid_cursor {
         if let Some(actual) = window_rect(hwnd) {
             let work = work_area_rect(cursor);
@@ -3541,7 +4053,7 @@ fn force_place_window(
                         (actual.bottom - actual.top).max(1),
                     );
                 }
-                let _ = unsafe {
+                let shift_ok = unsafe {
                     SetWindowPos(
                         hwnd,
                         z_order,
@@ -3555,9 +4067,32 @@ fn force_place_window(
                             | SWP_NOSENDCHANGING
                             | extra_flags,
                     )
-                };
+                }
+                .is_ok();
+                let shift_err = if shift_ok { 0 } else { win_err() };
+                shift_res = Some((sx, sy, shift_ok, shift_err));
             }
         }
+    }
+
+    if tracing {
+        cp_trace!(
+            "force_place_window: hwnd=0x{:x} target={:?} z=0x{:x} extra=0x{:x} has_hook={} before={:?} before_vis={:?} after={:?} after_vis={:?} place={:?} pos1=({},{}) mv={:?} shift={:?}",
+            hwnd.0 as usize,
+            target_rect,
+            z_order.0 as isize,
+            extra_flags.0,
+            ctx.hook.is_some(),
+            before_rect,
+            before_vis,
+            window_rect(hwnd),
+            visible_frame_rect(hwnd),
+            placement_res,
+            pos1_ok,
+            pos1_err,
+            mv_res,
+            shift_res
+        );
     }
 
     restore_foreground(ctx.previous_foreground, ctx.processes);
@@ -5000,6 +5535,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
 
     while Instant::now() < deadline {
         if !launch_still_wanted(launch) {
+            cp_trace!("wait_staged: aborted_loop id={}", launch.id);
             return None;
         }
         if let Some(window) = check_now(
@@ -5009,6 +5545,11 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
             &mut first_hidden,
         ) {
             if !launch_still_wanted(launch) {
+                cp_trace!(
+                    "wait_staged: aborted_after_check id={} hwnd=0x{:x}",
+                    launch.id,
+                    window.0 as usize
+                );
                 cleanup_aborted_source(window, launch);
                 return None;
             }
@@ -5086,6 +5627,7 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
             });
             if matched {
                 if !launch_still_wanted(launch) {
+                    cp_trace!("wait_staged: aborted_msg id={}", launch.id);
                     return None;
                 }
                 if let Some(window) = check_now(
@@ -5095,6 +5637,11 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
                     &mut first_hidden,
                 ) {
                     if !launch_still_wanted(launch) {
+                        cp_trace!(
+                            "wait_staged: aborted_msg_after_check id={} hwnd=0x{:x}",
+                            launch.id,
+                            window.0 as usize
+                        );
                         cleanup_aborted_source(window, launch);
                         return None;
                     }
@@ -5104,11 +5651,22 @@ fn wait_for_a_window_offscreen_staged(launch: &Launch) -> Option<HWND> {
         }
     }
     if !launch_still_wanted(launch) {
+        cp_trace!(
+            "wait_staged: aborted_timeout id={} first_hidden={:?}",
+            launch.id,
+            first_hidden.map(|(_, h)| h.0 as usize)
+        );
         if let Some((_, hwnd)) = first_hidden {
             cleanup_aborted_source(hwnd, launch);
         }
         return None;
     }
+    cp_trace!(
+        "wait_staged: timeout id={} fallback={:?} procs={:?}",
+        launch.id,
+        first_hidden.map(|(_, h)| h.0 as usize),
+        processes
+    );
     first_hidden.map(|(_, hwnd)| hwnd)
 }
 
@@ -5641,7 +6199,7 @@ impl HookSharedView {
     fn create(pid: u32, init: HookSharedInit, uncloak_msg: u32) -> Option<Self> {
         let name = wide_null(OsStr::new(&format!("Local\\RhpCustomPreviewHook_{pid}")));
         let size = std::mem::size_of::<HookSharedState>() as u32;
-        let mapping = unsafe {
+        let mapping = match unsafe {
             CreateFileMappingW(
                 INVALID_HANDLE_VALUE,
                 None,
@@ -5650,8 +6208,18 @@ impl HookSharedView {
                 size,
                 PCWSTR(name.as_ptr()),
             )
-        }
-        .ok()?;
+        } {
+            Ok(h) => h,
+            Err(e) => {
+                cp_trace!(
+                    "shm: CreateFileMappingW failed pid={} err={} code={:?}",
+                    pid,
+                    win_err(),
+                    e
+                );
+                return None;
+            }
+        };
         let already_exists = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
         let mapping = unsafe { OwnedHandle::from_raw_handle(mapping.0) };
         let mapped = unsafe {
@@ -5664,11 +6232,12 @@ impl HookSharedView {
             )
         };
         if mapped.Value.is_null() {
+            cp_trace!("shm: MapViewOfFile failed pid={} err={}", pid, win_err());
             return None;
         }
         let ptr = mapped.Value as *mut HookSharedState;
         let (x, y, w, h) = init.rect;
-        unsafe {
+        let existing_valid = unsafe {
             let existing_valid = already_exists
                 && (*ptr).magic == HOOK_MAGIC
                 && (*ptr).version == HOOK_VERSION
@@ -5705,7 +6274,20 @@ impl HookSharedView {
                     z_order_mode: AtomicU8::new(init.z_order_mode),
                 });
             }
-        }
+            existing_valid
+        };
+        cp_trace!(
+            "shm: create pid={} already_exists={} existing_valid={} rect={:?} cloak={} locked={} forced={} z_mode={} msg=0x{:x}",
+            pid,
+            already_exists,
+            existing_valid,
+            init.rect,
+            init.cloak_enabled,
+            init.rect_locked,
+            init.forced_mode,
+            init.z_order_mode,
+            uncloak_msg
+        );
         Some(Self {
             _mapping: mapping,
             view: ptr,
@@ -5785,13 +6367,24 @@ impl HookSharedView {
             )
         }
         .0 != 0;
-        sent && self.hook_hits() > hits_before
+        let err = if sent { 0 } else { win_err() };
+        let hits_after = self.hook_hits();
+        cp_trace!(
+            "shm: cloak_sync hwnd=0x{:x} sent={} err={} hits={}->{}",
+            hwnd.0 as usize,
+            sent,
+            err,
+            hits_before,
+            hits_after
+        );
+        sent && hits_after > hits_before
     }
 
     fn uncloak_sync(&self, hwnd: HWND) {
         self.state().cloak_enabled.store(0, Ordering::Release);
         if !hwnd.0.is_null() && unsafe { IsWindow(hwnd) }.as_bool() {
-            let _ = unsafe {
+            let hits_before = self.hook_hits();
+            let sent = unsafe {
                 SendMessageTimeoutW(
                     hwnd,
                     self.uncloak_msg,
@@ -5801,21 +6394,46 @@ impl HookSharedView {
                     150,
                     None,
                 )
-            };
+            }
+            .0 != 0;
+            let err = if sent { 0 } else { win_err() };
+            let hits_after = self.hook_hits();
+            cp_trace!(
+                "shm: uncloak_sync hwnd=0x{:x} sent={} err={} hits={}->{}",
+                hwnd.0 as usize,
+                sent,
+                err,
+                hits_before,
+                hits_after
+            );
+        } else {
+            cp_trace!("shm: uncloak_sync skipped hwnd=0x{:x}", hwnd.0 as usize);
         }
     }
 
     /// Synchronously ensure subclass installation and snap `hwnd` to locked SHM rect from in-process.
     fn enforce_now_sync(&self, hwnd: HWND) -> bool {
         if DETACHING.load(Ordering::Acquire) {
+            cp_trace!(
+                "shm: enforce_now_sync skipped hwnd=0x{:x} reason=detaching",
+                hwnd.0 as usize
+            );
             return false;
         }
         self.state().rect_locked.store(1, Ordering::Release);
         if DETACHING.load(Ordering::Acquire) {
             self.clear_locks_for_detach();
+            cp_trace!(
+                "shm: enforce_now_sync cleared hwnd=0x{:x} reason=detaching_race",
+                hwnd.0 as usize
+            );
             return false;
         }
         if hwnd.0.is_null() || !unsafe { IsWindow(hwnd) }.as_bool() {
+            cp_trace!(
+                "shm: enforce_now_sync skipped hwnd=0x{:x} reason=not_window",
+                hwnd.0 as usize
+            );
             return false;
         }
         let hits_before = self.hook_hits();
@@ -5831,7 +6449,25 @@ impl HookSharedView {
             )
         }
         .0 != 0;
-        sent && self.hook_hits() > hits_before
+        let err = if sent { 0 } else { win_err() };
+        let hits_after = self.hook_hits();
+        let s = self.state();
+        cp_trace!(
+            "shm: enforce_now_sync hwnd=0x{:x} sent={} err={} hits={}->{} rect=({},{},{},{}) forced={} cloak={} z_mode={}",
+            hwnd.0 as usize,
+            sent,
+            err,
+            hits_before,
+            hits_after,
+            s.x.load(Ordering::Relaxed),
+            s.y.load(Ordering::Relaxed),
+            s.w.load(Ordering::Relaxed),
+            s.h.load(Ordering::Relaxed),
+            s.forced_placement.load(Ordering::Relaxed),
+            s.cloak_enabled.load(Ordering::Relaxed),
+            s.z_order_mode.load(Ordering::Relaxed)
+        );
+        sent && hits_after > hits_before
     }
 
     /// Clear cloak + rect and forced-placement locks before promotion moves or restores `hwnd`.
@@ -5883,14 +6519,36 @@ impl InProcessHookSession {
             return true;
         }
         let Some((cbt_proc, cwp_proc)) = hook_procs_from_module(self.dll_module) else {
+            cp_trace!(
+                "hook_attach: thread_missing_procs pid={} tid={}",
+                self.pid,
+                tid
+            );
             return false;
         };
-        let Some((cbt, cwp)) = try_attach_thread_hooks(self.dll_module, cbt_proc, cwp_proc, tid)
-        else {
-            return false;
-        };
-        self.hooks.push((tid, cbt, cwp));
-        true
+        match try_attach_thread_hooks_result(self.dll_module, cbt_proc, cwp_proc, tid) {
+            Ok((cbt, cwp)) => {
+                cp_trace!(
+                    "hook_attach: thread ok pid={} tid={} cbt=0x{:x} cwp=0x{:x}",
+                    self.pid,
+                    tid,
+                    cbt.0 as usize,
+                    cwp.0 as usize
+                );
+                self.hooks.push((tid, cbt, cwp));
+                true
+            }
+            Err((stage, err)) => {
+                cp_trace!(
+                    "hook_attach: thread failed pid={} tid={} stage={} err={}",
+                    self.pid,
+                    tid,
+                    stage,
+                    err
+                );
+                false
+            }
+        }
     }
 }
 
@@ -5982,31 +6640,69 @@ fn hook_procs_from_module(hmod: HMODULE) -> Option<(HOOKPROC, HOOKPROC)> {
 }
 
 fn load_hook_dll() -> Option<(HMODULE, HOOKPROC, HOOKPROC)> {
-    let path = find_hook_dll()?;
+    let Some(path) = find_hook_dll() else {
+        cp_trace!("hook_dll: find_hook_dll -> None");
+        return None;
+    };
     let wide = wide_null(path.as_os_str());
-    let hmod = unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) }.ok()?;
+    let hmod = match unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) } {
+        Ok(h) => h,
+        Err(e) => {
+            cp_trace!(
+                "hook_dll: LoadLibraryW failed path={} err={} code={:?}",
+                path.display(),
+                win_err(),
+                e
+            );
+            return None;
+        }
+    };
     match hook_procs_from_module(hmod) {
-        Some((cbt_proc, cwp_proc)) => Some((hmod, cbt_proc, cwp_proc)),
+        Some((cbt_proc, cwp_proc)) => {
+            cp_trace!(
+                "hook_dll: loaded path={} hmod=0x{:x}",
+                path.display(),
+                hmod.0 as usize
+            );
+            Some((hmod, cbt_proc, cwp_proc))
+        }
         None => {
+            cp_trace!(
+                "hook_dll: GetProcAddress missing exports path={} err={}",
+                path.display(),
+                win_err()
+            );
             let _ = unsafe { FreeLibrary(hmod) };
             None
         }
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn try_attach_thread_hooks(
     hmod: HMODULE,
     cbt_proc: HOOKPROC,
     cwp_proc: HOOKPROC,
     tid: u32,
 ) -> Option<(HHOOK, HHOOK)> {
+    try_attach_thread_hooks_result(hmod, cbt_proc, cwp_proc, tid).ok()
+}
+
+fn try_attach_thread_hooks_result(
+    hmod: HMODULE,
+    cbt_proc: HOOKPROC,
+    cwp_proc: HOOKPROC,
+    tid: u32,
+) -> Result<(HHOOK, HHOOK), (&'static str, u32)> {
     let hinst = HINSTANCE(hmod.0);
-    let cbt = unsafe { SetWindowsHookExW(WH_CBT, cbt_proc, hinst, tid) }.ok()?;
+    let cbt = unsafe { SetWindowsHookExW(WH_CBT, cbt_proc, hinst, tid) }
+        .map_err(|_| ("WH_CBT", win_err()))?;
     match unsafe { SetWindowsHookExW(WH_CALLWNDPROC, cwp_proc, hinst, tid) } {
-        Ok(cwp) => Some((cbt, cwp)),
+        Ok(cwp) => Ok((cbt, cwp)),
         Err(_) => {
+            let err = win_err();
             let _ = unsafe { UnhookWindowsHookEx(cbt) };
-            None
+            Err(("WH_CALLWNDPROC", err))
         }
     }
 }
@@ -6018,14 +6714,39 @@ fn attach_dynamic_hook_session(
     init: HookSharedInit,
 ) -> Option<InProcessHookSession> {
     if pid == 0 || tid == 0 {
+        cp_trace!("hook_attach: dynamic skipped pid={} tid={}", pid, tid);
         return None;
     }
     let (hmod, cbt_proc, cwp_proc) = load_hook_dll()?;
     let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
     let view = HookSharedView::create(pid, init, uncloak_msg).map(Arc::new);
     let hooks = if view.is_some() {
-        try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, tid)
+        match try_attach_thread_hooks_result(hmod, cbt_proc, cwp_proc, tid) {
+            Ok((cbt, cwp)) => {
+                cp_trace!(
+                    "hook_attach: dynamic ok pid={} tid={} wow64={:?} cbt=0x{:x} cwp=0x{:x}",
+                    pid,
+                    tid,
+                    pid_is_wow64(pid),
+                    cbt.0 as usize,
+                    cwp.0 as usize
+                );
+                Some((cbt, cwp))
+            }
+            Err((stage, err)) => {
+                cp_trace!(
+                    "hook_attach: dynamic failed pid={} tid={} wow64={:?} stage={} err={}",
+                    pid,
+                    tid,
+                    pid_is_wow64(pid),
+                    stage,
+                    err
+                );
+                None
+            }
+        }
     } else {
+        cp_trace!("hook_attach: dynamic shm_failed pid={} tid={}", pid, tid);
         None
     };
     match (view, hooks) {
@@ -6060,6 +6781,11 @@ fn launch_with_hook(
         } else {
             capture_technique
         };
+        cp_trace!(
+            "launch_with_hook: no_dll fallback_tech={:?} exe={}",
+            fallback_tech,
+            path_basename(Path::new(exe))
+        );
         let (proc_handle, pid) = launch(exe, path, provisional, fallback_tech)?;
         return Some((proc_handle, pid, 0, None));
     };
@@ -6096,6 +6822,11 @@ fn launch_with_hook(
     }
     .is_err()
     {
+        cp_trace!(
+            "launch_with_hook: CreateProcessW failed exe={} err={}",
+            path_basename(Path::new(exe)),
+            win_err()
+        );
         let _ = unsafe { FreeLibrary(hmod) };
         return None;
     }
@@ -6104,6 +6835,19 @@ fn launch_with_hook(
     let process = unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0) };
     let pid = pi.dwProcessId;
     let tid = pi.dwThreadId;
+    cp_trace!(
+        "launch_with_hook: created pid={} tid={} wow64={:?} cap={:?} si_flags=0x{:x} si_show={} si_xy=({},{}) si_wh=({},{})",
+        pid,
+        tid,
+        process_is_wow64(HANDLE(process.as_raw_handle())),
+        capture_technique,
+        si.dwFlags.0,
+        si.wShowWindow,
+        si.dwX,
+        si.dwY,
+        si.dwXSize,
+        si.dwYSize
+    );
     let uncloak_msg = unsafe { RegisterWindowMessageW(HOOK_CONTROL_MSG_NAME) };
     let view = HookSharedView::create(pid, init, uncloak_msg).map(Arc::new);
 
@@ -6111,7 +6855,28 @@ fn launch_with_hook(
     // `W32THREAD` init (`ERROR_INVALID_THREAD_ID`), spin-yield 30ms (sub-0.1ms attach; avoids
     // 15.6ms timer-tick sleep) then sleep(1ms) up to 200ms.
     let mut hooks = if view.is_some() {
-        try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, tid)
+        match try_attach_thread_hooks_result(hmod, cbt_proc, cwp_proc, tid) {
+            Ok((cbt, cwp)) => {
+                cp_trace!(
+                    "launch_with_hook: pre_resume_hook ok pid={} tid={} cbt=0x{:x} cwp=0x{:x}",
+                    pid,
+                    tid,
+                    cbt.0 as usize,
+                    cwp.0 as usize
+                );
+                Some((cbt, cwp))
+            }
+            Err((stage, err)) => {
+                cp_trace!(
+                    "launch_with_hook: pre_resume_hook failed pid={} tid={} stage={} err={}",
+                    pid,
+                    tid,
+                    stage,
+                    err
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -6123,19 +6888,49 @@ fn launch_with_hook(
         let retry_start = Instant::now();
         let spin_deadline = retry_start + Duration::from_millis(30);
         let retry_deadline = retry_start + Duration::from_millis(200);
+        let mut attempts: u32 = 0;
+        let mut last_err: Option<(&'static str, u32)> = None;
+        let mut exited = false;
         while Instant::now() < retry_deadline {
             if process_has_exited(HANDLE(process.as_raw_handle())) {
+                exited = true;
                 break;
             }
-            if let Some(pair) = try_attach_thread_hooks(hmod, cbt_proc, cwp_proc, tid) {
-                hooks = Some(pair);
-                break;
+            attempts = attempts.saturating_add(1);
+            match try_attach_thread_hooks_result(hmod, cbt_proc, cwp_proc, tid) {
+                Ok((cbt, cwp)) => {
+                    cp_trace!(
+                        "launch_with_hook: post_resume_hook ok pid={} tid={} attempts={} elapsed_ms={} cbt=0x{:x} cwp=0x{:x}",
+                        pid,
+                        tid,
+                        attempts,
+                        retry_start.elapsed().as_millis(),
+                        cbt.0 as usize,
+                        cwp.0 as usize
+                    );
+                    hooks = Some((cbt, cwp));
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                }
             }
             if Instant::now() < spin_deadline {
                 std::thread::yield_now();
             } else {
                 std::thread::sleep(Duration::from_millis(1));
             }
+        }
+        if hooks.is_none() {
+            cp_trace!(
+                "launch_with_hook: post_resume_hook failed pid={} tid={} attempts={} elapsed_ms={} exited={} last_err={:?}",
+                pid,
+                tid,
+                attempts,
+                retry_start.elapsed().as_millis(),
+                exited,
+                last_err
+            );
         }
     }
 
@@ -6199,6 +6994,11 @@ fn wait_for_a_window_in_process_hook(
 
     while Instant::now() < deadline {
         if !launch_still_wanted(launch) {
+            cp_trace!(
+                "wait_hook: aborted_loop id={} hits={}",
+                launch.id,
+                session.view.hook_hits()
+            );
             return None;
         }
         let valid_captured = session
@@ -6260,9 +7060,23 @@ fn wait_for_a_window_in_process_hook(
         };
         if let Some(window) = found {
             if !launch_still_wanted(launch) {
+                cp_trace!(
+                    "wait_hook: aborted_found id={} hwnd=0x{:x} hits={}",
+                    launch.id,
+                    window.0 as usize,
+                    session.view.hook_hits()
+                );
                 cleanup_aborted_source(window, launch);
                 return None;
             }
+            cp_trace!(
+                "wait_hook: found id={} hwnd=0x{:x} hits={} cap={:?} elapsed_ms={}",
+                launch.id,
+                window.0 as usize,
+                session.view.hook_hits(),
+                session.view.captured_hwnd().map(|h| h.0 as usize),
+                launch.launched_at.elapsed().as_millis()
+            );
             return Some(window);
         }
 
@@ -6274,11 +7088,24 @@ fn wait_for_a_window_in_process_hook(
         std::thread::sleep(Duration::from_millis(5));
     }
     if !launch_still_wanted(launch) {
+        cp_trace!(
+            "wait_hook: aborted_timeout id={} first_candidate={:?} hits={}",
+            launch.id,
+            first_candidate.map(|(_, h)| h.0 as usize),
+            session.view.hook_hits()
+        );
         if let Some((_, hwnd)) = first_candidate {
             cleanup_aborted_source(hwnd, launch);
         }
         return None;
     }
+    cp_trace!(
+        "wait_hook: timeout id={} first_candidate={:?} hits={} procs={:?}",
+        launch.id,
+        first_candidate.map(|(_, h)| h.0 as usize),
+        session.view.hook_hits(),
+        processes
+    );
     first_candidate
         .map(|(_, hwnd)| hwnd)
         .or_else(|| wait_for_a_window(launch))
@@ -6299,6 +7126,17 @@ fn reveal_in_process_hook(
         *slot = Some(host_rect);
     }
     let ctx = placement_ctx_from_want(launch, processes, None, Some(&session.view));
+    cp_trace!(
+        "reveal_hook: start id={} src=0x{:x} host=0x{:x} host_rect={:?} hook_hits={} inv_layered={} forced={} cloaked={}",
+        launch.id,
+        source.0 as usize,
+        host.0 as usize,
+        host_rect,
+        session.view.hook_hits(),
+        *state.invisible_layered,
+        ctx.forced,
+        session.view.is_cloaked()
+    );
     // Late-hooked fallback (`hook_hits == 0`): source is not cloaked; use InvisibleLayered if active.
     if session.view.hook_hits() == 0 && *state.invisible_layered {
         session
@@ -6312,6 +7150,11 @@ fn reveal_in_process_hook(
         *state.placed_mode = Some(PlacementMode::InvisibleLayered);
         *state.placed_host_rect = Some(host_rect);
         *state.expected_rect = window_rect(source);
+        cp_trace!(
+            "reveal_hook: fallback_invisible_layered id={} expected={:?}",
+            launch.id,
+            *state.expected_rect
+        );
         return;
     }
 
@@ -6374,17 +7217,43 @@ fn reveal_in_process_hook(
     }
 
     // Check fit using off-screen dimensions so `source` never touches the monitor before `host`.
-    let fits_host = visible_frame_rect(source).is_some_and(|r| {
+    let stage_vis = visible_frame_rect(source);
+    let stage_win = window_rect(source);
+    let stage_shown = unsafe { IsWindowVisible(source) }.as_bool();
+    let stage_zoomed = unsafe { IsZoomed(source) }.as_bool();
+    let stage_iconic = unsafe { IsIconic(source) }.as_bool();
+    let fits_host = stage_vis.is_some_and(|r| {
         let aw = r.right - r.left;
         let ah = r.bottom - r.top;
         aw > 0 && ah > 0 && aw <= hw + ALIGN_TOLERANCE * 2 && ah <= hh + ALIGN_TOLERANCE * 2
-    }) && unsafe { IsWindowVisible(source) }.as_bool()
-        && !unsafe { IsZoomed(source) }.as_bool()
-        && !unsafe { IsIconic(source) }.as_bool();
+    }) && stage_shown
+        && !stage_zoomed
+        && !stage_iconic;
+    cp_trace!(
+        "reveal_hook: stage_fit id={} target_behind=({},{},{},{}) fits={} stage_vis={:?} stage_win={:?} vis={} zoom={} min={}",
+        launch.id,
+        wx,
+        wy,
+        ww,
+        wh,
+        fits_host,
+        stage_vis,
+        stage_win,
+        stage_shown,
+        stage_zoomed,
+        stage_iconic
+    );
 
     if !fits_host {
         let ask = the_ask_for((hw, hh), source_size(source, window_mode));
         *state.the_ask = Some(ask);
+        cp_trace!(
+            "reveal_hook: stage_ask id={} ask={:?} hw_hh=({},{})",
+            launch.id,
+            ask,
+            hw,
+            hh
+        );
         session
             .view
             .set_rect(STAGE_COORD, STAGE_COORD, ask.0, ask.1);
@@ -6419,7 +7288,7 @@ fn reveal_in_process_hook(
 
     // Size `host`, register thumbnail, and show opaque topmost `host` FIRST.
     if *state.box_of_the_host != Some(host_rect) {
-        let _ = unsafe {
+        let host_ok = unsafe {
             SetWindowPos(
                 host,
                 HWND::default(),
@@ -6429,14 +7298,41 @@ fn reveal_in_process_hook(
                 hh,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             )
-        };
+        }
+        .is_ok();
+        let host_err = if host_ok { 0 } else { win_err() };
+        cp_trace!(
+            "reveal_hook: host_pos id={} host_rect={:?} ok={} err={}",
+            launch.id,
+            host_rect,
+            host_ok,
+            host_err
+        );
         *state.box_of_the_host = Some(host_rect);
     }
     if *state.registered == 0 {
-        if let Ok(registration) = unsafe { DwmRegisterThumbnail(host, source) } {
-            *state.registered = registration;
-            if let Ok(mut held) = THUMBNAIL.lock() {
-                *held = registration;
+        match unsafe { DwmRegisterThumbnail(host, source) } {
+            Ok(registration) => {
+                *state.registered = registration;
+                if let Ok(mut held) = THUMBNAIL.lock() {
+                    *held = registration;
+                }
+                cp_trace!(
+                    "reveal_hook: dwm_register id={} reg=0x{:x} host=0x{:x} src=0x{:x}",
+                    launch.id,
+                    registration as usize,
+                    host.0 as usize,
+                    source.0 as usize
+                );
+            }
+            Err(e) => {
+                cp_trace!(
+                    "reveal_hook: dwm_register_err id={} host=0x{:x} src=0x{:x} err={:?}",
+                    launch.id,
+                    host.0 as usize,
+                    source.0 as usize,
+                    e
+                );
             }
         }
     }
@@ -6457,19 +7353,38 @@ fn reveal_in_process_hook(
             (w as i32, h as i32)
         };
         let properties = thumbnail_properties(client.right, client.bottom, picture, window_mode);
-        if unsafe { DwmUpdateThumbnailProperties(*state.registered, &properties) }.is_ok() {
-            SHOWN.store(true, Ordering::SeqCst);
-            let _ = unsafe {
-                SendMessageTimeoutW(
-                    host,
-                    WM_THE_PICTURE_IS_READY,
-                    WPARAM(0),
-                    LPARAM(0),
-                    SMTO_ABORTIFHUNG | SMTO_NORMAL,
-                    100,
-                    None,
-                )
-            };
+        match unsafe { DwmUpdateThumbnailProperties(*state.registered, &properties) } {
+            Ok(()) => {
+                SHOWN.store(true, Ordering::SeqCst);
+                let _ = unsafe {
+                    SendMessageTimeoutW(
+                        host,
+                        WM_THE_PICTURE_IS_READY,
+                        WPARAM(0),
+                        LPARAM(0),
+                        SMTO_ABORTIFHUNG | SMTO_NORMAL,
+                        100,
+                        None,
+                    )
+                };
+                cp_trace!(
+                    "reveal_hook: dwm_update ok id={} client=({},{}) picture={:?}",
+                    launch.id,
+                    client.right,
+                    client.bottom,
+                    picture
+                );
+            }
+            Err(e) => {
+                cp_trace!(
+                    "reveal_hook: dwm_update_err id={} client=({},{}) picture={:?} err={:?}",
+                    launch.id,
+                    client.right,
+                    client.bottom,
+                    picture,
+                    e
+                );
+            }
         }
     }
 
@@ -6489,6 +7404,13 @@ fn reveal_in_process_hook(
             );
             session.view.uncloak_sync(source);
             if !aligned_behind_host(source, host_rect) {
+                cp_trace!(
+                    "reveal_hook: behind_host_retry id={} cur_win={:?} cur_vis={:?} host={:?}",
+                    launch.id,
+                    window_rect(source),
+                    visible_frame_rect(source),
+                    host_rect
+                );
                 apply_hook_rect_now(ctx.hook, source, (wx, wy, ww, wh), ZORDER_BOTTOM);
                 force_place_window(
                     source,
@@ -6504,6 +7426,13 @@ fn reveal_in_process_hook(
                 PlacementMode::BehindHost
             } else {
                 let ask = the_ask_for((hw, hh), source_size(source, window_mode));
+                cp_trace!(
+                    "reveal_hook: behind_host_degrade_offscreen id={} ask={:?} cur_win={:?} cur_vis={:?}",
+                    launch.id,
+                    ask,
+                    window_rect(source),
+                    visible_frame_rect(source)
+                );
                 *state.the_ask = Some(ask);
                 session
                     .view
@@ -6579,6 +7508,17 @@ fn reveal_in_process_hook(
     *state.placed_mode = Some(mode);
     *state.placed_host_rect = Some(host_rect);
     *state.expected_rect = window_rect(source);
+    cp_trace!(
+        "reveal_hook: done id={} mode={:?} fits_host={} host_rect={:?} expected={:?} vis={:?} offscreen={} hits={}",
+        launch.id,
+        mode,
+        fits_host,
+        host_rect,
+        *state.expected_rect,
+        visible_frame_rect(source),
+        is_window_offscreen(source),
+        session.view.hook_hits()
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6618,8 +7558,23 @@ fn run_in_process_hook_settle_and_reveal(
 
     let forced = enforces_placement(launch.placement);
     let hook_mode = uses_hook_enforcement(launch.placement);
+    cp_trace!(
+        "settle_hook: start id={} src=0x{:x} was_hidden={} forced={} hook_mode={} hits={} cloaked={} win={:?}",
+        launch.id,
+        source.0 as usize,
+        was_hidden,
+        forced,
+        hook_mode,
+        session.view.hook_hits(),
+        session.view.is_cloaked(),
+        window_rect(source)
+    );
     if was_hidden {
         let Some(target_rect) = current_target_rect() else {
+            cp_trace!(
+                "settle_hook: abort id={} reason=no_target_rect_hidden",
+                launch.id
+            );
             if is_current(launch.id) {
                 end_the_program();
             }
@@ -6655,6 +7610,12 @@ fn run_in_process_hook_settle_and_reveal(
         if !ok && !is_window_offscreen(source) {
             push_offscreen(source);
         }
+        cp_trace!(
+            "settle_hook: degrade_uncloaked id={} inv_layered={} offscreen={}",
+            launch.id,
+            ok,
+            is_window_offscreen(source)
+        );
     }
 
     census(
@@ -6673,18 +7634,34 @@ fn run_in_process_hook_settle_and_reveal(
     let settle_deadline = settle_start + Duration::from_millis(500);
     let mut last_rect = window_rect(source);
     let mut last_change = settle_start;
+    let mut settle_reason = "deadline";
 
     while Instant::now() < settle_deadline {
         if !is_current(launch.id) {
+            cp_trace!(
+                "settle_hook: exit id={} reason=superseded elapsed_ms={}",
+                launch.id,
+                settle_start.elapsed().as_millis()
+            );
             return false;
         }
         if !unsafe { IsWindow(source) }.as_bool() {
+            cp_trace!(
+                "settle_hook: exit id={} reason=window_destroyed elapsed_ms={}",
+                launch.id,
+                settle_start.elapsed().as_millis()
+            );
             if is_current(launch.id) {
                 end_the_program();
             }
             return false;
         }
         let Some(target_rect) = current_target_rect() else {
+            cp_trace!(
+                "settle_hook: exit id={} reason=want_cleared elapsed_ms={}",
+                launch.id,
+                settle_start.elapsed().as_millis()
+            );
             if !is_current(launch.id) {
                 return false;
             }
@@ -6744,31 +7721,59 @@ fn run_in_process_hook_settle_and_reveal(
             }
             .0 != 0;
             if !is_current(launch.id) {
+                cp_trace!(
+                    "settle_hook: exit id={} reason=superseded_wm_null elapsed_ms={}",
+                    launch.id,
+                    settle_start.elapsed().as_millis()
+                );
                 return false;
             }
             if !unsafe { IsWindow(source) }.as_bool() {
+                cp_trace!(
+                    "settle_hook: exit id={} reason=destroyed_wm_null elapsed_ms={}",
+                    launch.id,
+                    settle_start.elapsed().as_millis()
+                );
                 if is_current(launch.id) {
                     end_the_program();
                 }
                 return false;
             }
             if answered && window_rect(source) == last_rect {
+                settle_reason = "stable";
                 break;
             }
         }
         std::thread::sleep(Duration::from_millis(10));
     }
 
+    cp_trace!(
+        "settle_hook: settled id={} reason={} elapsed_ms={} last_rect={:?} hits={}",
+        launch.id,
+        settle_reason,
+        settle_start.elapsed().as_millis(),
+        last_rect,
+        session.view.hook_hits()
+    );
+
     if !is_current(launch.id) {
         return false;
     }
     if !unsafe { IsWindow(source) }.as_bool() {
+        cp_trace!(
+            "settle_hook: post_exit id={} reason=window_destroyed",
+            launch.id
+        );
         if is_current(launch.id) {
             end_the_program();
         }
         return false;
     }
     let Some(host_rect) = current_target_rect() else {
+        cp_trace!(
+            "settle_hook: post_exit id={} reason=no_target_rect",
+            launch.id
+        );
         cloak_or_park(*state.invisible_layered);
         if is_current(launch.id) {
             end_the_program();
@@ -6918,11 +7923,17 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
 
     while Instant::now() < deadline {
         if !launch_still_wanted(launch) {
+            cp_trace!("wait_std: aborted_loop id={}", launch.id);
             return None;
         }
 
         if let Some(window) = check_now(&processes, &mut images, &mut creation_times) {
             if !launch_still_wanted(launch) {
+                cp_trace!(
+                    "wait_std: aborted_after_check id={} hwnd=0x{:x}",
+                    launch.id,
+                    window.0 as usize
+                );
                 cleanup_aborted_source(window, launch);
                 return None;
             }
@@ -7001,10 +8012,16 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             });
             if matched {
                 if !launch_still_wanted(launch) {
+                    cp_trace!("wait_std: aborted_msg id={}", launch.id);
                     return None;
                 }
                 if let Some(window) = check_now(&processes, &mut images, &mut creation_times) {
                     if !launch_still_wanted(launch) {
+                        cp_trace!(
+                            "wait_std: aborted_msg_after_check id={} hwnd=0x{:x}",
+                            launch.id,
+                            window.0 as usize
+                        );
                         cleanup_aborted_source(window, launch);
                         return None;
                     }
@@ -7013,6 +8030,7 @@ fn wait_for_a_window(launch: &Launch) -> Option<HWND> {
             }
         }
     }
+    cp_trace!("wait_std: timeout id={} procs={:?}", launch.id, processes);
     None
 }
 
@@ -9485,5 +10503,40 @@ mod tests {
             !SHOWN.load(Ordering::SeqCst),
             "OpenAsNewProcess must hide host"
         );
+    }
+
+    #[test]
+    fn trace_env_flag_parsing_and_write_truncates_once_then_appends() {
+        assert!(!trace::env_flag_enabled(None));
+        assert!(!trace::env_flag_enabled(Some(OsStr::new(""))));
+        assert!(!trace::env_flag_enabled(Some(OsStr::new("0"))));
+        assert!(!trace::env_flag_enabled(Some(OsStr::new("false"))));
+        assert!(!trace::env_flag_enabled(Some(OsStr::new("FALSE"))));
+        assert!(trace::env_flag_enabled(Some(OsStr::new("1"))));
+        assert!(trace::env_flag_enabled(Some(OsStr::new("true"))));
+
+        let unique = format!(
+            "rhp_cp_trace_test_{}_{}.log",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let log = std::env::temp_dir().join(unique);
+        std::fs::write(&log, "stale-previous-session\n").unwrap();
+
+        let started = Once::new();
+        trace::write_with_once(&started, &log, "first line");
+        trace::write_with_once(&started, &log, "second line");
+
+        let content = std::fs::read_to_string(&log).unwrap();
+        let _ = std::fs::remove_file(&log);
+
+        assert!(!content.contains("stale-previous-session"));
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].ends_with(" first line"));
+        assert!(lines[1].ends_with(" second line"));
     }
 }
