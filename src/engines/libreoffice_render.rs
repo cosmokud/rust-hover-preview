@@ -174,6 +174,9 @@ fn soffice() -> Option<PathBuf> {
 /// longer than a conversion takes: the stage folder is emptied before every conversion, and the
 /// document a kept engine holds is a stub of this app's own.
 fn workspace() -> Option<PathBuf> {
+    if let Some(portable) = crate::paths::data_root() {
+        return Some(portable.join("libreoffice"));
+    }
     Some(
         BaseDirs::new()?
             .data_local_dir()

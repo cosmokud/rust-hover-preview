@@ -421,12 +421,15 @@ fn state_folder() -> Option<PathBuf> {
     }
 
     #[cfg(not(test))]
-    Some(
-        BaseDirs::new()?
-            .data_local_dir()
-            .join("rust-hover-preview")
-            .join("engines"),
-    )
+    match crate::paths::data_root() {
+        Some(portable) => Some(portable.join("engines")),
+        None => Some(
+            BaseDirs::new()?
+                .data_local_dir()
+                .join("rust-hover-preview")
+                .join("engines"),
+        ),
+    }
 }
 
 /// Where a test build keeps its run files while a test does not name a folder of its

@@ -170,13 +170,16 @@ fn profile_root() -> PathBuf {
     }
 
     #[cfg(not(test))]
-    directories::BaseDirs::new()
-        .map(|dirs| {
-            dirs.data_local_dir()
-                .join("rust-hover-preview")
-                .join("webview")
-        })
-        .unwrap_or_else(std::env::temp_dir)
+    match crate::paths::data_root() {
+        Some(portable) => portable.join("webview"),
+        None => directories::BaseDirs::new()
+            .map(|dirs| {
+                dirs.data_local_dir()
+                    .join("rust-hover-preview")
+                    .join("webview")
+            })
+            .unwrap_or_else(std::env::temp_dir),
+    }
 }
 
 /// Where a test build keeps its profiles while a test does not name a folder of its

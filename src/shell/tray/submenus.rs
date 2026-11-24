@@ -430,6 +430,11 @@ pub(super) fn remember_volume_label() -> &'static str {
 /// The row that offers the update a check found, which is the version it is of
 /// and nothing else: the whole of what it says is what it offers.
 pub(super) fn update_available_label(version: &str) -> String {
+    // A portable run cannot be updated by the installer the release carries, so its row says what
+    // the click does there: opens the page the new zip is on.
+    if crate::paths::portable() {
+        return format!("Update Available (v{version}) — download the portable zip");
+    }
     format!("Update Available (v{version})")
 }
 

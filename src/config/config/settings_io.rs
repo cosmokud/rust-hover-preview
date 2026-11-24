@@ -566,7 +566,12 @@ impl AppConfig {
         }
 
         #[cfg(not(test))]
-        BaseDirs::new().map(|dirs| dirs.config_dir().join("rust-hover-preview"))
+        {
+            if let Some(portable) = crate::paths::data_root() {
+                return Some(portable.to_path_buf());
+            }
+            BaseDirs::new().map(|dirs| dirs.config_dir().join("rust-hover-preview"))
+        }
     }
 
     pub fn config_path() -> Option<PathBuf> {
