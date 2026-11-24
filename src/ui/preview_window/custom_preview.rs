@@ -4467,17 +4467,41 @@ impl Drop for InProcessHookSession {
     }
 }
 
+/// Beside the executable first, so a portable zip carries its own copy; then the per-user folder,
+/// which is where a lone executable's copy has to be put by hand. Tests run from
+/// `target/<profile>/deps/`, and the DLL that build made is in `target/<profile>/` above them.
 fn find_hook_dll() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-    let direct = dir.join("custom_preview_hook.dll");
-    if direct.is_file() {
-        return Some(direct);
-    }
-    // Integration/unit tests run under `target/<profile>/deps/`; DLL lives in `target/<profile>/`.
-    let parent_candidate = dir.parent()?.join("custom_preview_hook.dll");
-    parent_candidate.is_file().then_some(parent_candidate)
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    hook_dll_candidates(&dir, user_hook_folder())
+        .into_iter()
+        .find(|path| path.is_file())
 }
+
+/// The order `find_hook_dll` searches, as paths: beside the executable, one level above it, then
+/// the per-user folder.
+fn hook_dll_candidates(dir: &Path, user_folder: Option<PathBuf>) -> Vec<PathBuf> {
+    const NAME: &str = "custom_preview_hook.dll";
+    let mut candidates = vec![dir.join(NAME)];
+    if let Some(parent) = dir.parent() {
+        candidates.push(parent.join(NAME));
+    }
+    candidates.extend(user_folder.map(|folder| folder.join(NAME)));
+    candidates
+}
+
+/// `<local appdata>\rust-hover-preview` — local and not the roaming folder `config.ini` lives in,
+/// which a domain profile syncs and no binary belongs in.
+fn user_hook_folder() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|base| base.data_local_dir().join("rust-hover-preview"))
+}
+
+/// Whether a launch would find the hook DLL, read once for the preset editor's Capture Technique
+/// row. The DLL does not move while this app runs, and a hover searches for it again anyway.
+pub(crate) fn hook_dll_present() -> bool {
+    *HOOK_DLL_PRESENT.get_or_init(|| find_hook_dll().is_some())
+}
+
+static HOOK_DLL_PRESENT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn load_hook_dll() -> Option<(HMODULE, HOOKPROC, HOOKPROC)> {
     let path = find_hook_dll()?;
@@ -6394,6 +6418,26 @@ mod tests {
             bottom: 700,
         };
         assert!(!should_restore_on_teardown(false, on_screen, vscreen));
+    }
+
+    #[test]
+    fn the_hook_dll_is_sought_beside_the_executable_before_the_user_folder() {
+        // The portable zip and the installer both carry the DLL beside the exe, so that copy wins
+        // over whatever a lone executable's folder holds.
+        let dir = Path::new(r"C:\apps\rhp");
+        let user = PathBuf::from(r"C:\users\u\AppData\Local\rust-hover-preview");
+        let candidates = hook_dll_candidates(dir, Some(user));
+        assert_eq!(
+            candidates,
+            vec![
+                dir.join("custom_preview_hook.dll"),
+                Path::new(r"C:\apps").join("custom_preview_hook.dll"),
+                PathBuf::from(r"C:\users\u\AppData\Local\rust-hover-preview")
+                    .join("custom_preview_hook.dll"),
+            ]
+        );
+        // No local-appdata folder on the machine is two candidates rather than a panic.
+        assert_eq!(hook_dll_candidates(dir, None).len(), 2);
     }
 
     #[test]
