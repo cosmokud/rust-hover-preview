@@ -5967,6 +5967,7 @@ struct JobChildPreHook {
     initial_hook_rect: Option<(i32, i32, i32, i32)>,
     pre_hook: Option<InProcessHookSession>,
     hooked_tids: HashSet<u32>,
+    tight_attempted_pids: HashSet<u32>,
     wow64_cache: HashMap<u32, Option<bool>>,
     logged_errs: HashSet<(u32, u32, u32)>,
 }
@@ -5988,6 +5989,7 @@ impl JobChildPreHook {
             initial_hook_rect: launch.provisional,
             pre_hook: None,
             hooked_tids: HashSet::new(),
+            tight_attempted_pids: HashSet::new(),
             wow64_cache: HashMap::new(),
             logged_errs: HashSet::new(),
         }
@@ -6048,6 +6050,72 @@ impl JobChildPreHook {
         let Some((cbt_proc, cwp_proc)) = hook_procs_from_module(session.dll_module) else {
             return;
         };
+
+        let attach_start = Instant::now();
+        let do_tight_retry = session.hooks.is_empty() && self.tight_attempted_pids.insert(pid);
+        if do_tight_retry {
+            let tight_deadline = attach_start + Duration::from_millis(80);
+            let mut tids = threads_of_process(pid);
+            let mut last_enum = attach_start;
+            let mut attempts: u32 = 0;
+            let mut last_err: Option<(&'static str, u32)> = None;
+            while Instant::now() < tight_deadline {
+                if !launch_still_wanted(launch) {
+                    return;
+                }
+                if last_enum.elapsed() >= Duration::from_millis(5) {
+                    tids = threads_of_process(pid);
+                    last_enum = Instant::now();
+                    if tids.is_empty() {
+                        break;
+                    }
+                }
+                attempts = attempts.saturating_add(1);
+                for &tid in &tids {
+                    if self.hooked_tids.contains(&tid) {
+                        continue;
+                    }
+                    match try_attach_thread_hooks_result(
+                        session.dll_module,
+                        cbt_proc,
+                        cwp_proc,
+                        tid,
+                    ) {
+                        Ok((cbt, cwp)) => {
+                            self.hooked_tids.insert(tid);
+                            session.hooks.push((tid, cbt, cwp));
+                            cp_trace!(
+                                "pre_attach_job_child: ok id={} pid={} tid={} hooks={} attempts={} elapsed_ms={}",
+                                launch.id,
+                                pid,
+                                tid,
+                                session.hooks.len(),
+                                attempts,
+                                attach_start.elapsed().as_millis()
+                            );
+                            return;
+                        }
+                        Err(err) => {
+                            last_err = Some(err);
+                        }
+                    }
+                }
+                std::thread::yield_now();
+            }
+            if session.hooks.is_empty() {
+                cp_trace!(
+                    "pre_attach_job_child: tight_retry_timeout id={} pid={} attempts={} elapsed_ms={} tids={} last_err={:?}",
+                    launch.id,
+                    pid,
+                    attempts,
+                    attach_start.elapsed().as_millis(),
+                    tids.len(),
+                    last_err
+                );
+            }
+            return;
+        }
+
         for tid in threads_of_process(pid) {
             if self.hooked_tids.contains(&tid) {
                 continue;
@@ -6057,15 +6125,16 @@ impl JobChildPreHook {
                     self.hooked_tids.insert(tid);
                     session.hooks.push((tid, cbt, cwp));
                     cp_trace!(
-                        "pre_attach_job_child: ok id={} pid={} tid={} hooks={}",
+                        "pre_attach_job_child: ok id={} pid={} tid={} hooks={} attempts=1 elapsed_ms={}",
                         launch.id,
                         pid,
                         tid,
-                        session.hooks.len()
+                        session.hooks.len(),
+                        attach_start.elapsed().as_millis()
                     );
                 }
                 Err((stage, err)) => {
-                    // err=87 (`ERROR_INVALID_PARAMETER`) means USER32 is not initialized yet; retry next 5ms tick.
+                    // err=87 (`ERROR_INVALID_PARAMETER`) means USER32 is not initialized yet; retry next tick.
                     if err != 87 && self.logged_errs.insert((pid, tid, err)) {
                         cp_trace!(
                             "pre_attach_job_child: err id={} pid={} tid={} stage={} err={}",
@@ -6078,6 +6147,17 @@ impl JobChildPreHook {
                     }
                 }
             }
+        }
+    }
+
+    fn wait_cap_ms(&self, launch: &Launch) -> u128 {
+        if self.enabled
+            && self.pre_hook.is_none()
+            && launch.launched_at.elapsed() < Duration::from_millis(150)
+        {
+            1
+        } else {
+            5
         }
     }
 
@@ -6538,7 +6618,7 @@ fn wait_for_a_window_offscreen_staged(
         let remaining_ms = deadline
             .saturating_duration_since(Instant::now())
             .as_millis()
-            .min(5) as u32;
+            .min(pre_hook.wait_cap_ms(launch)) as u32;
         if remaining_ms > 0 {
             let _ = unsafe {
                 MsgWaitForMultipleObjectsEx(None, remaining_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
@@ -9075,7 +9155,7 @@ fn wait_for_a_window(
         let remaining_ms = deadline
             .saturating_duration_since(Instant::now())
             .as_millis()
-            .min(5) as u32;
+            .min(pre_hook.wait_cap_ms(launch)) as u32;
         if remaining_ms > 0 {
             let _ = unsafe {
                 MsgWaitForMultipleObjectsEx(None, remaining_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
@@ -12014,6 +12094,43 @@ mod tests {
         assert!(hook_tracker.enabled);
         let layered_tracker = PreCloakTracker::new(CustomCaptureTechnique::InvisibleLayered);
         assert!(layered_tracker.enabled);
+
+        let dummy_launch = |requested_capture: CustomCaptureTechnique| -> Launch {
+            let handle = unsafe {
+                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, std::process::id())
+                    .expect("open current process query handle")
+            };
+            Launch {
+                path: PathBuf::from("sample.custom"),
+                initial_own: None,
+                provisional: None,
+                packaged_broker: false,
+                process: Arc::new(unsafe { OwnedHandle::from_raw_handle(handle.0) }),
+                pid: 1,
+                tid: 1,
+                exe: "stub.exe".to_owned(),
+                previous_foreground: 0,
+                windows_before: Vec::new(),
+                processes_before: Vec::new(),
+                launch_filetime: 0,
+                launched_at: Instant::now(),
+                placement: CustomPlacement::FollowTray,
+                requested_capture,
+                install_dir: None,
+                id: 1,
+            }
+        };
+
+        // Wait cap shrinks from 5ms to 1ms for the first 150ms when waiting for a 64-bit job child.
+        let offscreen_launch = dummy_launch(CustomCaptureTechnique::OffScreen);
+        let offscreen_pre =
+            JobChildPreHook::new(&offscreen_launch, CustomCaptureTechnique::OffScreen);
+        assert!(!offscreen_pre.enabled);
+        assert_eq!(offscreen_pre.wait_cap_ms(&offscreen_launch), 5);
+        let hook_launch = dummy_launch(CustomCaptureTechnique::InProcessHook);
+        let pre = JobChildPreHook::new(&hook_launch, CustomCaptureTechnique::InvisibleLayered);
+        assert!(pre.enabled);
+        assert_eq!(pre.wait_cap_ms(&hook_launch), 1);
 
         // `select_hook_or_census_candidate` immediately adopts a titled captured HWND >= 64x64
         // when no larger visible Census window is present.
