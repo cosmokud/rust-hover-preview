@@ -151,11 +151,11 @@ Download the latest Windows 11 build from the repository's Releases page:
 Each release provides two options:
 
 - `rust-hover-preview_<version>_x64-setup.exe` — NSIS installer. Installs to `%LOCALAPPDATA%\rust-hover-preview` with an optional startup entry. **No administrator rights required.**
-- `rust-hover-preview_<version>_x64-portable.zip` — Portable build: `rust-hover-preview.exe` and the `custom_preview_hook.dll` it loads, unzipped into any folder.
+- `rust-hover-preview_<version>_x64-portable.zip` — Portable build: `rust-hover-preview.exe`, the `custom_preview_hook.dll` it loads, and the `.portable` marker that keeps everything beside itself. Unzip it into any folder.
 
 1. Open [Releases](https://github.com/cosmokud/rust-hover-preview/releases/latest).
 2. Download your preferred asset.
-3. Run the installer, or unzip the portable build wherever you like — keeping both files together, since the DLL is what `In-Process Hook` loads.
+3. Run the installer, or unzip the portable build wherever you like — keeping all three files together, since the DLL is what `In-Process Hook` loads and `.portable` is what keeps `config.ini`, `theme`, `engines`, `webview` and `libreoffice` in that folder instead of in your profile. Only the caches stay in `%TEMP%`, and `Start with Windows` still writes the one entry in the registry.
 4. Launch Rust Hover Preview.
 
 No Rust toolchain is needed.

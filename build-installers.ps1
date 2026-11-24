@@ -78,6 +78,20 @@ foreach ($file in $portableFiles) {
     }
 }
 Compress-Archive -LiteralPath $portableFiles -DestinationPath $portable -CompressionLevel Optimal
+# The marker is what makes the unzipped copy keep `config.ini`, `theme`, `engines`, `webview` and
+# `libreoffice` beside itself rather than scattering them through the user's profile (see
+# `paths::data_root`). An empty file says all of it, and it has to be in the archive from the
+# start: a user who unzips last build's zip gets no marker and therefore no portable copy.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [System.IO.Compression.ZipFile]::Open($portable, 'Update')
+try {
+    $zipEntry = $archive.CreateEntry('.portable')
+    $zipEntry.LastWriteTime = [System.DateTimeOffset]::Now
+}
+finally {
+    $archive.Dispose()
+}
 Write-Host ""
 Write-Host "Portable zip:"
 Write-Host (" - " + $portable)
