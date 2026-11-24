@@ -454,9 +454,66 @@ enum ArgQuote {
     Single,
 }
 
+fn is_single_outer_quoted_span(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() < 2 {
+        return false;
+    }
+    let outer = bytes[0];
+    if (outer != b'"' && outer != b'\'') || bytes[bytes.len() - 1] != outer {
+        return false;
+    }
+    if outer == b'\'' {
+        return !bytes[1..bytes.len() - 1].contains(&b'\'');
+    }
+
+    let mut i = 1usize;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            let mut slashes = 0usize;
+            while i < bytes.len() && bytes[i] == b'\\' {
+                slashes += 1;
+                i += 1;
+            }
+            if i < bytes.len() && bytes[i] == b'"' {
+                if slashes.is_multiple_of(2) {
+                    return i == bytes.len() - 1;
+                }
+                i += 1;
+            }
+        } else if bytes[i] == b'"' {
+            return i == bytes.len() - 1;
+        } else {
+            i += 1;
+        }
+    }
+    false
+}
+
 /// Parse an Arguments string into individual argv tokens following Windows `CommandLineToArgvW`
-/// backslash-before-quote rules plus single-quote grouping outside double quotes.
+/// backslash-before-quote rules plus single-quote grouping outside double quotes, unwrapping an
+/// accidental single outer wrapper quote around multiple flags/args while preserving real quoted values.
 pub fn parse_arguments(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if is_single_outer_quoted_span(trimmed) {
+        let raw_tokens = parse_arguments_raw(trimmed);
+        if raw_tokens.len() == 1 {
+            let inner_tokens = parse_arguments_raw(&raw_tokens[0]);
+            let looks_like_arg_list = inner_tokens.len() >= 2
+                && (((inner_tokens[0].starts_with('-') || inner_tokens[0].starts_with('/'))
+                    && !inner_tokens[0].contains('='))
+                    || inner_tokens[1..]
+                        .iter()
+                        .any(|t| t.starts_with('-') || t.starts_with('/') || t.contains("{file}")));
+            if looks_like_arg_list {
+                return inner_tokens;
+            }
+        }
+    }
+    parse_arguments_raw(trimmed)
+}
+
+fn parse_arguments_raw(raw: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_token = false;
@@ -1295,6 +1352,46 @@ mod tests {
         assert_eq!(
             sanitize_arguments("  --flag=1 \r\n --second=\"a b\" "),
             "  --flag=1  --second=\"a b\" "
+        );
+    }
+
+    #[test]
+    fn parse_arguments_unwraps_accidental_outer_quotes_only_for_arg_lists() {
+        assert_eq!(
+            parse_arguments(r#""-fullscreen -borderless""#),
+            vec!["-fullscreen", "-borderless"]
+        );
+        assert_eq!(
+            parse_arguments(r#""--fullscreen --silent""#),
+            vec!["--fullscreen", "--silent"]
+        );
+        assert_eq!(
+            parse_arguments("'--fullscreen --silent'"),
+            vec!["--fullscreen", "--silent"]
+        );
+        assert_eq!(
+            parse_arguments(r#""-fullscreen --path \"dir/sub/app.exe\"""#),
+            vec!["-fullscreen", "--path", "dir/sub/app.exe"]
+        );
+        assert_eq!(
+            parse_arguments(r#"--path "dir/sub/app.exe""#),
+            vec!["--path", "dir/sub/app.exe"]
+        );
+        assert_eq!(
+            parse_arguments(r#""--path" "dir/sub/app.exe""#),
+            vec!["--path", "dir/sub/app.exe"]
+        );
+        assert_eq!(
+            parse_arguments(r#""--title=My Video""#),
+            vec!["--title=My Video"]
+        );
+        assert_eq!(
+            parse_arguments(r#""my single file.txt""#),
+            vec!["my single file.txt"]
+        );
+        assert_eq!(
+            parse_arguments(r#""{file} --fullscreen""#),
+            vec!["{file}", "--fullscreen"]
         );
     }
 
