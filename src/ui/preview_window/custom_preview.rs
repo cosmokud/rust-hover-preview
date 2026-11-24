@@ -116,6 +116,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{
@@ -159,10 +160,11 @@ use windows::Win32::System::Memory::{
 use windows::Win32::System::Threading::{
     CreateProcessW, GetProcessTimes, GetThreadId, IsWow64Process, OpenProcess,
     QueryFullProcessImageNameW, ResumeThread, TerminateProcess, WaitForInputIdle,
-    WaitForSingleObject, CREATE_SUSPENDED, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, STARTF_USEPOSITION,
-    STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW, THREAD_QUERY_LIMITED_INFORMATION,
+    WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_CREATION_FLAGS,
+    PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
+    THREAD_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, IsWindowEnabled};
@@ -205,7 +207,7 @@ use super::preview_scale::{animated_scale_for, fit_reduced, HoverScales};
 use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
 use crate::config::config::{
-    custom_preset_for, CustomCaptureTechnique, CustomPlacement, CustomPreset,
+    build_launch_args, custom_preset_for, CustomCaptureTechnique, CustomPlacement, CustomPreset,
     CustomPromotionTechnique, CustomScaling, CustomWindowMode, PreviewScale, PreviewType,
     DEFAULT_AUDIO_SCALE,
 };
@@ -429,6 +431,7 @@ impl Drop for PreviewJob {
 struct Program {
     path: PathBuf,
     exe: String,
+    arguments: String,
     process: Arc<OwnedHandle>,
     pid: u32,
     job: Option<PreviewJob>,
@@ -1342,6 +1345,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     };
 
     let placement = preset.placement;
+    let arguments = preset.arguments.clone();
 
     // **The same program is not begun twice.** A hover of this file that this app's program is
     // already drawing is put back up wherever the hand now is — which is the whole of what keeps
@@ -1350,11 +1354,16 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         .lock()
         .ok()
         .and_then(|held| {
-            held.as_ref()
-                .map(|program| (program.path.clone(), program.exe.clone()))
+            held.as_ref().map(|program| {
+                (
+                    program.path.clone(),
+                    program.exe.clone(),
+                    program.arguments.clone(),
+                )
+            })
         })
-        .is_some_and(|(path_of, exe_of)| {
-            path_of.as_path() == path && exe_of.eq_ignore_ascii_case(&exe)
+        .is_some_and(|(path_of, exe_of, args_of)| {
+            path_of.as_path() == path && exe_of.eq_ignore_ascii_case(&exe) && args_of == arguments
         });
     if the_same_program {
         if let Ok(mut want) = WANT.lock() {
@@ -1362,9 +1371,10 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         }
         LIVE.store(true, Ordering::Release);
         cp_trace!(
-            "show: reuse path={} exe={} placement={:?} cursor={:?}",
+            "show: reuse path={} exe={} arguments={:?} placement={:?} cursor={:?}",
             path_basename(path),
             path_basename(Path::new(&exe)),
+            arguments,
             placement,
             where_cursor(at)
         );
@@ -1403,9 +1413,14 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         || uses_hook_enforcement(placement)
     {
         let init = hook_init_for(requested_capture, placement, hook_provisional);
-        let Some((proc_handle, pid, tid, session)) =
-            launch_with_hook(&exe, path, hook_provisional, requested_capture, init)
-        else {
+        let Some((proc_handle, pid, tid, session)) = launch_with_hook(
+            &exe,
+            &arguments,
+            path,
+            hook_provisional,
+            requested_capture,
+            init,
+        ) else {
             cp_trace!(
                 "show: launch_with_hook_failed path={} exe={} req_cap={:?} placement={:?}",
                 path_basename(path),
@@ -1423,7 +1438,9 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             };
         (proc_handle, pid, tid, session, effective)
     } else {
-        let Some((proc_handle, pid)) = launch(&exe, path, provisional, requested_capture) else {
+        let Some((proc_handle, pid)) =
+            launch(&exe, &arguments, path, provisional, requested_capture)
+        else {
             cp_trace!(
                 "show: launch_failed path={} exe={} req_cap={:?} placement={:?}",
                 path_basename(path),
@@ -1465,6 +1482,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         *held = Some(Program {
             path: path.to_path_buf(),
             exe: exe.clone(),
+            arguments: arguments.clone(),
             process: Arc::clone(&process),
             pid,
             job,
@@ -1494,10 +1512,11 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     // is the program on screen.
     let id = LAUNCH.fetch_add(1, Ordering::SeqCst) + 1;
     cp_trace!(
-        "show: launch id={} path={} exe={} req_cap={:?} cap={:?} placement={:?} win_mode={:?} scaling={:?} own={:?} prov={:?} hook_prov={:?} pid={} tid={} hook_session={} packaged={} has_install_dir={} cursor={:?}",
+        "show: launch id={} path={} exe={} arguments={:?} req_cap={:?} cap={:?} placement={:?} win_mode={:?} scaling={:?} own={:?} prov={:?} hook_prov={:?} pid={} tid={} hook_session={} packaged={} has_install_dir={} cursor={:?}",
         id,
         path_basename(path),
         exe_file,
+        arguments,
         requested_capture,
         capture_technique,
         placement,
@@ -1945,10 +1964,12 @@ fn clear_want() {
     }
 }
 
-/// Spawn a completely untouched, detached process for `exe` + `path` (no job, no hooks, no STARTUPINFO).
-fn spawn_detached_normal(exe: &str, path: &Path) {
+/// Spawn a completely untouched, detached process for `exe` + `arguments` + `path`
+/// (with `CREATE_NO_WINDOW`, no job, no hooks, no STARTUPINFO).
+fn spawn_detached_normal(exe: &str, arguments: &str, path: &Path) {
     let mut cmd = Command::new(exe);
-    cmd.arg(path);
+    cmd.args(build_launch_args(arguments, path));
+    cmd.creation_flags(CREATE_NO_WINDOW.0);
     if let Some(dir) = Path::new(exe)
         .parent()
         .filter(|d| !d.as_os_str().is_empty() && d.is_dir())
@@ -1962,12 +1983,13 @@ fn dispatch_open_fully<D, S>(
     technique: CustomPromotionTechnique,
     path: &Path,
     exe: &str,
+    arguments: &str,
     try_detach: D,
     spawn_new: S,
 ) -> bool
 where
     D: FnOnce(&Path) -> bool,
-    S: FnOnce(&str, &Path),
+    S: FnOnce(&str, &str, &Path),
 {
     match technique {
         CustomPromotionTechnique::DirectPromotion => {
@@ -1975,14 +1997,14 @@ where
                 return true;
             }
             end_the_program();
-            spawn_new(exe, path);
+            spawn_new(exe, arguments, path);
             true
         }
         CustomPromotionTechnique::OpenAsNewProcess => {
             clear_want();
             hide_the_host();
             end_the_program();
-            spawn_new(exe, path);
+            spawn_new(exe, arguments, path);
             true
         }
     }
@@ -2000,6 +2022,7 @@ pub(super) fn open_fully(path: &Path) -> bool {
         preset.promotion_technique,
         path,
         &exe,
+        &preset.arguments,
         try_detach_active_preview,
         spawn_detached_normal,
     )
@@ -2324,14 +2347,25 @@ fn quote_win32_arg(arg: &OsStr, out: &mut Vec<u16>) {
     out.push(QUOTE);
 }
 
-/// Build NUL-terminated UTF-16 command line `"exe" "path"` for `CreateProcessW`.
-fn build_command_line(exe: &OsStr, path: &OsStr) -> Vec<u16> {
+/// Build NUL-terminated UTF-16 command line `"exe" ...args...` for `CreateProcessW`.
+fn build_command_line(exe: &Path, arguments: &str, path: &Path) -> Vec<u16> {
     let mut line = Vec::new();
-    quote_win32_arg(exe, &mut line);
-    line.push(b' ' as u16);
-    quote_win32_arg(path, &mut line);
+    quote_win32_arg(exe.as_os_str(), &mut line);
+    for arg in build_launch_args(arguments, path) {
+        line.push(b' ' as u16);
+        quote_win32_arg(OsStr::new(&arg), &mut line);
+    }
     line.push(0);
     line
+}
+
+/// Process creation flags used when launching custom-preview processes (always silent: `CREATE_NO_WINDOW`).
+fn preview_creation_flags(suspended: bool) -> PROCESS_CREATION_FLAGS {
+    if suspended {
+        CREATE_SUSPENDED | CREATE_NO_WINDOW
+    } else {
+        CREATE_NO_WINDOW
+    }
 }
 
 fn provisional_rect_for(
@@ -2401,16 +2435,17 @@ fn launch_startup_info_for(
     }
 }
 
-/// Spawn target normally via `CreateProcessW` (no `CREATE_NO_WINDOW`, no stdio redirection) with
-/// its exe folder as cwd and `STARTUPINFOW` `SW_HIDE` + provisional position/size hints.
+/// Spawn target via `CreateProcessW` with `CREATE_NO_WINDOW` (no console flash, no stdio
+/// redirection), its exe folder as cwd, and `STARTUPINFOW` `SW_HIDE` + provisional position/size hints.
 fn launch(
     exe: &str,
+    arguments: &str,
     path: &Path,
     provisional: Option<(i32, i32, i32, i32)>,
     capture_technique: CustomCaptureTechnique,
 ) -> Option<(OwnedHandle, u32)> {
     let application = wide_null(OsStr::new(exe));
-    let mut cmdline = build_command_line(OsStr::new(exe), path.as_os_str());
+    let mut cmdline = build_command_line(Path::new(exe), arguments, path);
     let cwd_wide = Path::new(exe)
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
@@ -2428,7 +2463,7 @@ fn launch(
             None,
             None,
             BOOL(0),
-            PROCESS_CREATION_FLAGS(0),
+            preview_creation_flags(false),
             None,
             cwd_ptr,
             &si,
@@ -7905,11 +7940,12 @@ fn attach_dynamic_hook_session(
 
 const IN_PROCESS_HOOK_SHOW_CMD: u16 = SW_HIDE.0 as u16;
 
-/// Spawn target with `CREATE_SUSPENDED`, initialize per-PID shared memory, and attach `WH_CBT` +
-/// `WH_CALLWNDPROC` before/immediately after `ResumeThread`. Falls back to `None` session
+/// Spawn target with `CREATE_SUSPENDED | CREATE_NO_WINDOW`, initialize per-PID shared memory,
+/// and attach `WH_CBT` + `WH_CALLWNDPROC` before/immediately after `ResumeThread`. Falls back to `None` session
 /// if DLL is missing or hook cannot attach.
 fn launch_with_hook(
     exe: &str,
+    arguments: &str,
     path: &Path,
     provisional: Option<(i32, i32, i32, i32)>,
     capture_technique: CustomCaptureTechnique,
@@ -7926,12 +7962,12 @@ fn launch_with_hook(
             fallback_tech,
             path_basename(Path::new(exe))
         );
-        let (proc_handle, pid) = launch(exe, path, provisional, fallback_tech)?;
+        let (proc_handle, pid) = launch(exe, arguments, path, provisional, fallback_tech)?;
         return Some((proc_handle, pid, 0, None));
     };
 
     let application = wide_null(OsStr::new(exe));
-    let mut cmdline = build_command_line(OsStr::new(exe), path.as_os_str());
+    let mut cmdline = build_command_line(Path::new(exe), arguments, path);
     let cwd_wide = Path::new(exe)
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
@@ -7953,7 +7989,7 @@ fn launch_with_hook(
             None,
             None,
             BOOL(0),
-            CREATE_SUSPENDED,
+            preview_creation_flags(true),
             None,
             cwd_ptr,
             &si,
@@ -10030,32 +10066,147 @@ mod tests {
 
     #[test]
     fn command_line_quoting_handles_spaces_quotes_and_trailing_backslashes() {
-        let decode = |exe: &str, path: &str| {
-            let wide = build_command_line(OsStr::new(exe), OsStr::new(path));
+        let decode = |exe: &str, args: &str, path: &str| {
+            let wide = build_command_line(Path::new(exe), args, Path::new(path));
             assert_eq!(wide.last(), Some(&0), "must be NUL-terminated");
             String::from_utf16_lossy(&wide[..wide.len() - 1])
         };
 
         assert_eq!(
-            decode("viewer.exe", "photo.png"),
+            decode("viewer.exe", "", "photo.png"),
             r#""viewer.exe" "photo.png""#
         );
         assert_eq!(
-            decode(r"Program Files\My Viewer\app.exe", r"my folder\pic 1.png"),
+            decode(
+                r"Program Files\My Viewer\app.exe",
+                "",
+                r"my folder\pic 1.png"
+            ),
             r#""Program Files\My Viewer\app.exe" "my folder\pic 1.png""#
         );
         assert_eq!(
-            decode("app.exe", r#"say "hi".txt"#),
+            decode("app.exe", "", r#"say "hi".txt"#),
             r#""app.exe" "say \"hi\".txt""#
         );
         assert_eq!(
-            decode("app.exe", r#"dir\"quoted".png"#),
+            decode("app.exe", "", r#"dir\"quoted".png"#),
             r#""app.exe" "dir\\\"quoted\".png""#
         );
         assert_eq!(
-            decode("app.exe", r"trailing\folder\\"),
+            decode("app.exe", "", r"trailing\folder\\"),
             r#""app.exe" "trailing\folder\\\\""#
         );
+        assert_eq!(
+            decode("viewer.exe", "--fullscreen --silent", "photo.png"),
+            r#""viewer.exe" "--fullscreen" "--silent" "photo.png""#
+        );
+    }
+
+    #[test]
+    fn command_line_round_trips_through_win32_command_line_to_argv_w() {
+        use windows::Win32::Foundation::{LocalFree, HLOCAL};
+        use windows::Win32::UI::Shell::CommandLineToArgvW;
+
+        fn parse_with_win32(wide_nul: &[u16]) -> Vec<String> {
+            assert_eq!(wide_nul.last(), Some(&0), "must be NUL-terminated");
+            let mut argc = 0i32;
+            let argv = unsafe { CommandLineToArgvW(PCWSTR(wide_nul.as_ptr()), &mut argc) };
+            assert!(!argv.is_null(), "CommandLineToArgvW failed");
+            let mut out = Vec::with_capacity(argc.max(0) as usize);
+            unsafe {
+                for i in 0..(argc.max(0) as usize) {
+                    let pwstr = *argv.add(i);
+                    let mut len = 0usize;
+                    while *pwstr.0.add(len) != 0 {
+                        len += 1;
+                    }
+                    let slice = std::slice::from_raw_parts(pwstr.0, len);
+                    out.push(String::from_utf16_lossy(slice));
+                }
+                let _ = LocalFree(HLOCAL(argv.cast()));
+            }
+            out
+        }
+
+        let cases: [(&str, &str, &str, &[&str]); 6] = [
+            (
+                "viewer.exe",
+                "",
+                r"samples\pic.png",
+                &["viewer.exe", r"samples\pic.png"],
+            ),
+            (
+                r"Program Files\Viewer\app.exe",
+                "--fullscreen --silent",
+                r"media\my video.mp4",
+                &[
+                    r"Program Files\Viewer\app.exe",
+                    "--fullscreen",
+                    "--silent",
+                    r"media\my video.mp4",
+                ],
+            ),
+            (
+                "app.exe",
+                r#"--title="My Preview Title" --zoom=100%"#,
+                "a b.png",
+                &[
+                    "app.exe",
+                    "--title=My Preview Title",
+                    "--zoom=100%",
+                    "a b.png",
+                ],
+            ),
+            (
+                "app.exe",
+                r#"--dir=sub\dir\file "trailing\dir\\" "\"escaped\"""#,
+                "pic.jpg",
+                &[
+                    "app.exe",
+                    r"--dir=sub\dir\file",
+                    r"trailing\dir\",
+                    "\"escaped\"",
+                    "pic.jpg",
+                ],
+            ),
+            (
+                "app.exe",
+                r#"--input={file} --mode=fast"#,
+                r"folder with spaces\clip 1.mkv",
+                &[
+                    "app.exe",
+                    r"--input=folder with spaces\clip 1.mkv",
+                    "--mode=fast",
+                ],
+            ),
+            (
+                "app.exe",
+                r#""" --empty='""' --pair={file}:{file}"#,
+                "shot.png",
+                &["app.exe", "", r#"--empty="""#, "--pair=shot.png:shot.png"],
+            ),
+        ];
+
+        for (exe, arguments, file, expected) in cases {
+            let wide = build_command_line(Path::new(exe), arguments, Path::new(file));
+            let actual = parse_with_win32(&wide);
+            assert_eq!(
+                actual.iter().map(String::as_str).collect::<Vec<_>>(),
+                expected,
+                "CommandLineToArgvW mismatch for args=`{arguments}` file=`{file}`"
+            );
+        }
+    }
+
+    #[test]
+    fn preview_creation_flags_always_include_create_no_window() {
+        let normal = preview_creation_flags(false);
+        assert_ne!(normal.0 & CREATE_NO_WINDOW.0, 0);
+        assert_eq!(normal.0 & CREATE_SUSPENDED.0, 0);
+
+        let suspended = preview_creation_flags(true);
+        assert_ne!(suspended.0 & CREATE_NO_WINDOW.0, 0);
+        assert_ne!(suspended.0 & CREATE_SUSPENDED.0, 0);
     }
 
     #[test]
@@ -10545,7 +10696,7 @@ mod tests {
                 None,
                 None,
                 BOOL(0),
-                CREATE_SUSPENDED,
+                preview_creation_flags(true),
                 None,
                 PCWSTR::null(),
                 &si,
@@ -10899,6 +11050,7 @@ mod tests {
         Program {
             path,
             exe: "test.exe".to_string(),
+            arguments: String::new(),
             process: Arc::new(unsafe { OwnedHandle::from_raw_handle(handle.0) }),
             pid: 0,
             job: None,
@@ -11736,12 +11888,13 @@ mod tests {
             CustomPromotionTechnique::DirectPromotion,
             &path,
             "viewer.exe",
+            "--silent",
             |p| {
                 assert_eq!(p, path.as_path());
                 detached = true;
                 true
             },
-            |_, _| spawned = true,
+            |_, _, _| spawned = true,
         ));
         assert!(detached);
         assert!(!spawned);
@@ -11753,12 +11906,14 @@ mod tests {
             CustomPromotionTechnique::DirectPromotion,
             &path,
             "viewer.exe",
+            "--fullscreen --silent",
             |_| {
                 detached = true;
                 false
             },
-            |exe, p| {
+            |exe, args, p| {
                 assert_eq!(exe, "viewer.exe");
+                assert_eq!(args, "--fullscreen --silent");
                 assert_eq!(p, path.as_path());
                 spawned = true;
             },
@@ -11783,12 +11938,14 @@ mod tests {
             CustomPromotionTechnique::OpenAsNewProcess,
             &path,
             "viewer.exe",
+            "--windowed",
             |_| {
                 detached = true;
                 true
             },
-            |exe, p| {
+            |exe, args, p| {
                 assert_eq!(exe, "viewer.exe");
+                assert_eq!(args, "--windowed");
                 assert_eq!(p, path.as_path());
                 spawned = true;
             },
