@@ -118,7 +118,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, AtomicU8, Ordering,
 };
@@ -127,9 +127,10 @@ use std::time::{Duration, Instant};
 
 use windows::core::{w, PCSTR, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, FreeLibrary, GetLastError, BOOL, COLORREF, ERROR_ALREADY_EXISTS, ERROR_MORE_DATA,
-    FILETIME, HANDLE, HINSTANCE, HMODULE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT,
-    WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+    CloseHandle, FreeLibrary, GetLastError, SetHandleInformation, BOOL, COLORREF,
+    ERROR_ALREADY_EXISTS, ERROR_MORE_DATA, FILETIME, HANDLE, HANDLE_FLAG_INHERIT, HINSTANCE,
+    HMODULE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, POINT, RECT, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmFlush, DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
@@ -163,7 +164,7 @@ use windows::Win32::System::Threading::{
     WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_CREATION_FLAGS,
     PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_INFORMATION,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTUPINFOW,
+    STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, STARTF_USESTDHANDLES, STARTUPINFOW,
     THREAD_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
@@ -432,6 +433,7 @@ struct Program {
     path: PathBuf,
     exe: String,
     arguments: String,
+    previous_foreground: isize,
     process: Arc<OwnedHandle>,
     pid: u32,
     job: Option<PreviewJob>,
@@ -1483,6 +1485,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             path: path.to_path_buf(),
             exe: exe.clone(),
             arguments: arguments.clone(),
+            previous_foreground,
             process: Arc::clone(&process),
             pid,
             job,
@@ -1511,8 +1514,13 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     // Read after the launch is written down, so a worker begun for it is current exactly when it
     // is the program on screen.
     let id = LAUNCH.fetch_add(1, Ordering::SeqCst) + 1;
+    let prev_fg_class = if trace::enabled() && previous_foreground != 0 {
+        hwnd_class_name(HWND(previous_foreground as *mut _))
+    } else {
+        String::new()
+    };
     cp_trace!(
-        "show: launch id={} path={} exe={} arguments={:?} req_cap={:?} cap={:?} placement={:?} win_mode={:?} scaling={:?} own={:?} prov={:?} hook_prov={:?} pid={} tid={} hook_session={} packaged={} has_install_dir={} cursor={:?}",
+        "show: launch id={} path={} exe={} arguments={:?} req_cap={:?} cap={:?} placement={:?} win_mode={:?} scaling={:?} own={:?} prov={:?} hook_prov={:?} pid={} tid={} hook_session={} packaged={} has_install_dir={} prev_fg=0x{:x} prev_fg_class={:?} cursor={:?}",
         id,
         path_basename(path),
         exe_file,
@@ -1530,6 +1538,8 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         hook_session.is_some(),
         packaged_broker,
         install_dir.is_some(),
+        previous_foreground as usize,
+        prev_fg_class,
         where_cursor(at)
     );
     let launch = Launch {
@@ -1965,10 +1975,13 @@ fn clear_want() {
 }
 
 /// Spawn a completely untouched, detached process for `exe` + `arguments` + `path`
-/// (with `CREATE_NO_WINDOW`, no job, no hooks, no STARTUPINFO).
+/// (with `CREATE_NO_WINDOW`, null stdio handles, no job, no hooks, no STARTUPINFO).
 fn spawn_detached_normal(exe: &str, arguments: &str, path: &Path) {
     let mut cmd = Command::new(exe);
     cmd.args(build_launch_args(arguments, path));
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     cmd.creation_flags(CREATE_NO_WINDOW.0);
     if let Some(dir) = Path::new(exe)
         .parent()
@@ -2172,6 +2185,11 @@ fn end_the_program() {
         }
     }
 
+    let fg_before = unsafe { GetForegroundWindow() };
+    let previous_foreground = program
+        .as_ref()
+        .map(|program| program.previous_foreground)
+        .unwrap_or(0);
     let my_pid = std::process::id();
     let launched_pid = program.as_ref().map(|program| program.pid).unwrap_or(0);
     let processes_before = program
@@ -2212,7 +2230,7 @@ fn end_the_program() {
         }
         // Dropping `program` drops `PreviewJob` (triggering `KILL_ON_JOB_CLOSE`).
     }
-    for pid in pids_to_end {
+    for &pid in &pids_to_end {
         end_process(pid);
     }
 
@@ -2224,6 +2242,7 @@ fn end_the_program() {
         let _ = unsafe { DwmUnregisterThumbnail(thumbnail) };
     }
     hide_the_host();
+    restore_foreground_on_teardown(previous_foreground, fg_before, &pids_to_end);
 }
 
 /// End a process this app did not begin: a program that hands its file to a process of its own is
@@ -2435,8 +2454,29 @@ fn launch_startup_info_for(
     }
 }
 
-/// Spawn target via `CreateProcessW` with `CREATE_NO_WINDOW` (no console flash, no stdio
-/// redirection), its exe folder as cwd, and `STARTUPINFOW` `SW_HIDE` + provisional position/size hints.
+/// Open `NUL` read+write with `HANDLE_FLAG_INHERIT` so console-subsystem preview targets (e.g.
+/// `mpv.exe`) never inherit/touch an open terminal/console handle.
+fn open_inheritable_nul() -> Option<std::fs::File> {
+    let nul = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("NUL")
+        .ok()?;
+    let handle = HANDLE(nul.as_raw_handle());
+    unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT) }.ok()?;
+    Some(nul)
+}
+
+/// Point `hStdInput`, `hStdOutput`, and `hStdError` at `nul_handle` and set `STARTF_USESTDHANDLES`.
+fn attach_nul_stdio(si: &mut STARTUPINFOW, nul_handle: HANDLE) {
+    si.dwFlags |= STARTF_USESTDHANDLES;
+    si.hStdInput = nul_handle;
+    si.hStdOutput = nul_handle;
+    si.hStdError = nul_handle;
+}
+
+/// Spawn target via `CreateProcessW` with `CREATE_NO_WINDOW` and `NUL` stdio redirection
+/// (`STARTF_USESTDHANDLES`), its exe folder as cwd, and `STARTUPINFOW` `SW_HIDE` + provisional position/size hints.
 fn launch(
     exe: &str,
     arguments: &str,
@@ -2453,24 +2493,32 @@ fn launch(
     let cwd_ptr = cwd_wide
         .as_ref()
         .map_or(PCWSTR::null(), |buf| PCWSTR(buf.as_ptr()));
-    let si = launch_startup_info_for(provisional, capture_technique, virtual_screen());
+    let mut si = launch_startup_info_for(provisional, capture_technique, virtual_screen());
+    let nul = open_inheritable_nul();
+    let inherit_handles = if let Some(ref file) = nul {
+        attach_nul_stdio(&mut si, HANDLE(file.as_raw_handle()));
+        BOOL(1)
+    } else {
+        BOOL(0)
+    };
     let mut pi = PROCESS_INFORMATION::default();
 
-    unsafe {
+    let created = unsafe {
         CreateProcessW(
             PCWSTR(application.as_ptr()),
             PWSTR(cmdline.as_mut_ptr()),
             None,
             None,
-            BOOL(0),
+            inherit_handles,
             preview_creation_flags(false),
             None,
             cwd_ptr,
             &si,
             &mut pi,
         )
-    }
-    .ok()?;
+    };
+    drop(nul);
+    created.ok()?;
     let _ = unsafe { CloseHandle(pi.hThread) };
     // SAFETY: `pi.hProcess` is uniquely owned by this call and closed on `OwnedHandle` drop.
     let process = unsafe { OwnedHandle::from_raw_handle(pi.hProcess.0) };
@@ -5678,8 +5726,69 @@ fn restore_foreground(previous: isize, processes: &[u32]) {
     if current.0.is_null() || current == prev {
         return;
     }
-    if processes.contains(&pid_of(current)) {
-        let _ = unsafe { SetForegroundWindow(prev) };
+    let cur_pid = pid_of(current);
+    if processes.contains(&cur_pid) {
+        let ok = unsafe { SetForegroundWindow(prev) }.as_bool();
+        cp_trace!(
+            "restore_foreground: active prev=0x{:x} prev_class={:?} from=0x{:x} from_pid={} ok={}",
+            previous as usize,
+            hwnd_class_name(prev),
+            current.0 as usize,
+            cur_pid,
+            ok
+        );
+    }
+}
+
+fn should_restore_foreground_on_teardown(
+    previous: isize,
+    fg_before: isize,
+    fg_pid_before: u32,
+    fg_after: isize,
+    fg_pid_after: u32,
+    dying_pids: &[u32],
+) -> bool {
+    previous != 0
+        && fg_after != previous
+        && ((fg_before != previous && dying_pids.contains(&fg_pid_before))
+            || dying_pids.contains(&fg_pid_after))
+}
+
+/// Restore previous foreground window when closing/terminating a preview that held foreground,
+/// preventing Windows from auto-raising another window (such as an already-open terminal).
+fn restore_foreground_on_teardown(previous: isize, fg_before: HWND, dying_pids: &[u32]) {
+    if previous == 0 || dying_pids.is_empty() {
+        return;
+    }
+    let prev = HWND(previous as *mut _);
+    if !unsafe { IsWindow(prev) }.as_bool()
+        || !unsafe { IsWindowVisible(prev) }.as_bool()
+        || unsafe { IsIconic(prev) }.as_bool()
+    {
+        return;
+    }
+    let fg_after = unsafe { GetForegroundWindow() };
+    let fg_before_pid = pid_of(fg_before);
+    let fg_after_pid = pid_of(fg_after);
+    if should_restore_foreground_on_teardown(
+        previous,
+        fg_before.0 as isize,
+        fg_before_pid,
+        fg_after.0 as isize,
+        fg_after_pid,
+        dying_pids,
+    ) {
+        let ok = unsafe { SetForegroundWindow(prev) }.as_bool();
+        cp_trace!(
+            "restore_foreground: teardown prev=0x{:x} prev_class={:?} fg_before=0x{:x} fg_before_pid={} fg_after=0x{:x} fg_after_pid={} ok={}",
+            previous as usize,
+            hwnd_class_name(prev),
+            fg_before.0 as usize,
+            fg_before_pid,
+            fg_after.0 as usize,
+            fg_after_pid,
+            ok
+        );
     }
 }
 
@@ -7980,24 +8089,31 @@ fn launch_with_hook(
     if capture_technique == CustomCaptureTechnique::InProcessHook {
         si.wShowWindow = IN_PROCESS_HOOK_SHOW_CMD;
     }
+    let nul = open_inheritable_nul();
+    let inherit_handles = if let Some(ref file) = nul {
+        attach_nul_stdio(&mut si, HANDLE(file.as_raw_handle()));
+        BOOL(1)
+    } else {
+        BOOL(0)
+    };
 
     let mut pi = PROCESS_INFORMATION::default();
-    if unsafe {
+    let created = unsafe {
         CreateProcessW(
             PCWSTR(application.as_ptr()),
             PWSTR(cmdline.as_mut_ptr()),
             None,
             None,
-            BOOL(0),
+            inherit_handles,
             preview_creation_flags(true),
             None,
             cwd_ptr,
             &si,
             &mut pi,
         )
-    }
-    .is_err()
-    {
+    };
+    drop(nul);
+    if created.is_err() {
         cp_trace!(
             "launch_with_hook: CreateProcessW failed exe={} err={}",
             path_basename(Path::new(exe)),
@@ -10210,6 +10326,47 @@ mod tests {
     }
 
     #[test]
+    fn nul_stdio_redirection_sets_usestdhandles_and_handles() {
+        let nul = open_inheritable_nul().expect("opening NUL must succeed on Windows");
+        let nul_handle = HANDLE(nul.as_raw_handle());
+        let mut si = launch_startup_info(Some((10, 20, 300, 200)));
+        attach_nul_stdio(&mut si, nul_handle);
+        assert!(si.dwFlags.contains(STARTF_USESTDHANDLES));
+        assert!(si.dwFlags.contains(STARTF_USESHOWWINDOW));
+        assert_eq!(si.hStdInput, nul_handle);
+        assert_eq!(si.hStdOutput, nul_handle);
+        assert_eq!(si.hStdError, nul_handle);
+    }
+
+    #[test]
+    fn should_restore_foreground_on_teardown_respects_dying_pids() {
+        let prev = 0x1234isize;
+        let other = 0x5678isize;
+        let dying = [4001u32, 4002];
+
+        // Dying process held foreground before teardown -> restore even if Windows moved fg to another window.
+        assert!(should_restore_foreground_on_teardown(
+            prev, 0x9999, 4001, other, 9999, &dying
+        ));
+        // Dying process still holds foreground after teardown -> restore.
+        assert!(should_restore_foreground_on_teardown(
+            prev, prev, 100, 0x9999, 4002, &dying
+        ));
+        // Already back on previous foreground -> no-op.
+        assert!(!should_restore_foreground_on_teardown(
+            prev, 0x9999, 4001, prev, 100, &dying
+        ));
+        // User had switched to unrelated app before teardown -> do not steal focus.
+        assert!(!should_restore_foreground_on_teardown(
+            prev, other, 9999, other, 9999, &dying
+        ));
+        // Zero previous handle -> no-op.
+        assert!(!should_restore_foreground_on_teardown(
+            0, 0x9999, 4001, other, 9999, &dying
+        ));
+    }
+
+    #[test]
     fn startup_info_sets_hide_and_clamps_provisional_rect() {
         let none = launch_startup_info(None);
         assert_eq!(none.cb, std::mem::size_of::<STARTUPINFOW>() as u32);
@@ -11051,6 +11208,7 @@ mod tests {
             path,
             exe: "test.exe".to_string(),
             arguments: String::new(),
+            previous_foreground: 0,
             process: Arc::new(unsafe { OwnedHandle::from_raw_handle(handle.0) }),
             pid: 0,
             job: None,

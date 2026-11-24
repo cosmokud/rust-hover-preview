@@ -42,7 +42,9 @@ const SW_FORCEMINIMIZE: u32 = 11;
 
 const WM_CREATE: u32 = 0x0001;
 const WM_SHOWWINDOW: u32 = 0x0018;
+const WM_MOUSEACTIVATE: u32 = 0x0021;
 const WM_GETMINMAXINFO: u32 = 0x0024;
+const MA_NOACTIVATE: isize = 3;
 const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 const WM_WINDOWPOSCHANGED: u32 = 0x0047;
 const WM_NCCREATE: u32 = 0x0081;
@@ -549,7 +551,10 @@ pub unsafe extern "system" fn rhp_cbt_proc(code: i32, wparam: usize, lparam: isi
                     }
                     state.hook_hits.fetch_add(1, Ordering::Relaxed);
                 }
-            } else if code == HCBT_ACTIVATE && state.cloak_enabled.load(Ordering::Acquire) == 1 {
+            } else if code == HCBT_ACTIVATE
+                && (locked || state.cloak_enabled.load(Ordering::Acquire) == 1)
+            {
+                state.hook_hits.fetch_add(1, Ordering::Relaxed);
                 return 1;
             }
         }
@@ -592,6 +597,10 @@ unsafe extern "system" fn rhp_subclass_proc(
         }
         let forced_mode = state.forced_placement.load(Ordering::Acquire);
         let locked = state.rect_locked.load(Ordering::Acquire) == 1;
+        if msg == WM_MOUSEACTIVATE && locked {
+            state.hook_hits.fetch_add(1, Ordering::Relaxed);
+            return MA_NOACTIVATE;
+        }
         if msg == WM_SYSCOMMAND && locked {
             let cmd = wparam & 0xFFF0;
             let block = match forced_mode {
