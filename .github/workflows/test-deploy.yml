@@ -435,14 +435,15 @@ jobs:
           }
           # The portable zip is the only place a portable user gets the hook's DLL, which the launch
           # loads from beside the exe: a zip holding the exe alone is an In-Process Hook that
-          # silently runs as Invisible Layered.
+          # silently runs as Invisible Layered. `.portable` is what makes the unzipped copy keep its
+          # folders beside itself: a zip without it is an installed app wearing a portable's name.
           $portable = "target/packager/rust-hover-preview_${version}_x64-portable.zip"
           if (-not (Test-Path $portable)) {
             $problems += "no portable zip was built, so the release would carry no portable build"
           }
           else {
             $entries = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $portable)).Entries.FullName
-            foreach ($needed in @('rust-hover-preview.exe', 'custom_preview_hook.dll')) {
+            foreach ($needed in @('rust-hover-preview.exe', 'custom_preview_hook.dll', '.portable')) {
               if ($entries -notcontains $needed) {
                 $problems += "the portable zip carries no '$needed'"
               }

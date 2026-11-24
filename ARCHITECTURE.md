@@ -61,7 +61,7 @@ AFK/engines: `app::afk` clock from hook's `ExplorerState`; an engine set to `Unt
 ```
 src/main.rs                 RUNNING, CONFIG, thread boot + tray loop, the viewer's own run (`run_a_viewer`)
 src/cache.rs                `BoundedCache<K, V>` (O(1) true LRU in-memory memo) + `StableHasher` (fixed-key SipHash-2-4 deterministic disk keys)
-src/paths.rs                plain_path() — strip \\?\ (\\?\UNC\ keeps server) before Shell/browser/media use
+src/paths.rs                plain_path() — strip \\?\ (\\?\UNC\ keeps server) before Shell/browser/media use; data_root() — the one folder a run keeps its own files in, which a `.portable` marker beside the exe moves beside itself
 src/app/                    seam (every crossing between the tray side and the preview side — the blocks each of the run's viewers stands in and the facts published there, the counts the run keeps across all of them, the notices each sends, the two rings the split carries them on, and the one doorway both name), app_icon, single_instance, startup (registry sync/repair), updates, viewer (the process a run's previews are drawn in: begun, replaced, its pid recorded), engine_processes (job+record), afk, dialogs
 src/config/                 config (AppConfig, PreviewType/PreviewScale/..., DEFAULT_*, sanitize_*, save/ordered_text/differs/repair_older_lists, custom_presets), engines_in_effect, theme_files
 src/shell/                  explorer_hook/, wheel_input, key_input, hook_thread, cloud_files, window_classes (Explorer's own windows: the two answers both sides ask, and the frame a window of the Shell's stands in, because a press inside a listing lands on a child of it), tray/
