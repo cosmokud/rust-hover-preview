@@ -455,6 +455,26 @@ pub fn run_explorer_hook() {
                 .last_file
                 .as_deref()
                 .is_some_and(|path| cached_config.is_custom_preview(path));
+        let custom_settling_for_state =
+            active_is_custom_for_state && cursor_preview_hover().custom_settling;
+        let custom_settling_on_item = if custom_settling_for_state {
+            let mut pos = POINT::default();
+            if unsafe { GetCursorPos(&mut pos) }.is_ok() {
+                let dpi = monitor_dpi_from_point(pos.x, pos.y);
+                let threshold = session.pointer_pause.move_threshold_px(false, dpi);
+                session.hover_item_box.map_or_else(
+                    || {
+                        (pos.x - session.last_cursor_pos.x).abs() <= threshold
+                            && (pos.y - session.last_cursor_pos.y).abs() <= threshold
+                    },
+                    |b| point_in_box(pos, b),
+                )
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
         // Determine sleep duration and whether to recheck state based on current state
         let (sleep_ms, mut state_recheck_ms) = explorer_pace(session.current_state, tick_ms);
@@ -480,9 +500,31 @@ pub fn run_explorer_hook() {
 
         // If Explorer is not accessible, hide preview and sleep
         match session.current_state {
-            ExplorerState::NoExplorerWindows
-            | ExplorerState::AllMinimized
-            | ExplorerState::HiddenByForeground => {
+            ExplorerState::NoExplorerWindows | ExplorerState::AllMinimized => {
+                if active_is_custom_for_state {
+                    let mut pos = POINT::default();
+                    let cursor_tuple = if unsafe { GetCursorPos(&mut pos) }.is_ok() {
+                        (pos.x, pos.y)
+                    } else {
+                        (session.last_cursor_pos.x, session.last_cursor_pos.y)
+                    };
+                    if let Some(file) = session.last_file.clone() {
+                        session.block_custom_preview(file, cursor_tuple);
+                    }
+                    session.last_orphan_custom_hide = Some(Instant::now());
+                }
+                if session.reset_for_focus_loss() {
+                    hide_preview();
+                }
+                note_engine_page_drag(session.engine_page_drag);
+                crate::app::seam::wait_for_the_tray(sleep_ms);
+                continue;
+            }
+            ExplorerState::HiddenByForeground => {
+                if custom_settling_on_item {
+                    crate::app::seam::wait_for_the_tray(tick_ms);
+                    continue;
+                }
                 if active_is_custom_for_state {
                     let mut pos = POINT::default();
                     let cursor_tuple = if unsafe { GetCursorPos(&mut pos) }.is_ok() {
@@ -520,6 +562,10 @@ pub fn run_explorer_hook() {
                     .is_some_and(|pointer| preview_pointer_hold(pointer.point.x, pointer.point.y));
 
                 if !over_explorer && !holds_pointer {
+                    if custom_settling_on_item {
+                        crate::app::seam::wait_for_the_tray(tick_ms);
+                        continue;
+                    }
                     if active_is_custom_for_state {
                         let cursor_tuple = pointer
                             .map(|p| (p.point.x, p.point.y))
@@ -1202,13 +1248,15 @@ pub fn run_explorer_hook() {
                             .hover_item_box
                             .is_some_and(|b| point_in_box(cursor_pos, b));
 
+                        let settling_in_item = raw_hover.custom_settling && inside_item;
+
                         if let Some(current_file) = probed {
                             if session
                                 .last_file
                                 .as_ref()
                                 .is_some_and(|last| same_path(last, &current_file))
                             {
-                                if over_explorer {
+                                if over_explorer || settling_in_item {
                                     session.custom_missing_file_streak = 0;
                                     session.hover_start = Some(Instant::now());
                                     continue;
@@ -1227,13 +1275,15 @@ pub fn run_explorer_hook() {
                                     false,
                                 );
                             }
-                        } else if !over_explorer || !inside_item {
+                        } else if !inside_item || (!over_explorer && !settling_in_item) {
                             dismiss_custom_preview(
                                 &mut session,
                                 (cursor_pos.x, cursor_pos.y),
                                 !over_explorer,
                                 true,
                             );
+                        } else if !over_explorer && settling_in_item {
+                            keep_custom = true;
                         } else {
                             session.custom_missing_file_streak =
                                 session.custom_missing_file_streak.saturating_add(1);
@@ -1509,7 +1559,11 @@ pub fn run_explorer_hook() {
                 let inside_item = session
                     .hover_item_box
                     .is_some_and(|b| point_in_box(cursor_pos, b));
-                if !over_explorer || (session.hover_item_box.is_some() && !inside_item) {
+                let settling_on_item =
+                    raw_hover.custom_settling && (session.hover_item_box.is_none() || inside_item);
+                if (session.hover_item_box.is_some() && !inside_item)
+                    || (!over_explorer && !settling_on_item)
+                {
                     dismiss_custom_preview(
                         &mut session,
                         (cursor_pos.x, cursor_pos.y),
@@ -1521,9 +1575,10 @@ pub fn run_explorer_hook() {
                     continue;
                 }
 
-                let guard_due = session
-                    .last_custom_guard_check
-                    .is_none_or(|t| t.elapsed() >= Duration::from_millis(CUSTOM_GUARD_RECHECK_MS));
+                let guard_due = (over_explorer || !settling_on_item)
+                    && session.last_custom_guard_check.is_none_or(|t| {
+                        t.elapsed() >= Duration::from_millis(CUSTOM_GUARD_RECHECK_MS)
+                    });
                 if guard_due {
                     session.last_custom_guard_check = Some(Instant::now());
                     resolver.forget_item();
