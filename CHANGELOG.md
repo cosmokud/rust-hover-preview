@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **Deleting a preset is confirmed in a card of this app's own, not in a Windows dialog** — the `Custom Preview` editor asks it on itself: a dimmed scrim over its whole window and a rounded, shadowed card on it, drawn from the same `Palette` the editor is drawn from, so it is One Dark Pro with one theme and Atom One Light with the other. Nothing of the platform is in it — no beep, no fade, no system font, no `Yes`/`No` — and the safe answer is still the default: `Enter`, `Space` and `Escape` cancel, `Tab` or an arrow moves the ring onto `Delete`, and the card losing the foreground cancels too.
+
 ## [0.6.1] - 2026-11-24
 
 ### Added
