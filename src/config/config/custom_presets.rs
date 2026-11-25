@@ -408,6 +408,12 @@ impl CustomPathMethod {
 
     /// The file in this method's spelling: what `{file}` stands for, and what is appended where no
     /// placeholder is written at all.
+    ///
+    /// **Every method reads the plain path, the verbatim prefix off.** The hovered path arrives from
+    /// the Shell as `\\?\E:\…`, and that form is not a name any program resolves: VLC handed it
+    /// answered `VLC is unable to open the MRL 'file://?/E%3A/…'`, a URL it reconstructed out of a
+    /// prefix that was never part of one — so a preset with no `Path Method` of its own was broken
+    /// by the spelling this app used to hand over unread.
     pub fn spell(self, path: &Path) -> String {
         match self {
             Self::Plain => crate::paths::plain_path(path),
@@ -768,28 +774,56 @@ fn is_single_outer_quoted_span(s: &str) -> bool {
 /// Parse an Arguments string into individual argv tokens following Windows `CommandLineToArgvW`
 /// backslash-before-quote rules plus single-quote grouping outside double quotes, unwrapping an
 /// accidental single outer wrapper quote around multiple flags/args while preserving real quoted values.
+///
+/// **A quoted span is one argument unless what is inside it opens as a flag.** The unwrap exists for
+/// a run of flags copied from a docs page — `"--fullscreen --silent"` — and it is the one thing the
+/// CRT does not do. Taken one step too far it is a *path* torn into its words: VLC handed
+/// `"file:///E:/Videos/…/2026 - 02 - Batch/Sample Show/82.mkv"` asked for six media files
+/// (`…/2026`, `-`, `02`, …) and played none of them, which is the failure this predicate is written
+/// against — the old one unwrapped a span on *any* `-`-led word inside it, and a file name holding
+/// ` - ` has one. So the unwrap is taken only where the first word inside the span is a flag in its
+/// own right, or one of this app's three placeholders; every later word comes along with it.
 pub fn parse_arguments(raw: &str) -> Vec<String> {
     let trimmed = raw.trim();
     if is_single_outer_quoted_span(trimmed) {
         let raw_tokens = parse_arguments_raw(trimmed);
         if raw_tokens.len() == 1 {
             let inner_tokens = parse_arguments_raw(&raw_tokens[0]);
-            let looks_like_arg_list = inner_tokens.len() >= 2
-                && (((inner_tokens[0].starts_with('-') || inner_tokens[0].starts_with('/'))
-                    && !inner_tokens[0].contains('='))
-                    || inner_tokens[1..].iter().any(|t| {
-                        t.starts_with('-')
-                            || t.starts_with('/')
-                            || t.contains("{file}")
-                            || t.contains("{path}")
-                            || t.contains("{url}")
-                    }));
-            if looks_like_arg_list {
+            if looks_like_a_run_of_flags(&inner_tokens) {
                 return inner_tokens;
             }
         }
     }
     parse_arguments_raw(trimmed)
+}
+
+/// Whether a quoted span holds an argument *list* rather than one argument.
+///
+/// The first word decides: a flag opens a list, and so does a placeholder, while a value — a path,
+/// a file name, a URL — opens one argument that happens to have spaces in it (see
+/// `parse_arguments`).
+fn looks_like_a_run_of_flags(tokens: &[String]) -> bool {
+    let Some(first) = tokens.first() else {
+        return false;
+    };
+    tokens.len() >= 2
+        && (first.starts_with("{file}")
+            || first.starts_with("{path}")
+            || first.starts_with("{url}")
+            || is_a_flag(first))
+}
+
+/// A word that is a flag rather than the head of a path: `-`/`/`-led, carrying no `=` (a `--k=v`
+/// pair is one argument of its own) and no separator after the lead, which is what keeps `E:/…` and
+/// `/mnt/x` out — neither of them opens a run of flags.
+fn is_a_flag(token: &str) -> bool {
+    if token.contains('=') {
+        return false;
+    }
+    let Some(rest) = token.strip_prefix('-').or_else(|| token.strip_prefix('/')) else {
+        return false;
+    };
+    !rest.is_empty() && !rest.contains(['/', '\\', ':'])
 }
 
 fn parse_arguments_raw(raw: &str) -> Vec<String> {
@@ -1911,6 +1945,56 @@ mod tests {
         );
     }
 
+    /// **A quoted path is one argument, whatever is inside its name.** The unwrap that reads a docs
+    /// page's `"--fullscreen --silent"` as two flags used to fire on any `-`-led word inside the
+    /// span, and a media file named `2026 - 02 - Batch/Sample Show/…` has one: VLC was handed six media
+    /// files (`…/2026`, `-`, `02`, …), asked for each of them, and played none.
+    #[test]
+    fn a_quoted_path_is_never_read_as_a_run_of_flags() {
+        let real = r#""file:///E:/Videos/2026 - 02 - Batch/Sample Show/Sample Show - 82 (1080p).mkv""#;
+        assert_eq!(
+            parse_arguments(real),
+            vec![
+                r"file:///E:/Videos/2026 - 02 - Batch/Sample Show/Sample Show - 82 (1080p).mkv"
+            ]
+        );
+
+        // A plain path with a space in it is one argument as well, and so is a name that happens to
+        // open with a dash.
+        assert_eq!(
+            parse_arguments(r#""E:\Videos\2026 - 02 - Batch\Sample Show\82.mkv""#),
+            vec![r"E:\Videos\2026 - 02 - Batch\Sample Show\82.mkv"]
+        );
+        assert_eq!(
+            parse_arguments(r#""- a name that opens with a dash.mkv""#),
+            vec!["- a name that opens with a dash.mkv"]
+        );
+        // A drive letter is not a flag: `E:/…` is not a `/`-led word with something after it.
+        assert_eq!(
+            parse_arguments(r#""E:/Videos/a b.mkv""#),
+            vec!["E:/Videos/a b.mkv"]
+        );
+
+        // What the unwrap is for still unwraps: a pasted run of flags, and a placeholder first.
+        assert_eq!(
+            parse_arguments(r#""--fullscreen --silent""#),
+            vec!["--fullscreen", "--silent"]
+        );
+        assert_eq!(
+            parse_arguments(r#""{file} --fullscreen""#),
+            vec!["{file}", "--fullscreen"]
+        );
+        assert_eq!(
+            parse_arguments(r#""{url} --network-caching=1000""#),
+            vec!["{url}", "--network-caching=1000"]
+        );
+        // One word, however it reads, is one word.
+        assert_eq!(
+            parse_arguments(r#""--title=My Video""#),
+            vec!["--title=My Video"]
+        );
+    }
+
     #[test]
     fn build_launch_args_handles_file_placeholder_and_default_trailing_path() {
         let sample = Path::new(r"samples\my video.mp4");
@@ -1932,6 +2016,66 @@ mod tests {
             vec![
                 r"--first=samples\my video.mp4",
                 r"--second=samples\my video.mp4"
+            ]
+        );
+    }
+
+    /// **Every method reads the plain path, the verbatim prefix off.** The Shell hands a hovered
+    /// file over as `\\?\E:\…`, and that form is a name no program resolves: VLC answered
+    /// `VLC is unable to open the MRL 'file://?/E%3A/…'` — a URL it reconstructed out of a prefix that
+    /// was never part of one — which is what a preset with no `Path Method` of its own was handed.
+    #[test]
+    fn no_method_hands_a_program_the_shells_verbatim_prefix() {
+        let verbatim = Path::new(r"\\?\E:\Videos\82.mkv");
+        for method in [
+            CustomPathMethod::Plain,
+            CustomPathMethod::FileUrl,
+            CustomPathMethod::ForwardSlashes,
+            CustomPathMethod::ShortPath,
+            CustomPathMethod::FileUrlLiteral,
+        ] {
+            let spelled = method.spell(verbatim);
+            assert!(
+                !spelled.starts_with(r"\\?\"),
+                "{method:?} handed over {spelled}"
+            );
+        }
+        assert_eq!(
+            CustomPathMethod::Plain.spell(verbatim),
+            r"E:\Videos\82.mkv"
+        );
+        assert_eq!(
+            CustomPathMethod::ForwardSlashes.spell(verbatim),
+            "E:/Videos/82.mkv"
+        );
+        assert_eq!(
+            CustomPathMethod::FileUrl.spell(verbatim),
+            "file:///E:/Videos/82.mkv"
+        );
+        // And the verbatim form of a share is the share, not a `file:///?` anything.
+        assert_eq!(
+            CustomPathMethod::FileUrl.spell(Path::new(r"\\?\UNC\server\share\a.mkv")),
+            "file://server/share/a.mkv"
+        );
+    }
+
+    /// A path in a quoted `Arguments` field is **one argument**, and it arrives that way.
+    #[test]
+    fn a_quoted_path_reaches_the_program_as_one_argument() {
+        let file = Path::new(r"\\?\E:\Videos\2026 - 02 - Batch\Sample Show\82.mkv");
+        assert_eq!(
+            build_launch_args_with(r#""{file}""#, file, CustomPathMethod::Plain),
+            vec![r"E:\Videos\2026 - 02 - Batch\Sample Show\82.mkv"]
+        );
+
+        // The shape a user pastes after reading a docs page still unwraps, and the file still goes
+        // on the end.
+        assert_eq!(
+            build_launch_args_with(r#""--fullscreen --silent""#, file, CustomPathMethod::Plain),
+            vec![
+                "--fullscreen",
+                "--silent",
+                r"E:\Videos\2026 - 02 - Batch\Sample Show\82.mkv"
             ]
         );
     }
