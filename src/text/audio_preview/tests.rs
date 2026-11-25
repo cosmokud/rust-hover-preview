@@ -695,8 +695,15 @@ fn the_card_is_headed_with_the_name_and_not_the_extension() {
 fn the_facts_have_the_room_the_clock_leaves_them() {
     let card = card();
     let advance = body_advance();
-    let line = text_width("FLAC · 44.1 kHz · stereo · 1006 kbps · 12.3 MB", advance);
-    let readout = text_width("1:07 / 9:22", advance);
+    let style = super::page::body_style();
+    let scale = metrics_scale();
+    let line = text_width(
+        &style,
+        "FLAC · 44.1 kHz · stereo · 1006 kbps · 12.3 MB",
+        advance,
+        scale,
+    );
+    let readout = text_width(&style, "1:07 / 9:22", advance, scale);
 
     // The box the whole of the line and the readout beside it want, cut to a card of that width.
     let width = (line + readout + advance * TIME_GAP_ADVANCES + metrics_padding() * 2) as u32;
@@ -749,8 +756,15 @@ fn the_facts_line_is_scrolled_where_the_room_has_no_place_for_it() {
     let narrow = narrowest_card();
     let advance = body_advance();
     let padding = metrics_padding();
-    let line = text_width("FLAC · 44.1 kHz · stereo · 1006 kbps · 12.3 MB", advance);
-    let readout = text_width("1:07 / 9:22", advance);
+    let style = super::page::body_style();
+    let scale = metrics_scale();
+    let line = text_width(
+        &style,
+        "FLAC · 44.1 kHz · stereo · 1006 kbps · 12.3 MB",
+        advance,
+        scale,
+    );
+    let readout = text_width(&style, "1:07 / 9:22", advance, scale);
     // The box the line is drawn in: the room the clock leaves, drawn back to the last fact it holds
     // whole — the travel is what the line runs past that.
     let box_width = facts_edge(
@@ -758,6 +772,7 @@ fn the_facts_line_is_scrolled_where_the_room_has_no_place_for_it() {
         padding,
         narrow as i32 - padding - readout - advance * TIME_GAP_ADVANCES,
         advance,
+        scale,
     ) - padding;
 
     let scroll = facts_scroll(&card(), narrow, 96, options());
@@ -877,7 +892,12 @@ fn the_facts_row_is_the_band_the_line_is_drawn_in() {
     assert_eq!(rect.left, metrics_padding(), "from the content box's edge");
     assert_eq!(
         rect.right,
-        facts_right(&card, narrow as i32 - metrics_padding(), body_advance()),
+        facts_right(
+            &card,
+            narrow as i32 - metrics_padding(),
+            body_advance(),
+            metrics_scale()
+        ),
         "to the room the clock leaves"
     );
 
@@ -948,7 +968,7 @@ fn writes_the_clock_the_card_is_drawn_with() {
     let mut card = card();
     let colors = ([0, 0, 0], [1, 1, 1]);
 
-    let runs = clock_runs(&card, 400, 8, colors.0, colors.1);
+    let runs = clock_runs(&card, 400, 8, metrics_scale(), colors.0, colors.1);
     let text: String = runs.iter().map(|run| run.text.as_str()).collect();
     assert_eq!(text, "1:07 / 9:22");
     assert!(
@@ -957,7 +977,7 @@ fn writes_the_clock_the_card_is_drawn_with() {
     );
 
     card.duration = None;
-    let text: String = clock_runs(&card, 400, 8, colors.0, colors.1)
+    let text: String = clock_runs(&card, 400, 8, metrics_scale(), colors.0, colors.1)
         .iter()
         .map(|run| run.text.as_str())
         .collect();
@@ -968,7 +988,7 @@ fn writes_the_clock_the_card_is_drawn_with() {
 
     card.elapsed = None;
     assert!(
-        clock_runs(&card, 400, 8, colors.0, colors.1).is_empty(),
+        clock_runs(&card, 400, 8, metrics_scale(), colors.0, colors.1).is_empty(),
         "and a card with no player behind it has nothing to say about time"
     );
 }
@@ -1818,7 +1838,12 @@ fn the_name_runs_underneath_the_window_buttons_while_they_are_up() {
     unsafe {
         let _ = DeleteDC(dc);
     }
-    let offset = super::page::text_width(long, header_advance) - name_run.width;
+    let offset = super::page::text_width(
+        &super::page::name_style(),
+        long,
+        header_advance,
+        metrics_scale(),
+    ) - name_run.width;
 
     let mut up = named.clone();
     up.name_offset = offset;
@@ -2473,8 +2498,14 @@ fn a_facts_line_is_no_wider_than_the_runs_it_draws() {
     let box_width = facts_edge(
         &card.facts,
         metrics_padding(),
-        facts_right(&card, narrow as i32 - metrics_padding(), advance),
+        facts_right(
+            &card,
+            narrow as i32 - metrics_padding(),
+            advance,
+            metrics_scale(),
+        ),
         advance,
+        metrics_scale(),
     ) - metrics_padding();
     let scroll = facts_scroll(&card, narrow, 96, options());
     assert!(
@@ -2554,7 +2585,7 @@ fn a_resting_facts_line_ends_where_its_last_whole_fact_does() {
     let advance = body_advance();
     let padding = metrics_padding();
     let band = 400u32;
-    let room = |card: &Card| facts_right(card, band as i32 - padding, advance);
+    let room = |card: &Card| facts_right(card, band as i32 - padding, advance, metrics_scale());
     let mut edges = Vec::new();
     let mut texts = Vec::new();
 
@@ -2577,7 +2608,7 @@ fn a_resting_facts_line_ends_where_its_last_whole_fact_does() {
             .map(|fact| fact.text.as_str())
             .collect::<Vec<_>>()
             .join(" · ");
-        let edge = facts_edge(&card.facts, padding, room(&card), advance);
+        let edge = facts_edge(&card.facts, padding, room(&card), advance, metrics_scale());
 
         assert!(
             whole.starts_with(&drawn) && drawn.len() < whole.len(),
@@ -2590,7 +2621,12 @@ fn a_resting_facts_line_ends_where_its_last_whole_fact_does() {
         for run in &page.facts[..facts] {
             assert_eq!(
                 run.width,
-                text_width(&run.text, advance),
+                text_width(
+                    &super::page::body_style(),
+                    &run.text,
+                    advance,
+                    metrics_scale()
+                ),
                 "{:?} is drawn whole rather than cut by the box",
                 run.text
             );
@@ -2602,7 +2638,7 @@ fn a_resting_facts_line_ends_where_its_last_whole_fact_does() {
         );
         assert_eq!(
             edge,
-            padding + text_width(&drawn, advance),
+            padding + text_width(&super::page::body_style(), &drawn, advance, metrics_scale()),
             "the edge is the end of the facts drawn, with nothing kept off it"
         );
         assert!(edge <= room(&card), "the box never reaches the clock");
@@ -2625,13 +2661,13 @@ fn a_facts_line_the_room_holds_whole_is_drawn_in_the_whole_room() {
     let padding = metrics_padding();
     let band = 800u32;
     let card = card();
-    let right = facts_right(&card, band as i32 - padding, advance);
+    let right = facts_right(&card, band as i32 - padding, advance, metrics_scale());
     assert!(
-        right - padding >= facts_width(&card.facts, advance),
+        right - padding >= facts_width(&card.facts, advance, metrics_scale()),
         "the room holds the whole line"
     );
     assert_eq!(
-        facts_edge(&card.facts, padding, right, advance),
+        facts_edge(&card.facts, padding, right, advance, metrics_scale()),
         right,
         "a line that fits is drawn in the whole room"
     );
@@ -2660,14 +2696,15 @@ fn a_scrolled_facts_line_lays_the_facts_at_rest_left_out() {
     let edge = facts_edge(
         &card.facts,
         padding,
-        facts_right(&card, narrow as i32 - padding, advance),
+        facts_right(&card, narrow as i32 - padding, advance, metrics_scale()),
         advance,
+        metrics_scale(),
     );
     let scroll = facts_scroll(&card, narrow, 96, options());
     assert!(scroll.moves(), "the line is one the card has no room for");
     assert_eq!(
         scroll.travel,
-        facts_width(&card.facts, advance) - (edge - padding),
+        facts_width(&card.facts, advance, metrics_scale()) - (edge - padding),
         "the travel is the line the box is short of"
     );
 
@@ -2715,7 +2752,12 @@ fn a_room_too_narrow_for_the_first_fact_still_draws_it() {
     card.facts[0].text = "FLAC 24-bit 96 kHz stereo".to_string();
     let narrow = narrowest_card();
     let advance = body_advance();
-    let right = facts_right(&card, narrow as i32 - metrics_padding(), advance);
+    let right = facts_right(
+        &card,
+        narrow as i32 - metrics_padding(),
+        advance,
+        metrics_scale(),
+    );
 
     let page = scrolled(&card, narrow, 0);
     let facts = page.facts.len() - 3;
@@ -2724,12 +2766,69 @@ fn a_room_too_narrow_for_the_first_fact_still_draws_it() {
     let run = &page.facts[0];
     assert_eq!(run.text, "FLAC 24-bit 96 kHz stereo", "the fact itself");
     assert!(
-        run.width < text_width(&run.text, advance),
+        run.width
+            < text_width(
+                &super::page::body_style(),
+                &run.text,
+                advance,
+                metrics_scale()
+            ),
         "cut to the room rather than drawn whole"
     );
     assert_eq!(
         run.x + run.width,
         right,
         "and cut where the clock's room begins"
+    );
+}
+
+/// **A card's name is a file's name, and a file can be called `漢字Kanji name`.** Consolas carries no
+/// CJK, so a Chinese glyph in a name is drawn out of the font the system links in at a width of its
+/// own. A name counted at one advance a character was measured shorter than it is drawn: judged to
+/// fit the card, drawn once, and clipped at rest with its end eaten — never scrolled, because the
+/// scroll thought there was nothing to scroll.
+#[test]
+fn a_name_the_face_has_no_glyph_for_is_scrolled_rather_than_clipped() {
+    let advance = {
+        let dc = unsafe { CreateCompatibleDC(None) };
+        let metrics = TextMetrics::new(dc, 96, options().font_scale_percent).expect("metrics");
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+        metrics.advance[HEADER_LEVEL as usize].max(1)
+    };
+    let scale = metrics_scale();
+    let style = super::page::name_style();
+
+    // A name whose counted width just fits the room, and whose drawn width does not.
+    let width = narrowest_card();
+    let room = width as i32 - metrics_padding() * 2 - advance * super::card::MARK_CELL_ADVANCES;
+    let characters = (room / advance).max(6) as usize;
+    let name: String = "中".repeat(characters);
+
+    let counted = name.chars().count() as i32 * advance;
+    let drawn = text_width(&style, &name, advance, scale);
+    assert!(
+        drawn > counted,
+        "a Chinese name is wider than the same count of characters ({drawn} > {counted})"
+    );
+
+    let scroll = NameScroll::of(&name, width, 96, options());
+    assert!(
+        scroll.moves(),
+        "the name is wider than the room the card leaves it, so it is scrolled: {drawn} > {room}"
+    );
+    assert_eq!(
+        scroll.travel,
+        drawn - room,
+        "and its travel is what it runs past that room, measured rather than counted"
+    );
+
+    // A Latin name of the same character count does fit, and is held — the count was never wrong for
+    // the glyphs the face carries.
+    let latin = "x".repeat(characters);
+    assert!(
+        NameScroll::of(&latin, width, 96, options()).travel == 0,
+        "a Latin name of the same length is one cell a character and fits"
     );
 }

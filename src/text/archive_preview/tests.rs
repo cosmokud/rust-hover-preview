@@ -362,9 +362,101 @@ fn writes_sizes_a_person_reads() {
 
 #[test]
 fn cuts_a_name_to_the_room_it_has() {
-    assert_eq!(cut_to_width("report.pdf", 1_000, 7), "report.pdf");
-    assert_eq!(cut_to_width("report.pdf", 7 * 6, 7), "repor…");
-    assert_eq!(cut_to_width("report.pdf", 0, 7), "");
+    let style = plain_style(BODY_LEVEL);
+    let measure = |text: &str| text_width(&style, text, 7, 1.0);
+
+    assert_eq!(
+        cut_to_width(&style, "report.pdf", 1_000, 7, 1.0),
+        "report.pdf"
+    );
+    assert_eq!(
+        cut_to_width(&style, "report.pdf", 7 * 6, 7, 1.0),
+        "repor…",
+        "a name cut to the room of six characters keeps five of them and an ellipsis"
+    );
+    assert_eq!(cut_to_width(&style, "report.pdf", 0, 7, 1.0), "");
+
+    // A name of two Chinese glyphs is cut where its own glyphs run out rather than where a count of
+    // Latin ones would have put the cut: the face has none of them, and each is drawn about twice
+    // as wide.
+    assert!(
+        measure("漢字") > 2 * 7,
+        "two Chinese glyphs are wider than two cells of the face's own advance"
+    );
+}
+
+/// **An archive is full of names a fixed-pitch face has no glyph for.** A folder of Chinese entries
+/// is `漢字資料/Sample01.dds`, and the tree places each row against the size column beside it. A
+/// name counted at one advance a character was a name measured narrower than it is drawn, so its
+/// ink ran under the size column and the end of it was cut away by the box it was clipped to.
+#[test]
+fn a_name_the_face_has_no_glyph_for_is_laid_out_as_wide_as_it_is_drawn() {
+    let dir = scratch("cjk-names");
+    let path = dir.join("cjk-names.zip");
+    write_zip(
+        &path,
+        &[
+            ("漢字Kanji.dds", 1024),
+            ("漢字Sample file.dds", 2048),
+            ("简体中文测试文本.txt", 512),
+            ("ordinary.dds", 128),
+        ],
+    );
+
+    let options = ArchivePreviewOptions {
+        theme: TextTheme::Dark,
+        font_scale_percent: 125,
+    };
+    let listing = listing_for(&path, None).expect("a listing");
+    let theme = text_theme::loaded(options.theme).expect("a theme");
+    let dc = unsafe { CreateCompatibleDC(None) };
+    let metrics = TextMetrics::new(dc, 96, options.font_scale_percent).expect("metrics");
+    let page = build_page(&listing, "cjk-names.zip", theme, &metrics, 900, 700);
+    let (page_width, rows) = (page.width, page.lines);
+    unsafe {
+        let _ = windows::Win32::Graphics::Gdi::DeleteDC(dc);
+    }
+
+    // Every row's runs stand one after another and none of them is drawn past the page: what a name
+    // counted too narrow did was run under the size column and lose its own tail to the box.
+    let mut cjk_rows = 0;
+    for line in &rows {
+        for pair in line.runs.windows(2) {
+            assert!(
+                pair[1].x >= pair[0].x + pair[0].width,
+                "{:?} is placed inside {:?} — {} < {}",
+                pair[1].text,
+                pair[0].text,
+                pair[1].x,
+                pair[0].x + pair[0].width
+            );
+        }
+
+        for run in &line.runs {
+            assert!(
+                run.x + run.width <= page_width as i32,
+                "{:?} runs past the page — {} > {page_width}",
+                run.text,
+                run.x + run.width
+            );
+            if !run.text.is_ascii()
+                && !run.text.starts_with('\u{e7b8}')
+                && !run.text.starts_with('\u{e8a5}')
+            {
+                cjk_rows += 1;
+                assert!(
+                    run.width
+                        > run.text.chars().count() as i32 * metrics.advance[BODY_LEVEL as usize],
+                    "{:?} is not wider than a count of its characters",
+                    run.text
+                );
+            }
+        }
+    }
+    assert!(
+        cjk_rows >= 3,
+        "the listing holds three names the face has no glyph for, and {cjk_rows} were drawn"
+    );
 }
 
 /// The pictures this test writes are the design under review: a page per
