@@ -2665,6 +2665,34 @@ pub fn run_preview_window() {
                 zoom_sharpened = None;
             }
 
+            // **What a sweep of a folder left in memory, given back once the user has been away long
+            // enough** — the `Performance → Memory → Respect Away Timer` row. The clock is the
+            // Explorer hook's and is read here as the one bit it publishes (see `app::afk`), so this
+            // costs one atomic load per tick and nothing at all while a user is present.
+            //
+            // A tick with anything on screen answers nothing and owes the same flush it did before:
+            // a window of this app's that is up — pinned, minimized, a bubble, a detached window of
+            // its own — is a window its process keeps drawing, and what it may be shown next is
+            // what a flush would take (see `app::away_flush`).
+            let nothing_is_on_screen = !session.is_showing()
+                && pending_load.is_none()
+                && !pinned()
+                && !custom_preview::has_live_preview()
+                && webview_preview::showing_path().is_none()
+                // And nothing of a film's own: a player this process started draws in a window of
+                // its own rather than in this one, so a hover that has just gone leaves it running
+                // for a moment — and what it is playing is on screen all the same.
+                && current_video_path.is_none();
+
+            if crate::app::away_flush::the_flush_is_owed(nothing_is_on_screen) {
+                crate::app::away_flush::flush_the_caches();
+                note_pin_trace!("away flush: the memory caches were given back");
+            } else if !crate::app::afk::the_run_is_away() {
+                // And a user who is back has spent whatever the last away period answered: the next
+                // one is a flush of its own.
+                crate::app::away_flush::the_user_is_back();
+            }
+
             // Check for our custom messages. Only the newest hover target matters;
             // collapse stale Show/Hide traffic so we do not spend time computing
             // layouts for files the cursor has already left.

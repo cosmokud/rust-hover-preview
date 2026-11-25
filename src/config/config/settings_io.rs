@@ -221,6 +221,8 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "general_disk_cache_mb",
             "image_cache_mb",
             "image_disk_cache_mb",
+            "others_cache_mb",
+            "respect_away_timer",
             "tick_ms",
             "video_hw_accel",
         ],

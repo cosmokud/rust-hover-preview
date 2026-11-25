@@ -349,6 +349,7 @@ pub(crate) use event_loop::run_preview_window;
 pub(crate) use ffplay_window::kill_stray_video_process;
 pub(crate) use hover_facts::cursor_preview_hover;
 pub(crate) use hover_facts::PreviewCursorHover;
+pub(crate) use image_cache::clear_image_cache;
 pub(crate) use image_cache::trim_image_cache;
 pub(crate) use media_types::PreviewMessage;
 pub(crate) use mpv_resident::shut_down_the_resident;
@@ -378,6 +379,26 @@ pub(crate) use pointer::ScreenRegion;
 
 // The three facts a hold is answered from cross the seam now that the hook and the loop are two
 // processes: they are the seam's, re-exported where the loop has always named them.
+/// Give back every cache the `Performance → Memory` budgets bound and that is *held* rather than
+/// being drawn — which is what the away timer asks for once nobody is at the keyboard to hover
+/// anything (see `app::away_flush`).
+///
+/// It is the whole of the memory half of that flush rather than a trim to a smaller figure: what is
+/// being answered is a machine left alone, and a cache trimmed to a budget is still memory held for
+/// a hover nobody is there to make. The three caches under `Others` are beside this one rather than
+/// in it — they live where their owners do and are emptied by `others_cache::flush`.
+///
+/// Nothing on screen is taken by it. A window paints from the frames it holds through its media,
+/// and every one of these is a *second* reference to a frame rather than the last: the run a pin is
+/// drawn from, the frame a still was decoded into and the frame a drag left behind all stay with
+/// the picture that is on screen, and what goes is the room the next hover would have found them
+/// in.
+pub(crate) fn flush_the_memory_caches() {
+    clear_image_cache();
+    pin_index::forget();
+    pin_scrub::forget();
+}
+
 pub(crate) use crate::app::seam::{
     ENGINE_PAGE_DRAG, ENGINE_PAGE_RUNS, TEXT_PREVIEW_HOLDING, WAITING_PREVIEW_HOLDING,
 };

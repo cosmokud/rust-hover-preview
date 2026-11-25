@@ -2782,11 +2782,11 @@ fn a_room_too_narrow_for_the_first_fact_still_draws_it() {
     );
 }
 
-/// **A card's name is a file's name, and a file can be called `漢字Kanji name`.** Consolas carries no
-/// CJK, so a Chinese glyph in a name is drawn out of the font the system links in at a width of its
-/// own. A name counted at one advance a character was measured shorter than it is drawn: judged to
-/// fit the card, drawn once, and clipped at rest with its end eaten — never scrolled, because the
-/// scroll thought there was nothing to scroll.
+/// **A card's name is a file's name, and a file can be called `漢字Sample file`.** Consolas
+/// carries no CJK, so a Chinese glyph in a name is drawn out of the font the system links in at a
+/// width of its own. A name counted at one advance a character was measured shorter than it is
+/// drawn: judged to fit the card, drawn once, and clipped at rest with its end eaten — never
+/// scrolled, because the scroll thought there was nothing to scroll.
 #[test]
 fn a_name_the_face_has_no_glyph_for_is_scrolled_rather_than_clipped() {
     let advance = {

@@ -12,10 +12,11 @@ use super::defaults::{
     DEFAULT_EVERYTHING_PREVIEWS, DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB,
     DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
     DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE,
-    DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER,
-    DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_Q_DIR_PREVIEWS,
-    DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML,
+    DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_OTHERS_CACHE_MB,
+    DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE, DEFAULT_PIN_ZOOM_BOUNCE_GATE,
+    DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS,
+    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_Q_DIR_PREVIEWS, DEFAULT_REMEMBER_AUDIO_VOLUME,
+    DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML, DEFAULT_RESPECT_AWAY_TIMER,
     DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE,
     DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS,
@@ -240,6 +241,17 @@ pub struct AppConfig {
     /// Memory the decoded-image cache may hold, in megabytes. `0` switches the
     /// cache off, so every preview is decoded again.
     pub image_cache_mb: u32,
+    /// What the caches that are not stacks of decoded frames may hold between hovers, in
+    /// megabytes — the tray's `Performance → Memory → Others`.
+    ///
+    /// A parsed text document, an archive's listing and the one picture the image converter
+    /// develops for a preview larger than the frame cache are three kinds of thing the frame budget
+    /// beside it cannot see, and they are the three a sweep of a folder leaves behind. What is held
+    /// is measured in bytes — the document's text and its line index, an entry's name, the PNG the
+    /// engine wrote — and given back least recently used first until the whole of it fits, so the
+    /// number the row offers is one a user can compare against Task Manager. `0` holds nothing
+    /// between hovers, which is the same answer `image_cache_mb = 0` gives for frames.
+    pub others_cache_mb: u32,
     /// The backdrop a picture is drawn over — and every other preview that is not a
     /// document: a PDF page, a painted text frame, a page Office rendered.
     pub image_background: TransparentBackground,
@@ -686,6 +698,21 @@ pub struct AppConfig {
     /// the largest size that does when they do not. It is `Memory → Animated Image` in the
     /// tray, and it is the one setting under that submenu that is about what is *kept*.
     pub animated_webp_budget_mb: u32,
+    /// Whether the away timer reaches every cache this app keeps in RAM, which is the tray's
+    /// `Performance → Memory → Respect Away Timer`.
+    ///
+    /// **It is the row that turns `Engine → Away Timer` from a rule about processes into a rule
+    /// about memory.** An engine set to `Away` is a process let go once Explorer has been out of
+    /// reach for that long; with this on, the same moment is the one the decoded frames, the runs
+    /// a pinned picture was walked into, and the caches under `Others` are given back in — because
+    /// what they hold is memory for a hover nobody is there to make. Off, the timer bounds the
+    /// engines alone, which is what the app did before the row existed (see `app::away_flush`).
+    ///
+    /// Nothing on screen is ever taken by it: a window of this app's that is up — pinned,
+    /// minimized, put away as a bubble, or detached into a process of its own — is a picture its
+    /// process keeps drawing, so that process flushes nothing and the flush it owed is made when
+    /// the screen is empty and the user is still away.
+    pub respect_away_timer: bool,
     /// Whether a video is decoded on the graphics card rather than on a core, which is the
     /// `Video` row under `Performance → Hardware Acceleration` in the tray.
     ///
@@ -870,6 +897,7 @@ impl Default for AppConfig {
             webp_playback_fps: DEFAULT_WEBP_PLAYBACK_FPS,
             animated_fps_max: DEFAULT_ANIMATED_FPS_MAX,
             image_cache_mb: DEFAULT_IMAGE_CACHE_MB,
+            others_cache_mb: DEFAULT_OTHERS_CACHE_MB,
             image_background: DEFAULT_IMAGE_BACKGROUND,
             zoom_background: DEFAULT_ZOOM_BACKGROUND,
             font_background: DEFAULT_FONT_BACKGROUND,
@@ -938,6 +966,7 @@ impl Default for AppConfig {
             afk_timer_seconds: DEFAULT_AFK_TIMER_SECS,
             decode_budget_gb: DEFAULT_DECODE_BUDGET_GB,
             animated_webp_budget_mb: DEFAULT_ANIMATED_WEBP_BUDGET_MB,
+            respect_away_timer: DEFAULT_RESPECT_AWAY_TIMER,
             video_hw_accel: DEFAULT_VIDEO_HW_ACCEL,
             hdr_tone_map: DEFAULT_HDR_TONE_MAP,
             hdr_exposure: DEFAULT_HDR_EXPOSURE,

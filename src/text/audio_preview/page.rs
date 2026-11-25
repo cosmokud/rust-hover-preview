@@ -1575,11 +1575,11 @@ pub(super) fn name_style() -> TextStyle {
 /// The width of a run of text at `style`, measured where a count of characters is not the whole of
 /// it.
 ///
-/// **A card's name is a file's name, and a file can be called `漢字Kanji name`.** Consolas is fixed
-/// pitch for the characters it carries and carries no CJK at all, so a Chinese glyph in a name is
-/// drawn out of the font the system links in at a width of its own: a name counted at one advance a
-/// character was a name measured narrower than it is drawn, which is a name judged to fit the card
-/// and then clipped at rest instead of scrolled (see `NameScroll::of`).
+/// **A card's name is a file's name, and a file can be called `漢字Sample file`.** Consolas
+/// is fixed pitch for the characters it carries and carries no CJK at all, so a Chinese glyph in a
+/// name is drawn out of the font the system links in at a width of its own: a name counted at one
+/// advance a character was a name measured narrower than it is drawn, which is a name judged to fit
+/// the card and then clipped at rest instead of scrolled (see `NameScroll::of`).
 pub(super) fn text_width(style: &TextStyle, text: &str, advance: i32, scale: f32) -> i32 {
     crate::text::text_paint::run_width(style, text, advance, scale)
 }

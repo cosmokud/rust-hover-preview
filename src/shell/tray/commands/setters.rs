@@ -22,7 +22,7 @@
 use super::super::ids::{
     ANIMATED_WEBP_BUDGET_CHOICES_MB, AUDIO_SEEK_CHOICES, AVOID_CHOICES, BITMAP_SCALE_CHOICES,
     DECODE_BUDGET_CHOICES_GB, DISK_CACHE_SIZE_CHOICES_MB, IMAGE_CACHE_SIZE_CHOICES_MB,
-    TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CUSTOM_THEMES,
+    OTHERS_CACHE_SIZE_CHOICES_MB, TICK_CHOICES_MS, TIMING_DELAY_CHOICES_MS, TRAY_CUSTOM_THEMES,
 };
 use super::super::submenus::{
     afk_timer_secs_at, audio_scale_at, background_at, dds_background_at, document_scale_at,
@@ -36,9 +36,9 @@ use crate::app::seam::{
 use crate::config::config::{
     sanitize_animated_webp_budget_mb, sanitize_decode_budget_gb, sanitize_document_cache_mb,
     sanitize_general_disk_cache_mb, sanitize_image_cache_mb, sanitize_image_disk_cache_mb,
-    sanitize_text_font_scale_percent, sanitize_tick_ms, AudioSeek, AvoidMode, MarkdownMode,
-    OfficeEngine, PinMinimizeTo, PinNavFileTypes, PinScalingMode, PreviewScale, PreviewType,
-    TextTheme, TriggerKeyMode, VideoEngine, VOLUME_CHOICES,
+    sanitize_others_cache_mb, sanitize_text_font_scale_percent, sanitize_tick_ms, AudioSeek,
+    AvoidMode, MarkdownMode, OfficeEngine, PinMinimizeTo, PinNavFileTypes, PinScalingMode,
+    PreviewScale, PreviewType, TextTheme, TriggerKeyMode, VideoEngine, VOLUME_CHOICES,
 };
 use crate::config::{commit_config, publish_config_change, snapshot};
 use crate::formats::codecs;
@@ -562,6 +562,26 @@ pub(in super::super) fn set_animated_webp_budget_mb(index: u16) {
     commit_config(|config| {
         config.animated_webp_budget_mb = sanitize_animated_webp_budget_mb(megabytes);
     });
+}
+
+/// What the caches that are not stacks of decoded frames may hold between hovers, in megabytes —
+/// the parsed pages, the archive listings and the one picture the image converter develops.
+///
+/// Unlike the two budgets beside it this one *is* told to the viewer, because a figure lowered has
+/// to bite at the moment it is set rather than at whatever parse happens to pass through the caches
+/// next: what is over the new size goes now, the way a smaller `image_cache_mb` does (see
+/// `PreviewMessage::TrimCaches` and `others_cache::trim`).
+pub(in super::super) fn set_others_cache_mb(index: u16) {
+    let Some(megabytes) = OTHERS_CACHE_SIZE_CHOICES_MB.get(index as usize).copied() else {
+        return;
+    };
+
+    publish_config_change(
+        |config| {
+            config.others_cache_mb = sanitize_others_cache_mb(megabytes);
+        },
+        &[PreviewMessage::TrimCaches],
+    );
 }
 
 /// A text preview's own keys and pointer are the pin's business now: the row that used to

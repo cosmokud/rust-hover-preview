@@ -58,7 +58,12 @@ const PROBE_BYTES: usize = 512 + 8;
 /// Listings kept between hovers, keyed by the file and the version of it that was
 /// read. A second hover, a repaint, a theme switch or the render pass that
 /// follows the measure pass costs a lookup instead of a read.
-const LISTING_CACHE_MAX_ENTRIES: usize = 16;
+///
+/// What bounds them is `others_cache_mb` — the one figure the three caches under `Memory → Others`
+/// share, measured in the names a listing walked (see `others_cache::trim`) — and this is the count
+/// backstop under it, so that a folder of empty archives cannot fill a map for a figure they do not
+/// reach.
+const LISTING_CACHE_MAX_ENTRIES: usize = 256;
 
 /// The reader a file's own header names. The name it goes by is the fallback:
 /// a self-extracting zip starts with `MZ`, and a tar written without the ustar
@@ -194,6 +199,11 @@ pub(crate) fn listing_for(path: &Path, cancel: Option<&AtomicBool>) -> Option<Ar
     if let Ok(mut cache) = LISTINGS.lock() {
         cache.insert(key, Arc::clone(&listing));
     }
+
+    // And what is over the budget the tray names — the one total the three caches under `Others`
+    // share — goes now rather than at the next archive that happens to be read (see
+    // `others_cache::trim`).
+    crate::others_cache::trim();
 
     Some(listing)
 }
@@ -338,6 +348,9 @@ pub(crate) fn remember_engine_listing(path: &Path, listing: Listing) {
     };
 
     cache.insert(key, Arc::new(listing));
+    drop(cache);
+
+    crate::others_cache::trim();
 }
 
 /// The listing as the archive itself states it, read once per file version.
@@ -683,6 +696,46 @@ type ListingCache = crate::cache::BoundedCache<ListingKey, Arc<Listing>>;
 
 static LISTINGS: Lazy<Mutex<ListingCache>> =
     Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(LISTING_CACHE_MAX_ENTRIES)));
+
+/// What one held listing costs, as an estimate measured from the parts that make it up: the name
+/// of every entry it walked, the table those entries are held in, and the counters beside them.
+fn bytes_of(listing: &Listing) -> usize {
+    let names: usize = listing.entries.iter().map(|entry| entry.name.len()).sum();
+    let table = crate::others_cache::table_bytes(listing.entries.len())
+        + listing
+            .entries
+            .len()
+            .saturating_mul(std::mem::size_of::<ArchiveEntry>());
+
+    crate::others_cache::held_bytes(names, table, 0)
+}
+
+/// What the archive listings are holding between them, in bytes (see `others_cache::trim`).
+pub(crate) fn listing_bytes_held() -> usize {
+    LISTINGS
+        .lock()
+        .map(|cache| cache.iter_mru().map(|(_, listing)| bytes_of(listing)).sum())
+        .unwrap_or(0)
+}
+
+/// Give the least recently used listing back, answering what it freed.
+///
+/// A listing a window is showing is kept by that window through the `Arc` it was handed, so the
+/// entry goes and the page stays.
+pub(crate) fn drop_the_oldest_listing() -> Option<usize> {
+    let mut cache = LISTINGS.lock().ok()?;
+    let (_, listing) = cache.pop_lru()?;
+
+    Some(bytes_of(&listing))
+}
+
+/// Empty the listings, which is what the away timer asks for once nobody is at the keyboard to
+/// open an archive (see `app::away_flush`).
+pub(crate) fn clear_listings() {
+    if let Ok(mut cache) = LISTINGS.lock() {
+        cache.clear();
+    }
+}
 
 #[cfg(test)]
 mod tests;

@@ -26,17 +26,17 @@ use super::ids::{
     ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE,
     ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE,
     ID_TRAY_MPV_IDLE_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME,
-    ID_TRAY_OPEN_CONFIG, ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN,
-    ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
-    ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
-    ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
-    ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_RESTORE,
-    ID_TRAY_PIN_SCALING_UNTIL_RESIZED, ID_TRAY_PIN_SCALING_USE_SETTINGS, ID_TRAY_PIN_UPDATE,
-    ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
+    ID_TRAY_OPEN_CONFIG, ID_TRAY_OTHERS_CACHE_BASE, ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE,
+    ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE,
+    ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
+    ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
+    ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
+    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_SCALING_UNTIL_RESIZED, ID_TRAY_PIN_SCALING_USE_SETTINGS,
+    ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
     ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
     ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
-    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
-    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_RESPECT_AWAY_TIMER,
+    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -47,7 +47,7 @@ use super::ids::{
     ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE,
     ID_TRAY_VIDEO_SUBTITLES, ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE,
     ID_TRAY_ZOOM_BACKGROUND_BASE, IMAGE_CACHE_SIZE_CHOICES_MB, MAX_TRAY_CUSTOM_THEMES,
-    TRAY_CUSTOM_THEMES, ZOOM_BACKGROUND_CHOICES,
+    OTHERS_CACHE_SIZE_CHOICES_MB, TRAY_CUSTOM_THEMES, ZOOM_BACKGROUND_CHOICES,
 };
 use super::submenus::{
     animated_webp_budget_label, append_afk_timer_menu, append_audio_scale_menu, append_avoid_menu,
@@ -64,20 +64,21 @@ use super::submenus::{
 use crate::app::seam::{send_preview, PreviewMessage};
 use crate::app::updates;
 use crate::config::config::{
-    sanitize_animated_webp_budget_mb, sanitize_decode_budget_gb, sanitize_text_font_scale_percent,
-    MarkdownMode, PinMinimizeTo, PinScalingMode, PreviewType, TextTheme, TriggerKeyMode,
-    VideoEngine, DEFAULT_ANIMATED_SCALE, DEFAULT_AUDIO_LOOP, DEFAULT_AUDIO_SCALE,
-    DEFAULT_AUDIO_VOLUME, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND, DEFAULT_DESIGN_SCALE,
-    DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE, DEFAULT_FOLLOW_CURSOR,
-    DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE, DEFAULT_GENERAL_DISK_CACHE_MB,
-    DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND, DEFAULT_IMAGE_BACKGROUND,
-    DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MODEL_SCALE,
-    DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE, DEFAULT_PIN_MODE_AUDIO_END_OF_FILE,
-    DEFAULT_PIN_MODE_AUDIO_SHUFFLE, DEFAULT_PIN_MODE_IMAGE_SHUFFLE,
-    DEFAULT_PIN_MODE_VIDEO_END_OF_FILE, DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PREVIEW_SCALE,
-    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_SCALE,
-    DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE, DEFAULT_VIDEO_LOOP, DEFAULT_VIDEO_SCALE,
-    DEFAULT_VIDEO_VOLUME, DEFAULT_ZOOM_BACKGROUND, VOLUME_CHOICES,
+    sanitize_animated_webp_budget_mb, sanitize_decode_budget_gb, sanitize_others_cache_mb,
+    sanitize_text_font_scale_percent, MarkdownMode, PinMinimizeTo, PinScalingMode, PreviewType,
+    TextTheme, TriggerKeyMode, VideoEngine, DEFAULT_ANIMATED_SCALE, DEFAULT_AUDIO_LOOP,
+    DEFAULT_AUDIO_SCALE, DEFAULT_AUDIO_VOLUME, DEFAULT_DDS_BACKGROUND, DEFAULT_DESIGN_BACKGROUND,
+    DEFAULT_DESIGN_SCALE, DEFAULT_DOCUMENT_CACHE_MB, DEFAULT_DOCUMENT_SCALE, DEFAULT_EBOOK_SCALE,
+    DEFAULT_FOLLOW_CURSOR, DEFAULT_FONT_BACKGROUND, DEFAULT_FONT_SCALE,
+    DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HOVER_DELAY_MS, DEFAULT_HTML_BACKGROUND,
+    DEFAULT_IMAGE_BACKGROUND, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB,
+    DEFAULT_MODEL_SCALE, DEFAULT_OTHERS_CACHE_MB, DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE,
+    DEFAULT_PIN_MODE_AUDIO_END_OF_FILE, DEFAULT_PIN_MODE_AUDIO_SHUFFLE,
+    DEFAULT_PIN_MODE_IMAGE_SHUFFLE, DEFAULT_PIN_MODE_VIDEO_END_OF_FILE,
+    DEFAULT_PIN_MODE_VIDEO_SHUFFLE, DEFAULT_PREVIEW_SCALE, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    DEFAULT_SETTLING_DELAY_MS, DEFAULT_TEXT_SCALE, DEFAULT_VECTOR_BACKGROUND, DEFAULT_VECTOR_SCALE,
+    DEFAULT_VIDEO_LOOP, DEFAULT_VIDEO_SCALE, DEFAULT_VIDEO_VOLUME, DEFAULT_ZOOM_BACKGROUND,
+    VOLUME_CHOICES,
 };
 use crate::config::theme_files;
 use crate::engines::libreoffice_render;
@@ -1512,6 +1513,7 @@ pub(super) unsafe fn populate_context_menu(
     // needed a room of its own, and the name stays with the ceiling it has always meant.
     let decode_budget_gb = sanitize_decode_budget_gb(snap.decode_budget_gb);
     let animated_webp_budget_mb = sanitize_animated_webp_budget_mb(snap.animated_webp_budget_mb);
+    let others_cache_mb = sanitize_others_cache_mb(snap.others_cache_mb);
 
     let budget_menu_guard = MenuGuard::new()?;
     let budget_menu = budget_menu_guard.handle();
@@ -1588,18 +1590,76 @@ pub(super) unsafe fn populate_context_menu(
         );
     }
 
+    // And the cache that is not a stack of frames at all: the pages that were parsed, the listings
+    // an archive was walked for and the one picture the image converter develops for a preview too
+    // large for the frame cache. One figure for the three, because the three are one question —
+    // what a sweep of a folder leaves behind that is not a picture (see `others_cache`).
+    let others_menu_guard = MenuGuard::new()?;
+    let others_menu = others_menu_guard.handle();
+    let others_labels: Vec<Vec<u16>> = OTHERS_CACHE_SIZE_CHOICES_MB
+        .iter()
+        .map(|megabytes| {
+            cache_size_label(*megabytes, DEFAULT_OTHERS_CACHE_MB)
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect()
+        })
+        .collect();
+
+    for (index, _) in OTHERS_CACHE_SIZE_CHOICES_MB.iter().enumerate() {
+        let _ = AppendMenuW(
+            others_menu,
+            MF_STRING,
+            (ID_TRAY_OTHERS_CACHE_BASE + index as u16) as usize,
+            PCWSTR(others_labels[index].as_ptr()),
+        );
+    }
+
+    if let Some(index) = OTHERS_CACHE_SIZE_CHOICES_MB
+        .iter()
+        .position(|megabytes| *megabytes == others_cache_mb)
+    {
+        let _ = CheckMenuRadioItem(
+            others_menu,
+            ID_TRAY_OTHERS_CACHE_BASE as u32,
+            (ID_TRAY_OTHERS_CACHE_BASE + OTHERS_CACHE_SIZE_CHOICES_MB.len() as u16 - 1) as u32,
+            (ID_TRAY_OTHERS_CACHE_BASE + index as u16) as u32,
+            MF_BYCOMMAND.0,
+        );
+    }
+
     // What is held in memory between hovers and what one file may be answered for drawn into: the
-    // ceiling one hover may decode or read *for* first, then a rule, then the two rooms a run of
-    // frames is *kept* in — the frames a decoded picture is shown as, held between hovers, and the
-    // run a pinned picture's track reads (see `pin_index`). The ceiling is above the two because
-    // it decides whether a file is answered at all, which is the question a hand with a machine
-    // that struggles reaches for first.
+    // ceiling one hover may decode or read *for* first, then a rule, then the three rooms a preview
+    // is *kept* in — the frames a decoded picture is shown as, the run a pinned picture's track
+    // reads (see `pin_index`), and the caches that are not pictures at all: a parsed page, an
+    // archive's listing and the one picture the image converter develops. The ceiling is first
+    // because it decides whether a file is answered at all, which is the question a hand with a
+    // machine that struggles reaches for first.
     let memory_menu_guard = MenuGuard::new()?;
     let memory_menu = memory_menu_guard.handle();
+
+    // **The switch the three budgets below it are read with.** `Engine → Away Timer` is a clock
+    // about Explorer being out of reach; with this on, the moment it runs out is the one the caches
+    // under this submenu are given back at as well as the engines the timer has always let go. It
+    // is the first row here because it is a rule about all of them rather than a size of one.
+    let _ = AppendMenuW(
+        memory_menu,
+        MF_STRING
+            | if snap.respect_away_timer {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            },
+        ID_TRAY_RESPECT_AWAY_TIMER as usize,
+        w!("Respect Away Timer"),
+    );
+    let _ = AppendMenuW(memory_menu, MF_SEPARATOR, 0, PCWSTR::null());
+
     let _ = budget_menu_guard.append_to(memory_menu, MF_STRING, w!("Decode Budget"));
     let _ = AppendMenuW(memory_menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = image_menu.append_to(memory_menu, MF_STRING, w!("Image"));
     let _ = animated_webp_menu_guard.append_to(memory_menu, MF_STRING, w!("Animated Image"));
+    let _ = others_menu_guard.append_to(memory_menu, MF_STRING, w!("Others"));
 
     let _ = memory_menu_guard.append_to(performance_menu, MF_STRING, w!("Memory"));
 

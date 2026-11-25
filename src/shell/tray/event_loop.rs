@@ -20,23 +20,24 @@ use super::commands::{
     set_general_disk_cache_mb, set_hover_delay, set_html_background, set_image_background,
     set_image_cache_mb, set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode,
     set_model_scale, set_mpv_engine_idle, set_mpv_path, set_office_engine, set_office_engine_idle,
-    set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek, set_pin_nav_audio,
-    set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_pin_scaling_mode,
-    set_preview_scale, set_same_file_rehover_delay, set_settling_delay, set_text_font_scale,
-    set_text_scale, set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode,
-    set_vector_background, set_vector_scale, set_video_engine, set_video_scale, set_video_volume,
-    set_webview_idle, set_zoom_background, toggle_browse_dialog_preview, toggle_bypass_placement,
-    toggle_check_for_updates, toggle_custom_preview_enabled, toggle_everything_previews,
-    toggle_loop, toggle_normalize_video_volume, toggle_normalize_volume, toggle_pdf_autofocus,
+    set_others_cache_mb, set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek,
+    set_pin_nav_audio, set_pin_nav_image, set_pin_nav_others, set_pin_nav_video,
+    set_pin_scaling_mode, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
+    set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
+    set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
+    set_video_scale, set_video_volume, set_webview_idle, set_zoom_background,
+    toggle_browse_dialog_preview, toggle_bypass_placement, toggle_check_for_updates,
+    toggle_custom_preview_enabled, toggle_everything_previews, toggle_loop,
+    toggle_normalize_video_volume, toggle_normalize_volume, toggle_pdf_autofocus,
     toggle_pdf_full_mode, toggle_pin_always_on_top, toggle_pin_camera_follows, toggle_pin_enabled,
     toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_playlist_always_open,
     toggle_pin_shuffle, toggle_pin_update_enabled, toggle_pin_update_move_to_top,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_q_dir_previews, toggle_remember_audio_volume,
-    toggle_remember_video_volume, toggle_render_html, toggle_silent_auto_update, toggle_startup,
-    toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
-    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
-    toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
+    toggle_remember_video_volume, toggle_render_html, toggle_respect_away_timer,
+    toggle_silent_auto_update, toggle_startup, toggle_text_dont_preview_secrets,
+    toggle_text_show_extensionless, toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled,
+    toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, ANIMATED_WEBP_BUDGET_CHOICES_MB, AUDIO_SCALE_CHOICES,
@@ -61,8 +62,8 @@ use super::ids::{
     ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
     ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_BASE, ID_TRAY_MPV_IDLE_BASE,
     ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG,
-    ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
-    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ID_TRAY_OTHERS_CACHE_BASE, ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN,
+    ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
     ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
     ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, ID_TRAY_PIN_MODE_AUDIO_SEEK_BASE,
     ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_NAV_AUDIO_ALL,
@@ -73,8 +74,8 @@ use super::ids::{
     ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
     ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
     ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
-    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_SCALE_BASE,
-    ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
+    ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_RESPECT_AWAY_TIMER,
+    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
     ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
     ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
     ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
@@ -86,9 +87,9 @@ use super::ids::{
     ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
     IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MAX_TRAY_CUSTOM_THEMES, MPV_COMMANDS,
-    PIN_END_OF_FILE_CHOICES, TASKBAR_CREATED, TICK_CHOICES_MS, TIMER_CHECK, TIMER_DUE,
-    TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND, VIDEO_ENGINE_CHOICES, WM_TRAYICON,
-    WM_TRAY_INSTALL_FINISHED, WM_TRAY_UPDATE_INSTALLED, ZOOM_BACKGROUND_CHOICES,
+    OTHERS_CACHE_SIZE_CHOICES_MB, PIN_END_OF_FILE_CHOICES, TASKBAR_CREATED, TICK_CHOICES_MS,
+    TIMER_CHECK, TIMER_DUE, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND, VIDEO_ENGINE_CHOICES,
+    WM_TRAYICON, WM_TRAY_INSTALL_FINISHED, WM_TRAY_UPDATE_INSTALLED, ZOOM_BACKGROUND_CHOICES,
 };
 use super::menus::show_context_menu;
 use super::submenus::{install_engine, open_codec_page};
@@ -630,6 +631,10 @@ unsafe extern "system" fn tray_window_proc(
                     // submenu and so has an id of its own rather than
                     // a range.
                     ID_TRAY_VIDEO_HW_ACCEL => toggle_video_hw_accel(),
+                    // Whether the away timer reaches the app's memory caches as well as its
+                    // engines — the `Performance → Memory → Respect Away Timer` row, above the
+                    // sizes under it and so an id of its own rather than a range.
+                    ID_TRAY_RESPECT_AWAY_TIMER => toggle_respect_away_timer(),
                     // A cache size, by the position it was listed at. Each cache is bounded by the
                     // sizes it offers rather than by the base of the next one, so an item of a
                     // submenu added past these is not read as a cache size.
@@ -677,6 +682,16 @@ unsafe extern "system" fn tray_window_proc(
                         .contains(&cmd) =>
                     {
                         set_animated_webp_budget_mb(cmd - ID_TRAY_ANIMATED_WEBP_BUDGET_BASE)
+                    }
+                    // And the one budget here that is not a stack of frames: the pages that were
+                    // parsed, the listings an archive was walked for and the picture the image
+                    // converter develops, held to one total between them (see `others_cache`).
+                    cmd if (ID_TRAY_OTHERS_CACHE_BASE
+                        ..ID_TRAY_OTHERS_CACHE_BASE
+                            + OTHERS_CACHE_SIZE_CHOICES_MB.len() as u16)
+                        .contains(&cmd) =>
+                    {
+                        set_others_cache_mb(cmd - ID_TRAY_OTHERS_CACHE_BASE)
                     }
                     // A share of the display a document is drawn at, by the position it
                     // was listed at: the vector scale, and the two page scales beside it.

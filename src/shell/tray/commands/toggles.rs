@@ -305,6 +305,20 @@ pub(in super::super) fn toggle_video_hw_accel() {
     });
 }
 
+/// Whether the away timer reaches the app's memory caches as well as its engines, from
+/// `Performance → Memory → Respect Away Timer`.
+///
+/// **Nothing on screen changes and nothing is told.** The row is read where the flush is decided,
+/// which is the viewer's tick, and the setting is read there live rather than captured — so the
+/// first tick after the row is turned on is the first one that answers the new value, and a machine
+/// that is away when it is turned on flushes on that tick (see `app::away_flush`). A refresh would
+/// be a repaint of a preview for a setting that changes none of its pixels.
+pub(in super::super) fn toggle_respect_away_timer() {
+    commit_config(|config| {
+        config.respect_away_timer = !config.respect_away_timer;
+    });
+}
+
 /// Whether an explicitly chosen video engine falls through to the others when it cannot play a
 /// file, from the `Fallback` row at the top of `Engine → Video Engine`.
 ///

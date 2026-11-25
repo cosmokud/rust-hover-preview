@@ -171,6 +171,21 @@ impl<K: Eq + Hash + Clone, V> BoundedCache<K, V> {
         })
     }
 
+    /// Give back the least recently used entry, which is the one a byte budget takes first.
+    ///
+    /// A count-bounded cache takes one whenever it is full, by an `insert` of its own; a cache
+    /// bounded by *bytes* is one whose keeper asks in a loop until what is held fits, and it is
+    /// the keeper who knows what an entry costs (see `others_cache::trim`). Answers the entry it
+    /// took, so the keeper can measure what it freed.
+    pub(crate) fn pop_lru(&mut self) -> Option<(K, V)> {
+        let tail = self.tail?;
+        self.unlink(tail);
+        let entry = self.entries[tail].take()?;
+        self.index.remove(&entry.key);
+        self.free.push(tail);
+        Some((entry.key, entry.value))
+    }
+
     fn move_to_front(&mut self, idx: usize) {
         if self.head == Some(idx) {
             return;

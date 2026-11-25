@@ -25,6 +25,7 @@ pub use caret::{moved, Motion};
 pub(crate) use document::document_stat_count;
 #[cfg(test)]
 pub use document::drawn_lines;
+pub(crate) use document::{clear_documents, document_bytes_held, drop_the_oldest_document};
 pub use document::{drawn_lines_held, find_all, find_next, text_of, Place};
 pub use frame::{
     caret_rect, extend_word_selection, is_word_character, line_in, measure, position_in,

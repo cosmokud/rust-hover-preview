@@ -38,14 +38,14 @@ pub(super) use setters::{
     set_general_disk_cache_mb, set_hover_delay, set_html_background, set_image_background,
     set_image_cache_mb, set_image_disk_cache_mb, set_libreoffice_idle, set_markdown_mode,
     set_model_scale, set_mpv_engine_idle, set_mpv_path, set_office_engine, set_office_engine_idle,
-    set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek, set_pin_nav_audio,
-    set_pin_nav_image, set_pin_nav_others, set_pin_nav_video, set_pin_scaling_mode,
-    set_preview_scale, set_same_file_rehover_delay, set_settling_delay, set_text_font_scale,
-    set_text_scale, set_theme, set_theme_from_menu, set_tick_ms, set_trigger_key_mode,
-    set_vector_background, set_vector_scale, set_video_engine, set_video_scale, set_video_volume,
-    set_webview_idle, set_zoom_background, toggle_bypass_placement, toggle_custom_preview_enabled,
-    toggle_loop, toggle_pin_camera_follows, toggle_pin_playlist_always_open, toggle_pin_shuffle,
-    PinShuffle,
+    set_others_cache_mb, set_pin_end_of_file, set_pin_minimize_to, set_pin_mode_audio_seek,
+    set_pin_nav_audio, set_pin_nav_image, set_pin_nav_others, set_pin_nav_video,
+    set_pin_scaling_mode, set_preview_scale, set_same_file_rehover_delay, set_settling_delay,
+    set_text_font_scale, set_text_scale, set_theme, set_theme_from_menu, set_tick_ms,
+    set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
+    set_video_scale, set_video_volume, set_webview_idle, set_zoom_background,
+    toggle_bypass_placement, toggle_custom_preview_enabled, toggle_loop, toggle_pin_camera_follows,
+    toggle_pin_playlist_always_open, toggle_pin_shuffle, PinShuffle,
 };
 pub(crate) use toggles::toggle_pin_always_on_top;
 pub(crate) use toggles::toggle_preview_enabled;
@@ -56,9 +56,10 @@ pub(super) use toggles::{
     toggle_pin_update_enabled, toggle_pin_update_move_to_top, toggle_pin_update_on_hover,
     toggle_preview_type, toggle_prioritize_keyboard, toggle_q_dir_previews,
     toggle_remember_audio_volume, toggle_remember_video_volume, toggle_render_html,
-    toggle_silent_auto_update, toggle_startup, toggle_text_dont_preview_secrets,
-    toggle_text_show_extensionless, toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled,
-    toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles,
+    toggle_respect_away_timer, toggle_silent_auto_update, toggle_startup,
+    toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
+    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
+    toggle_video_hw_accel, toggle_video_subtitles,
 };
 
 // The four that turn an id back into the choice it was listed for. No window proc asks for

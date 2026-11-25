@@ -376,19 +376,18 @@ fn cuts_a_name_to_the_room_it_has() {
     );
     assert_eq!(cut_to_width(&style, "report.pdf", 0, 7, 1.0), "");
 
-    // A name of two Chinese glyphs is cut where its own glyphs run out rather than where a count of
-    // Latin ones would have put the cut: the face has none of them, and each is drawn about twice
-    // as wide.
+    // A Chinese name is cut where its own glyphs run out rather than where a count of Latin ones
+    // would have put the cut: the face has none of them, and each is drawn about twice as wide.
     assert!(
         measure("漢字") > 2 * 7,
         "two Chinese glyphs are wider than two cells of the face's own advance"
     );
 }
 
-/// **An archive is full of names a fixed-pitch face has no glyph for.** A folder of Chinese entries
-/// is `漢字資料/Sample01.dds`, and the tree places each row against the size column beside it. A
-/// name counted at one advance a character was a name measured narrower than it is drawn, so its
-/// ink ran under the size column and the end of it was cut away by the box it was clipped to.
+/// **An archive is full of names a fixed-pitch face has no glyph for.** A Chinese mod's entries are
+/// `漢字資料/Sample01.dds`, and the tree places each row against the size column beside it. A name
+/// counted at one advance a character was a name measured narrower than it is drawn, so its ink ran
+/// under the size column and the end of it was cut away by the box it was clipped to.
 #[test]
 fn a_name_the_face_has_no_glyph_for_is_laid_out_as_wide_as_it_is_drawn() {
     let dir = scratch("cjk-names");
