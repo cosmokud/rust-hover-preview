@@ -124,8 +124,13 @@ pub(super) fn editor(id: i32) -> Option<Wording> {
         ),
         ID_BROWSE => one("Pick the program with the system's own file dialog."),
         ID_ARGUMENTS => one(
-            "{file} stands where the file goes and may be named more than once; with no {file} the \
-             path is appended last. Quotes group an argument, backslashes escape them.",
+            "Three placeholders stand where the file goes. {file} is the path in this preset's own \
+             Path Method spelling; {path} is the plain Windows path whatever that row says; {url} is \
+             a file:// URL, for a program that will only take one. Any of them may be named more \
+             than once, or sit inside a value as --input={file}. Where none of the three appears \
+             the path is appended last, in {file}'s own spelling; a brace group that is none of the \
+             three is left exactly as written, so a file named {url}.mkv keeps its name. Quotes group \
+             an argument, backslashes escape them.",
         ),
         ID_CAPTURE_TECHNIQUE => listed(
             "How the program's window is kept off the screen while its picture is the preview. Each \
@@ -1293,6 +1298,25 @@ mod tests {
             rounded < 255,
             "the card's corner is square rather than rounded: {rounded}"
         );
+    }
+
+    /// **Every placeholder the parser expands is named in the `Arguments` tip.** The row is the one
+    /// place a user can read what may be written in that field, so a placeholder the app honours and
+    /// the tip does not name is one nobody can discover — which is what happened while the tip still
+    /// said only `{file}` and the parser had grown `{path}` and `{url}` beside it.
+    #[test]
+    fn the_arguments_tip_names_every_placeholder_the_parser_expands() {
+        // The words this app expands, spelled as the parser matches them.
+        const EXPANDS: &[&str] = &["{file}", "{path}", "{url}"];
+        let said = editor(crate::ui::custom_preview_settings::ID_ARGUMENTS)
+            .expect("the Arguments row has no tip")
+            .whole;
+        for placeholder in EXPANDS {
+            assert!(
+                said.contains(placeholder),
+                "`{placeholder}` is expanded by the parser and never named in the Arguments tip: {said:?}"
+            );
+        }
     }
 
     /// **A tip is a real, visible window**: made, composed, placed and shown, with black bytes in the
