@@ -184,6 +184,7 @@ name=Paint
 enabled=true
 exe=C:\Windows\System32\mspaint.exe
 arguments=
+path_method=plain
 extensions=jpg, png
 window_mode=normal
 capture_technique=in_process_hook
@@ -195,7 +196,8 @@ volume=100
 ```
 
   - `exe` — the program. A quoted path is accepted, as is the one a **Copy as path** puts on the clipboard.
-  - `arguments` — the command line the program is started with, before the file, on a hover and on a promotion. Spaces split it, double quotes group (and `\\` before a quote is an escape, as `CommandLineToArgvW` reads it), a single-quoted run groups without escapes, and `{file}` stands where the file path goes — written once, twice, or inside a value such as `--input={file}`; where no `{file}` appears the path is appended at the end. `;`, `#`, `[` and `]` are stored escaped, so they survive the file, and a field pasted as one wrapped run of flags (`"--fullscreen --silent"`) is unwrapped rather than handed over as a single argument.
+  - `arguments` — the command line the program is started with, before the file, on a hover and on a promotion. Spaces split it, double quotes group (and `\\` before a quote is an escape, as `CommandLineToArgvW` reads it), a single-quoted run groups without escapes, and three words stand where the file goes: `{file}` in the preset's own `path_method` spelling, `{path}` for the plain Windows path and `{url}` for a `file://` URL — so one command line may carry both spellings at once. Each may be written once, twice, or inside a value such as `--input={file}`; where none of the three appears the path is appended at the end, in the `path_method` spelling. `;`, `#`, `[` and `]` are stored escaped, so they survive the file, and a field pasted as one wrapped run of flags (`"--fullscreen --silent"`) is unwrapped rather than handed over as a single argument.
+  - `path_method` — how the file is spelled where `arguments` stands it, and where it is appended with no placeholder written: `plain` (default; `E:\Videos\a b.mkv`, what every preset did before this key existed), `file_url` (`file:///E:/Videos/a%20b.mkv`, and `file://server/share/a.mkv` for a share — what VLC, mpv's URL handling and most programs that take a stream address want), `forward_slashes` (`E:/Videos/a b.mkv`, nothing escaped, for a program that treats a backslash as an escape character), `short_path` (the volume's own 8.3 name, `E:\VIDEO~1\A~1.MKV`, and the plain path where the volume keeps no 8.3 names), or `file_url_literal` (the URL with `%20` left as a space, for the rare program that hands it on to the filesystem unescaped).
   - `extensions` — the names it claims, without dots.
   - `window_mode` — `normal` (the program's own frame) or `borderless`.
   - `capture_technique` — how the program's window is kept out of sight while it is previewed: `in_process_hook` (default; needs `custom_preview_hook.dll` beside the executable — or, for a lone executable, in `%LOCALAPPDATA%\rust-hover-preview` — and falls back to `invisible_layered` without it), `invisible_layered`, `behind_host`, `off_screen`, `direct_window`, `offscreen_staged`.

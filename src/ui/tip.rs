@@ -53,8 +53,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::custom_preview_settings::{
     rgb, scale, Palette, ID_ADD, ID_ARGUMENTS, ID_BROKER_FALLBACK, ID_BROWSE, ID_CAPTURE_TECHNIQUE,
     ID_CHILD_SCOPE, ID_CLOSE_BUTTON, ID_DELETE, ID_ENABLED, ID_EXE, ID_EXTENSIONS, ID_LIST,
-    ID_NAME, ID_PLACEMENT, ID_PROMOTION_TECHNIQUE, ID_SCALING, ID_SCALING_DOWN, ID_SCALING_PERCENT,
-    ID_SCALING_UP, ID_SEARCH, ID_SIBLING_WINDOWS, ID_STATUS, ID_TITLEBAR_CLOSE,
+    ID_NAME, ID_PATH_METHOD, ID_PLACEMENT, ID_PROMOTION_TECHNIQUE, ID_SCALING, ID_SCALING_DOWN,
+    ID_SCALING_PERCENT, ID_SCALING_UP, ID_SEARCH, ID_SIBLING_WINDOWS, ID_STATUS, ID_TITLEBAR_CLOSE,
     ID_TITLEBAR_MAXIMIZE, ID_TITLEBAR_MINIMIZE, ID_VOLUME, ID_VOLUME_DOWN, ID_VOLUME_ENABLED,
     ID_VOLUME_UP, ID_VOLUME_VALUE, ID_WINDOW_MODE,
 };
@@ -132,6 +132,12 @@ pub(super) fn editor(id: i32) -> Option<Wording> {
              three is left exactly as written, so a file named {url}.mkv keeps its name. Quotes group \
              an argument, backslashes escape them.",
         ),
+        ID_PATH_METHOD => listed(
+            "How the file is spelled where Arguments stands it, and where it is appended with no \
+             placeholder written. A program that says it cannot open the stream is usually a program \
+             handed a path where it wanted a URL, or the other way round.",
+            PATH_METHOD_WORDS,
+        ),
         ID_CAPTURE_TECHNIQUE => listed(
             "How the program's window is kept off the screen while its picture is the preview. Each \
              choice is a different road to that one end.",
@@ -190,6 +196,24 @@ pub(super) fn editor(id: i32) -> Option<Wording> {
         _ => return None,
     })
 }
+
+/// `Path Method`, value by value, in the order `PATH_METHODS` holds them.
+const PATH_METHOD_WORDS: &[&str] = &[
+    "E:\\Videos\\a b.mkv — the path as Windows writes it. What every preset did before this row \
+     existed, and what a program that takes a path rather than a URL wants.",
+    "file:///E:/Videos/a%20b.mkv — separators turned round and what a URL may not carry escaped, \
+     with a share written file://server/share/…. What VLC, mpv's URL handling and most programs \
+     that take a stream address want; handed a backslashed path they answer that they cannot open \
+     the MRL.",
+    "E:/Videos/a b.mkv — the separators turned round and nothing escaped. For a program that reads / \
+     but treats a backslash as an escape character in its own arguments, such as ffmpeg's option \
+     parser.",
+    "E:\\VIDEO~1\\A~1.MKV — the volume's own 8.3 name, which has no spaces and no non-ASCII in it. For \
+     an old program that splits its command line on spaces. A volume that keeps no 8.3 names, and a \
+     file that is already short, are handed the plain path instead.",
+    "file:///E:/Videos/a b.mkv — the URL with nothing escaped. For the rare program that takes a URL \
+     and then hands %20 to the filesystem as those four characters rather than as a space.",
+];
 
 /// `Capture Method`, value by value, in the order `CAPTURE_TECHNIQUES` holds them.
 const CAPTURE_TECHNIQUE_WORDS: &[&str] = &[
@@ -280,6 +304,7 @@ pub(super) const EXPLAINED: &[i32] = &[
     ID_EXE,
     ID_BROWSE,
     ID_ARGUMENTS,
+    ID_PATH_METHOD,
     ID_CAPTURE_TECHNIQUE,
     ID_CHILD_SCOPE,
     ID_BROKER_FALLBACK,
@@ -354,17 +379,31 @@ fn tip_of(hwnd: HWND) -> Option<&'static mut Tip> {
     unsafe { raw.as_mut() }
 }
 
-/// How many tip windows this process has made and not destroyed.
-///
-/// **A count and not a nicety**: a popup is a window of the desktop until it is destroyed, and a tip
-/// whose window is left standing after its sentence was taken down is a leak that nothing else in the
-/// app would ever see. The editor's tests hold it to zero.
+// How many tip windows this thread has made and not destroyed.
+//
+// **A count and not a nicety**: a popup is a window of the desktop until it is destroyed, and a tip
+// whose window is left standing after its sentence was taken down is a leak that nothing else in the
+// app would ever see. The editor's tests hold it to zero — and it is **per thread** rather than per
+// process because a tip is: `SHOWING` is this thread's, tests run in parallel on threads of their
+// own, and a count two of them shared would fail for a tip the other one was holding up.
 #[cfg(test)]
-static LIVE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+thread_local! {
+    static LIVE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
 #[cfg(test)]
 pub(super) fn live_windows() -> u32 {
-    LIVE.load(std::sync::atomic::Ordering::SeqCst)
+    LIVE.with(|live| live.get())
+}
+
+#[cfg(test)]
+fn note_a_tip_made() {
+    LIVE.with(|live| live.set(live.get() + 1));
+}
+
+#[cfg(test)]
+fn note_a_tip_gone() {
+    LIVE.with(|live| live.set(live.get().saturating_sub(1)));
 }
 
 thread_local! {
@@ -394,7 +433,7 @@ unsafe extern "system" fn tip_proc(
                 }
             }
             #[cfg(test)]
-            LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            note_a_tip_gone();
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
@@ -573,7 +612,7 @@ unsafe fn make_tip(owner: HWND, run: &str, palette: Palette, dpi: i32) -> Option
     }
     .ok()?;
     #[cfg(test)]
-    LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    note_a_tip_made();
 
     let tip = Box::new(Tip {
         pixels: Vec::new(),
@@ -1152,8 +1191,8 @@ impl Drop for Canvas {
 mod tests {
     use super::*;
     use crate::ui::custom_preview_settings::{
-        CHILD_SCOPES, ID_TITLEBAR_CLOSE, ID_TITLEBAR_MAXIMIZE, ID_TITLEBAR_MINIMIZE, PLACEMENTS,
-        PROMOTION_TECHNIQUES, SIBLING_WINDOW_MODES, WINDOW_MODES,
+        CHILD_SCOPES, ID_TITLEBAR_CLOSE, ID_TITLEBAR_MAXIMIZE, ID_TITLEBAR_MINIMIZE, PATH_METHODS,
+        PLACEMENTS, PROMOTION_TECHNIQUES, SIBLING_WINDOW_MODES, WINDOW_MODES,
     };
 
     /// Every control the editor lays out has a sentence, and every sentence names a control that
@@ -1188,8 +1227,9 @@ mod tests {
     /// A list's tips are one per value, and every list the editor draws is covered.
     #[test]
     fn every_value_of_every_list_is_explained() {
-        let lists: [(i32, usize); 6] = [
+        let lists: [(i32, usize); 7] = [
             (ID_CAPTURE_TECHNIQUE, 6),
+            (ID_PATH_METHOD, PATH_METHODS.len()),
             (ID_CHILD_SCOPE, CHILD_SCOPES.len()),
             (ID_SIBLING_WINDOWS, SIBLING_WINDOW_MODES.len()),
             (ID_PROMOTION_TECHNIQUE, PROMOTION_TECHNIQUES.len()),

@@ -30,7 +30,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::app::engine_processes;
-use crate::paths::plain_path;
 
 /// Screen-space rectangle a WebView2 host window is placed in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -291,30 +290,11 @@ pub(crate) fn register_navigation_completed(
 }
 
 /// Local absolute path encoded as a `file://` URL (stripping `\\?\` verbatim prefixes).
+///
+/// The one spelling a browser and a custom preview's program both take, so it is asked of
+/// [`crate::paths::file_url`] here rather than written twice.
 pub(crate) fn file_url(path: &Path) -> Option<String> {
-    if !path.is_absolute() {
-        return None;
-    }
-
-    let local = plain_path(path);
-
-    let (mut url, rest) = match local.strip_prefix(r"\\") {
-        Some(share) => (String::from("file://"), share.to_string()),
-        None => (String::from("file:///"), local),
-    };
-
-    for character in rest.chars() {
-        match character {
-            '\\' => url.push('/'),
-            ' ' => url.push_str("%20"),
-            '#' => url.push_str("%23"),
-            '?' => url.push_str("%3F"),
-            '%' => url.push_str("%25"),
-            other => url.push(other),
-        }
-    }
-
-    Some(url)
+    crate::paths::file_url(path)
 }
 
 /// NUL-terminated UTF-16 buffer for Win32 / WebView2 APIs.

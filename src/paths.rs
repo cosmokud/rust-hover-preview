@@ -55,6 +55,91 @@ pub(crate) fn plain_path(path: &Path) -> String {
     }
 }
 
+/// The same path with its separators turned round: `E:/Videos/a b.mkv`.
+///
+/// Nothing is escaped — a program that reads `/` but treats `\` as an escape (`ffmpeg`'s own
+/// option parser, most `-`-flagged tools written for both platforms) is the one this is for, and
+/// it takes the name as a name rather than as a URL.
+pub(crate) fn forward_slashes(path: &Path) -> String {
+    plain_path(path).replace('\\', "/")
+}
+
+/// The path in the form the volumes' own 8.3 names give it — `E:\VIDEO~1\A~1.MKV` — where it has
+/// one.
+///
+/// `None` for a path that does not exist, for a volume where 8.3 names are turned off (Windows
+/// 11's default on a non-system volume), and for a name that is already an 8.3 name: the point of
+/// asking is to be handed a *different* spelling, and the caller's own fallback is the plain path.
+pub(crate) fn short_path(path: &Path) -> Option<String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+
+    let plain = plain_path(path);
+    let wide: Vec<u16> = plain.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut asked = 0u32;
+    let mut buffer = vec![0u16; 260];
+    loop {
+        let answered = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buffer)) };
+        // The answer is the length written, or — where the buffer was short — the length needed,
+        // NUL excluded either way.
+        if answered == 0 {
+            return None;
+        }
+        let held = answered as usize;
+        if held < buffer.len() {
+            let short = String::from_utf16_lossy(&buffer[..held]);
+            return (short != plain).then_some(short);
+        }
+        if asked >= 2 {
+            return None;
+        }
+        asked += 1;
+        buffer = vec![0u16; held + 1];
+    }
+}
+
+/// A local absolute path as a `file://` URL the way a program that takes a URL reads it:
+/// `file:///E:/Videos/a%20b.mkv`, and `file://server/share/a.mkv` for a share.
+///
+/// `None` for a path that is not absolute, which is not a URL anything can open.
+pub(crate) fn file_url(path: &Path) -> Option<String> {
+    file_url_of(path, true)
+}
+
+/// The same URL with nothing escaped: `file:///E:/Videos/a b.mkv`.
+///
+/// For the odd program that takes a URL and then hands `%20` through to the filesystem as those
+/// four characters. The separators are still slashes, because that is what makes it a URL.
+pub(crate) fn file_url_literal(path: &Path) -> Option<String> {
+    file_url_of(path, false)
+}
+
+fn file_url_of(path: &Path, escape: bool) -> Option<String> {
+    if !path.is_absolute() {
+        return None;
+    }
+
+    let local = plain_path(path);
+
+    let (mut url, rest) = match local.strip_prefix(r"\\") {
+        Some(share) => (String::from("file://"), share.to_string()),
+        None => (String::from("file:///"), local),
+    };
+
+    for character in rest.chars() {
+        match character {
+            '\\' => url.push('/'),
+            ' ' if escape => url.push_str("%20"),
+            '#' if escape => url.push_str("%23"),
+            '?' if escape => url.push_str("%3F"),
+            '%' if escape => url.push_str("%25"),
+            other => url.push(other),
+        }
+    }
+
+    Some(url)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,6 +150,69 @@ mod tests {
         // is a file beside the exe a test build does not put one beside.
         assert!(data_root().is_none());
         assert!(!portable());
+    }
+
+    #[test]
+    fn a_verbatim_path_is_turned_round_shortened_and_written_as_a_url() {
+        // Separators, with the verbatim prefix off so the two spellings are the same file.
+        assert_eq!(
+            forward_slashes(Path::new(r"\\?\E:\Videos\a b.mkv")),
+            "E:/Videos/a b.mkv"
+        );
+        assert_eq!(
+            forward_slashes(Path::new(r"\\server\share\a.mkv")),
+            "//server/share/a.mkv"
+        );
+
+        // A URL escapes what a URL may not carry, and a share keeps its server.
+        assert_eq!(
+            file_url(Path::new(r"\\?\E:\Videos\a b.mkv")).as_deref(),
+            Some("file:///E:/Videos/a%20b.mkv")
+        );
+        assert_eq!(
+            file_url(Path::new(r"\\server\share\a b.mkv")).as_deref(),
+            Some("file://server/share/a%20b.mkv")
+        );
+        // The literal form is the same URL with the escaping left out.
+        assert_eq!(
+            file_url_literal(Path::new(r"E:\Videos\a b.mkv")).as_deref(),
+            Some("file:///E:/Videos/a b.mkv")
+        );
+        // A relative path is not a URL anything can open.
+        assert_eq!(file_url(Path::new(r"Videos\a.mkv")), None);
+        // A path that is not there has no 8.3 name to be handed.
+        assert_eq!(
+            short_path(Path::new(r"C:\no such folder\no such file.mkv")),
+            None
+        );
+    }
+
+    /// The 8.3 form where the volume keeps one, and nothing where it does not: a machine with
+    /// 8.3 names turned off answers the plain path back, and that is not a spelling to hand a
+    /// program as if it were a short one.
+    #[test]
+    fn a_short_name_is_a_different_spelling_of_the_same_file() {
+        let folder = std::env::temp_dir().join("rhp short name probe");
+        let _ = std::fs::create_dir_all(&folder);
+        let file = folder.join("a long enough file name.mkv");
+        if std::fs::write(&file, b"x").is_err() {
+            return;
+        }
+        match short_path(&file) {
+            Some(short) => {
+                assert!(Path::new(&short).is_file(), "{short} is the same file");
+                assert!(
+                    short.len() < plain_path(&file).len(),
+                    "{short} is a shorter spelling than the name it stands for"
+                );
+            }
+            None => assert_eq!(
+                short_path(&file).map(|short| short == plain_path(&file)),
+                None,
+                "a volume without 8.3 names answers nothing rather than the same name back"
+            ),
+        }
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]

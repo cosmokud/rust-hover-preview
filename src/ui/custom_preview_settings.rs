@@ -76,8 +76,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::config::config::{
     sanitize_arguments, sanitize_program_input, CustomCaptureTechnique, CustomChildScope,
-    CustomPlacement, CustomPreset, CustomPromotionTechnique, CustomScaling, CustomSiblingWindows,
-    CustomWindowMode, PreviewScale, TextTheme, MAX_PRESETS,
+    CustomPathMethod, CustomPlacement, CustomPreset, CustomPromotionTechnique, CustomScaling,
+    CustomSiblingWindows, CustomWindowMode, PreviewScale, TextTheme, MAX_PRESETS,
 };
 use crate::text::{text_paint, text_theme};
 use crate::ui::ask_card::{self, Question};
@@ -170,6 +170,7 @@ pub(super) const ID_ARGUMENTS: i32 = 131;
 pub(super) const ID_CHILD_SCOPE: i32 = 132;
 pub(super) const ID_BROKER_FALLBACK: i32 = 133;
 pub(super) const ID_SIBLING_WINDOWS: i32 = 134;
+pub(super) const ID_PATH_METHOD: i32 = 135;
 const ID_LABEL_BASE: i32 = 140;
 /// The titlebar's three buttons are drawn by the window rather than laid out as controls, so their
 /// ids exist only as the keys a tip is written under (see `ui::tip`).
@@ -339,12 +340,40 @@ fn placement_index(placement: CustomPlacement) -> usize {
         .unwrap_or(0)
 }
 
-pub(super) const EDITOR_LABELS: [&str; 14] = [
+pub(super) const PATH_METHODS: [CustomPathMethod; 5] = [
+    CustomPathMethod::Plain,
+    CustomPathMethod::FileUrl,
+    CustomPathMethod::ForwardSlashes,
+    CustomPathMethod::ShortPath,
+    CustomPathMethod::FileUrlLiteral,
+];
+
+/// What each method's row says: the name, and the spelling of one sample path beside it, so the
+/// choice is read off the box rather than guessed at from a word like `File URL`.
+fn path_method_label(method: CustomPathMethod) -> &'static str {
+    match method {
+        CustomPathMethod::Plain => "Plain Path (Default) — E:\\Videos\\a b.mkv",
+        CustomPathMethod::FileUrl => "File URL — file:///E:/Videos/a%20b.mkv",
+        CustomPathMethod::ForwardSlashes => "Forward Slashes — E:/Videos/a b.mkv",
+        CustomPathMethod::ShortPath => "Short Path (8.3) — E:\\VIDEO~1\\A~1.MKV",
+        CustomPathMethod::FileUrlLiteral => "File URL (Literal) — file:///E:/Videos/a b.mkv",
+    }
+}
+
+fn path_method_index(method: CustomPathMethod) -> usize {
+    PATH_METHODS
+        .iter()
+        .position(|held| *held == method)
+        .unwrap_or(0)
+}
+
+pub(super) const EDITOR_LABELS: [&str; 15] = [
     "Enabled",
     "Name",
     "Extensions",
     "Program",
     "Arguments",
+    "Path Method",
     "Capture Method",
     "Child Processes",
     "Broker Fallback",
@@ -367,6 +396,7 @@ const LABEL_CONTROLS: [i32; EDITOR_LABELS.len()] = [
     ID_EXTENSIONS,
     ID_EXE,
     ID_ARGUMENTS,
+    ID_PATH_METHOD,
     ID_CAPTURE_TECHNIQUE,
     ID_CHILD_SCOPE,
     ID_BROKER_FALLBACK,
@@ -380,6 +410,7 @@ const LABEL_CONTROLS: [i32; EDITOR_LABELS.len()] = [
 
 fn is_combo(id: u32) -> bool {
     id == ID_WINDOW_MODE as u32
+        || id == ID_PATH_METHOD as u32
         || id == ID_CAPTURE_TECHNIQUE as u32
         || id == ID_CHILD_SCOPE as u32
         || id == ID_SIBLING_WINDOWS as u32
@@ -983,7 +1014,8 @@ pub(super) fn create_window() -> Option<HWND> {
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             920,
-            820,
+            // Tall enough for the whole field stack: `Path Method` is one row more than there was.
+            860,
             None,
             None,
             HINSTANCE(hinstance.0),
@@ -1054,6 +1086,7 @@ unsafe fn apply_theme(state: &mut State) {
         apply_dwm_chrome(state.hwnd, palette.dark);
         for id in [
             ID_WINDOW_MODE,
+            ID_PATH_METHOD,
             ID_CAPTURE_TECHNIQUE,
             ID_CHILD_SCOPE,
             ID_SIBLING_WINDOWS,
@@ -1325,8 +1358,9 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             let dpi = (unsafe { GetDpiForWindow(hwnd) } as i32).max(96);
             info.ptMinTrackSize.x = scale(680, dpi);
             // Tall enough for the whole field stack: the three process-scope rows sit above
-            // Promotion, and a minimum that cut them off would hide a setting behind a resize.
-            info.ptMinTrackSize.y = scale(790, dpi);
+            // Promotion, and `Path Method` above `Capture Method`, and a minimum that cut them off
+            // would hide a setting behind a resize.
+            info.ptMinTrackSize.y = scale(830, dpi);
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -2133,6 +2167,21 @@ unsafe fn build(hwnd: HWND) -> State {
                     | CBS_OWNERDRAWFIXED as u32
                     | CBS_HASSTRINGS as u32,
             ),
+            ID_PATH_METHOD,
+        )
+    });
+    controls.push(unsafe {
+        child(
+            hwnd,
+            w!("COMBOBOX"),
+            "",
+            child_style(
+                WS_TABSTOP.0
+                    | WS_VSCROLL.0
+                    | CBS_DROPDOWNLIST as u32
+                    | CBS_OWNERDRAWFIXED as u32
+                    | CBS_HASSTRINGS as u32,
+            ),
             ID_CAPTURE_TECHNIQUE,
         )
     });
@@ -2310,6 +2359,11 @@ unsafe fn build(hwnd: HWND) -> State {
         unsafe { install_list_subclass(list, hwnd) };
     }
 
+    let path_method_combo = unsafe { GetDlgItem(hwnd, ID_PATH_METHOD) }.unwrap_or_default();
+    for method in PATH_METHODS {
+        unsafe { combo_add(path_method_combo, path_method_label(method)) };
+    }
+
     let window_mode_combo = unsafe { GetDlgItem(hwnd, ID_WINDOW_MODE) }.unwrap_or_default();
     for mode in WINDOW_MODES {
         unsafe { combo_add(window_mode_combo, window_mode_label(mode)) };
@@ -2360,6 +2414,7 @@ unsafe fn build(hwnd: HWND) -> State {
 
     for combo in [
         window_mode_combo,
+        path_method_combo,
         capture_technique_combo,
         child_scope_combo,
         sibling_windows_combo,
@@ -4770,6 +4825,17 @@ unsafe fn lay_out(state: &mut State) {
     place_edit(ID_ARGUMENTS, field_left, y, field_w, row);
     y += row + gap;
 
+    // Path Method: how the file is spelled where Arguments stands it. Its own row rather than a
+    // step of Arguments, because it is a choice of spelling and not a word in a command line.
+    place(
+        ID_PATH_METHOD,
+        field_left,
+        y,
+        field_w,
+        row + combo_drop_height(dpi),
+    );
+    y += row + gap;
+
     place(
         ID_CAPTURE_TECHNIQUE,
         field_left,
@@ -4972,6 +5038,7 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
             }
         }
         ID_WINDOW_MODE
+        | ID_PATH_METHOD
         | ID_CAPTURE_TECHNIQUE
         | ID_CHILD_SCOPE
         | ID_SIBLING_WINDOWS
@@ -4981,6 +5048,8 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
             if notice == CBN_SELCHANGE {
                 if id == ID_WINDOW_MODE {
                     unsafe { window_mode_chosen(state) };
+                } else if id == ID_PATH_METHOD {
+                    unsafe { path_method_chosen(state) };
                 } else if id == ID_CAPTURE_TECHNIQUE {
                     unsafe { capture_technique_chosen(state) };
                 } else if id == ID_CHILD_SCOPE {
@@ -5084,6 +5153,7 @@ unsafe fn fill_fields(state: &mut State) {
         }
         for id in [
             ID_WINDOW_MODE,
+            ID_PATH_METHOD,
             ID_CAPTURE_TECHNIQUE,
             ID_CHILD_SCOPE,
             ID_SIBLING_WINDOWS,
@@ -5108,6 +5178,7 @@ unsafe fn fill_fields(state: &mut State) {
     let extensions = preset.extensions_text();
     let exe = preset.exe.clone();
     let arguments = preset.arguments.clone();
+    let path_method = preset.path_method;
     let window_mode = preset.window_mode;
     let capture_technique = preset.capture_technique;
     let child_scope = preset.child_scope;
@@ -5141,6 +5212,14 @@ unsafe fn fill_fields(state: &mut State) {
         set_text(state.hwnd, ID_EXTENSIONS, &extensions);
         set_text(state.hwnd, ID_EXE, &exe);
         set_text(state.hwnd, ID_ARGUMENTS, &arguments);
+
+        let path_method_combo = GetDlgItem(state.hwnd, ID_PATH_METHOD).unwrap_or_default();
+        SendMessageW(
+            path_method_combo,
+            CB_SETCURSEL,
+            WPARAM(path_method_index(path_method)),
+            LPARAM(0),
+        );
 
         let mode_combo = GetDlgItem(state.hwnd, ID_WINDOW_MODE).unwrap_or_default();
         let mode_index = WINDOW_MODES
@@ -5290,6 +5369,7 @@ fn id_of_control(hwnd: HWND, control: HWND) -> Option<i32> {
 /// A combo's own id, where `control` is one of the editor's combos.
 fn combo_id_of(hwnd: HWND, control: HWND) -> Option<i32> {
     [
+        ID_PATH_METHOD,
         ID_CAPTURE_TECHNIQUE,
         ID_CHILD_SCOPE,
         ID_SIBLING_WINDOWS,
@@ -5615,6 +5695,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_EXE,
         ID_BROWSE,
         ID_ARGUMENTS,
+        ID_PATH_METHOD,
         ID_WINDOW_MODE,
         ID_CAPTURE_TECHNIQUE,
         ID_CHILD_SCOPE,
@@ -5840,6 +5921,29 @@ unsafe fn arguments_changed(state: &mut State) {
     }
     if let Some(preset) = state.presets.get_mut(index) {
         preset.arguments = cleaned;
+    }
+    state.dirtied = true;
+}
+
+/// `Path Method`: how the file is spelled where `Arguments` stands it — and where it is appended
+/// with no placeholder written.
+unsafe fn path_method_chosen(state: &mut State) {
+    if state.loading {
+        return;
+    }
+    let Some(index) = state.selected else {
+        return;
+    };
+    let combo = unsafe { GetDlgItem(state.hwnd, ID_PATH_METHOD) }.unwrap_or_default();
+    let choice = unsafe { SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+    let Some(method) = usize::try_from(choice)
+        .ok()
+        .and_then(|choice| PATH_METHODS.get(choice).copied())
+    else {
+        return;
+    };
+    if let Some(preset) = state.presets.get_mut(index) {
+        preset.path_method = method;
     }
     state.dirtied = true;
 }
@@ -7170,7 +7274,7 @@ pub(super) mod tests {
             lay_out(state);
 
             // A point in the middle of a label column names the control beside it.
-            let label = GetDlgItem(hwnd, ID_LABEL_BASE + 6).unwrap_or_default();
+            let label = GetDlgItem(hwnd, ID_LABEL_BASE + 7).unwrap_or_default();
             let mut label_box = RECT::default();
             let _ = GetWindowRect(label, &mut label_box);
             let over_label = POINT {
@@ -7180,7 +7284,7 @@ pub(super) mod tests {
             let spot = tip_spot_at(state, over_label).expect("a label column is part of a row");
             assert_eq!(
                 spot.id, ID_CHILD_SCOPE,
-                "the sixth label is `Child Processes`' own words"
+                "the seventh label is `Child Processes`' own words"
             );
             let children = GetDlgItem(hwnd, ID_CHILD_SCOPE).unwrap_or_default();
             assert_eq!(
@@ -7762,19 +7866,22 @@ pub(super) mod tests {
                 state.dirtied = false;
             }
 
-            // Program -> Arguments -> Capture Method -> Child Processes -> Broker Fallback ->
-            // Sibling Windows -> Promotion -> Placement -> Window (controls & labels) in Tab order.
-            assert_eq!(EDITOR_LABELS.len(), 14);
+            // Program -> Arguments -> Path Method -> Capture Method -> Child Processes -> Broker
+            // Fallback -> Sibling Windows -> Promotion -> Placement -> Window (controls & labels) in
+            // Tab order.
+            assert_eq!(EDITOR_LABELS.len(), 15);
             assert_eq!(EDITOR_LABELS[3], "Program");
             assert_eq!(EDITOR_LABELS[4], "Arguments");
-            assert_eq!(EDITOR_LABELS[5], "Capture Method");
-            assert_eq!(EDITOR_LABELS[6], "Child Processes");
-            assert_eq!(EDITOR_LABELS[7], "Broker Fallback");
-            assert_eq!(EDITOR_LABELS[8], "Sibling Windows");
-            assert_eq!(EDITOR_LABELS[9], "Promotion");
-            assert_eq!(EDITOR_LABELS[10], "Placement");
-            assert_eq!(EDITOR_LABELS[11], "Window");
+            assert_eq!(EDITOR_LABELS[5], "Path Method");
+            assert_eq!(EDITOR_LABELS[6], "Capture Method");
+            assert_eq!(EDITOR_LABELS[7], "Child Processes");
+            assert_eq!(EDITOR_LABELS[8], "Broker Fallback");
+            assert_eq!(EDITOR_LABELS[9], "Sibling Windows");
+            assert_eq!(EDITOR_LABELS[10], "Promotion");
+            assert_eq!(EDITOR_LABELS[11], "Placement");
+            assert_eq!(EDITOR_LABELS[12], "Window");
             let args_edit = GetDlgItem(hwnd, ID_ARGUMENTS).unwrap_or_default();
+            let path_method_combo = GetDlgItem(hwnd, ID_PATH_METHOD).unwrap_or_default();
             let children_combo = GetDlgItem(hwnd, ID_CHILD_SCOPE).unwrap_or_default();
             let broker_toggle = GetDlgItem(hwnd, ID_BROKER_FALLBACK).unwrap_or_default();
             let siblings_combo = GetDlgItem(hwnd, ID_SIBLING_WINDOWS).unwrap_or_default();
@@ -7784,6 +7891,7 @@ pub(super) mod tests {
             let browse_btn = GetDlgItem(hwnd, ID_BROWSE).unwrap_or_default();
             let (
                 mut args_rc,
+                mut path_method_rc,
                 mut cap_rc,
                 mut children_rc,
                 mut broker_rc,
@@ -7800,8 +7908,13 @@ pub(super) mod tests {
                 RECT::default(),
                 RECT::default(),
                 RECT::default(),
+                RECT::default(),
             );
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(args_edit, &mut args_rc);
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(
+                path_method_combo,
+                &mut path_method_rc,
+            );
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(combo, &mut cap_rc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(
                 children_combo,
@@ -7821,15 +7934,17 @@ pub(super) mod tests {
                 windows::Win32::UI::WindowsAndMessaging::GetWindowRect(place_combo, &mut place_rc);
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(win_combo, &mut win_rc);
             assert!(
-                args_rc.top < cap_rc.top
+                args_rc.top < path_method_rc.top
+                    && path_method_rc.top < cap_rc.top
                     && cap_rc.top < children_rc.top
                     && children_rc.top < broker_rc.top
                     && broker_rc.top < siblings_rc.top
                     && siblings_rc.top < promo_rc.top
                     && promo_rc.top < place_rc.top
                     && place_rc.top < win_rc.top,
-                "Row order must be Arguments ({}) < Capture Method ({}) < Child Processes ({}) < Broker Fallback ({}) < Sibling Windows ({}) < Promotion ({}) < Placement ({}) < Window ({})",
+                "Row order must be Arguments ({}) < Path Method ({}) < Capture Method ({}) < Child Processes ({}) < Broker Fallback ({}) < Sibling Windows ({}) < Promotion ({}) < Placement ({}) < Window ({})",
                 args_rc.top,
+                path_method_rc.top,
                 cap_rc.top,
                 children_rc.top,
                 broker_rc.top,
@@ -7845,8 +7960,13 @@ pub(super) mod tests {
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, args_edit, false).ok(),
+                Some(path_method_combo),
+                "Tab from Arguments must move to Path Method"
+            );
+            assert_eq!(
+                GetNextDlgTabItem(hwnd, path_method_combo, false).ok(),
                 Some(combo),
-                "Tab from Arguments must move to Capture Method"
+                "Tab from Path Method must move to Capture Method"
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, combo, false).ok(),
@@ -7879,8 +7999,8 @@ pub(super) mod tests {
                 "Tab from Placement must move to Window"
             );
 
-            // Labels 4..=11: Arguments < Capture Method < Child Processes < Broker Fallback <
-            // Sibling Windows < Promotion < Placement < Window.
+            // Labels 4..=12: Arguments < Path Method < Capture Method < Child Processes < Broker
+            // Fallback < Sibling Windows < Promotion < Placement < Window.
             let label_top = |index: i32| -> i32 {
                 let mut rc = RECT::default();
                 let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(
@@ -7889,14 +8009,14 @@ pub(super) mod tests {
                 );
                 rc.top
             };
-            let label_tops: Vec<i32> = (4..=11).map(label_top).collect();
+            let label_tops: Vec<i32> = (4..=12).map(label_top).collect();
             assert!(
                 label_tops.windows(2).all(|pair| pair[0] < pair[1]),
                 "Label order must match row order: {label_tops:?}"
             );
             let mut plcrc = RECT::default();
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(
-                GetDlgItem(hwnd, ID_LABEL_BASE + 10).unwrap_or_default(),
+                GetDlgItem(hwnd, ID_LABEL_BASE + 11).unwrap_or_default(),
                 &mut plcrc,
             );
             assert!(
@@ -7950,6 +8070,79 @@ pub(super) mod tests {
             state.selected = Some(0);
             fill_fields(state);
             assert_eq!(text_of(hwnd, ID_ARGUMENTS), "--fullscreen --title=\"a b\"");
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// `Path Method`: the row the file's spelling is chosen on — the box says what the preset holds,
+    /// a pick writes it, and switching presets shows each one's own.
+    #[test]
+    fn path_method_combo_selects_and_updates_preset_path_method() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.presets.clear();
+            let mut first = CustomPreset::named("Video");
+            first.exe = "vlc.exe".into();
+            first.set_extensions_text("mkv");
+            let mut second = CustomPreset::named("Image");
+            second.exe = "viewer.exe".into();
+            second.path_method = CustomPathMethod::ShortPath;
+            second.set_extensions_text("png");
+            state.presets.push(first);
+            state.presets.push(second);
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
+
+            let combo = GetDlgItem(hwnd, ID_PATH_METHOD).unwrap_or_default();
+            assert!(IsWindowEnabled(combo).as_bool());
+            assert_eq!(PATH_METHODS.len(), 5);
+            assert_eq!(PATH_METHODS[0], CustomPathMethod::Plain);
+            assert_eq!(PATH_METHODS[4], CustomPathMethod::FileUrlLiteral);
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                0,
+                "a fresh preset is the plain path"
+            );
+
+            // Every row of the box is a method, and a pick of it is written on the preset.
+            for (index, method) in PATH_METHODS.iter().copied().enumerate() {
+                SendMessageW(combo, CB_SETCURSEL, WPARAM(index), LPARAM(0));
+                command(state, ID_PATH_METHOD, CBN_SELCHANGE);
+                assert_eq!(state.presets[0].path_method, method);
+                assert!(state.dirtied);
+                state.dirtied = false;
+            }
+
+            // Switching presets shows each one's own spelling, and coming back restores the pick.
+            state.selected = Some(1);
+            fill_fields(state);
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                path_method_index(CustomPathMethod::ShortPath) as isize
+            );
+            state.selected = Some(0);
+            fill_fields(state);
+            assert_eq!(
+                SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
+                path_method_index(CustomPathMethod::FileUrlLiteral) as isize
+            );
+
+            // Every row's label carries the sample spelling of one file, so the choice is read off
+            // the box rather than guessed at from a word like `File URL`.
+            for method in PATH_METHODS {
+                let label = path_method_label(method);
+                assert!(
+                    label.contains("E:/") || label.contains("E:\\") || label.contains("~1"),
+                    "{label}"
+                );
+            }
 
             let _ = DestroyWindow(hwnd);
         }

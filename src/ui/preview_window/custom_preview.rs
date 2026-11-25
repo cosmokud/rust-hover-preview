@@ -208,9 +208,10 @@ use super::preview_scale::{animated_scale_for, fit_reduced, HoverScales};
 use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
 use crate::config::config::{
-    build_launch_args, custom_preset_for, CustomCaptureTechnique, CustomChildDepth,
-    CustomChildScope, CustomPlacement, CustomPreset, CustomPromotionTechnique, CustomScaling,
-    CustomSiblingWindows, CustomWindowMode, PreviewScale, PreviewType, DEFAULT_AUDIO_SCALE,
+    build_launch_args_with, custom_preset_for, CustomCaptureTechnique, CustomChildDepth,
+    CustomChildScope, CustomPathMethod, CustomPlacement, CustomPreset, CustomPromotionTechnique,
+    CustomScaling, CustomSiblingWindows, CustomWindowMode, PreviewScale, PreviewType,
+    DEFAULT_AUDIO_SCALE,
 };
 use crate::readers::{pdf_preview, svg_preview, video_player};
 use crate::CONFIG;
@@ -1358,6 +1359,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
 
     let placement = preset.placement;
     let arguments = preset.arguments.clone();
+    let path_method = preset.path_method;
 
     // **The same program is not begun twice.** A hover of this file that this app's program is
     // already drawing is put back up wherever the hand now is — which is the whole of what keeps
@@ -1432,6 +1434,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             &exe,
             &arguments,
             path,
+            path_method,
             hook_provisional,
             requested_capture,
             init,
@@ -1453,9 +1456,14 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             };
         (proc_handle, pid, tid, session, effective)
     } else {
-        let Some((proc_handle, pid)) =
-            launch(&exe, &arguments, path, provisional, requested_capture)
-        else {
+        let Some((proc_handle, pid)) = launch(
+            &exe,
+            &arguments,
+            path,
+            path_method,
+            provisional,
+            requested_capture,
+        ) else {
             cp_trace!(
                 "show: launch_failed path={} exe={} req_cap={:?} placement={:?}",
                 path_basename(path),
@@ -1993,9 +2001,9 @@ fn clear_want() {
 
 /// Spawn a completely untouched, detached process for `exe` + `arguments` + `path`
 /// (with `CREATE_NO_WINDOW`, null stdio handles, no job, no hooks, no STARTUPINFO).
-fn spawn_detached_normal(exe: &str, arguments: &str, path: &Path) {
+fn spawn_detached_normal(exe: &str, arguments: &str, path: &Path, method: CustomPathMethod) {
     let mut cmd = Command::new(exe);
-    cmd.args(build_launch_args(arguments, path));
+    cmd.args(build_launch_args_with(arguments, path, method));
     cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -2014,12 +2022,13 @@ fn dispatch_open_fully<D, S>(
     path: &Path,
     exe: &str,
     arguments: &str,
+    method: CustomPathMethod,
     try_detach: D,
     spawn_new: S,
 ) -> bool
 where
     D: FnOnce(&Path) -> bool,
-    S: FnOnce(&str, &str, &Path),
+    S: FnOnce(&str, &str, &Path, CustomPathMethod),
 {
     match technique {
         CustomPromotionTechnique::DirectPromotion => {
@@ -2027,14 +2036,14 @@ where
                 return true;
             }
             end_the_program();
-            spawn_new(exe, arguments, path);
+            spawn_new(exe, arguments, path, method);
             true
         }
         CustomPromotionTechnique::OpenAsNewProcess => {
             clear_want();
             hide_the_host();
             end_the_program();
-            spawn_new(exe, arguments, path);
+            spawn_new(exe, arguments, path, method);
             true
         }
     }
@@ -2053,6 +2062,7 @@ pub(super) fn open_fully(path: &Path) -> bool {
         path,
         &exe,
         &preset.arguments,
+        preset.path_method,
         try_detach_active_preview,
         spawn_detached_normal,
     )
@@ -2401,10 +2411,15 @@ fn quote_win32_arg(arg: &OsStr, out: &mut Vec<u16>) {
 }
 
 /// Build NUL-terminated UTF-16 command line `"exe" ...args...` for `CreateProcessW`.
-fn build_command_line(exe: &Path, arguments: &str, path: &Path) -> Vec<u16> {
+fn build_command_line(
+    exe: &Path,
+    arguments: &str,
+    path: &Path,
+    method: CustomPathMethod,
+) -> Vec<u16> {
     let mut line = Vec::new();
     quote_win32_arg(exe.as_os_str(), &mut line);
-    for arg in build_launch_args(arguments, path) {
+    for arg in build_launch_args_with(arguments, path, method) {
         line.push(b' ' as u16);
         quote_win32_arg(OsStr::new(&arg), &mut line);
     }
@@ -2515,11 +2530,12 @@ fn launch(
     exe: &str,
     arguments: &str,
     path: &Path,
+    method: CustomPathMethod,
     provisional: Option<(i32, i32, i32, i32)>,
     capture_technique: CustomCaptureTechnique,
 ) -> Option<(OwnedHandle, u32)> {
     let application = wide_null(OsStr::new(exe));
-    let mut cmdline = build_command_line(Path::new(exe), arguments, path);
+    let mut cmdline = build_command_line(Path::new(exe), arguments, path, method);
     let cwd_wide = Path::new(exe)
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
@@ -8136,6 +8152,7 @@ fn launch_with_hook(
     exe: &str,
     arguments: &str,
     path: &Path,
+    method: CustomPathMethod,
     provisional: Option<(i32, i32, i32, i32)>,
     capture_technique: CustomCaptureTechnique,
     init: HookSharedInit,
@@ -8151,12 +8168,12 @@ fn launch_with_hook(
             fallback_tech,
             path_basename(Path::new(exe))
         );
-        let (proc_handle, pid) = launch(exe, arguments, path, provisional, fallback_tech)?;
+        let (proc_handle, pid) = launch(exe, arguments, path, method, provisional, fallback_tech)?;
         return Some((proc_handle, pid, 0, None));
     };
 
     let application = wide_null(OsStr::new(exe));
-    let mut cmdline = build_command_line(Path::new(exe), arguments, path);
+    let mut cmdline = build_command_line(Path::new(exe), arguments, path, method);
     let cwd_wide = Path::new(exe)
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
@@ -10268,7 +10285,12 @@ mod tests {
     #[test]
     fn command_line_quoting_handles_spaces_quotes_and_trailing_backslashes() {
         let decode = |exe: &str, args: &str, path: &str| {
-            let wide = build_command_line(Path::new(exe), args, Path::new(path));
+            let wide = build_command_line(
+                Path::new(exe),
+                args,
+                Path::new(path),
+                CustomPathMethod::Plain,
+            );
             assert_eq!(wide.last(), Some(&0), "must be NUL-terminated");
             String::from_utf16_lossy(&wide[..wide.len() - 1])
         };
@@ -10389,7 +10411,12 @@ mod tests {
         ];
 
         for (exe, arguments, file, expected) in cases {
-            let wide = build_command_line(Path::new(exe), arguments, Path::new(file));
+            let wide = build_command_line(
+                Path::new(exe),
+                arguments,
+                Path::new(file),
+                CustomPathMethod::Plain,
+            );
             let actual = parse_with_win32(&wide);
             assert_eq!(
                 actual.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -12133,12 +12160,13 @@ mod tests {
             &path,
             "viewer.exe",
             "--silent",
+            CustomPathMethod::Plain,
             |p| {
                 assert_eq!(p, path.as_path());
                 detached = true;
                 true
             },
-            |_, _, _| spawned = true,
+            |_, _, _, _| spawned = true,
         ));
         assert!(detached);
         assert!(!spawned);
@@ -12151,14 +12179,16 @@ mod tests {
             &path,
             "viewer.exe",
             "--fullscreen --silent",
+            CustomPathMethod::FileUrl,
             |_| {
                 detached = true;
                 false
             },
-            |exe, args, p| {
+            |exe, args, p, method| {
                 assert_eq!(exe, "viewer.exe");
                 assert_eq!(args, "--fullscreen --silent");
                 assert_eq!(p, path.as_path());
+                assert_eq!(method, CustomPathMethod::FileUrl);
                 spawned = true;
             },
         ));
@@ -12183,11 +12213,12 @@ mod tests {
             &path,
             "viewer.exe",
             "--windowed",
+            CustomPathMethod::Plain,
             |_| {
                 detached = true;
                 true
             },
-            |exe, args, p| {
+            |exe, args, p, _| {
                 assert_eq!(exe, "viewer.exe");
                 assert_eq!(args, "--windowed");
                 assert_eq!(p, path.as_path());

@@ -352,6 +352,152 @@ impl CustomScaling {
     }
 }
 
+/// How the hovered file's path is spelled on the command line.
+///
+/// **A path and a URL are different words to a program**, and which one it wants is the program's
+/// own business: `mpv` takes either, `ffplay` takes a path, and a player handed `file://?/E%3A/…`
+/// answers that it cannot open the stream. So the spelling is a setting of the preset rather than
+/// something this app guesses, and the three placeholders in `arguments` read it — `{file}` in
+/// whichever spelling is picked here, `{path}` whichever-preset for the plain path and `{url}` for
+/// the URL — so one command line may carry both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomPathMethod {
+    /// `E:\Videos\a b.mkv` — the path as Windows writes it, and what every preset did before this
+    /// row existed.
+    #[default]
+    Plain,
+    /// `file:///E:/Videos/a%20b.mkv` — a URL, separators turned round and the characters a URL may
+    /// not carry escaped. `file://server/share/a.mkv` for a share.
+    FileUrl,
+    /// `E:/Videos/a b.mkv` — separators turned round and nothing escaped, for a program that reads
+    /// `/` but treats `\` as an escape.
+    ForwardSlashes,
+    /// `E:\VIDEO~1\A~1.MKV` — the volume's own 8.3 name, for a program that splits on spaces or
+    /// chokes on Unicode. Reads as `Plain` on a volume that keeps no short names.
+    ShortPath,
+    /// `file:///E:/Videos/a b.mkv` — the URL with nothing escaped, for the program that takes a URL
+    /// and then hands `%20` on to the filesystem as those four characters.
+    FileUrlLiteral,
+}
+
+impl CustomPathMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::FileUrl => "file_url",
+            Self::ForwardSlashes => "forward_slashes",
+            Self::ShortPath => "short_path",
+            Self::FileUrlLiteral => "file_url_literal",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "plain" | "path" | "windows" | "native" | "" => Some(Self::Plain),
+            "file_url" | "file-url" | "url" | "file_uri" | "uri" => Some(Self::FileUrl),
+            "forward_slashes" | "forward-slashes" | "slashes" | "unix" => {
+                Some(Self::ForwardSlashes)
+            }
+            "short_path" | "short-path" | "short" | "8.3" | "dos" => Some(Self::ShortPath),
+            "file_url_literal" | "file-url-literal" | "url_literal" | "file_url_raw" => {
+                Some(Self::FileUrlLiteral)
+            }
+            _ => None,
+        }
+    }
+
+    /// The file in this method's spelling: what `{file}` stands for, and what is appended where no
+    /// placeholder is written at all.
+    pub fn spell(self, path: &Path) -> String {
+        match self {
+            Self::Plain => crate::paths::plain_path(path),
+            Self::ForwardSlashes => crate::paths::forward_slashes(path),
+            Self::ShortPath => {
+                crate::paths::short_path(path).unwrap_or_else(|| crate::paths::plain_path(path))
+            }
+            Self::FileUrl => {
+                crate::paths::file_url(path).unwrap_or_else(|| crate::paths::plain_path(path))
+            }
+            Self::FileUrlLiteral => crate::paths::file_url_literal(path)
+                .unwrap_or_else(|| crate::paths::plain_path(path)),
+        }
+    }
+}
+
+/// The three words a token may be written as, and what each one stands for here.
+///
+/// **A placeholder is this app's, not the program's**, so it is spelled in braces: `%s` is a
+/// printf field to one program and a substitution of its own to another (`vlc`'s `%` expansion is
+/// why `%S` cannot be used), `%1` is a file association's own parameter, and `$F`/`%f` belong to
+/// editors and scripts. Nothing in this app's own command line ever carries a brace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathSpellings {
+    /// `{file}` — the preset's own `Path Method`.
+    pub file: String,
+    /// `{path}` — the plain Windows path, whatever the method is.
+    pub path: String,
+    /// `{url}` — a `file://` URL, whatever the method is.
+    pub url: String,
+}
+
+impl PathSpellings {
+    pub fn of(path: &Path, method: CustomPathMethod) -> Self {
+        Self {
+            file: method.spell(path),
+            path: crate::paths::plain_path(path),
+            url: crate::paths::file_url(path).unwrap_or_else(|| crate::paths::plain_path(path)),
+        }
+    }
+
+    /// Which of the three a given placeholder is, if it is one at all.
+    fn of_token(token: &str) -> Option<&str> {
+        match token {
+            "{file}" => Some("{file}"),
+            "{path}" => Some("{path}"),
+            "{url}" => Some("{url}"),
+            _ => None,
+        }
+    }
+
+    fn stand_in(&self, token: &str) -> &str {
+        match token {
+            "{path}" => &self.path,
+            "{url}" => &self.url,
+            _ => &self.file,
+        }
+    }
+}
+
+/// One token with every placeholder it carries replaced **in a single pass**, and whether it
+/// carried one at all.
+///
+/// One pass rather than a `replace` per word: a file named `{url}.mkv` is a file, and a path that
+/// was substituted into and then read again would be a second substitution of somebody's name.
+fn expand_placeholders(token: &str, spellings: &PathSpellings) -> (String, bool) {
+    let mut out = String::with_capacity(token.len());
+    let mut rest = token;
+    let mut substituted = false;
+    while let Some(open) = rest.find('{') {
+        let Some(close) = rest[open..].find('}').map(|close| open + close) else {
+            break;
+        };
+        let candidate = &rest[open..=close];
+        let Some(known) = PathSpellings::of_token(candidate) else {
+            // Not one of ours: kept as it is, and the scan goes on past it rather than stopping,
+            // so a token holding one of ours after a brace it does not know still gets it.
+            out.push_str(&rest[..=close]);
+            rest = &rest[close + 1..];
+            continue;
+        };
+        out.push_str(&rest[..open]);
+        out.push_str(spellings.stand_in(known));
+        substituted = true;
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    (out, substituted)
+}
+
 /// One custom preview: the program, the names it claims, and the settings a preview of it
 /// is drawn with.
 ///
@@ -369,6 +515,9 @@ pub struct CustomPreset {
     pub exe: String,
     /// Optional command-line arguments passed before (or around `{file}` instead of trailing) the hovered file path.
     pub arguments: String,
+    /// How the path is spelled where `arguments` stands it: `{file}` and the appended file read
+    /// this, `{path}` and `{url}` do not (see [`CustomPathMethod`]).
+    pub path_method: CustomPathMethod,
     /// The extensions it claims, each a bare extension without its dot, lowercased — the same
     /// shape `formats::lists` keeps its own entries in.
     pub extensions: Vec<String>,
@@ -404,6 +553,7 @@ impl Default for CustomPreset {
             enabled: true,
             exe: String::new(),
             arguments: String::new(),
+            path_method: CustomPathMethod::default(),
             extensions: Vec::new(),
             window_mode: CustomWindowMode::default(),
             capture_technique: CustomCaptureTechnique::default(),
@@ -627,9 +777,13 @@ pub fn parse_arguments(raw: &str) -> Vec<String> {
             let looks_like_arg_list = inner_tokens.len() >= 2
                 && (((inner_tokens[0].starts_with('-') || inner_tokens[0].starts_with('/'))
                     && !inner_tokens[0].contains('='))
-                    || inner_tokens[1..]
-                        .iter()
-                        .any(|t| t.starts_with('-') || t.starts_with('/') || t.contains("{file}")));
+                    || inner_tokens[1..].iter().any(|t| {
+                        t.starts_with('-')
+                            || t.starts_with('/')
+                            || t.contains("{file}")
+                            || t.contains("{path}")
+                            || t.contains("{url}")
+                    }));
             if looks_like_arg_list {
                 return inner_tokens;
             }
@@ -709,19 +863,35 @@ fn parse_arguments_raw(raw: &str) -> Vec<String> {
 }
 
 /// Build the argv list (excluding argv[0]) for launching a custom preview with `arguments` and
-/// `file_path`, expanding `{file}` placeholders or appending `file_path` at the end when omitted.
+/// `file_path`.
+///
+/// Three placeholders stand where the file goes: `{file}` in the preset's own [`CustomPathMethod`]
+/// spelling, `{path}` for the plain Windows path and `{url}` for a `file://` URL, so a preset that
+/// needs both a path and a URL in one command line has both. Any of them may be named more than
+/// once, and any of them may sit inside a value (`--input={file}`). Where no placeholder appears at
+/// all the file is appended last, in the method's own spelling — which is what a preset with no
+/// `arguments` gets.
+#[cfg_attr(not(test), allow(dead_code))] // The plain spelling's own name: every caller in the app asks `build_launch_args_with`, and the tests read this one as what "plain" means.
 pub fn build_launch_args(arguments: &str, file_path: &Path) -> Vec<String> {
-    let file_str = file_path.to_string_lossy();
+    build_launch_args_with(arguments, file_path, CustomPathMethod::default())
+}
+
+/// [`build_launch_args`] in the spelling `method` names.
+pub fn build_launch_args_with(
+    arguments: &str,
+    file_path: &Path,
+    method: CustomPathMethod,
+) -> Vec<String> {
+    let spellings = PathSpellings::of(file_path, method);
     let mut args = parse_arguments(arguments);
     let mut substituted = false;
     for arg in &mut args {
-        if arg.contains("{file}") {
-            *arg = arg.replace("{file}", &file_str);
-            substituted = true;
-        }
+        let (expanded, carried) = expand_placeholders(arg, &spellings);
+        *arg = expanded;
+        substituted |= carried;
     }
     if !substituted {
-        args.push(file_str.into_owned());
+        args.push(spellings.file);
     }
     args
 }
@@ -755,6 +925,11 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
             &section,
             "arguments",
             Some(encode_ini_arguments(&preset.arguments)),
+        );
+        ini.set(
+            &section,
+            "path_method",
+            Some(preset.path_method.as_str().to_string()),
         );
         ini.set(&section, "extensions", Some(preset.extensions_text()));
         ini.set(
@@ -874,6 +1049,11 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         }
         if let Some(arguments) = ini.get(section, "arguments") {
             preset.arguments = sanitize_arguments(&decode_ini_arguments(&arguments));
+        }
+        if let Some(method) = ini.get(section, "path_method") {
+            if let Some(parsed) = CustomPathMethod::from_str(&method) {
+                preset.path_method = parsed;
+            }
         }
         if let Some(extensions) = ini.get(section, "extensions") {
             preset.set_extensions_text(&extensions);
@@ -1754,6 +1934,105 @@ mod tests {
                 r"--second=samples\my video.mp4"
             ]
         );
+    }
+
+    #[test]
+    fn path_method_spells_the_file_and_the_two_fixed_words_do_not_move() {
+        let file = Path::new(r"E:\Videos\a b.mkv");
+
+        // A method is what `{file}` and the appended file read, and what a preset with no
+        // `arguments` at all gets.
+        assert_eq!(
+            build_launch_args_with("", file, CustomPathMethod::FileUrl),
+            vec!["file:///E:/Videos/a%20b.mkv"]
+        );
+        assert_eq!(
+            build_launch_args_with("{file}", file, CustomPathMethod::FileUrl),
+            vec!["file:///E:/Videos/a%20b.mkv"]
+        );
+        assert_eq!(
+            build_launch_args_with("--input={file}", file, CustomPathMethod::ForwardSlashes),
+            vec!["--input=E:/Videos/a b.mkv"]
+        );
+
+        // `{path}` and `{url}` say what they are whatever the row is set to, so one command line
+        // may carry both spellings at once.
+        assert_eq!(
+            build_launch_args_with("--a={path} --b={url}", file, CustomPathMethod::ShortPath),
+            vec![r"--a=E:\Videos\a b.mkv", "--b=file:///E:/Videos/a%20b.mkv"]
+        );
+
+        // A placeholder may be named twice, once in a value and once on its own.
+        assert_eq!(
+            build_launch_args_with("--pair={url}:{url}", file, CustomPathMethod::Plain),
+            vec!["--pair=file:///E:/Videos/a%20b.mkv:file:///E:/Videos/a%20b.mkv"]
+        );
+
+        // A brace that is nobody's is left as it was written, and does not stop the scan: a
+        // program whose own syntax has one still gets its file.
+        assert_eq!(
+            build_launch_args_with("--x={nope} --y={file}", file, CustomPathMethod::Plain),
+            vec![r"--x={nope}", r"--y=E:\Videos\a b.mkv"]
+        );
+
+        // A file whose own name holds a placeholder is a file, not a second substitution: the
+        // expansion is one pass, and what it wrote is never read again.
+        let named = Path::new(r"E:\Videos\{url}.mkv");
+        assert_eq!(
+            build_launch_args_with("{file}", named, CustomPathMethod::Plain),
+            vec![r"E:\Videos\{url}.mkv"]
+        );
+    }
+
+    #[test]
+    fn path_method_round_trips_and_an_unknown_one_reads_as_plain() {
+        assert_eq!(CustomPathMethod::default(), CustomPathMethod::Plain);
+        assert_eq!(
+            CustomPreset::named("Fresh").path_method,
+            CustomPathMethod::Plain
+        );
+
+        for method in [
+            CustomPathMethod::Plain,
+            CustomPathMethod::FileUrl,
+            CustomPathMethod::ForwardSlashes,
+            CustomPathMethod::ShortPath,
+            CustomPathMethod::FileUrlLiteral,
+        ] {
+            let mut preset = CustomPreset::named("Paths");
+            preset.exe = "vlc.exe".into();
+            preset.set_extensions_text("mkv");
+            preset.path_method = method;
+
+            let cfg = config_with(vec![preset]);
+            let mut ini = Ini::new();
+            write_all(&cfg, &mut ini);
+            assert_eq!(
+                ini.get("custom:paths", "path_method").as_deref(),
+                Some(method.as_str())
+            );
+
+            let mut read = AppConfig::default();
+            read_all(&ini, &mut read);
+            assert_eq!(read.custom_presets[0].path_method, method);
+        }
+
+        // A preset written before the key existed, and one naming something this build does not
+        // know, are both the plain path: that is what every preset did before the row was there.
+        let mut legacy = Ini::new();
+        legacy.set("custom:old", "name", Some("Old".into()));
+        legacy.set("custom:old", "exe", Some("a.exe".into()));
+        legacy.set("custom:old", "extensions", Some("png".into()));
+        legacy.set("custom:bogus", "name", Some("Bogus".into()));
+        legacy.set("custom:bogus", "exe", Some("b.exe".into()));
+        legacy.set("custom:bogus", "extensions", Some("png".into()));
+        legacy.set("custom:bogus", "path_method", Some("quantum".into()));
+        let mut read = AppConfig::default();
+        read_all(&legacy, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        for preset in &read.custom_presets {
+            assert_eq!(preset.path_method, CustomPathMethod::Plain);
+        }
     }
 
     #[test]
