@@ -1134,16 +1134,26 @@ pub(super) unsafe fn open_path_with_default_app(path: &Path, hwnd: HWND) {
     shell_open_on(hwnd, path);
 }
 
-/// Show a file where it lives: Windows Explorer comes up on the folder holding it, which is where the
-/// card's `Open Path` row takes a hand.
+/// Show a file where it lives: Windows Explorer comes up on the folder holding it **with the file
+/// picked out and scrolled to**, which is where the card's `Open Path` row takes a hand.
 ///
-/// **The Shell's own `explore` verb rather than a new window of this app's.** Handing the folder over
-/// through `ShellExecuteExW` is what makes the launch the Shell's: a folder already open in an
-/// Explorer window is taken to and reused rather than opened a second time, and the window it raises
-/// is the user's own Explorer with their own settings, not a folder view this app drew. The pin's own
-/// window goes in as the parent and its monitor as `SEE_MASK_HMONITOR`, the same context every other
-/// hand-off of this app's is made in, so a pin on a second display opens the folder there rather than
-/// on the primary one.
+/// **The Shell's own selection rather than a window of this app's, or a folder opened beside a file
+/// the user then has to find.** `SHOpenFolderAndSelectItems` is the one call in the Shell that does
+/// what Explorer's own `Show in folder` does: a folder already open in an Explorer window is taken to
+/// and reused rather than opened a second time, the window it raises is the user's own Explorer with
+/// their own settings, and the file is selected and brought into view inside it — which is the whole
+/// point of asking where a sound lives: the folder is a list of hundreds of files and the one the card
+/// is playing is the one the hand is looking for. The folder's item and the file's are both made by
+/// the Shell from the paths this app already holds (`ILCreateFromPathW`), and the file is handed in as
+/// the last id of its own list.
+///
+/// **What is given up for the selection is the display hint.** `SHOpenFolderAndSelectItems` takes no
+/// monitor and no window: Explorer decides for itself where the folder window goes, and the
+/// `SEE_MASK_HMONITOR` hint every other hand-off of this app's carries has no road here. A folder
+/// opened on the primary display for a pin standing on a second one is the price of the file being
+/// marked, and it is the right way round: the folder is where the hand is going next, and a folder
+/// that opened on the right display with nothing selected would still leave the user hunting for the
+/// file in it.
 ///
 /// **What it does not do is end the pin.** `Open in Default App` and `Open With...` both hand the file
 /// away and take the pin down with them, because a preview left standing over the program the user
@@ -1151,42 +1161,93 @@ pub(super) unsafe fn open_path_with_default_app(path: &Path, hwnd: HWND) {
 /// card stays where it is, and the folder comes up beside it — which is what a playlist is for
 /// (see `pin_menu::pin_menu_hand_off_release`).
 ///
-/// Like the hand-off above, nothing is asked of the folder here and nothing is waited for, and the
-/// answer is read and deliberately not acted on: a folder the Shell will not open is the user's
-/// machine rather than a fault in this one.
+/// **And it is done on a thread of its own.** Selecting an item in a folder is a question put to the
+/// running Explorer, and the Shell answers it when it is ready — this call is made from the window
+/// procedure of a pin that is still on screen and still playing, and a card that waited there would
+/// be a card that stopped drawing until another program had finished its own work. The thread takes
+/// a single-threaded apartment of its own for the length of the call, gives it back, and is gone; the
+/// pin has already been painted for the release by the time Explorer hears about it.
 ///
-/// # Safety
+/// Nothing is asked of the folder and nothing is waited for, and the answer is read and deliberately
+/// not acted on: a folder the Shell will not select in is the user's machine rather than a fault in
+/// this one.
+pub(super) fn reveal_in_explorer(path: &Path) {
+    // A path with no folder of its own has nowhere to be shown: the pin is never handed one — every
+    // file a pin holds came out of a listing — and a folder invented here would be a window opened
+    // on nothing (see `the_folder_and_the_file`).
+    let Some((folder, file)) = the_folder_and_the_file(path) else {
+        return;
+    };
+
+    let _ = std::thread::Builder::new()
+        .name("pin-reveal-in-explorer".to_string())
+        .spawn(move || select_in_explorer(&folder, &file));
+}
+
+/// The two names `reveal_in_explorer` hands the Shell: the folder the file lives in, and the file
+/// itself — both in the spelling the Shell reads, which is a path with no verbatim prefix on it
+/// (see `plain_path`).
 ///
-/// The verb and the folder are this function's own null-terminated buffers living past the call, and
-/// the window handle is the live preview window the press was released on; the monitor is a number
-/// read off that window and never dereferenced. Nothing is kept past the call and nothing borrowed
-/// outlives it.
-pub(super) unsafe fn reveal_in_explorer(path: &Path, hwnd: HWND) {
+/// `None` where the path has no folder of its own — a bare name, whose parent is the empty path —
+/// because the one thing the Shell is asked for is a file *in a folder*, and there is no folder to
+/// put a window on.
+pub(super) fn the_folder_and_the_file(path: &Path) -> Option<(String, String)> {
     let folder = path
         .parent()
-        .map(crate::paths::plain_path)
-        .unwrap_or_else(|| plain_path(path));
-    let folder: Vec<u16> = std::ffi::OsStr::new(&folder)
+        .filter(|folder| !folder.as_os_str().is_empty())?;
+    Some((crate::paths::plain_path(folder), plain_path(path)))
+}
+
+/// The body of `reveal_in_explorer` on the thread it was given: the file picked out in the folder it
+/// lives in, then every id this made given back and the apartment with it.
+///
+/// Its own apartment rather than the one the preview thread took at start-up, which is the
+/// multithreaded one (see `run_preview_window`): `SHOpenFolderAndSelectItems` goes through the
+/// Shell's own folder objects, and those are written for the single-threaded apartment Explorer
+/// itself runs in. A thread of its own has no apartment before this call, so the one taken here is
+/// always this function's to give back.
+fn select_in_explorer(folder: &str, file: &str) {
+    // Safety: an apartment taken on a thread of its own and released at the end of this function;
+    // nothing here is a pointer into another thread's stack.
+    let taken = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+
+    let folder: Vec<u16> = std::ffi::OsStr::new(folder)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let file: Vec<u16> = std::ffi::OsStr::new(file)
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
 
-    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    // Safety: both ids are this function's own — made from its own null-terminated buffers, freed
+    // here on every road out — and the child handed over is a pointer inside the file's own list,
+    // which is alive until after the call returns. Nothing outlives the call.
+    unsafe {
+        let folder_id = ILCreateFromPathW(PCWSTR(folder.as_ptr()));
+        let file_id = ILCreateFromPathW(PCWSTR(file.as_ptr()));
 
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_HMONITOR | SEE_MASK_ASYNCOK,
-        hwnd,
-        lpVerb: w!("explore"),
-        lpFile: PCWSTR(folder.as_ptr()),
-        nShow: SW_SHOWNORMAL.0,
-        Anonymous: SHELLEXECUTEINFOW_0 {
-            hMonitor: HANDLE(monitor.0),
-        },
-        ..Default::default()
-    };
+        if !folder_id.is_null() && !file_id.is_null() {
+            // The file's own list is the folder's ids and then the file's, so the part the folder
+            // view is asked to select is the last id of it.
+            let child = ILFindLastID(file_id);
+            if !child.is_null() {
+                let children: [*const ITEMIDLIST; 1] = [child.cast_const()];
+                let _ = SHOpenFolderAndSelectItems(folder_id, Some(&children[..]), 0);
+            }
+        }
 
-    let _ = ShellExecuteExW(&mut info);
+        if !folder_id.is_null() {
+            ILFree(Some(folder_id));
+        }
+        if !file_id.is_null() {
+            ILFree(Some(file_id));
+        }
+
+        if taken.is_ok() {
+            CoUninitialize();
+        }
+    }
 }
 
 /// Ask the Shell to open a file on the monitor the pin is standing on, through `ShellExecuteExW`

@@ -1095,6 +1095,30 @@ fn the_open_with_carry_leaves_a_moved_list_where_it_is() {
     );
 }
 
+/// **`Open Path` hands the Shell the file as well as its folder.** The folder is where Explorer comes
+/// up and the file's own id is the part of the list that is picked out and scrolled to, so the two
+/// names are read apart from one path: the folder is the file's parent, the file keeps its own name,
+/// and a path written with the verbatim prefix a walk carries is spelled the way the Shell reads it
+/// (see `reveal_in_explorer`). A path with no folder of its own answers nothing rather than a window
+/// on a folder that is not there.
+#[test]
+fn open_path_names_the_folder_and_the_file_for_the_shell() {
+    assert_eq!(
+        the_folder_and_the_file(Path::new(r"\\?\C:\music\an album\a song.flac")),
+        Some((
+            r"C:\music\an album".to_string(),
+            r"C:\music\an album\a song.flac".to_string()
+        )),
+        "the folder comes up, and the file in it is the one picked out"
+    );
+
+    assert_eq!(
+        the_folder_and_the_file(Path::new("a song.flac")),
+        None,
+        "a bare name has no folder to come up on"
+    );
+}
+
 /// A shuffled walk hears every sound once before any repeats: each step is the next file
 /// of the playlist, so one permutation is the sounds in some order with the file on screen
 /// first, and a spent playlist is respawned rather than ended.
