@@ -43,10 +43,11 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, GetWindowRect, IsWindow,
-    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, UpdateLayeredWindow,
-    GWLP_USERDATA, HWND_TOP, MA_NOACTIVATE, SWP_NOACTIVATE, SW_SHOWNOACTIVATE, ULW_ALPHA,
-    WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCHITTEST, WNDCLASSEXW, WNDCLASS_STYLES,
-    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+    IsWindowVisible, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    UpdateLayeredWindow, GWLP_USERDATA, HWND_TOP, MA_NOACTIVATE, SWP_NOACTIVATE, SW_SHOWNOACTIVATE,
+    ULW_ALPHA, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCHITTEST, WNDCLASSEXW,
+    WNDCLASS_STYLES, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    WS_POPUP,
 };
 
 use super::custom_preview_settings::{
@@ -399,6 +400,16 @@ fn ensure_class() {
     });
 }
 
+/// Whether a tip is on the screen, which is what the editor's clock is held to.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn is_up() -> bool {
+    SHOWING.with(|showing| {
+        showing
+            .borrow()
+            .is_some_and(|hwnd| unsafe { IsWindowVisible(hwnd) }.as_bool())
+    })
+}
+
 /// Take the tip down, and take its window with it.
 ///
 /// **Destroyed rather than hidden**, because a hidden window is a window the desktop still counts: the
@@ -422,9 +433,9 @@ pub(super) fn hide() {
 /// stands over the row (the label's words and the field beside them, one line of it), and a value in a
 /// dropped list stands over the combo it belongs to. The window a tip is owned by is the editor, so it
 /// stays above it and goes with it.
-pub(super) fn show_at(anchor: RECT, owner: HWND, run: &str, palette: Palette) {
+pub(super) fn show_at(anchor: RECT, owner: HWND, run: &str, palette: Palette) -> bool {
     if run.is_empty() || owner.0.is_null() {
-        return;
+        return false;
     }
     ensure_class();
     let dpi = unsafe { GetDpiForWindow(owner) }.max(96) as i32;
@@ -451,7 +462,7 @@ pub(super) fn show_at(anchor: RECT, owner: HWND, run: &str, palette: Palette) {
                 None => {
                     hide();
                     let Some(made) = (unsafe { make_tip(owner, run, palette, dpi) }) else {
-                        return;
+                        return false;
                     };
                     SHOWING.with(|showing| *showing.borrow_mut() = Some(made));
                     made
@@ -460,7 +471,7 @@ pub(super) fn show_at(anchor: RECT, owner: HWND, run: &str, palette: Palette) {
         } else {
             hide();
             let Some(made) = (unsafe { make_tip(owner, run, palette, dpi) }) else {
-                return;
+                return false;
             };
             SHOWING.with(|showing| *showing.borrow_mut() = Some(made));
             made
@@ -468,16 +479,17 @@ pub(super) fn show_at(anchor: RECT, owner: HWND, run: &str, palette: Palette) {
     };
 
     let Some((width, height)) = tip_of(tip).map(|tip| (tip.width, tip.height)) else {
-        return;
+        return false;
     };
     if width <= 0 || height <= 0 {
-        return;
+        return false;
     }
     let (x, y) = place(anchor, width, height, dpi, owner);
-    unsafe {
-        let _ = SetWindowPos(tip, HWND_TOP, x, y, width, height, SWP_NOACTIVATE);
-        let _ = ShowWindow(tip, SW_SHOWNOACTIVATE);
-    }
+    let moved = unsafe { SetWindowPos(tip, HWND_TOP, x, y, width, height, SWP_NOACTIVATE) }.is_ok();
+    // `ShowWindow` answers with the state the window was **in**, not with whether it worked: a tip
+    // that was hidden until now answers `false` and is on the screen.
+    let _ = unsafe { ShowWindow(tip, SW_SHOWNOACTIVATE) };
+    moved && unsafe { IsWindowVisible(tip) }.as_bool()
 }
 
 /// Where a tip of this size goes for this anchor: above the control where the work area has room,
@@ -1264,6 +1276,63 @@ mod tests {
             rounded < 255,
             "the card's corner is square rather than rounded: {rounded}"
         );
+    }
+
+    /// **A tip is a real, visible window**: made, composed, placed and shown, with black bytes in the
+    /// pixels where the words are. Everything in between has been wrong at least once, so the whole
+    /// road is walked here rather than the parts.
+    #[test]
+    fn a_tip_is_made_composed_placed_and_shown() {
+        let Some(owner) = crate::ui::custom_preview_settings::create_window() else {
+            panic!("the owner window was never made");
+        };
+        let palette = Palette::of(crate::config::config::TextTheme::Dark);
+        let anchor = RECT {
+            left: 300,
+            top: 300,
+            right: 600,
+            bottom: 330,
+        };
+        let shown = show_at(anchor, owner, "Disabled", palette);
+        assert!(shown, "the tip was never shown");
+
+        let tip = SHOWING
+            .with(|showing| *showing.borrow())
+            .expect("a tip was shown and not remembered");
+        unsafe {
+            assert!(
+                windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(tip).as_bool(),
+                "the tip is not a visible window"
+            );
+            let mut box_ = RECT::default();
+            let _ = GetWindowRect(tip, &mut box_);
+            assert!(
+                box_.right > box_.left && box_.bottom > box_.top,
+                "the tip has no box"
+            );
+            // Its picture is on the desktop it was placed on, not at the origin it was made at.
+            assert!(
+                box_.top < anchor.top && box_.bottom <= anchor.top && box_.left >= 0,
+                "the tip {box_:?} does not stand above its anchor {anchor:?}"
+            );
+
+            // And its own pixels are the ones composed: an opaque card, and ink inside it.
+            let only = tip_of(tip).expect("the tip kept no surface");
+            let w = only.width as usize;
+            let alpha_at = |x: usize, y: usize| (only.pixels[y * w + x] >> 24) & 0xFF;
+            let shadow = scale(SHADOW_LOGICAL, 96) as usize;
+            assert_eq!(alpha_at(shadow + 3, only.height as usize / 2), 255);
+            let darkened = only
+                .pixels
+                .iter()
+                .filter(|pixel| ((**pixel >> 24) & 0xFF) == 255)
+                .any(|pixel| ((pixel >> 16) & 0xFF) < 0x60 && ((pixel >> 8) & 0xFF) < 0x60);
+            assert!(darkened, "the card is opaque and holds no words");
+        }
+        hide();
+        unsafe {
+            let _ = DestroyWindow(owner);
+        }
     }
 
     /// Where a tip stands: above the control where the work area has room, below it where it has

@@ -947,7 +947,7 @@ fn run() {
     }
 }
 
-fn create_window() -> Option<HWND> {
+pub(super) fn create_window() -> Option<HWND> {
     unsafe {
         let hinstance = GetModuleHandleW(None).ok()?;
         let class = WNDCLASSEXW {
@@ -5314,6 +5314,35 @@ struct TipSpot {
     anchor: RECT,
 }
 
+/// Whether the tip's road is written down, read once: `RHP_TIP_TRACE`.
+fn tip_trace_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("RHP_TIP_TRACE").is_ok_and(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            !value.is_empty() && value != "0" && value != "false"
+        })
+    })
+}
+
+/// One line of the tip's road, appended to `%TEMP%\rhp-tip-trace.log`: what was read and what was
+/// said. A tip that never appears is a reading that found nothing, a surface that never composed, or
+/// a window that never showed — and this says which.
+fn tip_trace(line: &str) {
+    if !tip_trace_on() {
+        return;
+    }
+    use std::io::Write;
+    let path = std::env::temp_dir().join("rhp-tip-trace.log");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 /// What is standing at the cursor, read from the desktop rather than from a control's message.
 fn tip_spot_now(state: &State) -> Option<TipSpot> {
     let mut screen = POINT::default();
@@ -5376,6 +5405,10 @@ fn tip_spot_at(state: &State, screen: POINT) -> Option<TipSpot> {
     }
 
     let child = unsafe { ChildWindowFromPoint(state.hwnd, client) };
+    tip_trace(&format!(
+        "spot: client=({},{}) window_from_point=0x{:x} child=0x{:x}",
+        client.x, client.y, named.0 as usize, child.0 as usize
+    ));
     if child.0.is_null() || child == state.hwnd {
         return None;
     }
@@ -5484,9 +5517,23 @@ fn list_row_at(list: HWND, screen: POINT) -> (usize, bool) {
 unsafe fn tip_tick(state: &mut State) {
     let spot = tip_spot_now(state);
     let Some(spot) = spot else {
+        if state.tip_said.is_some() || state.tip_spot.is_some() {
+            tip_trace("tick: nothing under the pointer");
+        }
         unsafe { tip_take_down(state) };
         return;
     };
+    tip_trace(&format!(
+        "tick: id={} about=0x{:x} value={:?} anchor=({},{},{},{}) said={}",
+        spot.id,
+        spot.about,
+        spot.value,
+        spot.anchor.left,
+        spot.anchor.top,
+        spot.anchor.right,
+        spot.anchor.bottom,
+        state.tip_said.is_some()
+    ));
     if state.tip_spot.as_ref() != Some(&spot) {
         // A new place is a new wait, and whatever was said about the last one goes.
         unsafe { tip_take_down(state) };
@@ -5503,6 +5550,12 @@ unsafe fn tip_tick(state: &mut State) {
     let Some(spot) = state.tip_spot.clone() else {
         return;
     };
+    unsafe { tip_say(state, &spot) };
+}
+
+/// Say what `spot` is, which is the tick's last step: the reading and the wait are done, and what is
+/// left is the sentence and the window it is said in.
+unsafe fn tip_say(state: &mut State, spot: &TipSpot) {
     let Some(text) = crate::ui::tip::combo(spot.id, spot.value) else {
         return;
     };
@@ -5513,7 +5566,8 @@ unsafe fn tip_tick(state: &mut State) {
     {
         return;
     }
-    crate::ui::tip::show_at(spot.anchor, state.hwnd, text, state.palette);
+    let shown = crate::ui::tip::show_at(spot.anchor, state.hwnd, text, state.palette);
+    tip_trace(&format!("tick: show_at -> {shown} run={text:?}"));
     state.tip_said = Some((spot.about, text.to_string()));
 }
 
@@ -6622,7 +6676,7 @@ fn wide(text: &str) -> Vec<u16> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
     use windows::Win32::UI::Controls::{ODA_DRAWENTIRE, ODS_FLAGS, ODT_COMBOBOX};
@@ -7169,6 +7223,54 @@ mod tests {
                 .is_none_or(|id| id > 0),
                 "a point on the window's own background named a control"
             );
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// **The tick that says it.** The reading finds the row, the clock holds it for the delay, and the
+    /// tip that comes out is a window on the screen — the three steps the editor runs on every tick.
+    /// **The tick that says it.** The reading finds the row, the clock holds it for the delay, and the
+    /// tip that comes out is a window on the screen — the three steps the editor runs on every tick.
+    #[test]
+    fn a_tick_over_a_row_puts_its_tip_up() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            if state.presets.is_empty() {
+                let _ = DestroyWindow(hwnd);
+                return;
+            }
+            fill_fields(state);
+            lay_out(state);
+
+            // The pointer is over the seventh label, which is `Child Processes`' own words.
+            let label = GetDlgItem(hwnd, ID_LABEL_BASE + 7).unwrap_or_default();
+            let mut label_box = RECT::default();
+            let _ = GetWindowRect(label, &mut label_box);
+            let at = POINT {
+                x: (label_box.left + label_box.right) / 2,
+                y: (label_box.top + label_box.bottom) / 2,
+            };
+            let spot = tip_spot_at(state, at).expect("the label named no row");
+            // What the tick's second and third steps do, with the wait already served: the point of
+            // the test is the reading and the saying, not the delay a hand serves out of its own.
+            tip_say(state, &spot);
+            assert!(state.tip_said.is_some(), "the read row was never said");
+            assert!(
+                crate::ui::tip::is_up(),
+                "the tick said something and put no tip up"
+            );
+
+            // And leaving the row takes it down again.
+            state.tip_spot = None;
+            state.tip_since = None;
+            tip_tick(state);
+            assert!(!crate::ui::tip::is_up(), "the tip outlived the pointer");
 
             let _ = DestroyWindow(hwnd);
         }
