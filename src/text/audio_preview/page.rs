@@ -703,16 +703,25 @@ pub(super) fn build_page(
         facts_edge(
             &card.facts,
             content_left,
-            facts_right(card, content_right, body_advance),
+            facts_right(card, content_right, body_advance, metrics.scale),
             body_advance,
+            metrics.scale,
         ),
         card.facts_offset,
         body_advance,
+        metrics.scale,
         muted,
         foreground,
         number,
     );
-    facts.extend(clock_runs(card, content_right, body_advance, muted, accent));
+    facts.extend(clock_runs(
+        card,
+        content_right,
+        body_advance,
+        metrics.scale,
+        muted,
+        accent,
+    ));
 
     let boxes = control_boxes(metrics, width, card.controls.is_some());
     let bar_left = boxes.map_or(content_left, |boxes| boxes.bar.left);
@@ -819,15 +828,21 @@ pub(super) fn fill_span(card: &Card, bar_width: i32, scale: f32) -> (i32, i32) {
 /// accent, and the whole it is measured against in the page's own muted gray. A card with no player
 /// behind it has only the whole to show, and one whose file does not say how long it is has only the
 /// number that moves.
+#[allow(clippy::too_many_arguments)] // The card, the edge it ends at, the font and the two inks.
 pub(super) fn clock_runs(
     card: &Card,
     right: i32,
     advance: i32,
+    scale: f32,
     muted: [u8; 3],
     accent: [u8; 3],
 ) -> Vec<PageRun> {
+    let style = body_style();
     let parts = clock_parts(card);
-    let total: i32 = parts.iter().map(|text| text_width(text, advance)).sum();
+    let total: i32 = parts
+        .iter()
+        .map(|text| text_width(&style, text, advance, scale))
+        .sum();
     let mut x = right - total;
     // The played number is the one part of the readout that moves, and it is drawn in the accent the
     // bar's played part is drawn in; the whole beside it is the page's muted gray.
@@ -837,7 +852,7 @@ pub(super) fn clock_runs(
         .into_iter()
         .enumerate()
         .map(|(index, text)| {
-            let width = text_width(&text, advance);
+            let width = text_width(&style, &text, advance, scale);
             let run = PageRun {
                 text,
                 x,
@@ -870,10 +885,11 @@ fn clock_parts(card: &Card) -> Vec<String> {
 }
 
 /// How wide the readout is, which is the room the facts line gives up for it.
-fn clock_width(card: &Card, advance: i32) -> i32 {
+fn clock_width(card: &Card, advance: i32, scale: f32) -> i32 {
+    let style = body_style();
     clock_parts(card)
         .iter()
-        .map(|text| text_width(text, advance))
+        .map(|text| text_width(&style, text, advance, scale))
         .sum()
 }
 
@@ -884,8 +900,8 @@ fn clock_width(card: &Card, advance: i32) -> i32 {
 ///
 /// A card with no clock behind it ends the line at the content box's own edge: there is nothing to
 /// keep the room off.
-pub(super) fn facts_right(card: &Card, content_right: i32, advance: i32) -> i32 {
-    let clock = clock_width(card, advance);
+pub(super) fn facts_right(card: &Card, content_right: i32, advance: i32, scale: f32) -> i32 {
+    let clock = clock_width(card, advance, scale);
 
     if clock == 0 {
         content_right
@@ -904,14 +920,15 @@ fn laid_facts(facts: &[Fact]) -> impl Iterator<Item = &Fact> {
 /// How wide the whole facts line wants to be, its parting marks included — the marks it really draws,
 /// one between two facts rather than one before every fact but the first: the length a card the room
 /// has no place for scrolls across itself (see `Card::facts_offset`).
-pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
+pub(super) fn facts_width(facts: &[Fact], advance: i32, scale: f32) -> i32 {
+    let style = body_style();
     let mut width = 0;
 
     for (index, fact) in laid_facts(facts).enumerate() {
         if index > 0 {
-            width += text_width(FACT_SEPARATOR, advance);
+            width += text_width(&style, FACT_SEPARATOR, advance, scale);
         }
-        width += text_width(&fact.text, advance);
+        width += text_width(&style, &fact.text, advance, scale);
     }
 
     width
@@ -926,23 +943,24 @@ pub(super) fn facts_width(facts: &[Fact], advance: i32) -> i32 {
 ///
 /// Read of the line at rest, so the edge is one number per card: what the box clips as the line
 /// travels under it is the scroll's business, not the edge's.
-pub(super) fn facts_edge(facts: &[Fact], left: i32, right: i32, advance: i32) -> i32 {
+pub(super) fn facts_edge(facts: &[Fact], left: i32, right: i32, advance: i32, scale: f32) -> i32 {
+    let style = body_style();
     let mut edge = left;
 
     for (index, fact) in laid_facts(facts).enumerate() {
         let mark = if index == 0 {
             0
         } else {
-            text_width(FACT_SEPARATOR, advance)
+            text_width(&style, FACT_SEPARATOR, advance, scale)
         };
-        let next = edge + mark + text_width(&fact.text, advance);
+        let next = edge + mark + text_width(&style, &fact.text, advance, scale);
         if next > right {
             break;
         }
         edge = next;
     }
 
-    if edge == left || edge - left == facts_width(facts, advance) {
+    if edge == left || edge - left == facts_width(facts, advance, scale) {
         right
     } else {
         edge
@@ -969,10 +987,12 @@ fn fact_runs(
     right: i32,
     offset: i32,
     advance: i32,
+    scale: f32,
     muted: [u8; 3],
     foreground: [u8; 3],
     number: [u8; 3],
 ) -> Vec<PageRun> {
+    let style = body_style();
     let mut runs = Vec::new();
     let mut x = left - offset.max(0);
     let mut first = true;
@@ -981,15 +1001,24 @@ fn fact_runs(
         let mark = if first {
             0
         } else {
-            text_width(FACT_SEPARATOR, advance)
+            text_width(&style, FACT_SEPARATOR, advance, scale)
         };
         let start = x + mark;
-        let width = text_width(&fact.text, advance);
+        let width = text_width(&style, &fact.text, advance, scale);
         let laid = (start + width).min(right) > start.max(left);
 
         if laid {
             if !first {
-                push_fact_run(&mut runs, FACT_SEPARATOR, x, left, right, advance, muted);
+                push_fact_run(
+                    &mut runs,
+                    FACT_SEPARATOR,
+                    x,
+                    left,
+                    right,
+                    advance,
+                    scale,
+                    muted,
+                );
             }
 
             let ink = match fact.kind {
@@ -997,7 +1026,9 @@ fn fact_runs(
                 FactKind::Reading => foreground,
                 FactKind::Note => muted,
             };
-            push_fact_run(&mut runs, &fact.text, start, left, right, advance, ink);
+            push_fact_run(
+                &mut runs, &fact.text, start, left, right, advance, scale, ink,
+            );
         }
 
         x = start + width;
@@ -1014,6 +1045,7 @@ fn fact_runs(
 /// The piece is clipped to that box rather than cut to it: a line the room cannot hold is a line
 /// scrolled across the card, and what is past the edge of the room is out of sight for now (see
 /// `Card::facts_offset`).
+#[allow(clippy::too_many_arguments)] // The piece, its place, the box, the font and its ink.
 fn push_fact_run(
     runs: &mut Vec<PageRun>,
     text: &str,
@@ -1021,9 +1053,11 @@ fn push_fact_run(
     left: i32,
     right: i32,
     advance: i32,
+    scale: f32,
     ink: [u8; 3],
 ) -> i32 {
-    let width = text_width(text, advance);
+    let style = body_style();
+    let width = text_width(&style, text, advance, scale);
     let box_left = x.max(left);
     let box_right = (x + width).min(right);
 
@@ -1522,8 +1556,30 @@ fn paint_window_button(
 
 // ----------------------------------------------------------------------- text
 
-/// The width of a run of text, counted the way the rest of the page is: the face is fixed
-/// pitch, so a count of characters is the whole measurement.
-pub(super) fn text_width(text: &str, advance: i32) -> i32 {
-    text.chars().count() as i32 * advance.max(1)
+/// The style a card's facts line and its clock are set in: the body level, in whatever ink the piece
+/// is drawn.
+///
+/// It is named because a run's width has to be measured at the face it is drawn in: the ink a piece
+/// is set in does not change its width, but the level and the weight do.
+pub(super) fn body_style() -> TextStyle {
+    plain_style(BODY_LEVEL)
+}
+
+/// The style a card's name is set in: the header level, bold.
+pub(super) fn name_style() -> TextStyle {
+    let mut style = plain_style(HEADER_LEVEL);
+    style.bold = true;
+    style
+}
+
+/// The width of a run of text at `style`, measured where a count of characters is not the whole of
+/// it.
+///
+/// **A card's name is a file's name, and a file can be called `漢字Sample file`.** Consolas
+/// is fixed pitch for the characters it carries and carries no CJK at all, so a Chinese glyph in a
+/// name is drawn out of the font the system links in at a width of its own: a name counted at one
+/// advance a character was a name measured narrower than it is drawn, which is a name judged to fit
+/// the card and then clipped at rest instead of scrolled (see `NameScroll::of`).
+pub(super) fn text_width(style: &TextStyle, text: &str, advance: i32, scale: f32) -> i32 {
+    crate::text::text_paint::run_width(style, text, advance, scale)
 }
