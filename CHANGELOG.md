@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Three settings per preset say how far a `Custom Preview` may reach**, all of them off or unchanged by default: `Child Processes`, `Broker Fallback` and `Sibling Windows`.
+- **`Child Processes`** — `Disabled` (default), `Children`, or `Children + Grandchildren`. A program that hands its file to a process of its own is a program whose window is not the one the launched id owns, and finding it means walking the tree — the same walk that lets a preview *hide*, and on teardown *end*, a process the user never named. `Disabled` therefore looks only at the pid this app began: no tree walk, no Job Object members, and no `custom_preview_hook.dll` written into a child, since the pre-attach is a pid this app never started. `Children` is one level; `Children + Grandchildren` is today's behaviour.
+- **`Broker Fallback`** — whether an activator- or stub-started pid may be adopted. A packaged app (Windows 11's Paint) is begun by an activator that hands the file to a pid this app never started, and a Squirrel/Velopack or NSIS stub exits as soon as it has begun the real program, so discovery has a second road: a **new** process whose image name is the preset's, or which sits inside the preset's own install folder, tried after the launched tree has shown nothing. It is now a toggle rather than something every preset takes, because the pid it adopts is one the user never named.
+- **`Sibling Windows`** — `Disabled`, `Cloak only`, `Cloak + Hide (Default)`, which is what every preview did before. During discovery each candidate is `DWMWA_CLOAK`ed so nothing of the program is composited while its window is picked; after adoption the program's other visible windows are `SW_HIDE`d (a modal `#32770` dialog is closed with `WM_CLOSE` instead of hidden). `Cloak only` keeps the first and drops the second, which is the half that used to run a program's splash over the listing for a tick. `Direct Window` keeps its carve-out at every setting — a window meant to stand on screen is the one a stray cloak kills — and this row is deliberately not a step of `Child Processes`: those windows belong to the process being shown, so nothing about them is a process-tree question.
+
+### Changed
+
+- **A preset written before these keys existed reads as `Disabled` / `off` / `Cloak + Hide`** — the walk is gated, the broker road is off, and window suppression is unchanged. A new preset from the editor's `+` starts the same way.
+- **The editor has three rows under `Capture Method`** — `Child Processes`, `Broker Fallback` and `Sibling Windows`, in that order and in the tab order between `Capture Method` and `Promotion`, and the window's default and minimum height grow to hold them.
+
 ### Fixed
 
 - **A page the face has no glyph for is measured where it is drawn, in every preview that draws one** — the last release taught the text preview that Consolas carries no CJK at all and that a Chinese glyph is drawn out of the font the system links in, at a width of its own. Two previews that draw the same way were still counting characters: an archive entry's name was measured narrower than it is drawn, so its ink ran under the size column beside it and the end of it was clipped away, and a sound card's name was measured shorter than it is drawn, so it was judged to fit and drawn once with its tail eaten instead of scrolling. Both are measured now — the name, the header line about the archive, the facts line, its parting marks and the clock — and the archive's cut-to-the-room and the card's marquee travel come from the same measurement, so a name of Chinese is cut and scrolled where its own glyphs run out.
