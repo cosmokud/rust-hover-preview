@@ -400,6 +400,7 @@ pub(crate) fn trim_caches() {
     document_cache::trim_now();
     document_cache::trim_image_now();
     trim_image_cache();
+    crate::others_cache::trim();
 }
 
 /// The tray's `Pin Mode → Enable` row was clicked, or the configuration that decides whether

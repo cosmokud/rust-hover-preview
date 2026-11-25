@@ -396,6 +396,14 @@ pub(crate) struct SeamFacts {
     /// Whether a Q-Dir pane is a listing the app previews a file in (see `Q_DIR_PREVIEWS`), for the same
     /// reason.
     q_dir_previews: AtomicBool,
+    /// Whether Explorer has been out of reach for longer than `Engine → Away Timer` names, as the
+    /// hook last read it (see `app::afk`).
+    ///
+    /// **It is the run's own rather than a window's because the two things it bounds live in
+    /// different processes.** The clock is the hook's, which is the tray's, and what the clock
+    /// decides — an engine let go, a cache flushed — is the viewer's. An `Instant` is a process's
+    /// own and means nothing across that boundary, so what crosses is the answer.
+    away: AtomicBool,
     /// Monotonic config revision counter bumped on live config publication.
     config_generation: AtomicU64,
     /// Set by tray on graceful exit so serving and detached viewers tear down cleanly before job close.
@@ -420,6 +428,7 @@ impl SeamFacts {
             browse_dialog_previews: AtomicBool::new(true),
             everything_previews: AtomicBool::new(true),
             q_dir_previews: AtomicBool::new(true),
+            away: AtomicBool::new(false),
             config_generation: AtomicU64::new(0),
             shutdown_requested: AtomicBool::new(false),
         }
@@ -3489,6 +3498,11 @@ pub(crate) fn everything_previews() -> bool {
 pub(crate) fn an_everything_is_previewed(hwnd: HWND) -> bool {
     everything_previews() && crate::shell::window_classes::everything_class_matches(hwnd)
 }
+
+/// Whether Explorer has been out of reach for longer than `Engine → Away Timer` names, as the hook
+/// last read it — the run's own answer rather than a window's, because the clock is the tray's and
+/// what it bounds is the viewer's (see `app::afk`).
+pub(crate) static AWAY: RunFact<AtomicBool> = RunFact::of(|facts| &facts.away);
 
 /// Whether a preview is made where **Q-Dir** is showing its panes (`Preview Settings → General → Enable
 /// in Q-Dir`), published for every road that may take no lock.

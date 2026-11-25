@@ -114,6 +114,22 @@ pub(crate) fn trim_image_cache() {
     }
 }
 
+/// Give back every decoded frame the run is holding, which is what the away timer asks for once
+/// nobody is at the keyboard to hover a picture (see `app::away_flush`).
+///
+/// The whole of the pool is emptied rather than trimmed to a smaller figure: what a flush is for is
+/// a machine left alone, and a cache holding "as much as the budget allows" of pictures nobody is
+/// looking at is the thing being given back rather than a smaller version of it. Nothing on screen
+/// is taken by it — a window is drawn from the frames it holds through the media, and the cache's
+/// reference is one of several rather than the last.
+pub(crate) fn clear_image_cache() {
+    if let Ok(mut cache) = IMAGE_CACHE.lock() {
+        cache.entries.clear();
+        cache.bytes = 0;
+        cache.tick = 0;
+    }
+}
+
 /// The frame held for `key`, if the cache still has it.
 pub(super) fn image_cache_get(key: &ImageCacheKey) -> Option<Arc<ImageFrame>> {
     let limit = image_cache_limit_bytes();

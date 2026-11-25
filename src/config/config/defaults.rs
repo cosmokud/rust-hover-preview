@@ -447,6 +447,23 @@ pub const MAX_DECODE_BUDGET_GB: f32 = 64.0;
 pub const DEFAULT_ANIMATED_WEBP_BUDGET_MB: u32 = 512;
 pub const MIN_ANIMATED_WEBP_BUDGET_MB: u32 = 64;
 pub const MAX_ANIMATED_WEBP_BUDGET_MB: u32 = 8192;
+/// What the caches that are not measured in decoded frames may hold between hovers, in megabytes —
+/// the tray's `Performance → Memory → Others`.
+///
+/// **It is the one memory budget under `Memory` that is not a stack of bitmaps**, which is why it
+/// needed a name of its own: a parsed text document is its own text plus a line index, an archive's
+/// listing is the names it walked, and the one picture the image converter develops for a preview
+/// too large for the frame cache is the PNG it wrote. Those are the things a sweep of a folder
+/// leaves behind, and what they cost is bounded by nothing a frame cache can see.
+///
+/// A hundred and twenty-eight megabytes by default, which is around what the three held between
+/// them while each had a count of its own: a couple of dozen parsed documents — the cap is what
+/// made a log or an NFO sweep re-parse on the way back — sixteen archive listings and one
+/// developed picture. `0` is a cache that is switched off rather than a size to be corrected,
+/// exactly as `image_cache_mb` reads, so a hand that asks to hold nothing between hovers is
+/// answered as asking it.
+pub const DEFAULT_OTHERS_CACHE_MB: u32 = 128;
+pub const MAX_OTHERS_CACHE_MB: u32 = 16384;
 /// The curve a picture whose samples are light is brought into eight bits with: an EXR, a
 /// Radiance HDR and a float texture hold light rather than levels, so what they need is
 /// the transfer function a PNG has already been through and a curve that brings a range
@@ -509,6 +526,16 @@ pub const DEFAULT_AFK_TIMER_SECS: u64 = 60;
 /// say better. `0` is left as it is: it is the way to ask for an engine to go the moment
 /// Explorer goes out of reach.
 pub const MAX_AFK_TIMER_SECS: u64 = 86_400;
+/// Whether the away timer reaches the app's own memory caches as well as its engines, which is the
+/// tray's `Performance → Memory → Respect Away Timer`.
+///
+/// It is on where the app starts, because what it buys is the whole of what the timer is for: an
+/// engine set to `Away` is a process let go once the user has been elsewhere long enough, and a
+/// cache of decoded pixels left holding a folder's worth of pictures is memory held for a hover
+/// nobody is there to make. Off, the timer bounds the engines alone — what the app did before the
+/// row existed — and what a sweep leaves behind is given up by the budgets under `Memory` and by
+/// nothing else.
+pub const DEFAULT_RESPECT_AWAY_TIMER: bool = true;
 
 pub fn sanitize_webp_playback_fps(value: u32) -> u32 {
     match value {
@@ -531,6 +558,27 @@ pub fn sanitize_animated_fps_max(value: u32) -> u32 {
 /// to it.
 pub fn sanitize_image_cache_mb(value: u32) -> u32 {
     value.min(MAX_IMAGE_CACHE_MB)
+}
+
+/// What the caches under `Others` may hold, in megabytes. `0` is a cache switched off rather than
+/// a size to be corrected, on the same terms as `image_cache_mb` beside it, and anything past the
+/// ceiling is clamped to it.
+pub fn sanitize_others_cache_mb(value: u32) -> u32 {
+    value.min(MAX_OTHERS_CACHE_MB)
+}
+
+/// What the caches under `Others` may hold between hovers, in bytes.
+///
+/// Read from the configuration each time it is asked for rather than captured, so an edit to
+/// `others_cache_mb` applies at the next hover rather than at a restart — the same rule
+/// `animated_webp_budget_bytes` and the image cache's own limit are read by.
+pub fn others_cache_limit_bytes() -> usize {
+    let megabytes = crate::CONFIG
+        .lock()
+        .map(|config| sanitize_others_cache_mb(config.others_cache_mb))
+        .unwrap_or(DEFAULT_OTHERS_CACHE_MB);
+
+    megabytes as usize * 1024 * 1024
 }
 
 /// The tick the loop runs at, in milliseconds: what a hand-edited file is read

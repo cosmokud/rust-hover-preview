@@ -802,6 +802,41 @@ fn hold(picture: Held) {
     if let Ok(mut last) = LAST.lock() {
         *last = Some(picture);
     }
+
+    // A developed picture is one of the three the `Others` budget bounds, and it is the one that
+    // can be megabytes the moment it lands: what is over the budget goes now rather than at the
+    // next conversion (see `others_cache::trim`).
+    crate::others_cache::trim();
+}
+
+/// What the developed picture in hand costs, or nothing where there is none.
+///
+/// It is the PNG the engine wrote and nothing else: the size it was developed at and the key it
+/// came from are a handful of bytes beside a picture that can be tens of megabytes.
+pub(crate) fn developed_bytes_held() -> usize {
+    LAST.lock()
+        .map(|last| last.as_ref().map(|held| held.png.capacity()).unwrap_or(0))
+        .unwrap_or(0)
+}
+
+/// Give the developed picture back, answering what it freed — which is what a trim over the
+/// `Others` budget does when the picture is the thing holding the room.
+///
+/// Nothing on screen is taken by it: the picture is held for the milliseconds between the engine
+/// answering and the hover being drawn (see `take_developed`), so a window that has already been
+/// drawn from it is not drawing *this* any more.
+pub(crate) fn drop_the_developed_picture() -> Option<usize> {
+    let mut last = LAST.lock().ok()?;
+    let held = last.take()?;
+
+    Some(held.png.capacity())
+}
+
+/// Empty the developed picture, which is what the away timer asks for (see `app::away_flush`).
+pub(crate) fn clear_developed() {
+    if let Ok(mut last) = LAST.lock() {
+        *last = None;
+    }
 }
 
 /// Remember that the engine will not draw this file, so that it is not asked twice.

@@ -127,6 +127,15 @@ pub(super) const DISK_CACHE_SIZE_CHOICES_MB: [u32; 15] = [
 
 pub(super) const DECODE_BUDGET_CHOICES_GB: [f32; 6] = [16.0, 8.0, 4.0, 2.0, 1.0, 0.5];
 
+/// The sizes `Memory → Others` offers, in megabytes, largest first — the parsed pages, the archive
+/// listings and the picture the image converter develops, held between hovers under one total.
+///
+/// The same list `Memory → Image` is offered, including the `0` at the bottom: a budget of nothing
+/// is "hold nothing between hovers" rather than a size to be corrected, and it is the answer a hand
+/// with less memory to spare gives to both.
+pub(super) const OTHERS_CACHE_SIZE_CHOICES_MB: [u32; 12] =
+    [16384, 8192, 4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 0];
+
 pub(super) const ANIMATED_WEBP_BUDGET_CHOICES_MB: [u32; 8] =
     [8192, 4096, 2048, 1024, 512, 256, 128, 64];
 
@@ -264,6 +273,9 @@ define_tray_ids! {
     ID_TRAY_REMEMBER_VOLUME : 1,
     ID_TRAY_REMEMBER_VIDEO_VOLUME : 1,
     ID_TRAY_VIDEO_HW_ACCEL : 1,
+    // `Performance → Memory → Respect Away Timer`: whether the away timer reaches the caches as well
+    // as the engines (see `app::away_flush`).
+    ID_TRAY_RESPECT_AWAY_TIMER : 1,
     ID_TRAY_THEME_LIGHT : 1,
     ID_TRAY_THEME_DARK : 1,
     ID_TRAY_MARKDOWN_RENDERED : 1,
@@ -333,6 +345,7 @@ define_tray_ids! {
     ID_TRAY_GENERAL_DISK_CACHE_BASE : DISK_CACHE_SIZE_CHOICES_MB.len(),
     ID_TRAY_DECODE_BUDGET_BASE : DECODE_BUDGET_CHOICES_GB.len(),
     ID_TRAY_ANIMATED_WEBP_BUDGET_BASE : ANIMATED_WEBP_BUDGET_CHOICES_MB.len(),
+    ID_TRAY_OTHERS_CACHE_BASE : OTHERS_CACHE_SIZE_CHOICES_MB.len(),
     ID_TRAY_ENGINE_IDLE_BASE : ENGINE_IDLE_CHOICES.len(),
     ID_TRAY_LIBREOFFICE_IDLE_BASE : ENGINE_IDLE_CHOICES.len(),
     ID_TRAY_WEBVIEW_IDLE_BASE : ENGINE_IDLE_CHOICES.len(),
