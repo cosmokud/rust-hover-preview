@@ -316,36 +316,25 @@ fn configure_dpi_awareness() {
 }
 
 fn sync_startup_setting(trace: &mut StartupTrace) {
-    let should_enable_startup = CONFIG
-        .lock()
-        .map(|config| config.is_first_run && config.run_at_startup)
-        .unwrap_or(false);
-
-    if should_enable_startup {
-        app::startup::enable_startup();
+    // **The file is an instruction, not only a record.** A `run_at_startup=true` is a user who asked
+    // for this app to start with Windows, and every way that can come apart while it says so is put
+    // right here: the entry removed by a cleaner, the value another tool switched off, the entry
+    // naming a copy that has since moved, and the entry that could not be written at all. The same
+    // call writes what the machine really holds back into the file, so the tray's row and
+    // `config.ini` are never one thing while the machine is another. It is asked again at every
+    // opening of the tray menu, where it is three registry reads (see `app::startup`).
+    if app::startup::honour_the_configuration() {
+        trace.step("startup entry written");
     }
 
     // And an entry that is there but names another copy of this app is put right, before
-    // anything reads it as settled: a portable copy run once from a folder of its own, an
-    // older version still installed where it put itself, an app moved since — each of them
-    // writes its own path into the one entry there is, and that path is what the next logon
-    // starts. The entry decides only *whether* this app starts, which is left to the user;
-    // what it points at is this app's own business, and this is the copy running now.
+    // anything reads it as settled, whether or not the file asks for it: a portable copy run once
+    // from a folder of its own, an older version still installed where it put itself, an app moved
+    // since — each of them writes its own path into the one entry there is, and that path is what
+    // the next logon starts. What it points at is this app's own business, and this is the copy
+    // running now; whether it starts at all was answered above.
     if app::startup::repair_startup_entry() {
         trace.step("startup entry repaired");
-    }
-
-    // And the configuration is brought into step with what the registry holds, which is what
-    // actually starts this app: a `run_at_startup` that says yes while the entry is gone is a
-    // value that lies about the machine, and the tray's own toggle is where the choice is
-    // made after the first run anyway. Nothing else reads this value but the tray.
-    let registered = app::startup::is_startup_enabled();
-
-    if let Ok(mut config) = CONFIG.lock() {
-        if config.run_at_startup != registered {
-            config.run_at_startup = registered;
-            config.save();
-        }
     }
 }
 

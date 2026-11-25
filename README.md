@@ -369,6 +369,8 @@ Press `F7` in File Explorer anytime to pause or resume previews, or enable **Tri
 
 No. Rust Hover Preview installs per-user with no admin rights, never injects code into File Explorer, skips online-only OneDrive, SharePoint, and Dropbox files without downloading them, and blocks `.env` files and SSH keys by default.
 
+Starting it as an administrator works, with two things worth knowing. **The startup entry is written into the account at the desktop**, even where the elevation prompt was answered by a *different* administrator's credentials: that account's own `Run` key under `HKEY_USERS` is used instead of the elevated token's, so the next logon of the user at the keyboard still starts the app — an elevated run writing into its own hive would be an entry nobody logs on to read. And a `Run` entry always starts **unelevated**, because Windows never raises a UAC prompt for one, so the copy the logon starts is the ordinary one even where the copy it was registered from was elevated.
+
 ## Build from Source
 
 Requirements: Windows 11, Rust 1.98.1+, Visual Studio Build Tools (MSVC / C++), and the Windows SDK. The build targets the x86-64-v2 level (`-C target-cpu=x86-64-v2` in `.cargo/config.toml`), so the machine that compiles it has to be one that can run the result.

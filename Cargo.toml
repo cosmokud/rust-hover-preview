@@ -26,6 +26,11 @@ windows = { version = "0.58", features = [
     # order the listing shows them (see `explorer_hook::read_view_sort`).
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_Security",
+    # `ConvertSidToStringSidW`, which spells the SID of an account the way the Shell does: the
+    # elevated half of this app asks which account the desktop belongs to before it writes the startup
+    # entry, and a SID is the only spelling of that answer two hives can be compared by (see
+    # `app::elevation`).
+    "Win32_Security_Authorization",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     # `CreatePipe`, which is the one way a child of this app's is handed a stream: a model's viewer

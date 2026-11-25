@@ -224,6 +224,35 @@ pub(crate) fn report_install_failure(name: &str, code: i32) {
     report(&text);
 }
 
+/// What the `Run at Startup` row says when the machine would not take the entry.
+///
+/// It is said out loud rather than left to a checkmark that flips back: a `Run` key a policy holds,
+/// a hive this process may not write, and an entry Windows refuses to run all read the same way
+/// from the tray — as a switch that does nothing — and the one thing a user can act on is what the
+/// machine refused.
+pub(crate) fn report_startup_failure(outcome: crate::app::startup::Outcome) {
+    let state = match outcome {
+        // The machine refused the write and still holds the opposite of what was asked for.
+        crate::app::startup::Outcome::NotWritten { held: false } => {
+            "Nothing of this app will start with Windows until the value is written."
+        }
+        crate::app::startup::Outcome::NotWritten { held: true } => {
+            "The entry that is there still starts this app, so it reads as on."
+        }
+        _ => "Something else is starting this app, so it still reads as on.",
+    };
+
+    let text = format!(
+        "The startup entry could not be written.\n\n\
+         Windows would not take the value this app uses under HKCU\\Software\\Microsoft\\Windows\\\
+         CurrentVersion\\Run, which is what starts it at a logon. {state}\n\n\
+         A security policy, an antivirus tool or another program holding that key is the usual \
+         reason. The rest of this app is unaffected."
+    );
+
+    report(&text);
+}
+
 /// A box that reports rather than asks, for what has already happened and cannot be refused.
 ///
 /// It is a dialog of this app's like the questions are — the tray answers no menu while one is on
