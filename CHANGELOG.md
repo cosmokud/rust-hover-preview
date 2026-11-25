@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A page the face has no glyph for is measured where it is drawn, in every preview that draws one** — the last release taught the text preview that Consolas carries no CJK at all and that a Chinese glyph is drawn out of the font the system links in, at a width of its own. Two previews that draw the same way were still counting characters: an archive entry's name was measured narrower than it is drawn, so its ink ran under the size column beside it and the end of it was clipped away, and a sound card's name was measured shorter than it is drawn, so it was judged to fit and drawn once with its tail eaten instead of scrolling. Both are measured now — the name, the header line about the archive, the facts line, its parting marks and the clock — and the archive's cut-to-the-room and the card's marquee travel come from the same measurement, so a name of Chinese is cut and scrolled where its own glyphs run out.
+- **A Unicode page with no ASCII in it is read as Unicode** — the decode recognized a UTF-16 file without a byte order mark by the NUL bytes beside its ASCII characters, which is the half of every pair that a character above U+00FF does not have. A Chinese, Japanese or Korean page written by a tool that drops the mark — every character above U+00FF, so not one NUL in the file — went past that check to the legacy code page and came out as a line of accented Latin letters. It is recognized now by what it decodes to: a page whose every character is one East Asian text is written in, read little-endian, which is the order Windows and every tool that writes `Unicode` writes. The NUL check itself now accepts a NUL on either side of the pairs as the byte order rather than requiring NULs in most of them, so a page that is a word of Chinese and a space is no longer refused.
+
 ## [0.6.3] - 2026-11-25
 
 ### Added

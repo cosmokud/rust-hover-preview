@@ -2037,3 +2037,106 @@ fn the_same_text_is_the_same_page_whatever_encoding_it_arrived_in() {
         );
     }
 }
+
+/// **A page of Chinese written by a tool that drops the mark has no NUL byte in it either.** The
+/// decode looks for NULs to recognize UTF-16 — a NUL is the high half of an ASCII character — so a
+/// file whose every character is above U+00FF went past that check to the code page, and a Chinese
+/// page came out as a line of accented Latin letters.
+#[test]
+fn a_unicode_page_with_no_ascii_in_it_is_read_as_unicode() {
+    let dir = scratch("no-mark");
+
+    let page = |name: &str, bytes: &[u8]| -> Option<Vec<String>> {
+        let source = dir.join(name);
+        fs::write(&source, bytes).expect("a written page");
+        let (width, height) = measure(&source, 900, 400, 96, options())?;
+        let page =
+            render_scrolled(&source, 0, width, height, 96, options(), None, None).expect("a page");
+        Some(
+            page.lines
+                .iter()
+                .flat_map(|line| line.runs.iter())
+                .map(|run| run.text.clone())
+                .collect(),
+        )
+    };
+
+    // Every one of these is a page with no ASCII in it at all, so no NUL byte: Chinese, Japanese,
+    // Korean, bopomofo and fullwidth forms.
+    let pages: &[(&str, &str)] = &[
+        ("chinese", "中文测试文本内容全文都是中文"),
+        ("japanese", "日本語のテキストです"),
+        ("korean", "한국어텍스트입니다이것은테스트입니다"),
+        ("bopomofo", "ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏ"),
+        ("fullwidth", "ＡＢＣＤ１２３４"),
+    ];
+    for (name, text) in pages {
+        let utf16: Vec<u8> = text
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect();
+        let drawn = page(&format!("{name}.txt"), &utf16)
+            .unwrap_or_else(|| panic!("{name}: the page was refused"));
+        assert_eq!(
+            drawn.concat(),
+            *text,
+            "{name}: a UTF-16 page with no mark read as something other than itself"
+        );
+    }
+
+    // And a page that *does* have ASCII in it took the NUL path, which is where it always went.
+    let mixed: Vec<u8> = "中文测试 abc"
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    assert_eq!(
+        page("mixed.txt", &mixed).expect("a page").concat(),
+        "中文测试 abc"
+    );
+
+    // A page that is not Unicode at all stays what it says it is: the code page's own bytes are
+    // Latin letters, and nothing here may turn them into Chinese.
+    let accented = page("accented.txt", b"Caf\xe9 na\xefve gr\xf6\xdfe").expect("a page");
+    assert_eq!(accented.concat(), "Café naïve größe");
+}
+
+/// The genuine article is not mistaken for a page of Chinese either: a GBK, Big5 or Shift-JIS file is
+/// a stream of high bytes whose *own* code page is the one that reads it. Read as UTF-16 those bytes
+/// are a scatter of Hangul, Tifinagh and private-use code points, never one East Asian page — which
+/// is what keeps a legacy-encoded file out of the Unicode path.
+#[test]
+fn a_code_page_page_is_not_read_as_unicode() {
+    let dir = scratch("code-pages");
+
+    let shown = |name: &str, bytes: &[u8]| -> Vec<String> {
+        let source = dir.join(name);
+        fs::write(&source, bytes).expect("a written page");
+        let (width, height) = measure(&source, 900, 400, 96, options()).expect("a measured page");
+        let page =
+            render_scrolled(&source, 0, width, height, 96, options(), None, None).expect("a page");
+        page.lines
+            .iter()
+            .flat_map(|line| line.runs.iter())
+            .map(|run| run.text.clone())
+            .collect()
+    };
+
+    // What the code page makes of these bytes, written out rather than encoded here: the test is of
+    // the decoder, and a test that used the same encoder it was checking would agree with itself.
+    for (name, bytes) in [
+        (
+            "gbk.txt",
+            &[0xD6u8, 0xD0, 0xCE, 0xC4, 0xB2, 0xE2, 0xCA, 0xD4][..],
+        ),
+        (
+            "big5.txt",
+            &[0xA4u8, 0xA4, 0xA4, 0xE5, 0xB4, 0xFA, 0xB8, 0xD5][..],
+        ),
+    ] {
+        let drawn = shown(name, bytes).concat();
+        assert!(
+            !drawn.contains('中') && !drawn.contains('文'),
+            "{name} was read as Unicode rather than as its own code page: {drawn:?}"
+        );
+    }
+}
