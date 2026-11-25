@@ -49,11 +49,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     BeginDeferWindowPos, CallWindowProcW, ChildWindowFromPoint, CreateWindowExW, DefWindowProcW,
     DeferWindowPos, DestroyWindow, DispatchMessageW, EndDeferWindowPos, GetClientRect,
-    GetCursorPos, GetDlgItem, GetMessageTime, GetMessageW, GetNextDlgTabItem, GetParent,
-    GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow, IsZoomed,
+    GetCursorPos, GetDlgItem, GetMessageTime, GetMessageW, GetNextDlgTabItem, GetSystemMetrics,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsWindow, IsZoomed,
     KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
     SetCursor, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-    ShowWindow, TranslateMessage, BS_OWNERDRAW, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDOK,
+    ShowWindow, TranslateMessage, WindowFromPoint, BS_OWNERDRAW, CBN_SELCHANGE, CBN_SELENDOK,
     CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL,
     CB_GETDROPPEDSTATE, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE,
     ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
@@ -124,10 +124,6 @@ const WM_PRESET_DRAG_END: u32 = WM_APP + 26;
 const WM_AUTOSAVE: u32 = WM_APP + 27;
 // Posted by list_subclass_proc on row pill click; wparam = drawn row index.
 const WM_PRESET_ROW_TOGGLE: u32 = WM_APP + 28;
-/// A row of a combo's dropped list was pointed at (or the list was left): `wparam` is the combo and
-/// `lparam` the row, or `-1` for none. Posted by the list's own subclass, because a list is a window
-/// of its own and its pointer is nothing the combo's subclass is ever told about.
-const WM_TIP_LIST_ROW: u32 = WM_APP + 29;
 
 const TITLEBAR_LOGICAL_H: i32 = 40;
 const TITLEBAR_BTN_W: i32 = 44;
@@ -381,34 +377,6 @@ const LABEL_CONTROLS: [i32; EDITOR_LABELS.len()] = [
     ID_SCALING,
     ID_VOLUME_ENABLED,
 ];
-
-/// The control a point in the window's own client area is beside, where it is over a label column.
-fn label_row_control_at(hwnd: HWND, x: i32, y: i32) -> Option<(HWND, i32)> {
-    for (index, control_id) in LABEL_CONTROLS.iter().copied().enumerate() {
-        let label = unsafe { GetDlgItem(hwnd, ID_LABEL_BASE + index as i32) }.ok()?;
-        let mut box_ = RECT::default();
-        if unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(label, &mut box_) }
-            .is_err()
-        {
-            continue;
-        }
-        let mut corner = POINT {
-            x: box_.left,
-            y: box_.top,
-        };
-        let _ = unsafe { ScreenToClient(hwnd, &mut corner) };
-        let local = RECT {
-            left: corner.x,
-            top: corner.y,
-            right: corner.x + (box_.right - box_.left),
-            bottom: corner.y + (box_.bottom - box_.top),
-        };
-        if pt_in_rect(local, x, y) {
-            return Some((label, control_id));
-        }
-    }
-    None
-}
 
 fn is_combo(id: u32) -> bool {
     id == ID_WINDOW_MODE as u32
@@ -779,12 +747,17 @@ struct State {
     hovered_tb: Option<TitlebarButton>,
     pressed_tb: Option<TitlebarButton>,
     tracking_mouse: bool,
-    /// Where the pointer is resting and since when, which is the whole of the tip's schedule: a tip
-    /// is put up by the window's own timer once the pointer has stood still on one control, and put
-    /// away the moment it moves or leaves. `tip_key` is the control the tip is about, so a second
-    /// look at the same one restarts nothing.
-    tip_rest: Option<(isize, Instant)>,
-    tip_key: Option<isize>,
+    /// **Where the pointer is standing, and since when.** Asked of the desktop by the window's own
+    /// clock rather than told by a control's `WM_MOUSEMOVE`, because more than half of what this
+    /// window shows never says anything about the pointer: a label is a `STATIC` without
+    /// `SS_NOTIFY`, the titlebar's three buttons are drawn rather than laid out, and a combo's
+    /// dropped list is a window of its own that routes nothing back. One reading covers all of them
+    /// and cannot disagree with itself.
+    tip_spot: Option<TipSpot>,
+    /// Since when that spot had the pointer, and what was last said about it, so a tick that finds
+    /// the pointer where it was does nothing at all.
+    tip_since: Option<Instant>,
+    tip_said: Option<(isize, String)>,
     rects: LayoutRects,
     gradient: Option<GradientCache>,
     card_slice: Option<CardSliceCache>,
@@ -1221,27 +1194,6 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 let next = state.rects.titlebar_button_at(x, y);
                 // A tip over the titlebar's own buttons is asked for here, because they are drawn by
                 // the window rather than laid out as controls: there is no child to hover.
-                // A titlebar button is drawn rather than laid out, so its "control" is the window
-                // itself and its id is the key the tip is written under.
-                let over = next.map(titlebar_button_id);
-                match over {
-                    Some(id) => unsafe { tip_pointer_over(state, Some(hwnd.0 as isize), Some(id)) },
-                    // A label column is the row's other half: its words explain the control beside
-                    // them, which is where the pointer would be told the same thing.
-                    None => match label_row_control_at(hwnd, x, y) {
-                        Some((label, control_id)) => unsafe {
-                            tip_pointer_over(state, Some(label.0 as isize), Some(control_id))
-                        },
-                        // Anything else the window itself is told about — the gap between two
-                        // controls, the empty part of a card — is not a control, so the tip goes.
-                        None => match child_under_cursor(hwnd) {
-                            Some((child, id)) => unsafe {
-                                tip_pointer_over(state, Some(child.0 as isize), Some(id))
-                            },
-                            None => unsafe { tip_left(state) },
-                        },
-                    },
-                }
                 if next != state.hovered_tb {
                     state.hovered_tb = next;
                     unsafe {
@@ -1391,14 +1343,6 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 } else {
                     unsafe { enabled_toggled(state, enabled) };
                 }
-            }
-            LRESULT(0)
-        }
-        WM_TIP_LIST_ROW => {
-            if let Some(state) = unsafe { state_of(hwnd) } {
-                let combo = HWND(wparam.0 as *mut _);
-                let row = usize::try_from(lparam.0).ok();
-                unsafe { tip_list_row(state, combo, row) };
             }
             LRESULT(0)
         }
@@ -1554,6 +1498,7 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             LRESULT(0)
         }
         WM_DESTROY => {
+            let _ = unsafe { KillTimer(hwnd, TIP_TIMER) };
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
@@ -2098,8 +2043,9 @@ unsafe fn build(hwnd: HWND) -> State {
         hovered_tb: None,
         pressed_tb: None,
         tracking_mouse: false,
-        tip_rest: None,
-        tip_key: None,
+        tip_spot: None,
+        tip_since: None,
+        tip_said: None,
         rects: LayoutRects {
             titlebar: RECT::default(),
             sidebar_card: RECT::default(),
@@ -2405,12 +2351,15 @@ unsafe fn build(hwnd: HWND) -> State {
         if !combo.0.is_null() {
             unsafe {
                 install_combo_subclass(combo, hwnd);
-                // A dropped list is a window of its own, so the rows' tips are asked for on it.
-                install_list_tips(combo);
                 apply_combo_list_theme(combo, palette.dark);
             }
         }
     }
+
+    // **The tip's clock runs for the window's whole life.** It is armed here rather than by a
+    // control's message, because the pointer can come to rest on a label, on a drawn titlebar button
+    // or on a row of a dropped list without this process being told anything at all (see `tip_tick`).
+    unsafe { SetTimer(hwnd, TIP_TIMER, TIP_TICK_MS, None) };
 
     if !state.presets.is_empty() {
         state.selected = Some(0);
@@ -2454,18 +2403,6 @@ unsafe extern "system" fn edit_subclass_proc(
     let orig_proc = sub.orig_proc;
 
     match msg {
-        // A field explains itself too: the pointer resting on it is the pointer resting on a control,
-        // and the clock that decides when a tip is worth putting up is the window's own.
-        WM_MOUSEMOVE => {
-            if let Some(state) = unsafe { state_of(sub.parent) } {
-                unsafe { tip_pointer_over(state, Some(hwnd.0 as isize), Some(sub.id)) };
-            }
-        }
-        WM_MOUSELEAVE => {
-            if let Some(state) = unsafe { state_of(sub.parent) } {
-                unsafe { tip_left(state) };
-            }
-        }
         WM_KEYDOWN => {
             let vk = wparam.0 as u16;
             let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
@@ -2687,8 +2624,10 @@ unsafe extern "system" fn stepper_subclass_proc(
             return LRESULT(0);
         }
         WM_TIMER => {
-            // The tip's own clock: one tick decides whether the pointer has stood still long enough
-            // on one control for its tip to be worth putting up, and stops itself when it has.
+            // **The tip's clock.** One tick reads where the pointer is standing and says what that is
+            // once it has stood there long enough — asked of the desktop rather than told by a
+            // control, because a label, a drawn titlebar button and a row of a dropped list all have
+            // no message to tell it with (see `tip_tick`).
             if wparam.0 == TIP_TIMER {
                 if let Some(state) = unsafe { state_of(hwnd) } {
                     unsafe { tip_tick(state) };
@@ -2760,11 +2699,6 @@ unsafe extern "system" fn stepper_subclass_proc(
                 };
                 let _ = unsafe { TrackMouseEvent(&mut tme) };
             }
-            if let Some(id) = id_of_control_any(hwnd) {
-                if let Some(state) = unsafe { state_of(sub.parent) } {
-                    unsafe { tip_pointer_over(state, Some(hwnd.0 as isize), Some(id)) };
-                }
-            }
         }
         WM_MOUSELEAVE => {
             sub.tracking = false;
@@ -2773,9 +2707,6 @@ unsafe extern "system" fn stepper_subclass_proc(
                 unsafe {
                     let _ = InvalidateRect(hwnd, None, false);
                 }
-            }
-            if let Some(state) = unsafe { state_of(sub.parent) } {
-                unsafe { tip_left(state) };
             }
         }
         WM_NCDESTROY => {
@@ -2929,21 +2860,12 @@ unsafe extern "system" fn button_subclass_proc(
                 };
                 let _ = unsafe { TrackMouseEvent(&mut tme) };
             }
-            if let Some(id) = id_of_control_any(hwnd) {
-                if let Some(state) = unsafe { state_of(GetParent(hwnd).unwrap_or_default()) } {
-                    unsafe { tip_pointer_over(state, Some(hwnd.0 as isize), Some(id)) };
-                }
-            }
         }
         WM_MOUSELEAVE => {
             sub.tracking = false;
             if sub.hovered {
                 sub.hovered = false;
                 let _ = unsafe { InvalidateRect(hwnd, None, false) };
-            }
-            let parent = unsafe { GetParent(hwnd) }.unwrap_or_default();
-            if let Some(state) = unsafe { state_of(parent) } {
-                unsafe { tip_left(state) };
             }
         }
         WM_NCDESTROY => {
@@ -2961,11 +2883,6 @@ unsafe extern "system" fn button_subclass_proc(
 
 /// The id a control answers to, by asking the window it belongs to — which is what a control's own
 /// subclass has and the editor's table is keyed by.
-fn id_of_control_any(control: HWND) -> Option<i32> {
-    let parent = unsafe { GetParent(control) }.ok()?;
-    id_of_control(parent, control)
-}
-
 unsafe fn install_combo_subclass(combo: HWND, parent: HWND) {
     let orig = unsafe {
         SetWindowLongPtrW(
@@ -2998,14 +2915,7 @@ unsafe extern "system" fn combo_subclass_proc(
 
     match msg {
         WM_ERASEBKGND => return LRESULT(1),
-        // The pointer on the field itself: a combo says what it is set to.
         WM_MOUSEMOVE => {
-            let over = Some(hwnd.0 as isize);
-            let id =
-                unsafe { state_of(sub.parent) }.and_then(|state| combo_id_of(state.hwnd, hwnd));
-            if let Some(state) = unsafe { state_of(sub.parent) } {
-                unsafe { tip_pointer_over(state, over, id) };
-            }
             if !sub.hovered {
                 sub.hovered = true;
                 let _ = unsafe { InvalidateRect(hwnd, None, false) };
@@ -3148,9 +3058,6 @@ unsafe extern "system" fn combo_subclass_proc(
             sub.tracking = false;
             sub.hovered = false;
             let _ = unsafe { InvalidateRect(hwnd, None, false) };
-            if let Some(state) = unsafe { state_of(sub.parent) } {
-                unsafe { tip_left(state) };
-            }
         }
         WM_SETFOCUS | WM_KILLFOCUS | WM_ENABLE => {
             let res = unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
@@ -5079,11 +4986,6 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                     unsafe { scaling_chosen(state) };
                 }
             }
-            // The list opening is the field's own tip going: the rows are about to be on screen with
-            // tips of their own, and two tips about one combo is one too many.
-            if notice == CBN_DROPDOWN {
-                unsafe { tip_left(state) };
-            }
             // A pick is confirmed by the pick, not by where the focus goes next: a combo keeps
             // the focus after the list closes, so `WM_KILLFOCUS` may be a long way off.
             if notice == CBN_SELENDOK {
@@ -5391,215 +5293,254 @@ fn combo_id_of(hwnd: HWND, control: HWND) -> Option<i32> {
     .find(|id| control_of(hwnd, *id).is_some_and(|held| held == control))
 }
 
-/// The pointer has come to rest on `control`, which explains itself as `id`, or it has left.
+/// What the pointer is standing on, and what the tip should say about it.
 ///
-/// **The whole of the schedule is here.** A control's own `WM_MOUSEMOVE` says where the pointer is;
-/// the window's clock says how long it has been there; and `restart: true` is the calls that mean the
-/// pointer moved somewhere else — a press, a wheel notch, a combo dropping its list — which put the
-/// tip away at once rather than wait out the delay again.
-unsafe fn tip_pointer_over(state: &mut State, control: Option<isize>, id: Option<i32>) {
-    let resting = control.filter(|_| id.is_some());
-    if resting.is_none() {
-        unsafe { tip_take_down(state) };
-        state.tip_rest = None;
-        return;
-    }
-    if state.tip_rest.map(|(held, _)| held) == resting {
-        return;
-    }
-    unsafe { tip_take_down(state) };
-    state.tip_rest = Some((resting.unwrap_or(0), Instant::now()));
-    unsafe { SetTimer(state.hwnd, TIP_TIMER, TIP_TICK_MS, None) };
+/// The whole of a tip's schedule is one reading of the desktop taken by the window's own clock, so
+/// every part of the editor is explained by the same code: a row's label, a control, the titlebar's
+/// drawn buttons, a row of a dropped list. Nothing here is a message from a control, and that is the
+/// point — half of what this window shows never sends one.
+#[derive(Clone, PartialEq, Eq)]
+struct TipSpot {
+    /// The window the pointer is over, and the row of it where that is a list.
+    window: isize,
+    row: Option<usize>,
+    /// The control whose tip is the one to say, and the id it is written under.
+    about: isize,
+    id: i32,
+    /// The value to say instead of the control's own sentence: a combo's current value, or the row
+    /// of a list under the pointer.
+    value: Option<usize>,
+    /// Where the tip stands, in screen pixels: the control's box, widened to the row it belongs to.
+    anchor: RECT,
 }
 
-/// The pointer left whatever it was on, and the tip goes with it.
-unsafe fn tip_left(state: &mut State) {
-    unsafe { tip_take_down(state) };
-    state.tip_rest = None;
+/// What is standing at the cursor, read from the desktop rather than from a control's message.
+fn tip_spot_now(state: &State) -> Option<TipSpot> {
+    let mut screen = POINT::default();
+    unsafe { GetCursorPos(&mut screen) }.ok()?;
+    tip_spot_at(state, screen)
 }
 
-/// One tick of the tip's clock: put the tip up where the pointer has stood still long enough.
-unsafe fn tip_tick(state: &mut State) {
-    let Some((resting, since)) = state.tip_rest else {
-        let _ = unsafe { KillTimer(state.hwnd, TIP_TIMER) };
-        return;
-    };
-    if since.elapsed() < TIP_DELAY {
-        return;
-    }
-    let _ = unsafe { KillTimer(state.hwnd, TIP_TIMER) };
-    if state.tip_key == Some(resting) {
-        return;
-    }
-    let control = HWND(resting as *mut _);
-    if !unsafe { IsWindow(control) }.as_bool() {
-        state.tip_rest = None;
-        return;
-    }
-    let Some(id) = id_of_control(state.hwnd, control) else {
-        state.tip_rest = None;
-        return;
-    };
-    // A combo says what it is set to, and the dropped list says what each value is — the control's
-    // own sentence is the one that list's headline is read from.
-    if combo_id_of(state.hwnd, control).is_some() {
-        let choice = unsafe { SendMessageW(control, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
-        let index = usize::try_from(choice).ok();
-        if let Some(text) = crate::ui::tip::combo(id, index) {
-            crate::ui::tip::show(control, text, state.palette);
-            state.tip_key = Some(resting);
-            return;
+/// What is standing at a point of the screen, which is the whole of the tip's reading.
+///
+/// Split out from the cursor so that it can be asked a point rather than the hand: this is the part
+/// that decides *what* the tip is about, and the part a test can drive.
+fn tip_spot_at(state: &State, screen: POINT) -> Option<TipSpot> {
+    // A dropped list is a window of its own and the top of the stack where it is up: its rows are
+    // the values of the combo that owns it, so the row under the pointer is what the tip says.
+    let named = unsafe { WindowFromPoint(screen) };
+    if !named.0.is_null() {
+        if let Some(combo) = combo_owning_list(state, named) {
+            let (row, inside) = list_row_at(named, screen);
+            if !inside {
+                return None;
+            }
+            let id = combo_id_of(state.hwnd, combo)?;
+            let mut field = RECT::default();
+            if unsafe { GetWindowRect(combo, &mut field) }.is_err() {
+                return None;
+            }
+            return Some(TipSpot {
+                window: named.0 as isize,
+                row: Some(row),
+                about: combo.0 as isize,
+                id,
+                value: Some(row),
+                anchor: field,
+            });
         }
     }
-    crate::ui::tip::for_control(control, id);
-    state.tip_key = Some(resting);
+
+    // The titlebar's three buttons are drawn by the window rather than laid out, so they are the one
+    // part of it a control id cannot name: the window's own boxes do.
+    let mut client = screen;
+    let _ = unsafe { ScreenToClient(state.hwnd, &mut client) };
+    if client.y < state.rects.titlebar.bottom {
+        let id = state
+            .rects
+            .titlebar_button_at(client.x, client.y)
+            .map(titlebar_button_id)?;
+        return Some(TipSpot {
+            window: state.hwnd.0 as isize,
+            row: None,
+            about: state.hwnd.0 as isize,
+            id,
+            value: None,
+            anchor: RECT {
+                left: screen.x - client.x + state.rects.titlebar.left,
+                top: screen.y - client.y + state.rects.titlebar.top,
+                right: screen.x - client.x + state.rects.titlebar.right,
+                bottom: screen.y - client.y + state.rects.titlebar.bottom,
+            },
+        });
+    }
+
+    let child = unsafe { ChildWindowFromPoint(state.hwnd, client) };
+    if child.0.is_null() || child == state.hwnd {
+        return None;
+    }
+
+    // A combo's field says what it is set to, and its rows say what each value is.
+    if let Some(id) = combo_id_of(state.hwnd, child) {
+        let choice = unsafe { SendMessageW(child, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+        let mut field = RECT::default();
+        if unsafe { GetWindowRect(child, &mut field) }.is_err() {
+            return None;
+        }
+        return Some(TipSpot {
+            window: child.0 as isize,
+            row: None,
+            about: child.0 as isize,
+            id,
+            value: usize::try_from(choice).ok(),
+            anchor: field,
+        });
+    }
+
+    // A label is the row's other half: hovering `Broker Fallback`'s words explains the toggle beside
+    // them, and the tip stands where that toggle is rather than over the words.
+    if let Some(control_id) = label_id_of(state.hwnd, child) {
+        let about = control_of(state.hwnd, control_id)?;
+        let mut field = RECT::default();
+        if unsafe { GetWindowRect(about, &mut field) }.is_err() {
+            return None;
+        }
+        let mut label_box = RECT::default();
+        if unsafe { GetWindowRect(child, &mut label_box) }.is_ok() {
+            // The row's own box: from the label's left to the field's right, at the field's height.
+            field.left = label_box.left;
+        }
+        return Some(TipSpot {
+            window: child.0 as isize,
+            row: None,
+            about: about.0 as isize,
+            id: control_id,
+            value: None,
+            anchor: field,
+        });
+    }
+
+    let id = id_of_control(state.hwnd, child)?;
+    let mut field = RECT::default();
+    if unsafe { GetWindowRect(child, &mut field) }.is_err() {
+        return None;
+    }
+    Some(TipSpot {
+        window: child.0 as isize,
+        row: None,
+        about: child.0 as isize,
+        id,
+        value: None,
+        anchor: field,
+    })
 }
 
-/// A row of a dropped list was pointed at, or the list was left.
+/// The combo whose dropped list `named` is, where it is one of the editor's lists.
+fn combo_owning_list(state: &State, named: HWND) -> Option<HWND> {
+    for id in [
+        ID_CAPTURE_TECHNIQUE,
+        ID_CHILD_SCOPE,
+        ID_SIBLING_WINDOWS,
+        ID_PROMOTION_TECHNIQUE,
+        ID_PLACEMENT,
+        ID_WINDOW_MODE,
+        ID_SCALING,
+    ] {
+        let combo = control_of(state.hwnd, id)?;
+        let mut info = COMBOBOXINFO {
+            cbSize: std::mem::size_of::<COMBOBOXINFO>() as u32,
+            ..Default::default()
+        };
+        if unsafe { GetComboBoxInfo(combo, &mut info) }.is_ok() && info.hwndList == named {
+            return Some(combo);
+        }
+    }
+    None
+}
+
+/// The row of a dropped list a screen point is over, and whether that point is inside a row at all.
+fn list_row_at(list: HWND, screen: POINT) -> (usize, bool) {
+    let mut client = screen;
+    let _ = unsafe { ScreenToClient(list, &mut client) };
+    let answer = unsafe {
+        SendMessageW(
+            list,
+            LB_ITEMFROMPOINT,
+            WPARAM(0),
+            LPARAM((((client.y as u16 as u32) << 16) | (client.x as u16 as u32)) as isize),
+        )
+    }
+    .0 as u32;
+    ((answer & 0xFFFF) as usize, (answer >> 16) & 1 == 0)
+}
+
+/// One tick of the tip's clock: read where the pointer is, and say what that is if it has been there
+/// long enough.
 ///
-/// A list's rows are the values of the combo that owns it, so the tip is that value's own sentence —
-/// `Capture Method` -> `In-Process Hook` explains the hook — and leaving the list puts it away.
-unsafe fn tip_list_row(state: &mut State, combo: HWND, row: Option<usize>) {
-    let Some(id) = combo_id_of(state.hwnd, combo) else {
+/// **The clock runs while the editor is up**, rather than being started by a control's message: the
+/// pointer can arrive at a row, at a drawn titlebar button or at a row of a dropped list without this
+/// process being told anything at all, and a timer that had to be armed by the movement it is meant to
+/// notice would never be armed for those.
+unsafe fn tip_tick(state: &mut State) {
+    let spot = tip_spot_now(state);
+    let Some(spot) = spot else {
+        unsafe { tip_take_down(state) };
         return;
     };
-    let Some(row) = row else {
-        unsafe { tip_left(state) };
+    if state.tip_spot.as_ref() != Some(&spot) {
+        // A new place is a new wait, and whatever was said about the last one goes.
+        unsafe { tip_take_down(state) };
+        state.tip_spot = Some(spot);
+        state.tip_since = Some(Instant::now());
+        return;
+    }
+    if state
+        .tip_since
+        .is_none_or(|since| since.elapsed() < TIP_DELAY)
+    {
+        return;
+    }
+    let Some(spot) = state.tip_spot.clone() else {
         return;
     };
-    let Some(text) = crate::ui::tip::combo(id, Some(row)) else {
+    let Some(text) = crate::ui::tip::combo(spot.id, spot.value) else {
         return;
     };
-    // A row of the list is one tip after another as the hand travels down it, so it is put up at
-    // once rather than waiting out the delay the pointer's resting on a control earns.
-    state.tip_rest = None;
-    crate::ui::tip::show(combo, text, state.palette);
-    state.tip_key = Some(combo.0 as isize);
+    if state
+        .tip_said
+        .as_ref()
+        .is_some_and(|(about, said)| *about == spot.about && said == text)
+    {
+        return;
+    }
+    crate::ui::tip::show_at(spot.anchor, state.hwnd, text, state.palette);
+    state.tip_said = Some((spot.about, text.to_string()));
 }
 
 /// Take the tip down, and forget that it was up.
 unsafe fn tip_take_down(state: &mut State) {
-    if state.tip_key.take().is_some() {
+    if state.tip_said.take().is_some() {
         crate::ui::tip::hide();
     }
 }
 
-/// A combo's dropped list, as its own window: pointed at by the combo, and told about its pointer
-/// through a subclass so the rows can have tips of their own.
-///
-/// **A list is a separate window**, so hovering a row of it is not hovering the combo: the combo's
-/// subclass never sees it, and neither does the editor. `ListBox`-style owner-drawn combos route
-/// their list's messages through the combo only where the combo asked for them, so a subclass on the
-/// list window itself is what gets the pointer over a row.
-/// The child control under the pointer, with the id its tip is written under.
-///
-/// **What the parent's own `WM_MOUSEMOVE` is for**: a control that is not one of the editor's
-/// interactive ones — the status line, a label — has no subclass of its own and no message of its
-/// own to hang a tip on, so the window underneath asks instead, once the pointer has come to rest.
-fn child_under_cursor(hwnd: HWND) -> Option<(HWND, i32)> {
-    let mut point = POINT::default();
-    unsafe { GetCursorPos(&mut point) }.ok()?;
-    let mut client = point;
-    let _ = unsafe { ScreenToClient(hwnd, &mut client) };
-    let child = unsafe { ChildWindowFromPoint(hwnd, client) };
-    if child.0.is_null() || child == hwnd {
-        return None;
-    }
-    let id = id_of_control(hwnd, child)?;
-    Some((child, id))
+/// The pointer left the editor, or something moved under it: the wait starts again from nothing.
+unsafe fn tip_left(state: &mut State) {
+    unsafe { tip_take_down(state) };
+    state.tip_spot = None;
+    state.tip_since = None;
 }
 
-unsafe fn install_list_tips(combo: HWND) {
-    let mut info = COMBOBOXINFO {
-        cbSize: std::mem::size_of::<COMBOBOXINFO>() as u32,
-        ..Default::default()
-    };
-    if unsafe { GetComboBoxInfo(combo, &mut info) }.is_err() || info.hwndList.0.is_null() {
-        return;
-    }
-    unsafe { install_tip_list_subclass(info.hwndList, combo) };
-}
-
-unsafe fn install_tip_list_subclass(list: HWND, combo: HWND) {
-    let orig = unsafe {
-        SetWindowLongPtrW(
-            list,
-            GWLP_WNDPROC,
-            tip_list_proc as *const () as usize as isize,
-        )
-    };
-    let orig_proc: WNDPROC = unsafe { std::mem::transmute(orig) };
-    let data = Box::into_raw(Box::new(TipListSubclass {
-        orig_proc,
-        combo,
-        row: None,
-    }));
-    unsafe { SetWindowLongPtrW(list, GWLP_USERDATA, data as isize) };
-}
-
-struct TipListSubclass {
-    orig_proc: WNDPROC,
-    combo: HWND,
-    /// The row last announced, so one row is one tip rather than one a mouse pixel.
-    row: Option<usize>,
-}
-
-unsafe extern "system" fn tip_list_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut TipListSubclass;
-    let Some(sub) = (unsafe { raw.as_mut() }) else {
-        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-    };
-    let orig_proc = sub.orig_proc;
-
-    match msg {
-        WM_MOUSEMOVE => {
-            let answer = unsafe { SendMessageW(hwnd, 0x0199, WPARAM(0), lparam) }.0 as u32;
-            let row = usize::try_from(answer & 0xFFFF).ok().filter(|index| {
-                // `LB_ITEMFROMPOINT` clamps to the nearest row and says whether the point was inside
-                // one; a point past the last row is no row at all.
-                (answer >> 16) & 1 == 0
-                    && (*index as isize)
-                        < unsafe { SendMessageW(hwnd, LB_GETCOUNT, WPARAM(0), LPARAM(0)) }.0
-            });
-            if row != sub.row {
-                sub.row = row;
-                unsafe { announce_list_row(sub.combo, row) };
-            }
-            return unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
-        }
-        WM_MOUSELEAVE => {
-            sub.row = None;
-            unsafe { announce_list_row(sub.combo, None) };
-        }
-        WM_NCDESTROY => {
-            unsafe {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(raw));
-            }
-            return unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
-        }
-        _ => {}
-    }
-
-    unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
-}
-
-/// A row of a combo's list was pointed at, or the list was left: tell the editor, which owns the tip.
-unsafe fn announce_list_row(combo: HWND, row: Option<usize>) {
-    let parent = unsafe { GetParent(combo) }.unwrap_or_default();
-    let _ = unsafe {
-        PostMessageW(
-            parent,
-            WM_TIP_LIST_ROW,
-            WPARAM(combo.0 as usize),
-            LPARAM(row.map_or(-1, |row| row as isize)),
-        )
-    };
+/// The id a label column stands for, where `control` is one of the editor's labels.
+fn label_id_of(hwnd: HWND, control: HWND) -> Option<i32> {
+    LABEL_CONTROLS
+        .iter()
+        .copied()
+        .enumerate()
+        .find(|(index, _)| {
+            control_of(hwnd, ID_LABEL_BASE + *index as i32).is_some_and(|label| label == control)
+        })
+        .map(|(_, control_id)| control_id)
 }
 
 unsafe fn set_fields_enabled(state: &State, enabled: bool) {
@@ -7136,6 +7077,97 @@ mod tests {
             assert_eq!(
                 state.presets[0].sibling_windows,
                 CustomSiblingWindows::CloakAndHide
+            );
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// **The reading the tip is made of**: a point over a row's label is that row, a point over a
+    /// control is that control, and a point over a combo's field is the value it holds.
+    ///
+    /// This is the part that was wrong before it was a reading at all: a label is a `STATIC` without
+    /// `SS_NOTIFY`, so it sends the window nothing about the pointer, and a schedule that waited to be
+    /// told about it never ran.
+    #[test]
+    fn the_pointer_over_a_label_asks_for_that_row_and_over_a_control_for_that_control() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            if state.presets.is_empty() {
+                let _ = DestroyWindow(hwnd);
+                return;
+            }
+            fill_fields(state);
+            lay_out(state);
+
+            // A point in the middle of a label column names the control beside it.
+            let label = GetDlgItem(hwnd, ID_LABEL_BASE + 6).unwrap_or_default();
+            let mut label_box = RECT::default();
+            let _ = GetWindowRect(label, &mut label_box);
+            let over_label = POINT {
+                x: (label_box.left + label_box.right) / 2,
+                y: (label_box.top + label_box.bottom) / 2,
+            };
+            let spot = tip_spot_at(state, over_label).expect("a label column is part of a row");
+            assert_eq!(
+                spot.id, ID_CHILD_SCOPE,
+                "the sixth label is `Child Processes`' own words"
+            );
+            let children = GetDlgItem(hwnd, ID_CHILD_SCOPE).unwrap_or_default();
+            assert_eq!(
+                spot.about, children.0 as isize,
+                "a label asks for the control beside it"
+            );
+            // The tip stands over the row, not over the words: its box is the field's own.
+            let mut field = RECT::default();
+            let _ = GetWindowRect(children, &mut field);
+            assert_eq!(spot.anchor.right, field.right);
+            assert_eq!(spot.anchor.top, field.top);
+
+            // A point in the middle of a combo reads the value the combo holds.
+            let over_combo = POINT {
+                x: (field.left + field.right) / 2,
+                y: (field.top + field.bottom) / 2,
+            };
+            let spot = tip_spot_at(state, over_combo).expect("a combo is part of a row");
+            assert_eq!(spot.id, ID_CHILD_SCOPE);
+            assert_eq!(
+                spot.value,
+                Some(child_scope_index(state.presets[0].child_scope)),
+                "a combo says the value it is set to"
+            );
+            assert!(crate::ui::tip::combo(spot.id, spot.value).is_some());
+
+            // A point in the middle of a plain field names that field.
+            let args = GetDlgItem(hwnd, ID_ARGUMENTS).unwrap_or_default();
+            let mut args_box = RECT::default();
+            let _ = GetWindowRect(args, &mut args_box);
+            let over_args = POINT {
+                x: (args_box.left + args_box.right) / 2,
+                y: (args_box.top + args_box.bottom) / 2,
+            };
+            let spot = tip_spot_at(state, over_args).expect("a field is a control");
+            assert_eq!(spot.id, ID_ARGUMENTS);
+            assert_eq!(spot.value, None);
+
+            // A point outside every control of the editor names nothing at all.
+            assert!(
+                tip_spot_at(
+                    state,
+                    POINT {
+                        x: state.rects.titlebar.left + 2,
+                        y: state.rects.titlebar.bottom + 2,
+                    }
+                )
+                .map(|spot| spot.id)
+                .filter(|id| *id != ID_TITLEBAR_MINIMIZE && *id != ID_TITLEBAR_MAXIMIZE)
+                .is_none_or(|id| id > 0),
+                "a point on the window's own background named a control"
             );
 
             let _ = DestroyWindow(hwnd);

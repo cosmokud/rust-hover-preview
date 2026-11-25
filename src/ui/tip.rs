@@ -42,20 +42,20 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetParent, GetWindowLongPtrW, GetWindowRect,
-    IsWindow, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, UpdateLayeredWindow,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, GetWindowRect, IsWindow,
+    RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow, UpdateLayeredWindow,
     GWLP_USERDATA, HWND_TOP, MA_NOACTIVATE, SWP_NOACTIVATE, SW_SHOWNOACTIVATE, ULW_ALPHA,
     WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_NCDESTROY, WM_NCHITTEST, WNDCLASSEXW, WNDCLASS_STYLES,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use super::custom_preview_settings::{
-    rgb, scale, theme_now, Palette, ID_ADD, ID_ARGUMENTS, ID_BROKER_FALLBACK, ID_BROWSE,
-    ID_CAPTURE_TECHNIQUE, ID_CHILD_SCOPE, ID_CLOSE_BUTTON, ID_DELETE, ID_ENABLED, ID_EXE,
-    ID_EXTENSIONS, ID_LIST, ID_NAME, ID_PLACEMENT, ID_PROMOTION_TECHNIQUE, ID_SCALING,
-    ID_SCALING_DOWN, ID_SCALING_PERCENT, ID_SCALING_UP, ID_SEARCH, ID_SIBLING_WINDOWS, ID_STATUS,
-    ID_TITLEBAR_CLOSE, ID_TITLEBAR_MAXIMIZE, ID_TITLEBAR_MINIMIZE, ID_VOLUME, ID_VOLUME_DOWN,
-    ID_VOLUME_ENABLED, ID_VOLUME_UP, ID_VOLUME_VALUE, ID_WINDOW_MODE,
+    rgb, scale, Palette, ID_ADD, ID_ARGUMENTS, ID_BROKER_FALLBACK, ID_BROWSE, ID_CAPTURE_TECHNIQUE,
+    ID_CHILD_SCOPE, ID_CLOSE_BUTTON, ID_DELETE, ID_ENABLED, ID_EXE, ID_EXTENSIONS, ID_LIST,
+    ID_NAME, ID_PLACEMENT, ID_PROMOTION_TECHNIQUE, ID_SCALING, ID_SCALING_DOWN, ID_SCALING_PERCENT,
+    ID_SCALING_UP, ID_SEARCH, ID_SIBLING_WINDOWS, ID_STATUS, ID_TITLEBAR_CLOSE,
+    ID_TITLEBAR_MAXIMIZE, ID_TITLEBAR_MINIMIZE, ID_VOLUME, ID_VOLUME_DOWN, ID_VOLUME_ENABLED,
+    ID_VOLUME_UP, ID_VOLUME_VALUE, ID_WINDOW_MODE,
 };
 
 /// What one control says about itself, and what each of its values says, all of it measured before a
@@ -305,17 +305,6 @@ pub(super) fn combo(id: i32, index: Option<usize>) -> Option<&'static str> {
     Some(row(&wording, index))
 }
 
-/// The editor's own tip for a control that is up and placed, keyed by the control's id.
-///
-/// One call for every road in the editor: a control addresses its tip by the id it was made with, and
-/// the palette is read here rather than passed in, so no road can put a tip up in a stale theme.
-pub(super) fn for_control(control: HWND, id: i32) {
-    let Some(wording) = editor(id) else {
-        return;
-    };
-    show(control, wording.whole, Palette::of(theme_now()));
-}
-
 /// The statement a hovered list row makes for a combo: the value's own sentence, and the control's
 /// when the row is no row at all (`CB_GETCURSEL` answering nothing).
 pub(super) fn row(wording: &Wording, index: Option<usize>) -> &'static str {
@@ -427,24 +416,18 @@ pub(super) fn hide() {
     });
 }
 
-/// Put a tip up for `about`, saying `run`, standing off the control's own box.
+/// Put a tip up, standing off `anchor` — a box in screen pixels rather than a window.
 ///
-/// A run that has not changed about the same window is a `SetWindowPos` of a surface that already
-/// says it; a run that has changed is one composition and one repaint.
-pub(super) fn show(about: HWND, run: &str, palette: Palette) {
-    if run.is_empty() || about.0.is_null() {
+/// **A box and not a control**, because half of what the editor shows is not a control: a row's tip
+/// stands over the row (the label's words and the field beside them, one line of it), and a value in a
+/// dropped list stands over the combo it belongs to. The window a tip is owned by is the editor, so it
+/// stays above it and goes with it.
+pub(super) fn show_at(anchor: RECT, owner: HWND, run: &str, palette: Palette) {
+    if run.is_empty() || owner.0.is_null() {
         return;
     }
     ensure_class();
-    let owner = unsafe { GetParent(about) }.unwrap_or_default();
-    if owner.0.is_null() {
-        return;
-    }
-    let dpi = unsafe { GetDpiForWindow(about) }.max(96) as i32;
-    let mut anchor = RECT::default();
-    if unsafe { GetWindowRect(about, &mut anchor) }.is_err() {
-        return;
-    }
+    let dpi = unsafe { GetDpiForWindow(owner) }.max(96) as i32;
 
     let held = SHOWING
         .with(|showing| *showing.borrow())
@@ -624,6 +607,11 @@ unsafe fn compose(hwnd: HWND, tip: &mut Tip, run: &str, palette: Palette, dpi: i
     );
     canvas.fill(body, radius, palette.border, 1.0);
     canvas.fill(body.inset(1.0), (radius - 1.0).max(0.0), palette.card, 1.0);
+    // **The card is opaque, and a layered window is what its pixels say.** `UpdateLayeredWindow`
+    // takes each pixel's alpha as given — the one call it does not honour is `LWA_OPAQUE` — and a
+    // card whose every pixel was blended over an empty surface came out at about half the coverage
+    // it was drawn at: the shadow read, and the words inside it did not.
+    canvas.opaque(body, radius);
     canvas.text(
         font,
         RECT {
@@ -701,7 +689,22 @@ unsafe fn present(hwnd: HWND, tip: &Tip) {
         return;
     }
     let old = unsafe { SelectObject(mem_dc, HGDIOBJ(dib.0)) };
-    let dst = POINT { x: 0, y: 0 };
+    // **The destination is a screen point**, and this update is the one window in the app whose
+    // origin it decides: `UpdateLayeredWindow` moves the window to it as well as painting it, so a
+    // tip composed while the window stood at `(0, 0)` would otherwise be put there.
+    let mut origin = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut origin) }.is_err() {
+        origin = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+    }
+    let dst = POINT {
+        x: origin.left,
+        y: origin.top,
+    };
     let size = SIZE {
         cx: width,
         cy: height,
@@ -889,6 +892,28 @@ impl Canvas {
 
     fn pixels(&self) -> &[u32] {
         &self.pixels
+    }
+
+    /// Make a shape **opaque inside its own outline**: the card's coverage is one everywhere the
+    /// rounded box holds, so a pixel of the words inside it is never composited against the desktop
+    /// behind the tip. The outline itself keeps the anti-aliasing `fill` blended it with, which is
+    /// what rounds the corner rather than stepping it.
+    fn opaque(&mut self, bounds: Box_, radius: f32) {
+        let cx = (bounds.left + bounds.right) * 0.5;
+        let (ix0, iy0, ix1, iy1) = self.area(bounds, 0.0);
+        for y in iy0..iy1 {
+            let py = y as f32 + 0.5;
+            let core = Self::covered_half(bounds, radius, py);
+            if core <= 0.0 {
+                continue;
+            }
+            let core_x0 = ((cx - core).round() as i32).clamp(ix0, ix1);
+            let core_x1 = ((cx + core).round() as i32).clamp(core_x0, ix1);
+            for x in core_x0..core_x1 {
+                let index = (y as usize) * (self.w as usize) + x as usize;
+                self.pixels[index] |= 0xFF00_0000;
+            }
+        }
     }
 
     fn blend(&mut self, x: i32, y: i32, colour: COLORREF, alpha: f32) {
@@ -1201,6 +1226,44 @@ mod tests {
         unsafe {
             let _ = DeleteObject(HGDIOBJ(font.0));
         }
+    }
+
+    /// **The card is opaque where it is a card.** A layered window is what its pixels say, and a card
+    /// blended over an empty surface came out at about half its coverage: the shadow stood and the
+    /// words inside it did not. Every pixel the rounded box holds is at full alpha, and the corner the
+    /// outline rounds keeps the anti-aliasing that makes it a curve.
+    #[test]
+    fn the_cards_own_pixels_are_opaque_and_its_corners_are_not() {
+        let palette = Palette::of(crate::config::config::TextTheme::Dark);
+        let mut tip = Tip {
+            pixels: Vec::new(),
+            width: 0,
+            height: 0,
+            text: String::new(),
+            palette,
+        };
+        // `compose` paints the window it is handed; with none, it still composes the surface.
+        unsafe { compose(HWND::default(), &mut tip, "Disabled", palette, 96) }
+            .expect("the tip was never composed");
+
+        let w = tip.width as usize;
+        let alpha_at = |x: usize, y: usize| (tip.pixels[y * w + x] >> 24) & 0xFF;
+        let shadow = scale(SHADOW_LOGICAL, 96) as usize;
+        let middle = (shadow + 3, tip.height as usize / 2);
+        assert_eq!(
+            alpha_at(middle.0, middle.1),
+            255,
+            "the card's own pixels are not opaque"
+        );
+        // The very corner of the surface is outside the card entirely: nothing of it is drawn there.
+        assert_eq!(alpha_at(0, 0), 0, "a tip leaked a pixel outside its shadow");
+        // The corner of the card's box is rounded, so it is neither nothing nor solid.
+        let corner = (shadow, shadow);
+        let rounded = alpha_at(corner.0, corner.1);
+        assert!(
+            rounded < 255,
+            "the card's corner is square rather than rounded: {rounded}"
+        );
     }
 
     /// Where a tip stands: above the control where the work area has room, below it where it has
