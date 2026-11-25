@@ -232,10 +232,23 @@ pub(in super::super) fn reset_settings_from_tray() {
     // same way round as the toggle beside it: a reset that turns it back on writes the
     // entry, or the file and the machine would disagree about what starts this app.
     if run_at_startup != startup::is_startup_enabled() {
-        if run_at_startup {
-            startup::enable_startup();
+        let outcome = if run_at_startup {
+            startup::enable_startup()
         } else {
-            startup::disable_startup();
+            startup::disable_startup()
+        };
+
+        // And the file keeps what the machine holds rather than what the reset asked for, for the
+        // reason the toggle does (see `toggles::toggle_startup`).
+        let held = startup::is_startup_enabled();
+        if held != run_at_startup {
+            commit_config(|config| {
+                config.run_at_startup = held;
+            });
+        }
+
+        if !outcome.settled() {
+            dialogs::report_startup_failure(outcome);
         }
     }
 

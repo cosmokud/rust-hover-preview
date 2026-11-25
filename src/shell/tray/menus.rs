@@ -114,6 +114,18 @@ unsafe fn try_show_context_menu(hwnd: HWND) -> Option<()> {
     // is no menu at all (see `updates::note_a_menu_is_open`).
     updates::note_a_menu_is_open(true);
     let open_guard = MenuOpenGuard;
+
+    // **And the startup entry is asked about at every opening of this menu, not only at a start.**
+    // It is three registry reads in the ordinary case — the value, the flag Windows keeps beside it,
+    // and the command line in it — and what it buys is that the row a user is about to read and the
+    // entry a logon will run are the same fact: a `config.ini` hand-edited to `run_at_startup=true`
+    // is written here, and an entry a cleaner removed, switched off in Windows, or left pointing at
+    // another copy is put right before the checkmark is drawn from it (see
+    // `startup::honour_the_configuration`). It is taken before the snapshot below so that the file's
+    // own copy of the setting, which this can put right, is read after the correcting rather than
+    // before it.
+    crate::app::startup::honour_the_configuration();
+
     // Lock released before the publish: the message a publish sends locks `CONFIG` again on
     // the preview loop. A level this process wrote itself is not an edit, and is not reported
     // as one (see `reload_from_disk_keeping_our_own_levels`).
@@ -134,6 +146,7 @@ unsafe fn try_show_context_menu(hwnd: HWND) -> Option<()> {
     }
 
     updates::request_check();
+
     populate_context_menu(menu, &snap)?;
 
     // Get cursor position and show menu
@@ -1783,20 +1796,38 @@ pub(super) unsafe fn populate_context_menu(
         w!("Silent Auto-Update"),
     );
 
-    // Add "Run at Startup" with checkmark: what starts this app is the entry,
-    // and the two can be made to differ from outside this app.
-    let startup_enabled = startup::is_startup_enabled();
+    // Add "Run at Startup" with checkmark: what starts this app is the entry, and the two can be
+    // made to differ from outside this app. **The entry is asked twice, because Windows keeps two
+    // facts about it**: the value under `Run` is the entry, and the flag under `StartupApproved\\Run`
+    // is whether a logon is allowed to run it — an entry turned off in Task Manager, or in
+    // Settings → Apps → Startup, is a value that is there and starts nothing, and a checkmark
+    // drawn from the value alone would be a yes on a machine where nothing happens. What is left of
+    // that case is said in the label, since that entry is one click away from being put back.
+    let startup_present = startup::is_entry_present();
+    let startup_enabled = startup_present && startup::is_entry_enabled();
+    // And the one setting this app cannot undo from here: an executable marked *Run this program as
+    // an administrator* is one Windows will never start from a `Run` value, because it never
+    // elevates one. The row says so rather than showing a checkmark over an entry that does nothing.
+    let startup_elevated = startup::entry_would_ask_for_elevation();
     let flags = MF_STRING
         | if startup_enabled {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
+    let label = if startup_elevated {
+        "Run at Startup (needs Run as administrator turned off)"
+    } else if startup_present && !startup_enabled {
+        "Run at Startup (turned off in Windows)"
+    } else {
+        "Run at Startup"
+    };
+    let label_wide: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
     let _ = AppendMenuW(
         system_menu,
         flags,
         ID_TRAY_STARTUP as usize,
-        w!("Run at Startup"),
+        PCWSTR(label_wide.as_ptr()),
     );
 
     let _ = AppendMenuW(system_menu, MF_SEPARATOR, 0, PCWSTR::null());
