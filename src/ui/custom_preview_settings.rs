@@ -754,6 +754,10 @@ struct State {
     /// dropped list is a window of its own that routes nothing back. One reading covers all of them
     /// and cannot disagree with itself.
     tip_spot: Option<TipSpot>,
+    /// How many times the tip's clock has been read. Nothing in the editor turns on it: it is what a
+    /// test holds the window to, because a `WM_TIMER` a window does not answer and one it does both
+    /// come back as `0` (see `the_tip_timer_is_armed_and_answered_by_the_editor_itself`).
+    tip_ticks: u32,
     /// Since when that spot had the pointer, and what was last said about it, so a tick that finds
     /// the pointer where it was does nothing at all.
     tip_since: Option<Instant>,
@@ -1301,6 +1305,20 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 unsafe { lay_out(state) };
             }
             LRESULT(0)
+        }
+        // **The tip's clock, on the window that armed it.** One tick reads where the pointer is
+        // standing and says what that is once it has stood there long enough — asked of the desktop
+        // rather than told by a control, because a label is a `STATIC` without `SS_NOTIFY`, the
+        // titlebar's three buttons are drawn rather than laid out, and a combo's dropped list is a
+        // window of its own that routes nothing back (see `tip_tick`).
+        WM_TIMER => {
+            if wparam.0 == TIP_TIMER {
+                if let Some(state) = unsafe { state_of(hwnd) } {
+                    unsafe { tip_tick(state) };
+                }
+                return LRESULT(0);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_GETMINMAXINFO => {
             let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
@@ -2044,6 +2062,7 @@ unsafe fn build(hwnd: HWND) -> State {
         pressed_tb: None,
         tracking_mouse: false,
         tip_spot: None,
+        tip_ticks: 0,
         tip_since: None,
         tip_said: None,
         rects: LayoutRects {
@@ -2624,16 +2643,6 @@ unsafe extern "system" fn stepper_subclass_proc(
             return LRESULT(0);
         }
         WM_TIMER => {
-            // **The tip's clock.** One tick reads where the pointer is standing and says what that is
-            // once it has stood there long enough — asked of the desktop rather than told by a
-            // control, because a label, a drawn titlebar button and a row of a dropped list all have
-            // no message to tell it with (see `tip_tick`).
-            if wparam.0 == TIP_TIMER {
-                if let Some(state) = unsafe { state_of(hwnd) } {
-                    unsafe { tip_tick(state) };
-                }
-                return LRESULT(0);
-            }
             if wparam.0 == STEP_TIMER_INITIAL {
                 unsafe {
                     let _ = KillTimer(hwnd, STEP_TIMER_INITIAL);
@@ -5515,6 +5524,7 @@ fn list_row_at(list: HWND, screen: POINT) -> (usize, bool) {
 /// process being told anything at all, and a timer that had to be armed by the movement it is meant to
 /// notice would never be armed for those.
 unsafe fn tip_tick(state: &mut State) {
+    state.tip_ticks = state.tip_ticks.saturating_add(1);
     let spot = tip_spot_now(state);
     let Some(spot) = spot else {
         if state.tip_said.is_some() || state.tip_spot.is_some() {
@@ -7271,6 +7281,113 @@ pub(super) mod tests {
             state.tip_since = None;
             tip_tick(state);
             assert!(!crate::ui::tip::is_up(), "the tip outlived the pointer");
+
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// **The tip's clock is answered by the window that armed it.** A `SetTimer` sends `WM_TIMER` to
+    /// the procedure of the window it was armed on, so an arm in `build` and an answer in a control's
+    /// own subclass is a timer nobody ever hears: the tip's whole schedule sat in the stepper
+    /// button's procedure, where the editor never sent a message, and no tip appeared at all.
+    #[test]
+    fn the_tip_timer_is_armed_and_answered_by_the_editor_itself() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            // The arm: one timer on the editor's own window, for the window's whole life.
+            assert!(
+                GetWindowLongPtrW(hwnd, GWLP_USERDATA) != 0,
+                "the editor was never built"
+            );
+            // The answer: a `WM_TIMER` carrying the tip's id, sent to the editor, runs the reading
+            // rather than falling through to the default procedure. `tip_spot` is what the reading
+            // writes, so a tick that did nothing leaves it as it was.
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            state.tip_spot = None;
+            state.tip_since = None;
+            state.tip_said = None;
+            // A tick over nothing at all still runs: it reads, finds no control, and takes down
+            // whatever was standing. What matters is that the message reached `tip_tick` at all.
+            tip_tick(state);
+            assert!(
+                state.tip_spot.is_none(),
+                "a tick over nothing named a control"
+            );
+
+            // And the message the timer sends is one this window answers: `WM_TIMER` carrying the
+            // tip's id reaches the reading, and one carrying any other id does not.
+            let asked = state.tip_ticks;
+            SendMessageW(hwnd, WM_TIMER, WPARAM(TIP_TIMER), LPARAM(0));
+            let answered = state_of(hwnd).map_or(asked, |state| state.tip_ticks);
+            assert_eq!(
+                answered,
+                asked + 1,
+                "the tip's timer was armed on this window and answered somewhere else"
+            );
+            SendMessageW(hwnd, WM_TIMER, WPARAM(TIP_TIMER + 90), LPARAM(0));
+            assert_eq!(
+                state_of(hwnd).map_or(answered, |state| state.tip_ticks),
+                answered,
+                "a timer this window never armed was read as the tip's"
+            );
+
+            crate::ui::tip::hide();
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// **A tip is a window, and a window nothing destroys is a leak.** Every road out of a tip — the
+    /// pointer leaving, the sentence changing, the editor closing — has to destroy the popup it made.
+    #[test]
+    fn no_tip_outlives_the_editor_that_asked_for_it() {
+        let Some(hwnd) = create_window() else {
+            panic!("the window was never made");
+        };
+        unsafe {
+            let Some(state) = state_of(hwnd) else {
+                panic!("the window kept no state");
+            };
+            if state.presets.is_empty() {
+                let _ = DestroyWindow(hwnd);
+                return;
+            }
+            fill_fields(state);
+            lay_out(state);
+            let before = crate::ui::tip::live_windows();
+
+            // Three sentences about three different rows, put up one after another.
+            for index in [6, 7, 8] {
+                let label = GetDlgItem(hwnd, ID_LABEL_BASE + index).unwrap_or_default();
+                let mut box_ = RECT::default();
+                let _ = GetWindowRect(label, &mut box_);
+                let spot = tip_spot_at(
+                    state,
+                    POINT {
+                        x: (box_.left + box_.right) / 2,
+                        y: (box_.top + box_.bottom) / 2,
+                    },
+                )
+                .expect("the label named no row");
+                tip_say(state, &spot);
+            }
+            assert!(
+                crate::ui::tip::live_windows() <= before + 1,
+                "three sentences about three rows left {} tips standing",
+                crate::ui::tip::live_windows() - before
+            );
+
+            // Leaving the window takes the last one with it.
+            tip_left(state);
+            tip_take_down(state);
+            assert_eq!(
+                crate::ui::tip::live_windows(),
+                before,
+                "a tip outlived the pointer that asked for it"
+            );
 
             let _ = DestroyWindow(hwnd);
         }

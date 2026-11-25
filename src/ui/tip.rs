@@ -349,6 +349,19 @@ fn tip_of(hwnd: HWND) -> Option<&'static mut Tip> {
     unsafe { raw.as_mut() }
 }
 
+/// How many tip windows this process has made and not destroyed.
+///
+/// **A count and not a nicety**: a popup is a window of the desktop until it is destroyed, and a tip
+/// whose window is left standing after its sentence was taken down is a leak that nothing else in the
+/// app would ever see. The editor's tests hold it to zero.
+#[cfg(test)]
+static LIVE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(test)]
+pub(super) fn live_windows() -> u32 {
+    LIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 thread_local! {
     /// The tip this thread has up, if any: one at a time, because a pointer is over one control at a
     /// time. Held so that a run which has not changed is a window moved rather than one rebuilt.
@@ -375,6 +388,8 @@ unsafe extern "system" fn tip_proc(
                     drop(Box::from_raw(raw));
                 }
             }
+            #[cfg(test)]
+            LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
@@ -552,6 +567,8 @@ unsafe fn make_tip(owner: HWND, run: &str, palette: Palette, dpi: i32) -> Option
         )
     }
     .ok()?;
+    #[cfg(test)]
+    LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
     let tip = Box::new(Tip {
         pixels: Vec::new(),
