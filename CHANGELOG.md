@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`Run at Startup` is answered by the machine, and written by the setting** — the row's checkmark is drawn from the entry **and** from the flag Windows keeps beside it under `Explorer\StartupApproved\Run`, so an entry turned off in Task Manager or in **Settings → Apps → Startup** reads **Run at Startup (turned off in Windows)** rather than a yes on a machine where nothing starts — and an executable marked *Run this program as an administrator* reads **Run at Startup (needs Run as administrator turned off)**, since a `Run` value is never elevated. Clicking the row writes the command and puts that flag back on in one go. `run_at_startup=true` is now an instruction as well as a record, asked at every start **and every opening of the tray menu** (three registry reads when nothing is wrong): an entry a cleaner removed, one Windows has been told not to run, one missing, and one naming a copy that has since moved are each written again, and the file is brought back into step with what the machine holds in the same pass — where before only a first run ever wrote the entry and a missing one was never brought back.
+- **A startup entry written from an elevated run lands in the account at the desktop** — where the elevation prompt was answered by a *different* administrator's credentials, `HKEY_CURRENT_USER` is that administrator's hive and an entry written there is one no logon of the user at the keyboard reads. The SID of the desktop's own account is read from the Shell's token and the entry is written under `HKEY_USERS\<that SID>\…` instead (`app::elevation`), with a fallback to `HKEY_CURRENT_USER` where the account's hive is not loaded.
+- **A document, ebook, page or font is drawn on an elevated run** — WebView2 refuses to start its browser process from an elevated token, which left every preview that engine draws with nothing in it on a machine where this app was started as an administrator. `--no-sandbox` is passed where the token is elevated, and only there.
+
+### Changed
+
+- **The startup value is written quoted, and into a `Run` key that is created if it is gone** — a folder with a space in it is one path to `CreateProcess` rather than a path and half an argument, and a `Run` key another tool deleted is written rather than silently failing to be opened.
+- **A startup write that the machine refuses says so** — `enable_startup`/`disable_startup` answer an `Outcome` rather than nothing, `config.ini` keeps what the registry really holds rather than what was asked for, and a refused write is reported in a box naming the key instead of leaving a checkmark that flips back by itself.
+
 ## [0.6.2] - 2026-11-25
 
 ### Added
