@@ -104,6 +104,7 @@ fn a_line(text: &str) -> Vec<FrameLine> {
             x: 0,
             width: text.chars().count() as i32 * 10,
             text: text.to_string(),
+            advances: None,
         }],
         source: (0, 0),
     }]
@@ -367,6 +368,7 @@ fn a_third_press_takes_the_whole_of_the_line_under_the_hand() {
             x: 0,
             width: text.chars().count() as i32 * 10,
             text: text.to_string(),
+            advances: None,
         }],
         source,
     };
@@ -1570,5 +1572,267 @@ fn a_find_is_drawn_over_the_text_and_never_over_the_numbers() {
     assert_eq!(
         marks_over_the_numbers, 0,
         "and nothing of the mark reaches the numbers standing beside the text"
+    );
+}
+
+/// **A fixed-pitch face is one number a character only for the characters it carries.** Consolas has
+/// no CJK at all, and GDI draws a Chinese glyph out of a font it links in, at a width of its own — a
+/// width a count of characters cannot know. A page laid out at one advance a character was laid out
+/// shorter than it was painted: every run after the first Chinese one landed inside the ink of the
+/// one before it, and the tail of each was clipped at the box it was given. This is the shape of the
+/// file that showed it — a mod's readme, Chinese and Latin in one word and on one line — and what is
+/// asserted is that a run is as wide as its own characters are drawn and that nothing is cut off.
+#[test]
+fn a_line_of_chinese_and_latin_is_laid_out_as_wide_as_it_is_drawn() {
+    let dir = scratch("mixed-script");
+    let source = dir.join("mixed.txt");
+    fs::write(
+        &source,
+        "指甲Nail\n高跟前置High heel button\n手饰Hand Jewelry\n",
+    )
+    .expect("a written page");
+
+    let page = render_scrolled(&source, 0, 600, 200, 96, options(), None, None).expect("a page");
+
+    for line in &page.lines {
+        for pair in line.runs.windows(2) {
+            assert!(
+                pair[1].x >= pair[0].x + pair[0].width,
+                "{:?} is placed inside the run before it: {} < {}",
+                pair[1].text,
+                pair[1].x,
+                pair[0].x + pair[0].width
+            );
+        }
+
+        // The ink of the last run of each line is inside the frame, which is what a run clipped at a
+        // box counted too narrow lost.
+        let last = line.runs.last().expect("a run of text");
+        assert!(
+            last.x + last.width <= page.width as i32,
+            "{:?} runs past the page: {} > {}",
+            last.text,
+            last.x + last.width,
+            page.width
+        );
+    }
+
+    // A run holding a character the face has no glyph for carries the width of each of its own
+    // characters, because one number a character does not say what GDI drew them at.
+    let first = page.lines[0].runs.first().expect("the line's first run");
+    assert_eq!(first.text, "指甲Nail");
+    let advances = first
+        .advances
+        .as_deref()
+        .expect("a run of characters the face has no glyph for is measured");
+    assert_eq!(
+        advances.len(),
+        first.text.chars().count(),
+        "one width per character of the run"
+    );
+    assert_eq!(
+        advances.iter().sum::<i32>(),
+        first.width,
+        "and the run is as wide as its characters say it is"
+    );
+    assert!(
+        advances[0] != advances[2],
+        "a Chinese glyph is not drawn at the advance of a Latin one, which is what the count did not know"
+    );
+
+    // A line whose word begins with the Chinese is placed at the measured width of the word before
+    // it, not at a counted one: a count would have put every run of the line a glyph's worth of
+    // pixels too far to the left, which is the overlap the fixture showed.
+    let mixed = page.lines[1]
+        .runs
+        .iter()
+        .find(|run| run.text == "高跟前置High")
+        .expect("the second line's Chinese word");
+    let measured = mixed.advances.as_deref().expect("a measured run");
+    assert_eq!(
+        mixed.width,
+        measured.iter().sum::<i32>(),
+        "the run is as wide as the characters it is drawn from"
+    );
+    assert!(
+        mixed.width
+            > mixed.text.chars().count() as i32 * first.width / first.text.chars().count() as i32,
+        "and wider than the same count of Latin characters"
+    );
+
+    // A word of Latin alone is one cell a character and is not measured at all.
+    assert!(
+        page.lines[1]
+            .runs
+            .iter()
+            .find(|run| run.text == "button")
+            .expect("the Latin word")
+            .advances
+            .is_none(),
+        "Latin is one cell a character and is not measured"
+    );
+}
+
+/// Where a press lands in a run holding characters GDI drew at widths of its own is the character it
+/// is over: the cells are the run's measured ones, not an even split of its width. A press on the
+/// `N` of `指甲Nail` is the third character, and the caret for it is drawn at that cell's own edges.
+#[test]
+fn a_press_on_a_run_of_two_scripts_lands_on_the_character_it_is_over() {
+    let dir = scratch("mixed-press");
+    let source = dir.join("mixed-press.txt");
+    fs::write(&source, "指甲Nail\n").expect("a written page");
+
+    let page = render_scrolled(&source, 0, 600, 120, 96, options(), None, None).expect("a page");
+    let line = page.lines.first().expect("a painted line");
+    let run = line.runs.first().expect("a run of text");
+    let advances = run
+        .advances
+        .as_deref()
+        .expect("the run is measured, since two of its characters are not the face's own");
+
+    // A point on the `N`, in the half of its cell before the middle of it: a caret is placed at the
+    // boundary nearest the point, and the middle of a cell is the boundary after the character.
+    let at = run.x + advances[..2].iter().sum::<i32>() + advances[2] / 4;
+    let middle = line.top + line.height / 2;
+
+    assert_eq!(
+        position_in(&page.lines, at, middle),
+        (0, 2),
+        "a press on the `N` is a press on the third character of the line"
+    );
+
+    // And the caret for that place brings back that cell, which begins where the two Chinese
+    // characters end and is as wide as a Latin one.
+    let caret = caret_rect(&page.lines, (0, 2)).expect("a caret on the page");
+    assert_eq!(caret.left, run.x + advances[0] + advances[1]);
+    assert_eq!(caret.right - caret.left, advances[2]);
+}
+
+/// A line of Chinese too wide for the box breaks where the box runs out, at a character — not where
+/// a count of *Latin* characters would have put it, which is short of the edge and leaves the glyph
+/// after it hanging past. Each of the rows it becomes says which characters of the line it holds and
+/// carries their own widths, so a selection measured across the break is the text the file has.
+#[test]
+fn a_line_of_chinese_is_wrapped_at_the_character_the_box_runs_out_on() {
+    let dir = scratch("mixed-wrap");
+    let source = dir.join("wrap.txt");
+    fs::write(
+        &source,
+        "如果你喜欢我的作品可以进入下方链接给我买份汉堡吗谢谢你一直以来的支持与鼓励\n",
+    )
+    .expect("a written page");
+
+    let options = options();
+    let (_, height) = measure(&source, 320, 400, 96, options).expect("a measured page");
+    let page = render_scrolled(&source, 0, 320, height, 96, options, None, None).expect("a page");
+
+    let rows: Vec<&FrameLine> = page
+        .lines
+        .iter()
+        .filter(|line| line.source.0 == 0)
+        .collect();
+    assert!(
+        rows.len() > 1,
+        "the line is wider than the box and is drawn as more than one row"
+    );
+
+    // Every row is inside the frame, and every row after the first picks the line up where the row
+    // before it stopped: a place in the document is a row and a character of it.
+    let mut next = 0usize;
+    for row in &rows {
+        assert_eq!(
+            row.source.1, next,
+            "each row starts where the one before it stopped"
+        );
+        let last = row.runs.last().expect("a run of text");
+        assert!(
+            last.x + last.width <= page.width as i32,
+            "a row runs past the frame: {} > {}",
+            last.x + last.width,
+            page.width
+        );
+        next = row.source.1
+            + row
+                .runs
+                .iter()
+                .map(|run| run.text.chars().count())
+                .sum::<usize>();
+    }
+    assert_eq!(
+        next,
+        "如果你喜欢我的作品可以进入下方链接给我买份汉堡吗谢谢你一直以来的支持与鼓励"
+            .chars()
+            .count(),
+        "every character of the line is on one of its rows"
+    );
+
+    // The characters a row holds are the widths it was placed with, so the row's own right edge is
+    // where its last glyph ends.
+    for row in &rows {
+        for run in &row.runs {
+            if let Some(advances) = run.advances.as_deref() {
+                assert_eq!(
+                    advances.iter().sum::<i32>(),
+                    run.width,
+                    "{:?} is as wide as its characters",
+                    run.text
+                );
+            }
+        }
+    }
+}
+
+/// A selection's wash and a find's band are cut where the run's own characters end, and the pieces
+/// they cut it into are painted at the columns the run was laid out with: a Chinese run drawn in
+/// pieces went to the glyph it belonged to only because `lpDx` carried those columns, since GDI lays
+/// a piece out from its own first character. What is asserted is that the wash over `Nail` in
+/// `指甲Nail` begins at the `N` and not a glyph short of it.
+#[test]
+fn a_wash_over_latin_after_chinese_begins_at_the_latin() {
+    let dir = scratch("mixed-wash");
+    let source = dir.join("wash.txt");
+    fs::write(&source, "指甲Nail\n").expect("a written page");
+
+    let options = options();
+    let plain = render_scrolled(&source, 0, 320, 120, 96, options, None, None).expect("a page");
+    let selected = render_scrolled(
+        &source,
+        0,
+        320,
+        120,
+        96,
+        options,
+        Some(Selection {
+            anchor: (0, 2),
+            caret: (0, 6),
+        }),
+        None,
+    )
+    .expect("a page with its selection on it");
+
+    let run = plain.lines[0].runs.first().expect("a run of text");
+    let advances = run.advances.as_deref().expect("the run is measured");
+    let latin_begins = run.x + advances[0] + advances[1];
+
+    let changed: Vec<i32> = (0..plain.width as i32)
+        .filter(|x| {
+            (plain.lines[0].top..plain.lines[0].top + plain.lines[0].height).any(|y| {
+                frame_pixel(&plain, *x as u32, y as u32)
+                    != frame_pixel(&selected, *x as u32, y as u32)
+            })
+        })
+        .collect();
+
+    let first = changed.first().copied().expect("the selection is painted");
+    assert_eq!(
+        first, latin_begins,
+        "the wash begins where the two Chinese characters end, not on the split of the run's width"
+    );
+    // An even split of the run's width would have put the third character at a third of 62 — 21
+    // pixels — which is inside the second Chinese glyph.
+    let even_split = run.x + 2 * run.width / run.text.chars().count() as i32;
+    assert!(
+        first > even_split,
+        "the character begins at {first}, further along than the even split's {even_split}"
     );
 }

@@ -14,16 +14,17 @@
 
 use crate::config::config::sanitize_text_font_scale_percent;
 use once_cell::sync::Lazy;
-use std::sync::Mutex;
+use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 use syntect::highlighting::{Color, FontStyle, Style};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, ExtTextOutW,
-    GetTextExtentPoint32W, GetTextMetricsW, SelectObject, SetBkColor, SetBkMode, SetTextColor,
-    TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
-    DEFAULT_CHARSET, DIB_RGB_COLORS, ETO_CLIPPED, ETO_OPAQUE, FF_MODERN, FIXED_PITCH, HBITMAP, HDC,
-    HFONT, HGDIOBJ, OPAQUE, OUT_TT_PRECIS, TEXTMETRICW, TRANSPARENT,
+    GetTextExtentExPointW, GetTextExtentPoint32W, GetTextMetricsW, SelectObject, SetBkColor,
+    SetBkMode, SetTextColor, TextOutW, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, ETO_CLIPPED, ETO_OPAQUE, FF_MODERN,
+    FIXED_PITCH, HBITMAP, HDC, HFONT, HGDIOBJ, OPAQUE, OUT_TT_PRECIS, TEXTMETRICW, TRANSPARENT,
 };
 
 /// Size steps the document model uses: body text, four heading levels.
@@ -43,6 +44,11 @@ pub(crate) const SCROLLBAR_MARGIN_PIXELS: i32 = 4;
 /// Consolas ships with Windows, is fixed pitch, and carries the box-drawing
 /// characters NFO art is made of; bold and italic keep the same advance, which
 /// is what lets a layout measure a line by counting characters.
+///
+/// **Only for the characters the face itself carries.** Consolas has no CJK
+/// glyphs, and GDI draws those out of another font it links in — at a width of
+/// its own, which a count of characters does not know. A run holding one is
+/// measured instead (see [`character_advances`]).
 pub(crate) const FONT_FACE: &str = "Consolas";
 
 pub(crate) const MIN_DPI: u32 = 48;
@@ -134,6 +140,133 @@ pub(crate) fn text_style(style: &Style, level: u8) -> TextStyle {
 
 pub(crate) fn scaled(pixels: i32, scale: f32) -> i32 {
     ((pixels as f32) * scale).round().max(1.0) as i32
+}
+
+// ------------------------------------------------------------- character cells
+
+/// How many distinct runs' character cells are held. A screenful of a page with Chinese in it is a
+/// few hundred, and what is held is what a scroll, a caret and a drag ask for again with no new
+/// text between them.
+const CHARACTER_ADVANCES_MAX_ENTRIES: usize = 2048;
+
+/// What a run's character cells are held by: the face and the size it is drawn at, and the run
+/// itself.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct AdvanceKey {
+    /// The font's own pixel size, which is what a glyph's advance is drawn at: two scales that
+    /// round to the same size are one answer.
+    pixels: i32,
+    style: TextStyleKey,
+    text: String,
+}
+
+thread_local! {
+    /// A 1x1 surface to measure on, made once per thread: `GetTextExtentExPointW` is asked of a
+    /// device context rather than of a font.
+    static MEASURE_SURFACE: RefCell<Option<DibSurface>> = const { RefCell::new(None) };
+
+    static CHARACTER_ADVANCES: RefCell<crate::cache::BoundedCache<AdvanceKey, Arc<[i32]>>> =
+        RefCell::new(crate::cache::BoundedCache::new(CHARACTER_ADVANCES_MAX_ENTRIES));
+}
+
+/// The advance of each character of `text`, in the face and at the size `style` is drawn in.
+///
+/// **A fixed-pitch face is one number a character — for the characters it carries.** Consolas
+/// carries the Latin, the box-drawing and the symbols NFO art is made of, and no CJK at all: a
+/// Chinese glyph is drawn out of a font the system links in, at a width of its own, which is a
+/// width `count * advance` cannot know. A run that is not measured is laid out shorter than it is
+/// drawn: the run after it is placed inside its ink and the tail of it is clipped, which is the
+/// overlap and the eaten text this answers (see `text_preview::layout`).
+///
+/// Only a run holding a character outside ASCII is measured. Everything ASCII is one cell a
+/// character in every style and at every size Consolas is drawn at, so the common page of source
+/// or prose keeps the arithmetic it had and pays nothing for this.
+///
+/// `GetTextExtentExPointW` answers one column per UTF-16 code unit; the units of a character are
+/// folded into the one column that character ends at, so what comes back is one entry per
+/// character and not per code unit — which is what a layout, a caret and a selection count in.
+pub(crate) fn character_advances(style: &TextStyle, text: &str, scale: f32) -> Option<Arc<[i32]>> {
+    if text.is_ascii() {
+        return None;
+    }
+
+    let key = AdvanceKey {
+        pixels: scaled(LEVEL_FONT_PIXELS[style.level as usize], scale),
+        style: TextStyleKey::of(style),
+        text: text.to_string(),
+    };
+
+    if let Some(held) = CHARACTER_ADVANCES.with(|held| held.borrow_mut().get(&key).cloned()) {
+        return Some(held);
+    }
+
+    let advances = measure_character_advances(style, text, scale)?;
+    CHARACTER_ADVANCES.with(|held| {
+        held.borrow_mut().insert(key, Arc::clone(&advances));
+    });
+
+    Some(advances)
+}
+
+/// One measurement of one run, through the thread's own scratch surface.
+fn measure_character_advances(style: &TextStyle, text: &str, scale: f32) -> Option<Arc<[i32]>> {
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    if wide.is_empty() {
+        return None;
+    }
+
+    MEASURE_SURFACE.with(|surface| {
+        let mut surface = surface.borrow_mut();
+        if surface.is_none() {
+            *surface = DibSurface::create(1, 1);
+        }
+        let surface = surface.as_ref()?;
+
+        let font = create_font(
+            scaled(LEVEL_FONT_PIXELS[style.level as usize], scale),
+            style,
+        );
+        if font.0.is_null() {
+            return None;
+        }
+
+        let mut partial = vec![0i32; wide.len()];
+        let mut extent = SIZE::default();
+        let measured = unsafe {
+            let previous = SelectObject(surface.dc, font);
+            let measured = GetTextExtentExPointW(
+                surface.dc,
+                PCWSTR(wide.as_ptr()),
+                wide.len() as i32,
+                i32::MAX,
+                None,
+                Some(partial.as_mut_ptr()),
+                &mut extent,
+            )
+            .as_bool();
+            let _ = SelectObject(surface.dc, previous);
+            let _ = DeleteObject(font);
+            measured
+        };
+
+        if !measured {
+            return None;
+        }
+
+        // A character's own advance is the column it ends at less the column the one before it
+        // ended at, and a character outside the basic plane is two code units folded into one.
+        let mut advances = Vec::with_capacity(text.chars().count());
+        let mut units = 0usize;
+        let mut before = 0i32;
+        for character in text.chars() {
+            units += character.len_utf16();
+            let ends = partial[units - 1];
+            advances.push(ends - before);
+            before = ends;
+        }
+
+        Some(Arc::from(advances))
+    })
 }
 
 // -------------------------------------------------------------------- metrics
@@ -472,7 +605,7 @@ pub(crate) struct FontCache {
     fonts: Vec<(TextStyleKey, HFONT)>,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct TextStyleKey {
     face: &'static str,
     level: u8,
@@ -561,6 +694,14 @@ fn colorref(color: [u8; 3]) -> COLORREF {
 /// outside. The two are one corner for every run of this app but one — the name
 /// of a sound's card, which is drawn whole under a box that does not move while
 /// its own origin does (see `audio_preview`).
+///
+/// `advances` is the width of each character where the face draws them at widths of its own — a
+/// Chinese glyph is drawn out of a font the system links in — and the text is then placed at the
+/// columns the run was laid out with rather than at the ones this piece happens to ask for on its
+/// own: a piece is a run cut at a mark, and GDI lays a piece out from its first character, which is
+/// a column or two away from where the whole run had it (see `character_advances`). Nothing is
+/// passed for a run of a fixed-pitch face's own glyphs, which GDI places where it always did.
+#[allow(clippy::too_many_arguments)] // The piece, its box, its two inks and its columns are one drawing.
 pub(crate) unsafe fn paint_run(
     surface: &DibSurface,
     text: &str,
@@ -568,6 +709,7 @@ pub(crate) unsafe fn paint_run(
     rect: RECT,
     foreground: [u8; 3],
     background: [u8; 3],
+    advances: Option<&[i32]>,
 ) {
     if text.is_empty() {
         return;
@@ -578,6 +720,18 @@ pub(crate) unsafe fn paint_run(
     SetBkColor(surface.dc, colorref(background));
     SetBkMode(surface.dc, OPAQUE);
 
+    // `lpDx` is one entry per UTF-16 code unit, so a character outside the basic plane carries its
+    // own width on its first unit and nothing on the second.
+    let columns = advances.and_then(|advances| {
+        let mut expanded = Vec::with_capacity(wide.len());
+        let mut counted = advances.iter();
+        for character in text.chars() {
+            expanded.push(*counted.next()?);
+            expanded.extend(std::iter::repeat_n(0, character.len_utf16() - 1));
+        }
+        (expanded.len() == wide.len()).then_some(expanded)
+    });
+
     let _ = ExtTextOutW(
         surface.dc,
         origin,
@@ -586,7 +740,7 @@ pub(crate) unsafe fn paint_run(
         Some(&rect),
         PCWSTR(wide.as_ptr()),
         wide.len() as u32,
-        None,
+        columns.as_deref().map(<[i32]>::as_ptr),
     );
 }
 
@@ -626,6 +780,22 @@ impl<'a> RunPainter<'a> {
         foreground: [u8; 3],
         background: [u8; 3],
     ) {
+        self.draw_at(text, origin, rect, style, foreground, background, None);
+    }
+
+    /// `draw` with the columns the run's characters were laid out at, for a piece whose glyphs the
+    /// face would otherwise place at widths of its own (see `paint_run`).
+    #[allow(clippy::too_many_arguments)] // The piece, its box, its two inks and its columns are one drawing.
+    pub(crate) fn draw_at(
+        &mut self,
+        text: &str,
+        origin: i32,
+        rect: RECT,
+        style: &TextStyle,
+        foreground: [u8; 3],
+        background: [u8; 3],
+        advances: Option<&[i32]>,
+    ) {
         if text.is_empty() {
             return;
         }
@@ -643,7 +813,15 @@ impl<'a> RunPainter<'a> {
         }
 
         unsafe {
-            paint_run(self.surface, text, origin, rect, foreground, background);
+            paint_run(
+                self.surface,
+                text,
+                origin,
+                rect,
+                foreground,
+                background,
+                advances,
+            );
         }
     }
 
