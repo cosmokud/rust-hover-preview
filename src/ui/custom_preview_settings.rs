@@ -10,6 +10,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Once;
+use std::time::{Duration, Instant};
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -46,13 +47,14 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BeginDeferWindowPos, CallWindowProcW, CreateWindowExW, DefWindowProcW, DeferWindowPos,
-    DestroyWindow, DispatchMessageW, EndDeferWindowPos, GetClientRect, GetDlgItem, GetMessageTime,
-    GetMessageW, GetNextDlgTabItem, GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW,
-    GetWindowTextW, IsWindow, IsZoomed, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SendMessageW, SetCursor, SetForegroundWindow, SetTimer, SetWindowLongPtrW,
-    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, BS_OWNERDRAW, CBN_SELCHANGE,
-    CBN_SELENDOK, CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL,
+    BeginDeferWindowPos, CallWindowProcW, ChildWindowFromPoint, CreateWindowExW, DefWindowProcW,
+    DeferWindowPos, DestroyWindow, DispatchMessageW, EndDeferWindowPos, GetClientRect,
+    GetCursorPos, GetDlgItem, GetMessageTime, GetMessageW, GetNextDlgTabItem, GetParent,
+    GetSystemMetrics, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, IsWindow, IsZoomed,
+    KillTimer, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
+    SetCursor, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
+    ShowWindow, TranslateMessage, BS_OWNERDRAW, CBN_DROPDOWN, CBN_SELCHANGE, CBN_SELENDOK,
+    CBS_DROPDOWNLIST, CBS_HASSTRINGS, CBS_OWNERDRAWFIXED, CB_ADDSTRING, CB_GETCURSEL,
     CB_GETDROPPEDSTATE, CB_GETLBTEXT, CB_GETLBTEXTLEN, CB_SETCURSEL, CW_USEDEFAULT, EN_CHANGE,
     ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
     HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND,
@@ -91,6 +93,12 @@ static SLIDER_CLASS_REGISTERED: Once = Once::new();
 static TOGGLE_CLASS_REGISTERED: Once = Once::new();
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const TIP_TIMER: usize = 3;
+/// How still the pointer has to stand on one control before its tip is worth putting up, and how
+/// often the clock that decides it ticks. The delay is the platform's own habit: a tip that arrived
+/// as soon as the pointer crossed a row would be a tip on every row the hand sweeps over.
+const TIP_DELAY: Duration = Duration::from_millis(520);
+const TIP_TICK_MS: u32 = 90;
 const PRF_CLIENT: isize = 0x0004;
 
 const WM_BRING_FORWARD: u32 = WM_APP + 17;
@@ -116,6 +124,10 @@ const WM_PRESET_DRAG_END: u32 = WM_APP + 26;
 const WM_AUTOSAVE: u32 = WM_APP + 27;
 // Posted by list_subclass_proc on row pill click; wparam = drawn row index.
 const WM_PRESET_ROW_TOGGLE: u32 = WM_APP + 28;
+/// A row of a combo's dropped list was pointed at (or the list was left): `wparam` is the combo and
+/// `lparam` the row, or `-1` for none. Posted by the list's own subclass, because a list is a window
+/// of its own and its pointer is nothing the combo's subclass is ever told about.
+const WM_TIP_LIST_ROW: u32 = WM_APP + 29;
 
 const TITLEBAR_LOGICAL_H: i32 = 40;
 const TITLEBAR_BTN_W: i32 = 44;
@@ -134,35 +146,40 @@ const SCALING_MAX: u32 = 1000;
 const VOLUME_MIN: u32 = 0;
 const VOLUME_MAX: u32 = 100;
 
-const ID_SEARCH: i32 = 100;
-const ID_ADD: i32 = 101;
-const ID_LIST: i32 = 102;
-const ID_NAME: i32 = 110;
-const ID_EXTENSIONS: i32 = 111;
-const ID_EXE: i32 = 112;
-const ID_BROWSE: i32 = 113;
-const ID_SCALING: i32 = 114;
-const ID_SCALING_PERCENT: i32 = 115;
-const ID_ENABLED: i32 = 116;
-const ID_VOLUME: i32 = 117;
-const ID_VOLUME_VALUE: i32 = 118;
-const ID_WINDOW_MODE: i32 = 119;
-const ID_CAPTURE_TECHNIQUE: i32 = 120;
-const ID_DELETE: i32 = 121;
-const ID_CLOSE_BUTTON: i32 = 122;
-const ID_SCALING_UP: i32 = 123;
-const ID_SCALING_DOWN: i32 = 124;
-const ID_VOLUME_UP: i32 = 125;
-const ID_VOLUME_DOWN: i32 = 126;
-const ID_PROMOTION_TECHNIQUE: i32 = 127;
-const ID_VOLUME_ENABLED: i32 = 128;
-const ID_PLACEMENT: i32 = 129;
-const ID_STATUS: i32 = 130;
-const ID_ARGUMENTS: i32 = 131;
-const ID_CHILD_SCOPE: i32 = 132;
-const ID_BROKER_FALLBACK: i32 = 133;
-const ID_SIBLING_WINDOWS: i32 = 134;
+pub(super) const ID_SEARCH: i32 = 100;
+pub(super) const ID_ADD: i32 = 101;
+pub(super) const ID_LIST: i32 = 102;
+pub(super) const ID_NAME: i32 = 110;
+pub(super) const ID_EXTENSIONS: i32 = 111;
+pub(super) const ID_EXE: i32 = 112;
+pub(super) const ID_BROWSE: i32 = 113;
+pub(super) const ID_SCALING: i32 = 114;
+pub(super) const ID_SCALING_PERCENT: i32 = 115;
+pub(super) const ID_ENABLED: i32 = 116;
+pub(super) const ID_VOLUME: i32 = 117;
+pub(super) const ID_VOLUME_VALUE: i32 = 118;
+pub(super) const ID_WINDOW_MODE: i32 = 119;
+pub(super) const ID_CAPTURE_TECHNIQUE: i32 = 120;
+pub(super) const ID_DELETE: i32 = 121;
+pub(super) const ID_CLOSE_BUTTON: i32 = 122;
+pub(super) const ID_SCALING_UP: i32 = 123;
+pub(super) const ID_SCALING_DOWN: i32 = 124;
+pub(super) const ID_VOLUME_UP: i32 = 125;
+pub(super) const ID_VOLUME_DOWN: i32 = 126;
+pub(super) const ID_PROMOTION_TECHNIQUE: i32 = 127;
+pub(super) const ID_VOLUME_ENABLED: i32 = 128;
+pub(super) const ID_PLACEMENT: i32 = 129;
+pub(super) const ID_STATUS: i32 = 130;
+pub(super) const ID_ARGUMENTS: i32 = 131;
+pub(super) const ID_CHILD_SCOPE: i32 = 132;
+pub(super) const ID_BROKER_FALLBACK: i32 = 133;
+pub(super) const ID_SIBLING_WINDOWS: i32 = 134;
 const ID_LABEL_BASE: i32 = 140;
+/// The titlebar's three buttons are drawn by the window rather than laid out as controls, so their
+/// ids exist only as the keys a tip is written under (see `ui::tip`).
+pub(super) const ID_TITLEBAR_MINIMIZE: i32 = 900;
+pub(super) const ID_TITLEBAR_MAXIMIZE: i32 = 901;
+pub(super) const ID_TITLEBAR_CLOSE: i32 = 902;
 
 const EDIT_IDS: [i32; 7] = [
     ID_SEARCH,
@@ -174,7 +191,7 @@ const EDIT_IDS: [i32; 7] = [
     ID_VOLUME_VALUE,
 ];
 
-const SCALE_CHOICES: [(&str, CustomScaling); 5] = [
+pub(super) const SCALE_CHOICES: [(&str, CustomScaling); 5] = [
     ("Follow Tray -> Scaling", CustomScaling::FollowTray),
     (
         "Fit to screen",
@@ -194,7 +211,7 @@ const SCALE_CHOICES: [(&str, CustomScaling); 5] = [
     ),
 ];
 
-const WINDOW_MODES: [CustomWindowMode; 2] =
+pub(super) const WINDOW_MODES: [CustomWindowMode; 2] =
     [CustomWindowMode::Normal, CustomWindowMode::Borderless];
 
 fn window_mode_label(mode: CustomWindowMode) -> &'static str {
@@ -204,7 +221,7 @@ fn window_mode_label(mode: CustomWindowMode) -> &'static str {
     }
 }
 
-const CAPTURE_TECHNIQUES: [CustomCaptureTechnique; 6] = [
+pub(super) const CAPTURE_TECHNIQUES: [CustomCaptureTechnique; 6] = [
     CustomCaptureTechnique::InProcessHook,
     CustomCaptureTechnique::InvisibleLayered,
     CustomCaptureTechnique::BehindHost,
@@ -240,7 +257,7 @@ fn capture_technique_selectable(technique: CustomCaptureTechnique, hook_dll: boo
     hook_dll || technique != CustomCaptureTechnique::InProcessHook
 }
 
-const CHILD_SCOPES: [CustomChildScope; 3] = [
+pub(super) const CHILD_SCOPES: [CustomChildScope; 3] = [
     CustomChildScope::Disabled,
     CustomChildScope::Children,
     CustomChildScope::ChildrenAndGrandchildren,
@@ -261,7 +278,7 @@ fn child_scope_index(scope: CustomChildScope) -> usize {
         .unwrap_or(0)
 }
 
-const SIBLING_WINDOW_MODES: [CustomSiblingWindows; 3] = [
+pub(super) const SIBLING_WINDOW_MODES: [CustomSiblingWindows; 3] = [
     CustomSiblingWindows::Disabled,
     CustomSiblingWindows::Cloak,
     CustomSiblingWindows::CloakAndHide,
@@ -282,7 +299,7 @@ fn sibling_windows_index(mode: CustomSiblingWindows) -> usize {
         .unwrap_or(SIBLING_WINDOW_MODES.len() - 1)
 }
 
-const PROMOTION_TECHNIQUES: [CustomPromotionTechnique; 2] = [
+pub(super) const PROMOTION_TECHNIQUES: [CustomPromotionTechnique; 2] = [
     CustomPromotionTechnique::DirectPromotion,
     CustomPromotionTechnique::OpenAsNewProcess,
 ];
@@ -294,7 +311,7 @@ fn promotion_technique_label(technique: CustomPromotionTechnique) -> &'static st
     }
 }
 
-const PLACEMENTS: [CustomPlacement; 3] = [
+pub(super) const PLACEMENTS: [CustomPlacement; 3] = [
     CustomPlacement::FollowTray,
     CustomPlacement::Forced,
     CustomPlacement::Hook,
@@ -326,7 +343,7 @@ fn placement_index(placement: CustomPlacement) -> usize {
         .unwrap_or(0)
 }
 
-const EDITOR_LABELS: [&str; 14] = [
+pub(super) const EDITOR_LABELS: [&str; 14] = [
     "Enabled",
     "Name",
     "Extensions",
@@ -342,6 +359,56 @@ const EDITOR_LABELS: [&str; 14] = [
     "Scaling",
     "Volume",
 ];
+
+/// The control each label column explains, in `EDITOR_LABELS` order.
+///
+/// **A label is the row's other half**, and a `STATIC` without `SS_NOTIFY` is transparent to the
+/// pointer: hovering `Broker Fallback`'s words sends the message to the window, not to the label, so
+/// the row's tip is asked for here rather than from a subclass on the label.
+const LABEL_CONTROLS: [i32; EDITOR_LABELS.len()] = [
+    ID_ENABLED,
+    ID_NAME,
+    ID_EXTENSIONS,
+    ID_EXE,
+    ID_ARGUMENTS,
+    ID_CAPTURE_TECHNIQUE,
+    ID_CHILD_SCOPE,
+    ID_BROKER_FALLBACK,
+    ID_SIBLING_WINDOWS,
+    ID_PROMOTION_TECHNIQUE,
+    ID_PLACEMENT,
+    ID_WINDOW_MODE,
+    ID_SCALING,
+    ID_VOLUME_ENABLED,
+];
+
+/// The control a point in the window's own client area is beside, where it is over a label column.
+fn label_row_control_at(hwnd: HWND, x: i32, y: i32) -> Option<(HWND, i32)> {
+    for (index, control_id) in LABEL_CONTROLS.iter().copied().enumerate() {
+        let label = unsafe { GetDlgItem(hwnd, ID_LABEL_BASE + index as i32) }.ok()?;
+        let mut box_ = RECT::default();
+        if unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowRect(label, &mut box_) }
+            .is_err()
+        {
+            continue;
+        }
+        let mut corner = POINT {
+            x: box_.left,
+            y: box_.top,
+        };
+        let _ = unsafe { ScreenToClient(hwnd, &mut corner) };
+        let local = RECT {
+            left: corner.x,
+            top: corner.y,
+            right: corner.x + (box_.right - box_.left),
+            bottom: corner.y + (box_.bottom - box_.top),
+        };
+        if pt_in_rect(local, x, y) {
+            return Some((label, control_id));
+        }
+    }
+    None
+}
 
 fn is_combo(id: u32) -> bool {
     id == ID_WINDOW_MODE as u32
@@ -712,6 +779,12 @@ struct State {
     hovered_tb: Option<TitlebarButton>,
     pressed_tb: Option<TitlebarButton>,
     tracking_mouse: bool,
+    /// Where the pointer is resting and since when, which is the whole of the tip's schedule: a tip
+    /// is put up by the window's own timer once the pointer has stood still on one control, and put
+    /// away the moment it moves or leaves. `tip_key` is the control the tip is about, so a second
+    /// look at the same one restarts nothing.
+    tip_rest: Option<(isize, Instant)>,
+    tip_key: Option<isize>,
     rects: LayoutRects,
     gradient: Option<GradientCache>,
     card_slice: Option<CardSliceCache>,
@@ -1146,6 +1219,29 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 let x = (lparam.0 & 0xFFFF) as i16 as i32;
                 let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
                 let next = state.rects.titlebar_button_at(x, y);
+                // A tip over the titlebar's own buttons is asked for here, because they are drawn by
+                // the window rather than laid out as controls: there is no child to hover.
+                // A titlebar button is drawn rather than laid out, so its "control" is the window
+                // itself and its id is the key the tip is written under.
+                let over = next.map(titlebar_button_id);
+                match over {
+                    Some(id) => unsafe { tip_pointer_over(state, Some(hwnd.0 as isize), Some(id)) },
+                    // A label column is the row's other half: its words explain the control beside
+                    // them, which is where the pointer would be told the same thing.
+                    None => match label_row_control_at(hwnd, x, y) {
+                        Some((label, control_id)) => unsafe {
+                            tip_pointer_over(state, Some(label.0 as isize), Some(control_id))
+                        },
+                        // Anything else the window itself is told about — the gap between two
+                        // controls, the empty part of a card — is not a control, so the tip goes.
+                        None => match child_under_cursor(hwnd) {
+                            Some((child, id)) => unsafe {
+                                tip_pointer_over(state, Some(child.0 as isize), Some(id))
+                            },
+                            None => unsafe { tip_left(state) },
+                        },
+                    },
+                }
                 if next != state.hovered_tb {
                     state.hovered_tb = next;
                     unsafe {
@@ -1167,6 +1263,7 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
         }
         WM_MOUSELEAVE => {
             if let Some(state) = unsafe { state_of(hwnd) } {
+                unsafe { tip_left(state) };
                 state.tracking_mouse = false;
                 if state.hovered_tb.is_some() || state.pressed_tb.is_some() {
                     state.hovered_tb = None;
@@ -1247,6 +1344,8 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
         }
         WM_SIZE => {
             if let Some(state) = unsafe { state_of(hwnd) } {
+                // The controls have moved under the tip, which was placed against where they were.
+                unsafe { tip_left(state) };
                 unsafe { lay_out(state) };
             }
             LRESULT(0)
@@ -1292,6 +1391,14 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
                 } else {
                     unsafe { enabled_toggled(state, enabled) };
                 }
+            }
+            LRESULT(0)
+        }
+        WM_TIP_LIST_ROW => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                let combo = HWND(wparam.0 as *mut _);
+                let row = usize::try_from(lparam.0).ok();
+                unsafe { tip_list_row(state, combo, row) };
             }
             LRESULT(0)
         }
@@ -1408,6 +1515,9 @@ unsafe fn editor_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> L
             LRESULT(0)
         }
         WM_THEME_CHANGED => {
+            if let Some(state) = unsafe { state_of(hwnd) } {
+                unsafe { tip_left(state) };
+            }
             if let Some(state) = unsafe { state_of(hwnd) } {
                 unsafe { apply_theme(state) };
             }
@@ -1988,6 +2098,8 @@ unsafe fn build(hwnd: HWND) -> State {
         hovered_tb: None,
         pressed_tb: None,
         tracking_mouse: false,
+        tip_rest: None,
+        tip_key: None,
         rects: LayoutRects {
             titlebar: RECT::default(),
             sidebar_card: RECT::default(),
@@ -2293,6 +2405,8 @@ unsafe fn build(hwnd: HWND) -> State {
         if !combo.0.is_null() {
             unsafe {
                 install_combo_subclass(combo, hwnd);
+                // A dropped list is a window of its own, so the rows' tips are asked for on it.
+                install_list_tips(combo);
                 apply_combo_list_theme(combo, palette.dark);
             }
         }
@@ -2340,6 +2454,18 @@ unsafe extern "system" fn edit_subclass_proc(
     let orig_proc = sub.orig_proc;
 
     match msg {
+        // A field explains itself too: the pointer resting on it is the pointer resting on a control,
+        // and the clock that decides when a tip is worth putting up is the window's own.
+        WM_MOUSEMOVE => {
+            if let Some(state) = unsafe { state_of(sub.parent) } {
+                unsafe { tip_pointer_over(state, Some(hwnd.0 as isize), Some(sub.id)) };
+            }
+        }
+        WM_MOUSELEAVE => {
+            if let Some(state) = unsafe { state_of(sub.parent) } {
+                unsafe { tip_left(state) };
+            }
+        }
         WM_KEYDOWN => {
             let vk = wparam.0 as u16;
             let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
@@ -2561,6 +2687,14 @@ unsafe extern "system" fn stepper_subclass_proc(
             return LRESULT(0);
         }
         WM_TIMER => {
+            // The tip's own clock: one tick decides whether the pointer has stood still long enough
+            // on one control for its tip to be worth putting up, and stops itself when it has.
+            if wparam.0 == TIP_TIMER {
+                if let Some(state) = unsafe { state_of(hwnd) } {
+                    unsafe { tip_tick(state) };
+                }
+                return LRESULT(0);
+            }
             if wparam.0 == STEP_TIMER_INITIAL {
                 unsafe {
                     let _ = KillTimer(hwnd, STEP_TIMER_INITIAL);
@@ -2626,6 +2760,11 @@ unsafe extern "system" fn stepper_subclass_proc(
                 };
                 let _ = unsafe { TrackMouseEvent(&mut tme) };
             }
+            if let Some(id) = id_of_control_any(hwnd) {
+                if let Some(state) = unsafe { state_of(sub.parent) } {
+                    unsafe { tip_pointer_over(state, Some(hwnd.0 as isize), Some(id)) };
+                }
+            }
         }
         WM_MOUSELEAVE => {
             sub.tracking = false;
@@ -2634,6 +2773,9 @@ unsafe extern "system" fn stepper_subclass_proc(
                 unsafe {
                     let _ = InvalidateRect(hwnd, None, false);
                 }
+            }
+            if let Some(state) = unsafe { state_of(sub.parent) } {
+                unsafe { tip_left(state) };
             }
         }
         WM_NCDESTROY => {
@@ -2787,12 +2929,21 @@ unsafe extern "system" fn button_subclass_proc(
                 };
                 let _ = unsafe { TrackMouseEvent(&mut tme) };
             }
+            if let Some(id) = id_of_control_any(hwnd) {
+                if let Some(state) = unsafe { state_of(GetParent(hwnd).unwrap_or_default()) } {
+                    unsafe { tip_pointer_over(state, Some(hwnd.0 as isize), Some(id)) };
+                }
+            }
         }
         WM_MOUSELEAVE => {
             sub.tracking = false;
             if sub.hovered {
                 sub.hovered = false;
                 let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+            let parent = unsafe { GetParent(hwnd) }.unwrap_or_default();
+            if let Some(state) = unsafe { state_of(parent) } {
+                unsafe { tip_left(state) };
             }
         }
         WM_NCDESTROY => {
@@ -2806,6 +2957,13 @@ unsafe extern "system" fn button_subclass_proc(
     }
 
     unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
+}
+
+/// The id a control answers to, by asking the window it belongs to — which is what a control's own
+/// subclass has and the editor's table is keyed by.
+fn id_of_control_any(control: HWND) -> Option<i32> {
+    let parent = unsafe { GetParent(control) }.ok()?;
+    id_of_control(parent, control)
 }
 
 unsafe fn install_combo_subclass(combo: HWND, parent: HWND) {
@@ -2840,6 +2998,29 @@ unsafe extern "system" fn combo_subclass_proc(
 
     match msg {
         WM_ERASEBKGND => return LRESULT(1),
+        // The pointer on the field itself: a combo says what it is set to.
+        WM_MOUSEMOVE => {
+            let over = Some(hwnd.0 as isize);
+            let id =
+                unsafe { state_of(sub.parent) }.and_then(|state| combo_id_of(state.hwnd, hwnd));
+            if let Some(state) = unsafe { state_of(sub.parent) } {
+                unsafe { tip_pointer_over(state, over, id) };
+            }
+            if !sub.hovered {
+                sub.hovered = true;
+                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            }
+            if !sub.tracking {
+                sub.tracking = true;
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                let _ = unsafe { TrackMouseEvent(&mut tme) };
+            }
+        }
         WM_PAINT => {
             let (p, dpi, font, card_brush) = match unsafe { state_of(sub.parent) } {
                 Some(state) => (state.palette, state.dpi, state.font, Some(state.brush_card)),
@@ -2963,27 +3144,12 @@ unsafe extern "system" fn combo_subclass_proc(
             }
             return LRESULT(0);
         }
-        WM_MOUSEMOVE => {
-            if !sub.hovered {
-                sub.hovered = true;
-                let _ = unsafe { InvalidateRect(hwnd, None, false) };
-            }
-            if !sub.tracking {
-                sub.tracking = true;
-                let mut tme = TRACKMOUSEEVENT {
-                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                    dwFlags: TME_LEAVE,
-                    hwndTrack: hwnd,
-                    dwHoverTime: 0,
-                };
-                let _ = unsafe { TrackMouseEvent(&mut tme) };
-            }
-        }
         WM_MOUSELEAVE => {
             sub.tracking = false;
-            if sub.hovered {
-                sub.hovered = false;
-                let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            sub.hovered = false;
+            let _ = unsafe { InvalidateRect(hwnd, None, false) };
+            if let Some(state) = unsafe { state_of(sub.parent) } {
+                unsafe { tip_left(state) };
             }
         }
         WM_SETFOCUS | WM_KILLFOCUS | WM_ENABLE => {
@@ -4913,6 +5079,11 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                     unsafe { scaling_chosen(state) };
                 }
             }
+            // The list opening is the field's own tip going: the rows are about to be on screen with
+            // tips of their own, and two tips about one combo is one too many.
+            if notice == CBN_DROPDOWN {
+                unsafe { tip_left(state) };
+            }
             // A pick is confirmed by the pick, not by where the focus goes next: a combo keeps
             // the focus after the list closes, so `WM_KILLFOCUS` may be a long way off.
             if notice == CBN_SELENDOK {
@@ -5178,6 +5349,257 @@ unsafe fn fill_fields(state: &mut State) {
     }
     state.loading = false;
     unsafe { set_fields_enabled(state, true) };
+}
+
+/// The id a titlebar button is explained under, which is the key its tip is written at.
+///
+/// The three are drawn by the window rather than laid out as controls, so there is no child window to
+/// hover and no id of the control's own: the tip table's keys for them are these.
+fn titlebar_button_id(button: TitlebarButton) -> i32 {
+    match button {
+        TitlebarButton::Minimize => ID_TITLEBAR_MINIMIZE,
+        TitlebarButton::Maximize => ID_TITLEBAR_MAXIMIZE,
+        TitlebarButton::Close => ID_TITLEBAR_CLOSE,
+    }
+}
+
+/// The control an id belongs to, if it is one this window made.
+fn control_of(hwnd: HWND, id: i32) -> Option<HWND> {
+    unsafe { GetDlgItem(hwnd, id) }.ok()
+}
+
+/// The id a control of this window answers to, or nothing for one that is not this window's.
+fn id_of_control(hwnd: HWND, control: HWND) -> Option<i32> {
+    crate::ui::tip::EXPLAINED
+        .iter()
+        .copied()
+        .find(|id| control_of(hwnd, *id).is_some_and(|held| held == control))
+}
+
+/// A combo's own id, where `control` is one of the editor's combos.
+fn combo_id_of(hwnd: HWND, control: HWND) -> Option<i32> {
+    [
+        ID_CAPTURE_TECHNIQUE,
+        ID_CHILD_SCOPE,
+        ID_SIBLING_WINDOWS,
+        ID_PROMOTION_TECHNIQUE,
+        ID_PLACEMENT,
+        ID_WINDOW_MODE,
+        ID_SCALING,
+    ]
+    .into_iter()
+    .find(|id| control_of(hwnd, *id).is_some_and(|held| held == control))
+}
+
+/// The pointer has come to rest on `control`, which explains itself as `id`, or it has left.
+///
+/// **The whole of the schedule is here.** A control's own `WM_MOUSEMOVE` says where the pointer is;
+/// the window's clock says how long it has been there; and `restart: true` is the calls that mean the
+/// pointer moved somewhere else — a press, a wheel notch, a combo dropping its list — which put the
+/// tip away at once rather than wait out the delay again.
+unsafe fn tip_pointer_over(state: &mut State, control: Option<isize>, id: Option<i32>) {
+    let resting = control.filter(|_| id.is_some());
+    if resting.is_none() {
+        unsafe { tip_take_down(state) };
+        state.tip_rest = None;
+        return;
+    }
+    if state.tip_rest.map(|(held, _)| held) == resting {
+        return;
+    }
+    unsafe { tip_take_down(state) };
+    state.tip_rest = Some((resting.unwrap_or(0), Instant::now()));
+    unsafe { SetTimer(state.hwnd, TIP_TIMER, TIP_TICK_MS, None) };
+}
+
+/// The pointer left whatever it was on, and the tip goes with it.
+unsafe fn tip_left(state: &mut State) {
+    unsafe { tip_take_down(state) };
+    state.tip_rest = None;
+}
+
+/// One tick of the tip's clock: put the tip up where the pointer has stood still long enough.
+unsafe fn tip_tick(state: &mut State) {
+    let Some((resting, since)) = state.tip_rest else {
+        let _ = unsafe { KillTimer(state.hwnd, TIP_TIMER) };
+        return;
+    };
+    if since.elapsed() < TIP_DELAY {
+        return;
+    }
+    let _ = unsafe { KillTimer(state.hwnd, TIP_TIMER) };
+    if state.tip_key == Some(resting) {
+        return;
+    }
+    let control = HWND(resting as *mut _);
+    if !unsafe { IsWindow(control) }.as_bool() {
+        state.tip_rest = None;
+        return;
+    }
+    let Some(id) = id_of_control(state.hwnd, control) else {
+        state.tip_rest = None;
+        return;
+    };
+    // A combo says what it is set to, and the dropped list says what each value is — the control's
+    // own sentence is the one that list's headline is read from.
+    if combo_id_of(state.hwnd, control).is_some() {
+        let choice = unsafe { SendMessageW(control, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+        let index = usize::try_from(choice).ok();
+        if let Some(text) = crate::ui::tip::combo(id, index) {
+            crate::ui::tip::show(control, text, state.palette);
+            state.tip_key = Some(resting);
+            return;
+        }
+    }
+    crate::ui::tip::for_control(control, id);
+    state.tip_key = Some(resting);
+}
+
+/// A row of a dropped list was pointed at, or the list was left.
+///
+/// A list's rows are the values of the combo that owns it, so the tip is that value's own sentence —
+/// `Capture Method` -> `In-Process Hook` explains the hook — and leaving the list puts it away.
+unsafe fn tip_list_row(state: &mut State, combo: HWND, row: Option<usize>) {
+    let Some(id) = combo_id_of(state.hwnd, combo) else {
+        return;
+    };
+    let Some(row) = row else {
+        unsafe { tip_left(state) };
+        return;
+    };
+    let Some(text) = crate::ui::tip::combo(id, Some(row)) else {
+        return;
+    };
+    // A row of the list is one tip after another as the hand travels down it, so it is put up at
+    // once rather than waiting out the delay the pointer's resting on a control earns.
+    state.tip_rest = None;
+    crate::ui::tip::show(combo, text, state.palette);
+    state.tip_key = Some(combo.0 as isize);
+}
+
+/// Take the tip down, and forget that it was up.
+unsafe fn tip_take_down(state: &mut State) {
+    if state.tip_key.take().is_some() {
+        crate::ui::tip::hide();
+    }
+}
+
+/// A combo's dropped list, as its own window: pointed at by the combo, and told about its pointer
+/// through a subclass so the rows can have tips of their own.
+///
+/// **A list is a separate window**, so hovering a row of it is not hovering the combo: the combo's
+/// subclass never sees it, and neither does the editor. `ListBox`-style owner-drawn combos route
+/// their list's messages through the combo only where the combo asked for them, so a subclass on the
+/// list window itself is what gets the pointer over a row.
+/// The child control under the pointer, with the id its tip is written under.
+///
+/// **What the parent's own `WM_MOUSEMOVE` is for**: a control that is not one of the editor's
+/// interactive ones — the status line, a label — has no subclass of its own and no message of its
+/// own to hang a tip on, so the window underneath asks instead, once the pointer has come to rest.
+fn child_under_cursor(hwnd: HWND) -> Option<(HWND, i32)> {
+    let mut point = POINT::default();
+    unsafe { GetCursorPos(&mut point) }.ok()?;
+    let mut client = point;
+    let _ = unsafe { ScreenToClient(hwnd, &mut client) };
+    let child = unsafe { ChildWindowFromPoint(hwnd, client) };
+    if child.0.is_null() || child == hwnd {
+        return None;
+    }
+    let id = id_of_control(hwnd, child)?;
+    Some((child, id))
+}
+
+unsafe fn install_list_tips(combo: HWND) {
+    let mut info = COMBOBOXINFO {
+        cbSize: std::mem::size_of::<COMBOBOXINFO>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetComboBoxInfo(combo, &mut info) }.is_err() || info.hwndList.0.is_null() {
+        return;
+    }
+    unsafe { install_tip_list_subclass(info.hwndList, combo) };
+}
+
+unsafe fn install_tip_list_subclass(list: HWND, combo: HWND) {
+    let orig = unsafe {
+        SetWindowLongPtrW(
+            list,
+            GWLP_WNDPROC,
+            tip_list_proc as *const () as usize as isize,
+        )
+    };
+    let orig_proc: WNDPROC = unsafe { std::mem::transmute(orig) };
+    let data = Box::into_raw(Box::new(TipListSubclass {
+        orig_proc,
+        combo,
+        row: None,
+    }));
+    unsafe { SetWindowLongPtrW(list, GWLP_USERDATA, data as isize) };
+}
+
+struct TipListSubclass {
+    orig_proc: WNDPROC,
+    combo: HWND,
+    /// The row last announced, so one row is one tip rather than one a mouse pixel.
+    row: Option<usize>,
+}
+
+unsafe extern "system" fn tip_list_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut TipListSubclass;
+    let Some(sub) = (unsafe { raw.as_mut() }) else {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+    let orig_proc = sub.orig_proc;
+
+    match msg {
+        WM_MOUSEMOVE => {
+            let answer = unsafe { SendMessageW(hwnd, 0x0199, WPARAM(0), lparam) }.0 as u32;
+            let row = usize::try_from(answer & 0xFFFF).ok().filter(|index| {
+                // `LB_ITEMFROMPOINT` clamps to the nearest row and says whether the point was inside
+                // one; a point past the last row is no row at all.
+                (answer >> 16) & 1 == 0
+                    && (*index as isize)
+                        < unsafe { SendMessageW(hwnd, LB_GETCOUNT, WPARAM(0), LPARAM(0)) }.0
+            });
+            if row != sub.row {
+                sub.row = row;
+                unsafe { announce_list_row(sub.combo, row) };
+            }
+            return unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+        }
+        WM_MOUSELEAVE => {
+            sub.row = None;
+            unsafe { announce_list_row(sub.combo, None) };
+        }
+        WM_NCDESTROY => {
+            unsafe {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(raw));
+            }
+            return unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) };
+        }
+        _ => {}
+    }
+
+    unsafe { CallWindowProcW(orig_proc, hwnd, msg, wparam, lparam) }
+}
+
+/// A row of a combo's list was pointed at, or the list was left: tell the editor, which owns the tip.
+unsafe fn announce_list_row(combo: HWND, row: Option<usize>) {
+    let parent = unsafe { GetParent(combo) }.unwrap_or_default();
+    let _ = unsafe {
+        PostMessageW(
+            parent,
+            WM_TIP_LIST_ROW,
+            WPARAM(combo.0 as usize),
+            LPARAM(row.map_or(-1, |row| row as isize)),
+        )
+    };
 }
 
 unsafe fn set_fields_enabled(state: &State, enabled: bool) {
