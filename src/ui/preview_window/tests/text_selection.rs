@@ -133,6 +133,7 @@ fn put_painted_line(text: &str) {
                     x: 0,
                     width: text.chars().count() as i32 * 10,
                     text: text.to_string(),
+                    advances: None,
                 }],
                 source: (0, 0),
             }];
