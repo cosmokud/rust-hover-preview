@@ -13,6 +13,7 @@ use crate::config::config::{MarkdownMode, TextTheme};
 use crate::text::text_paint::{DibSurface, TextMetrics};
 use crate::text::text_theme;
 use std::path::Path;
+use std::sync::Arc;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 
@@ -55,6 +56,25 @@ pub struct FrameRun {
     pub width: i32,
     /// The characters the run shows, which is what a selection counts in.
     pub text: String,
+    /// The width of each of those characters where one number a character does not say it: a run
+    /// holding a Chinese glyph is drawn out of the font the system links in, at a width of its own,
+    /// and a caret, a press and a selection's wash over it are placed from these rather than from an
+    /// even split of `width` (see `x_within_line`). It is nothing for a run that is one cell a
+    /// character, which is every run of a fixed-pitch face's own glyphs.
+    pub advances: Option<std::sync::Arc<[i32]>>,
+}
+
+impl FrameRun {
+    /// The left edge of character `offset` of this run, in frame coordinates.
+    fn edge(&self, offset: usize) -> i32 {
+        super::layout::cell_edge(
+            self.x,
+            self.width,
+            self.text.chars().count(),
+            self.advances.as_deref(),
+            offset,
+        )
+    }
 }
 
 /// One painted line, in frame coordinates.
@@ -210,6 +230,10 @@ fn painted_text_characters(line: &FrameLine) -> usize {
 /// The left edge of character `offset` of a painted line, and the width of the character there —
 /// which is the next character's width at the end of the line, so a bar at the end of a run is as
 /// wide as the text it stands after rather than as wide as whatever is drawn beside it.
+///
+/// The edge is the run's own, which is a measured column where the run holds a character GDI drew
+/// out of another face — a Chinese one — and an even split of the run's width everywhere else (see
+/// `FrameRun::advances`).
 fn x_within_line(line: &FrameLine, offset: usize) -> (i32, i32) {
     let mut before = 0usize;
 
@@ -218,14 +242,11 @@ fn x_within_line(line: &FrameLine, offset: usize) -> (i32, i32) {
         if count == 0 {
             continue;
         }
-        let advance = (run.width as f32 / count as f32).max(1.0);
 
         if offset < before + count {
             let within = offset - before;
-            return (
-                run.x + (within as f32 * advance).round() as i32,
-                advance.round().max(1.0) as i32,
-            );
+            let width = run.edge(within + 1) - run.edge(within);
+            return (run.edge(within), width.max(1));
         }
         before += count;
     }
@@ -235,12 +256,17 @@ fn x_within_line(line: &FrameLine, offset: usize) -> (i32, i32) {
     // its text is drawn in rather than the frame's — an empty line is inside the text, not beside the
     // numbers (see `FrameLine::left`).
     match line.runs.last() {
-        Some(run) => (
-            run.x + run.width,
-            (run.width as f32 / run.text.chars().count().max(1) as f32)
-                .round()
-                .max(1.0) as i32,
-        ),
+        Some(run) => {
+            let count = run.text.chars().count();
+            (
+                run.edge(count),
+                if count == 0 {
+                    1
+                } else {
+                    (run.edge(count) - run.edge(count - 1)).max(1)
+                },
+            )
+        }
         None => (line.left, 1),
     }
 }
@@ -257,6 +283,10 @@ fn nearest_line(lines: &[FrameLine], y: i32) -> Option<(usize, &FrameLine)> {
 /// caret a press places, and the character whose cell the point is actually in, which is the one a
 /// word is taken around. The two differ in the right half of a cell, where the caret sits after a
 /// character the point is still on.
+///
+/// The cells are the run's own edges, so a press inside a run holding characters GDI drew at widths
+/// of their own — a Chinese glyph beside a Latin one — lands on the character it is over and not a
+/// few pixels along it (see `FrameRun::advances`).
 fn point_in_line(line: &FrameLine, x: i32) -> (usize, usize) {
     let mut characters = 0usize;
     let mut caret = 0usize;
@@ -264,24 +294,62 @@ fn point_in_line(line: &FrameLine, x: i32) -> (usize, usize) {
     let mut closest_distance = i32::MAX;
 
     for run in &line.runs {
-        let count = run.text.chars().count() as i32;
+        let count = run.text.chars().count();
         if count == 0 {
             continue;
         }
-        let advance = (run.width as f32 / count as f32).max(1.0);
-        let within = (x - run.x) as f32 / advance;
-        let boundary = (within.round() as i32).clamp(0, count);
-        let edge = run.x + (boundary as f32 * advance).round() as i32;
+
+        let (boundary, cell) = cell_in_run(run, count, x);
+        let edge = run.edge(boundary);
         let distance = (edge - x).abs();
         if distance < closest_distance {
             closest_distance = distance;
-            caret = characters + boundary as usize;
-            character = characters + (within.floor() as i32).clamp(0, count - 1) as usize;
+            caret = characters + boundary;
+            character = characters + cell;
         }
-        characters += count as usize;
+        characters += count;
     }
 
     (caret, character)
+}
+
+/// The character boundary of one painted run nearest `x`, and the character whose cell `x` is in.
+///
+/// The cells are the run's own edges, so this is the same arithmetic whether the run is one cell a
+/// character or carries the widths GDI drew each of its characters at (see `FrameRun::advances`).
+/// An edge is found by bisection because both kinds of run have edges that only grow, and a line of
+/// a minified file is a run of a hundred thousand characters a press may be measured against.
+fn cell_in_run(run: &FrameRun, count: usize, x: i32) -> (usize, usize) {
+    // The last character whose left edge is at or left of `x`: the cell `x` is in, or the end of the
+    // run where `x` is past all of them.
+    let (mut low, mut high) = (0usize, count);
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        if run.edge(middle) <= x {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    let cell = low;
+
+    // The boundary nearest `x`: the near edge of the cell it is in, or the far one where it is past
+    // the middle of that cell — which is the caret sitting after the character the point is on. A
+    // point exactly on the middle of a cell is the far edge, the way an even split of a run's width
+    // was always rounded.
+    let boundary = if cell < count {
+        let left = run.edge(cell);
+        let right = run.edge(cell + 1);
+        if x - left < right - x {
+            cell
+        } else {
+            cell + 1
+        }
+    } else {
+        count
+    };
+
+    (boundary, cell.min(count - 1))
 }
 
 /// Where a point falls in a text preview: the document line under it and the
@@ -744,6 +812,7 @@ fn render_scrolled_from(
                     x: run.x,
                     width: run.width,
                     text: run.text.clone(),
+                    advances: run.advances.clone(),
                 })
                 .collect(),
         })
@@ -876,10 +945,18 @@ fn has_a_repeated_source_in(lines: &[super::layout::LaidLine]) -> bool {
 /// screen the row this layout would paint.
 fn the_same_runs(old: &[FrameRun], new: &[super::layout::LaidRun]) -> bool {
     old.len() == new.len()
-        && old
-            .iter()
-            .zip(new)
-            .all(|(old, new)| old.x == new.x && old.width == new.width && old.text == new.text)
+        && old.iter().zip(new).all(|(old, new)| {
+            old.x == new.x
+                && old.width == new.width
+                && old.text == new.text
+                && match (&old.advances, &new.advances) {
+                    (None, None) => true,
+                    // The same measurement is the same answer: a run laid out twice on one thread
+                    // asks the cache and gets the handle it was given the first time.
+                    (Some(old), Some(new)) => Arc::ptr_eq(old, new) || old == new,
+                    _ => false,
+                }
+        })
 }
 
 /// Move the rows of the frame already on screen into the surface just made, by `moved` rows, leaving

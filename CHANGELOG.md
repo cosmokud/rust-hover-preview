@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **A text preview mixing Chinese and Latin is drawn the way it is laid out** — the preview measures a line as `characters × advance`, which holds for Consolas and every glyph Consolas carries, and Consolas carries no CJK at all: a Chinese glyph is drawn out of the font the system links in, at a width of its own. A file like `漢字Kanji` or `漢字Sample file` was therefore laid out shorter than it was painted, and every run after the first Chinese one landed inside the ink of the one it followed and had its own tail clipped at the box it was given — read on screen as Latin text drawn over Chinese, or as text simply eaten. A run holding a character outside ASCII is now measured once through GDI and carries the width of each of its characters, and that one answer places the run, breaks the wrap, cuts a selection's wash and a find's band, lands a press and draws a caret; a run that is ASCII is not measured at all and keeps the arithmetic it had, so a page of source or prose costs what it always cost.
+
 ## [0.6.2] - 2026-11-25
 
 ### Added
