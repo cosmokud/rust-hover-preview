@@ -1836,3 +1836,204 @@ fn a_wash_over_latin_after_chinese_begins_at_the_latin() {
         "the character begins at {first}, further along than the even split's {even_split}"
     );
 }
+
+/// The scripts a text file can be written in, as one page each: what the layout counts a character
+/// as against what GDI draws it as is a question of the *script*, not of Chinese alone — a run of
+/// Japanese, Korean, Thai or emoji is drawn out of a linked face exactly as a Chinese one is, and a
+/// page of any of them laid out at `count * advance` is a page laid out shorter than it is painted.
+///
+/// This is the audit of that: every one of them is painted, and no row of any of them has a run
+/// placed inside the run before it, a row running past the frame, or a run whose own characters do
+/// not add up to its width.
+#[test]
+fn a_page_of_any_script_is_laid_out_as_wide_as_it_is_drawn() {
+    let dir = scratch("scripts");
+
+    let pages: &[(&str, &str)] = &[
+        ("ascii", "Difference Button Quantity and Notes\n"),
+        ("latin-1", "Café naïve größe Ångström\n"),
+        ("greek", "Ελληνικά γράμματα\n"),
+        ("cyrillic", "Кириллица тест\n"),
+        ("armenian", "Հայերեն տեքստ\n"),
+        ("georgian", "ქართული ტექსტი\n"),
+        ("ethiopic", "አማርኛ ጽሑፍ\n"),
+        ("hebrew", "עברית שלום עולם\n"),
+        ("arabic", "العربية مرحبا بالعالم\n"),
+        ("thai", "ภาษาไทย สวัสดี\n"),
+        ("devanagari", "हिन्दी नमस्ते\n"),
+        ("japanese", "日本語のテキストです\n"),
+        ("korean", "한국어 텍스트입니다\n"),
+        ("chinese-simplified", "简体中文测试文本\n"),
+        ("chinese-traditional", "繁體中文測試文本\n"),
+        ("kana", "ひらがなカタカナ\n"),
+        ("fullwidth", "ＡＢＣＤ１２３\n"),
+        ("emoji", "emoji 😀 😁 🎉 test\n"),
+        ("math", "∑ ∫ √ ≠ ≤ ≥ ∞\n"),
+        ("box-drawing", "┌────┬────┐\n│ a  │ b  │\n└────┴────┘\n"),
+        (
+            "mixed",
+            "漢字Kanji 漢字Sample file 漢字Sample ( , )\n",
+        ),
+    ];
+
+    for (label, text) in pages {
+        let source = dir.join(format!("{label}.txt"));
+        fs::write(&source, text).expect("a written page");
+
+        let (width, height) =
+            measure(&source, 1_000, 1_200, 96, options()).expect("a measured page");
+        let page =
+            render_scrolled(&source, 0, width, height, 96, options(), None, None).expect("a page");
+
+        for line in &page.lines {
+            for pair in line.runs.windows(2) {
+                assert!(
+                    pair[1].x >= pair[0].x + pair[0].width,
+                    "{label}: {:?} is placed inside {:?} — {} < {}",
+                    pair[1].text,
+                    pair[0].text,
+                    pair[1].x,
+                    pair[0].x + pair[0].width
+                );
+            }
+
+            if let Some(last) = line.runs.last() {
+                assert!(
+                    last.x + last.width <= page.width as i32,
+                    "{label}: {:?} runs past the frame — {} > {}",
+                    last.text,
+                    last.x + last.width,
+                    page.width
+                );
+            }
+
+            for run in &line.runs {
+                if let Some(advances) = run.advances.as_deref() {
+                    assert_eq!(
+                        advances.iter().sum::<i32>(),
+                        run.width,
+                        "{label}: {:?} is not as wide as its own characters",
+                        run.text
+                    );
+                }
+            }
+        }
+
+        // Nothing is left of the page: every character of the file is on the frame, in order. A page
+        // is drawn a row at a time and a row a run at a time, so what is compared is the characters
+        // with the breaks and the dropped space at a wrap point taken out.
+        let drawn: String = page
+            .lines
+            .iter()
+            .flat_map(|line| line.runs.iter())
+            .map(|run| run.text.clone())
+            .collect();
+        let wanted: String = text
+            .chars()
+            .filter(|character| *character != '\n')
+            .collect();
+        let drawn: String = drawn
+            .chars()
+            .filter(|character| *character != '\n')
+            .collect();
+        assert_eq!(
+            drawn.chars().count(),
+            wanted.chars().count(),
+            "{label}: the page draws {} characters of {} — it drew {:?}",
+            drawn.chars().count(),
+            wanted.chars().count(),
+            drawn.chars().take(60).collect::<String>()
+        );
+    }
+}
+
+/// **The encoding a file arrives in is not the layout's business, and must not become it.** The same
+/// text written the five ways a text file reaches this app is the same page: UTF-8, UTF-8 with a
+/// byte order mark, UTF-16 either way round with its mark, and — for text the code page can carry —
+/// Windows-1252. What differs between them is the bytes; a preview that came out different would be
+/// a preview laid out from the encoding rather than from the characters.
+#[test]
+fn the_same_text_is_the_same_page_whatever_encoding_it_arrived_in() {
+    let dir = scratch("encodings");
+
+    let page_of = |name: &str, bytes: &[u8]| -> Vec<(String, i32, i32)> {
+        let source = dir.join(name);
+        fs::write(&source, bytes).expect("a written page");
+        let (width, height) = measure(&source, 900, 400, 96, options()).expect("a measured page");
+        let page =
+            render_scrolled(&source, 0, width, height, 96, options(), None, None).expect("a page");
+        page.lines
+            .iter()
+            .flat_map(|line| {
+                line.runs
+                    .iter()
+                    .map(|run| (run.text.clone(), run.x, run.width))
+            })
+            .collect()
+    };
+
+    // Latin, which every encoding here can carry.
+    let latin = "Café naïve größe\n";
+    let utf16: Vec<u8> = latin
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    let mut utf16_be = Vec::new();
+    for unit in latin.encode_utf16() {
+        utf16_be.extend(unit.to_be_bytes());
+    }
+    let mut with_bom8 = vec![0xEF, 0xBB, 0xBF];
+    with_bom8.extend(latin.as_bytes());
+    let mut with_bom16 = vec![0xFF, 0xFE];
+    with_bom16.extend(&utf16);
+    let mut with_bom16_be = vec![0xFE, 0xFF];
+    with_bom16_be.extend(&utf16_be);
+
+    let expected = page_of("latin-utf8.txt", latin.as_bytes());
+    for (name, bytes) in [
+        ("latin-bom8.txt", with_bom8.as_slice()),
+        ("latin-le16.txt", with_bom16.as_slice()),
+        ("latin-be16.txt", with_bom16_be.as_slice()),
+        (
+            "latin-cp1252.txt",
+            b"Caf\xe9 na\xefve gr\xf6\xdfe\n".as_slice(),
+        ),
+    ] {
+        assert_eq!(
+            page_of(name, bytes),
+            expected,
+            "{name} is the same text and must be the same page"
+        );
+    }
+
+    // Chinese, which only the Unicode encodings carry: the mark is the only thing that says which
+    // way round the two bytes of a Chinese character go.
+    let chinese = "漢字Kanji 漢字Sample\n";
+    let utf16: Vec<u8> = chinese
+        .encode_utf16()
+        .flat_map(|unit| unit.to_le_bytes())
+        .collect();
+    let mut utf16_be = Vec::new();
+    for unit in chinese.encode_utf16() {
+        utf16_be.extend(unit.to_be_bytes());
+    }
+    let mut with_bom16 = vec![0xFF, 0xFE];
+    with_bom16.extend(&utf16);
+    let mut with_bom16_be = vec![0xFE, 0xFF];
+    with_bom16_be.extend(&utf16_be);
+    let mut with_bom8 = vec![0xEF, 0xBB, 0xBF];
+    with_bom8.extend(chinese.as_bytes());
+
+    let expected = page_of("chinese-utf8.txt", chinese.as_bytes());
+    for (name, bytes) in [
+        ("chinese-bom8.txt", with_bom8.as_slice()),
+        ("chinese-le16.txt", with_bom16.as_slice()),
+        ("chinese-be16.txt", with_bom16_be.as_slice()),
+    ] {
+        assert_eq!(
+            page_of(name, bytes),
+            expected,
+            "{name} is the same text and must be the same page"
+        );
+    }
+}
