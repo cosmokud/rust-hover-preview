@@ -189,6 +189,16 @@ pub(crate) fn new_browser_pids(before: &[u32]) -> Vec<u32> {
 }
 
 /// Create a WebView2 environment with `arguments` under `user_data_folder`, bounded by `deadline`.
+///
+/// **An elevated run is told to turn the browser's sandbox off, or it has no browser at all.**
+/// WebView2 refuses to start its own process from a token at a higher integrity level than the one
+/// the browser was meant to run at — the check is Chromium's, and it fails whichever account ran
+/// the UAC prompt — so a document, an ebook, a page or a font would be drawn by nothing on the one
+/// machine where this app was started as an administrator. `--no-sandbox` is what turns that check
+/// off, and there is nothing left for it to protect here: the browser draws a file the user already
+/// opened, in a window of this app's that is never navigated anywhere else, with the resolver rule
+/// above making sure nothing it links to is fetched. It is added here rather than at each caller so
+/// that every engine of this app's — the hover's, the PDF pin's — is answered the same way.
 pub(crate) fn create_environment(
     user_data_folder: &Path,
     deadline: Instant,
@@ -197,9 +207,15 @@ pub(crate) fn create_environment(
     let folder = wide(&user_data_folder.to_string_lossy());
     let (sender, receiver) = mpsc::channel();
 
+    let arguments = if crate::app::elevation::is_elevated() {
+        format!("{arguments} --no-sandbox")
+    } else {
+        arguments.to_string()
+    };
+
     let options = CoreWebView2EnvironmentOptions::default();
     unsafe {
-        options.set_additional_browser_arguments(arguments.to_string());
+        options.set_additional_browser_arguments(arguments);
     }
     let options: ICoreWebView2EnvironmentOptions = options.into();
 

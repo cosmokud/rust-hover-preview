@@ -18,6 +18,7 @@
 //! wider than the thing it names. `super::super` is `tray`, which is exactly as wide as the
 //! `pub(super)` these were written as when they all lived in one file.
 
+use crate::app::dialogs;
 use crate::app::seam::{
     refresh_pin, refresh_preview, refresh_preview_types, refresh_render_html, send_preview,
     the_rings_are_the_road, PreviewMessage,
@@ -34,15 +35,25 @@ pub(in super::super) fn toggle_startup() {
     // agree with what was just done.
     let enable = !startup::is_startup_enabled();
 
-    if enable {
-        startup::enable_startup();
+    let outcome = if enable {
+        startup::enable_startup()
     } else {
-        startup::disable_startup();
-    }
+        startup::disable_startup()
+    };
 
+    // **What is written down is what the machine holds, not what was asked for.** A write the
+    // registry refused — a `Run` key a policy or another tool holds, a hive this process may not
+    // open — used to leave `run_at_startup=true` in the file beside no entry at all, which is the
+    // one failure that reads as the app forgetting the choice it was given. The row says so as
+    // well, since a switch that flips back by itself is a switch nobody trusts.
+    let held = startup::is_startup_enabled();
     commit_config(|config| {
-        config.run_at_startup = enable;
+        config.run_at_startup = held;
     });
+
+    if !outcome.settled() {
+        dialogs::report_startup_failure(outcome);
+    }
 }
 
 pub(crate) fn toggle_preview_enabled() {
