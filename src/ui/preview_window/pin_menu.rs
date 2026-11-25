@@ -101,9 +101,9 @@ pub(super) enum PinMenuHandOff {
     DefaultApp,
     /// Show the Shell's own list of programs.
     OpenWithList,
-    /// Show the file in the folder it lives in, Explorer's own `Show in folder` — a press that
-    /// raises a window under the hand like the two above it, and so waits for the release for the
-    /// same reason (see `reveal_in_explorer`).
+    /// Show the file in the folder it lives in, selected and scrolled into view — Explorer's own
+    /// `Show in folder` — a press that raises a window under the hand like the two above it, and so
+    /// waits for the release for the same reason (see `reveal_in_explorer`).
     OpenPath,
 }
 
@@ -366,8 +366,9 @@ pub(super) enum PinMenuRow {
     /// The Shell's own list of programs, the same dialog the card's `Open With...` button
     /// opens (see `show_open_with_dialog`).
     OpenWithList,
-    /// Open Windows Explorer on the folder the file is in — the one row here that hands nothing to
-    /// another program, and the one that leaves the card standing (see `reveal_in_explorer`).
+    /// Open Windows Explorer on the folder the file is in, with the file selected — the one row here
+    /// that hands nothing to another program, and the one that leaves the card standing (see
+    /// `reveal_in_explorer`).
     OpenPath,
 }
 
@@ -1055,7 +1056,7 @@ pub(super) unsafe fn pinned_menu_press(hwnd: HWND, x: i32, y: i32) -> bool {
 /// hand that right-clicked anywhere else asked about what is playing (see
 /// `pin_playlist::the_file_a_menu_named`). `Open Path` is the one row of the three that leaves the
 /// pin standing — it hands nothing over, so there is nothing to get out from under: the sound goes on
-/// playing while Explorer comes up on its folder (see `reveal_in_explorer`).
+/// playing while Explorer comes up on its folder with the file picked out (see `reveal_in_explorer`).
 ///
 /// Answers whether a hand-off was armed, and whether the press was therefore this function's. The
 /// pointer is given back here and the pin asked for its end the way the card's own two buttons ask
@@ -1083,12 +1084,12 @@ pub(super) unsafe fn pin_menu_hand_off_release(hwnd: HWND) -> bool {
                     std::thread::spawn(move || carry_open_with_to(at, before));
                 }
             }
-            // The folder, rather than the file: Explorer comes up on it, and the pin is left exactly as
-            // it stands — no capture to give back, no end to ask for. `ShellExecuteExW`'s `explore`
-            // verb is the Shell's own, so it reuses the folder's window where one is up rather than
-            // opening a second one.
+            // The folder with the file picked out in it, and the pin is left exactly as it stands — no
+            // capture to give back, no end to ask for. `SHOpenFolderAndSelectItems` is the Shell's own
+            // selection, so the folder's window is reused where one is up rather than a second one
+            // opened, and the file the hand is looking for is the row it comes up selected.
             PinMenuHandOff::OpenPath => {
-                reveal_in_explorer(&path, hwnd);
+                reveal_in_explorer(&path);
                 // The row the menu named is the menu's mark on the band, and the menu is gone: it is put
                 // away here, where the last thing that knew which row it was has finished with it (see
                 // `pin_playlist::forget_the_row_a_menu_named`).
@@ -1251,9 +1252,9 @@ unsafe fn card_menu_press(paint: &PinMenuPaint, x: i32, y: i32) -> bool {
             false
         }
         // The file's own folder: the one row here that hands nothing over — the pin stays up and goes
-        // on playing while Explorer comes up on the folder the file is in (see
-        // `reveal_in_explorer`). Armed on the press and made on the release for the same reason the
-        // two above are: Explorer's window comes up under the hand, and a window raised while the
+        // on playing while Explorer comes up on the folder the file is in, with the file picked out
+        // (see `reveal_in_explorer`). Armed on the press and made on the release for the same reason
+        // the two above are: Explorer's window comes up under the hand, and a window raised while the
         // mouse button is still down is a window that gets the release for a click of its own.
         Some(PinMenuRow::OpenPath) => {
             with_pin(|pin| pin.menu.hand_off = Some(PinMenuHandOff::OpenPath));

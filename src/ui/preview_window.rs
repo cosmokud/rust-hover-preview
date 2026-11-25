@@ -272,6 +272,7 @@ use windows::Win32::Graphics::Gdi::{
     BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
     MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY,
 };
+use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard,
     SetClipboardData,
@@ -297,10 +298,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 // itself is compiled out rather than made and ignored.
 #[cfg(not(test))]
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LBUTTON};
+use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    AssocQueryStringW, DragAcceptFiles, DragFinish, DragQueryFileW, ShellExecuteExW, ASSOCF_NONE,
-    ASSOCSTR, ASSOCSTR_FRIENDLYAPPNAME, HDROP, SEE_MASK_ASYNCOK, SEE_MASK_HMONITOR,
-    SHELLEXECUTEINFOW, SHELLEXECUTEINFOW_0,
+    AssocQueryStringW, DragAcceptFiles, DragFinish, DragQueryFileW, ILCreateFromPathW,
+    ILFindLastID, ILFree, SHOpenFolderAndSelectItems, ShellExecuteExW, ASSOCF_NONE, ASSOCSTR,
+    ASSOCSTR_FRIENDLYAPPNAME, HDROP, SEE_MASK_ASYNCOK, SEE_MASK_HMONITOR, SHELLEXECUTEINFOW,
+    SHELLEXECUTEINFOW_0,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
