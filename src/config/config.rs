@@ -35,8 +35,8 @@ pub use custom_presets::parse_arguments;
 pub(crate) use custom_presets::read_all as custom_presets_read_for_test;
 pub use custom_presets::{
     build_launch_args, preset_for as custom_preset_for, sanitize_arguments, sanitize_program_input,
-    CustomCaptureTechnique, CustomPlacement, CustomPreset, CustomPromotionTechnique, CustomScaling,
-    CustomWindowMode, MAX_PRESETS,
+    CustomCaptureTechnique, CustomChildDepth, CustomChildScope, CustomPlacement, CustomPreset,
+    CustomPromotionTechnique, CustomScaling, CustomSiblingWindows, CustomWindowMode, MAX_PRESETS,
 };
 pub use engines_in_effect::{latch_engines, office_engine_in_effect, video_engine_in_effect};
 #[cfg(test)]

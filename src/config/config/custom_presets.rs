@@ -165,6 +165,120 @@ impl CustomPromotionTechnique {
     }
 }
 
+/// How far past the launched pid a custom preview may look for the window it shows.
+///
+/// **A program that hands its file to a process of its own is a program whose window is not the
+/// one the launched id owns** — a launcher and the window it puts up, a viewer and its renderer,
+/// the stub an installer writes and the program it starts. Walking the tree is what finds those
+/// windows, and it is also what lets a preview hide, and on teardown end, processes the user never
+/// named — so how far it may walk is the user's to say, per preset, and it is off unless asked for.
+///
+/// The walk itself is bounded (see `process_tree`); these are the three shapes it is asked in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomChildScope {
+    /// The launched pid alone: no tree walk, no job pids, no brokered pid — the one process this
+    /// app began and nothing beside it.
+    #[default]
+    Disabled,
+    /// The launched pid and the processes it started, one level deep.
+    Children,
+    /// The launched pid and everything below it, as deep as the machine's own parent links go.
+    ChildrenAndGrandchildren,
+}
+
+impl CustomChildScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Children => "children",
+            Self::ChildrenAndGrandchildren => "children_and_grandchildren",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" | "off" | "none" => Some(Self::Disabled),
+            "children" | "child" | "direct" => Some(Self::Children),
+            "children_and_grandchildren"
+            | "children-and-grandchildren"
+            | "grandchildren"
+            | "all"
+            | "tree" => Some(Self::ChildrenAndGrandchildren),
+            _ => None,
+        }
+    }
+
+    /// How many `children_of` levels past the launched pid may be walked: none, one, or as deep as
+    /// the tree goes.
+    pub fn depth(self) -> CustomChildDepth {
+        match self {
+            Self::Disabled => CustomChildDepth::LaunchedOnly,
+            Self::Children => CustomChildDepth::OneLevel,
+            Self::ChildrenAndGrandchildren => CustomChildDepth::WholeTree,
+        }
+    }
+}
+
+/// The walk a scope stands for, in the terms `process_tree` and `discovery_processes` ask it in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomChildDepth {
+    /// `[launch.pid]` and nothing else.
+    LaunchedOnly,
+    /// `launch.pid` plus the pids it started directly.
+    OneLevel,
+    /// `launch.pid` plus every descendant, as far as the machine's parent links go.
+    WholeTree,
+}
+
+/// What a custom preview does with the program's *other* windows — the splash, the About box, the
+/// second document — while one of them is the picture.
+///
+/// **Not a child-process question.** Those windows belong to the same process as the one being
+/// shown, so nothing here reads the process tree; it is the suppression half of keeping a
+/// program's furniture off the listing, and it is a setting of its own rather than a step of
+/// [`CustomChildScope`] for exactly that reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomSiblingWindows {
+    /// Neither concealed nor hidden: the preview shows its window and leaves the rest alone.
+    Disabled,
+    /// `DWMWA_CLOAK` on every candidate before the winner is known, so nothing of the program is
+    /// composited while discovery runs. Nothing is hidden.
+    Cloak,
+    /// Cloaked during discovery and then hidden once the winner is adopted: a visible companion is
+    /// `SW_HIDE`d, and a modal `#32770` dialog is closed with `WM_CLOSE` instead of hidden.
+    #[default]
+    CloakAndHide,
+}
+
+impl CustomSiblingWindows {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Cloak => "cloak",
+            Self::CloakAndHide => "cloak_and_hide",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "disabled" | "off" | "none" => Some(Self::Disabled),
+            "cloak" | "cloak_only" | "cloak-only" => Some(Self::Cloak),
+            "cloak_and_hide" | "cloak-and-hide" | "hide" | "on" => Some(Self::CloakAndHide),
+            _ => None,
+        }
+    }
+
+    /// Whether candidates are cloaked before the winner is known.
+    pub fn cloaks(self) -> bool {
+        self != Self::Disabled
+    }
+
+    /// Whether the program's other visible windows are hidden once the winner is adopted.
+    pub fn hides(self) -> bool {
+        self == Self::CloakAndHide
+    }
+}
+
 /// How a custom preview positions the target window relative to `Tray -> Placement`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CustomPlacement {
@@ -262,6 +376,14 @@ pub struct CustomPreset {
     pub window_mode: CustomWindowMode,
     /// Capture/display technique used for this preset's target window.
     pub capture_technique: CustomCaptureTechnique,
+    /// How far past the launched pid discovery may look for that window.
+    pub child_scope: CustomChildScope,
+    /// Whether a program begun by an activator or a stub — a packaged app, a Squirrel/NSIS
+    /// launcher — may be found by its image name or its install folder after the launched tree
+    /// has shown nothing.
+    pub broker_fallback: bool,
+    /// What happens to the program's other windows while one of them is the picture.
+    pub sibling_windows: CustomSiblingWindows,
     /// Promotion technique used when pinning / opening this preset's file.
     pub promotion_technique: CustomPromotionTechnique,
     /// Placement strategy used for this preset's preview window.
@@ -285,6 +407,9 @@ impl Default for CustomPreset {
             extensions: Vec::new(),
             window_mode: CustomWindowMode::default(),
             capture_technique: CustomCaptureTechnique::default(),
+            child_scope: CustomChildScope::default(),
+            broker_fallback: false,
+            sibling_windows: CustomSiblingWindows::default(),
             promotion_technique: CustomPromotionTechnique::default(),
             placement: CustomPlacement::default(),
             scaling: CustomScaling::default(),
@@ -644,6 +769,28 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
         );
         ini.set(
             &section,
+            "child_scope",
+            Some(preset.child_scope.as_str().to_string()),
+        );
+        ini.set(
+            &section,
+            "broker_fallback",
+            Some(
+                if preset.broker_fallback {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            ),
+        );
+        ini.set(
+            &section,
+            "sibling_windows",
+            Some(preset.sibling_windows.as_str().to_string()),
+        );
+        ini.set(
+            &section,
             "promotion_technique",
             Some(preset.promotion_technique.as_str().to_string()),
         );
@@ -739,6 +886,21 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         if let Some(technique) = ini.get(section, "capture_technique") {
             if let Some(parsed) = CustomCaptureTechnique::from_str(&technique) {
                 preset.capture_technique = parsed;
+            }
+        }
+        if let Some(scope) = ini.get(section, "child_scope") {
+            if let Some(parsed) = CustomChildScope::from_str(&scope) {
+                preset.child_scope = parsed;
+            }
+        }
+        if let Some(enabled) = ini.get(section, "broker_fallback") {
+            if let Some(parsed) = parse_enabled(&enabled) {
+                preset.broker_fallback = parsed;
+            }
+        }
+        if let Some(siblings) = ini.get(section, "sibling_windows") {
+            if let Some(parsed) = CustomSiblingWindows::from_str(&siblings) {
+                preset.sibling_windows = parsed;
             }
         }
         if let Some(technique) = ini.get(section, "promotion_technique") {
@@ -1177,6 +1339,180 @@ mod tests {
         assert_eq!(read.custom_presets.len(), 2);
         for p in &read.custom_presets {
             assert_eq!(p.capture_technique, CustomCaptureTechnique::InProcessHook);
+        }
+    }
+
+    #[test]
+    fn child_scope_round_trips_and_defaults_to_disabled() {
+        // Off unless asked for: a walk that can hide, and end, a process the user never named is
+        // not a default.
+        assert_eq!(CustomChildScope::default(), CustomChildScope::Disabled);
+        assert_eq!(
+            CustomPreset::named("Fresh").child_scope,
+            CustomChildScope::Disabled
+        );
+        let cases = [
+            (CustomChildScope::Disabled, "disabled"),
+            (CustomChildScope::Children, "children"),
+            (
+                CustomChildScope::ChildrenAndGrandchildren,
+                "children_and_grandchildren",
+            ),
+        ];
+        for (scope, expected_str) in cases {
+            let mut preset = CustomPreset::named("ScopeTest");
+            preset.exe = "viewer.exe".into();
+            preset.set_extensions_text("png");
+            preset.child_scope = scope;
+
+            let cfg = config_with(vec![preset]);
+            let mut ini = Ini::new();
+            write_all(&cfg, &mut ini);
+            assert_eq!(
+                ini.get("custom:scopetest", "child_scope").as_deref(),
+                Some(expected_str)
+            );
+
+            let mut read = AppConfig::default();
+            read_all(&ini, &mut read);
+            assert_eq!(read.custom_presets[0].child_scope, scope);
+        }
+
+        // Missing or unknown value falls back to Disabled, which is what every config.ini written
+        // before this key existed holds.
+        let mut legacy = Ini::new();
+        legacy.set("custom:missing", "name", Some("Missing".into()));
+        legacy.set("custom:missing", "exe", Some("a.exe".into()));
+        legacy.set("custom:missing", "extensions", Some("png".into()));
+        legacy.set("custom:unknown", "name", Some("Unknown".into()));
+        legacy.set("custom:unknown", "exe", Some("b.exe".into()));
+        legacy.set("custom:unknown", "extensions", Some("png".into()));
+        legacy.set("custom:unknown", "child_scope", Some("bogus".into()));
+
+        let mut read = AppConfig::default();
+        read_all(&legacy, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        for p in &read.custom_presets {
+            assert_eq!(p.child_scope, CustomChildScope::Disabled);
+        }
+
+        // A new preset from the window's `+` starts where an unasked preset starts.
+        assert_eq!(
+            CustomPreset::named("Fresh").child_scope,
+            CustomChildScope::Disabled
+        );
+
+        // The scope is the walk, in the terms discovery asks it in.
+        assert_eq!(
+            CustomChildScope::Disabled.depth(),
+            CustomChildDepth::LaunchedOnly
+        );
+        assert_eq!(
+            CustomChildScope::Children.depth(),
+            CustomChildDepth::OneLevel
+        );
+        assert_eq!(
+            CustomChildScope::ChildrenAndGrandchildren.depth(),
+            CustomChildDepth::WholeTree
+        );
+    }
+
+    #[test]
+    fn broker_fallback_defaults_to_off_and_round_trips() {
+        assert!(!CustomPreset::named("Fresh").broker_fallback);
+        for want in [true, false] {
+            let mut preset = CustomPreset::named("BrokerTest");
+            preset.exe = "viewer.exe".into();
+            preset.set_extensions_text("png");
+            preset.broker_fallback = want;
+
+            let cfg = config_with(vec![preset]);
+            let mut ini = Ini::new();
+            write_all(&cfg, &mut ini);
+            assert_eq!(
+                ini.get("custom:brokertest", "broker_fallback").as_deref(),
+                Some(if want { "true" } else { "false" })
+            );
+
+            let mut read = AppConfig::default();
+            read_all(&ini, &mut read);
+            assert_eq!(read.custom_presets[0].broker_fallback, want);
+        }
+
+        let mut legacy = Ini::new();
+        legacy.set("custom:missing", "name", Some("Missing".into()));
+        legacy.set("custom:missing", "exe", Some("a.exe".into()));
+        legacy.set("custom:missing", "extensions", Some("png".into()));
+        legacy.set("custom:junk", "name", Some("Junk".into()));
+        legacy.set("custom:junk", "exe", Some("b.exe".into()));
+        legacy.set("custom:junk", "extensions", Some("png".into()));
+        legacy.set("custom:junk", "broker_fallback", Some("perhaps".into()));
+
+        let mut read = AppConfig::default();
+        read_all(&legacy, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        for p in &read.custom_presets {
+            assert!(!p.broker_fallback);
+        }
+    }
+
+    #[test]
+    fn sibling_windows_round_trips_and_defaults_to_cloak_and_hide() {
+        // Today's behaviour is the default, so a file written before this key existed previews
+        // exactly as it did.
+        assert_eq!(
+            CustomSiblingWindows::default(),
+            CustomSiblingWindows::CloakAndHide
+        );
+        assert_eq!(
+            CustomPreset::named("Fresh").sibling_windows,
+            CustomSiblingWindows::CloakAndHide
+        );
+        let cases = [
+            (CustomSiblingWindows::Disabled, "disabled"),
+            (CustomSiblingWindows::Cloak, "cloak"),
+            (CustomSiblingWindows::CloakAndHide, "cloak_and_hide"),
+        ];
+        for (siblings, expected_str) in cases {
+            let mut preset = CustomPreset::named("SiblingTest");
+            preset.exe = "viewer.exe".into();
+            preset.set_extensions_text("png");
+            preset.sibling_windows = siblings;
+
+            let cfg = config_with(vec![preset]);
+            let mut ini = Ini::new();
+            write_all(&cfg, &mut ini);
+            assert_eq!(
+                ini.get("custom:siblingtest", "sibling_windows").as_deref(),
+                Some(expected_str)
+            );
+
+            let mut read = AppConfig::default();
+            read_all(&ini, &mut read);
+            assert_eq!(read.custom_presets[0].sibling_windows, siblings);
+        }
+
+        assert!(!CustomSiblingWindows::Disabled.cloaks());
+        assert!(!CustomSiblingWindows::Disabled.hides());
+        assert!(CustomSiblingWindows::Cloak.cloaks());
+        assert!(!CustomSiblingWindows::Cloak.hides());
+        assert!(CustomSiblingWindows::CloakAndHide.cloaks());
+        assert!(CustomSiblingWindows::CloakAndHide.hides());
+
+        let mut legacy = Ini::new();
+        legacy.set("custom:missing", "name", Some("Missing".into()));
+        legacy.set("custom:missing", "exe", Some("a.exe".into()));
+        legacy.set("custom:missing", "extensions", Some("png".into()));
+        legacy.set("custom:junk", "name", Some("Junk".into()));
+        legacy.set("custom:junk", "exe", Some("b.exe".into()));
+        legacy.set("custom:junk", "extensions", Some("png".into()));
+        legacy.set("custom:junk", "sibling_windows", Some("bogus".into()));
+
+        let mut read = AppConfig::default();
+        read_all(&legacy, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        for p in &read.custom_presets {
+            assert_eq!(p.sibling_windows, CustomSiblingWindows::CloakAndHide);
         }
     }
 

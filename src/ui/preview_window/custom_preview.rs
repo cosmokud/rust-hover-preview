@@ -208,9 +208,9 @@ use super::preview_scale::{animated_scale_for, fit_reduced, HoverScales};
 use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
 use crate::config::config::{
-    build_launch_args, custom_preset_for, CustomCaptureTechnique, CustomPlacement, CustomPreset,
-    CustomPromotionTechnique, CustomScaling, CustomWindowMode, PreviewScale, PreviewType,
-    DEFAULT_AUDIO_SCALE,
+    build_launch_args, custom_preset_for, CustomCaptureTechnique, CustomChildDepth,
+    CustomChildScope, CustomPlacement, CustomPreset, CustomPromotionTechnique, CustomScaling,
+    CustomSiblingWindows, CustomWindowMode, PreviewScale, PreviewType, DEFAULT_AUDIO_SCALE,
 };
 use crate::readers::{pdf_preview, svg_preview, video_player};
 use crate::CONFIG;
@@ -438,6 +438,9 @@ struct Program {
     pid: u32,
     job: Option<PreviewJob>,
     processes_before: Vec<u32>,
+    /// The preset's `Child Processes` row as it stood when this program was begun: how far the
+    /// teardown sweep may walk to end what it started.
+    child_scope: CustomChildScope,
 }
 
 /// What one launch is: the process it began, the image that program runs under, and the windows
@@ -478,6 +481,13 @@ struct Launch {
     placement: CustomPlacement,
     /// Capture technique originally requested by the preset (before 32-bit hook fallback).
     requested_capture: CustomCaptureTechnique,
+    /// How far past `pid` discovery may look — the preset's `Child Processes` row, read once at
+    /// launch so a config change mid-hover cannot half-move a window that is already adopted.
+    child_scope: CustomChildScope,
+    /// Whether a brokered/stub-handoff process may be adopted by image name or install folder.
+    broker_fallback: bool,
+    /// What happens to the program's other windows while one of them is the picture.
+    sibling_windows: CustomSiblingWindows,
     /// Dedicated install directory of the launched executable when safe for stub fallback matching.
     install_dir: Option<PathBuf>,
     /// Which launch this is, so that a worker begun for an earlier one stands down.
@@ -1396,6 +1406,9 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let scaling = preset.scaling;
     let window_mode = preset.window_mode;
     let requested_capture = preset.capture_technique;
+    let child_scope = preset.child_scope;
+    let broker_fallback = preset.broker_fallback;
+    let sibling_windows = preset.sibling_windows;
     let volume = preset.volume_enabled.then_some(preset.volume);
     let initial_own = base_size(path);
     let provisional = initial_own.and_then(|own| {
@@ -1490,6 +1503,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
             pid,
             job,
             processes_before: processes_before.clone(),
+            child_scope,
         });
     }
     if let Ok(mut want) = WANT.lock() {
@@ -1558,6 +1572,9 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         launched_at,
         placement,
         requested_capture,
+        child_scope,
+        broker_fallback,
+        sibling_windows,
         install_dir,
         id,
     };
@@ -2197,17 +2214,34 @@ fn end_the_program() {
         .map(|program| program.processes_before.as_slice())
         .unwrap_or(&[]);
     let launched_tree = if launched_pid != 0 && launched_pid != my_pid {
-        process_tree(launched_pid)
+        match program.as_ref() {
+            Some(program) => process_tree_to(launched_pid, program.child_scope.depth()),
+            None => Vec::new(),
+        }
     } else {
         Vec::new()
     };
     let job_pids = program
         .as_ref()
+        .filter(|program| program.child_scope != CustomChildScope::Disabled)
         .and_then(|program| program.job.as_ref())
         .map(PreviewJob::process_ids)
         .unwrap_or_default();
-    let source_tree = if source_is_new && source_pid != 0 && source_pid != my_pid {
-        process_tree(source_pid)
+    let source_tree = if source_is_new
+        && source_pid != 0
+        && source_pid != my_pid
+        && program
+            .as_ref()
+            .is_none_or(|program| program.child_scope != CustomChildScope::Disabled)
+    {
+        process_tree_to(
+            source_pid,
+            program
+                .as_ref()
+                .map_or(CustomChildDepth::WholeTree, |program| {
+                    program.child_scope.depth()
+                }),
+        )
     } else {
         Vec::new()
     };
@@ -2654,13 +2688,17 @@ fn update_owned_pids_if_current(launch: &Launch, pids: &[u32]) {
 }
 
 /// End `launch.pid` and any newly spawned descendants or active job processes, excluding pre-launch and self PIDs.
+///
+/// **Depth is the preset's `Child Processes` row here too**, so a preset that asked for the
+/// launched pid alone leaves the processes it started running — which is what a user who gated the
+/// walk is asking for, and why the gate is the same one discovery reads rather than a second switch.
 fn sweep_launch_tree(launch: &Launch) {
     let my_pid = std::process::id();
     let mut to_end = Vec::new();
     if launch.pid != 0 && launch.pid != my_pid {
-        to_end.extend(process_tree(launch.pid));
+        to_end.extend(discovery_tree(launch));
     }
-    for pid in active_job_pids(launch.id) {
+    for pid in discovery_job_pids(launch) {
         if !to_end.contains(&pid) {
             to_end.push(pid);
         }
@@ -2692,8 +2730,8 @@ fn cleanup_aborted_source(source: HWND, launch: &Launch) {
         }
         let _ = unsafe { PostMessageW(source, WM_CLOSE, WPARAM(0), LPARAM(0)) };
     }
-    if source_is_new {
-        for pid in process_tree(source_pid) {
+    if source_is_new && launch.child_scope != CustomChildScope::Disabled {
+        for pid in process_tree_to(source_pid, launch.child_scope.depth()) {
             if pid != 0 && pid != my_pid && !launch.processes_before.contains(&pid) {
                 end_process(pid);
             }
@@ -2782,7 +2820,7 @@ fn run_it(
     }
 
     // Lock ownership strictly to our launched tree (+ active job PIDs + adopted brokered tree if newly spawned).
-    let mut processes = owned_pids_for(launch.id, launch.pid, source_pid, source_is_new);
+    let mut processes = owned_pids_for(&launch, launch.pid, source_pid, source_is_new);
     update_owned_pids_if_current(&launch, &processes);
     if let Some(vol) = volume {
         audio_session::apply_custom_preview_volume(processes.clone(), vol);
@@ -3589,7 +3627,7 @@ fn run_it(
         )
         .take();
         if tree_read.elapsed() >= Duration::from_secs(1) {
-            processes = owned_pids_for(launch.id, launch.pid, source_pid, source_is_new);
+            processes = owned_pids_for(&launch, launch.pid, source_pid, source_is_new);
             update_owned_pids_if_current(&launch, &processes);
             tree_read = Instant::now();
         }
@@ -5963,9 +6001,9 @@ fn discovery_match_for_pid(
 fn discovery_processes(launch: &Launch) -> Vec<u32> {
     let my_pid = std::process::id();
     let mut found = Vec::new();
-    for pid in process_tree(launch.pid)
+    for pid in discovery_tree(launch)
         .into_iter()
-        .chain(active_job_pids(launch.id))
+        .chain(discovery_job_pids(launch))
     {
         if pid != 0 && pid != my_pid && !found.contains(&pid) {
             found.push(pid);
@@ -5974,9 +6012,23 @@ fn discovery_processes(launch: &Launch) -> Vec<u32> {
     found
 }
 
+/// The launched tree, walked only as far as the preset's `Child Processes` row allows.
+fn discovery_tree(launch: &Launch) -> Vec<u32> {
+    process_tree_to(launch.pid, launch.child_scope.depth())
+}
+
+/// The job's own members — which are processes the preset asked for only where it asked for
+/// children at all.
+fn discovery_job_pids(launch: &Launch) -> Vec<u32> {
+    if launch.child_scope == CustomChildScope::Disabled {
+        return Vec::new();
+    }
+    active_job_pids(launch.id)
+}
+
 fn refresh_job_pids(launch: &Launch, processes: &mut Vec<u32>) -> Vec<u32> {
     let my_pid = std::process::id();
-    let job_pids = active_job_pids(launch.id);
+    let job_pids = discovery_job_pids(launch);
     let mut changed = false;
     for &pid in &job_pids {
         if pid != 0 && pid != my_pid && !processes.contains(&pid) {
@@ -5988,6 +6040,26 @@ fn refresh_job_pids(launch: &Launch, processes: &mut Vec<u32>) -> Vec<u32> {
         update_owned_pids_if_current(launch, processes);
     }
     job_pids
+}
+
+/// Whether a pid the launched tree never yielded may still be adopted: the preset asked for the
+/// broker road, and the launcher has either exited or had its grace.
+///
+/// **Off unless the preset asks for it.** A packaged program (Windows 11's Paint) is begun by an
+/// activator that hands the file to a pid this app never started, and a Squirrel/Velopack or NSIS
+/// stub exits as soon as it has begun the real program — so the road exists, it is just not one a
+/// preview takes without being told to, because the pid it adopts is one the user never named.
+fn broker_fallback_allowed(launch: &Launch) -> bool {
+    if !launch.broker_fallback {
+        return false;
+    }
+    let grace = if launch.packaged_broker {
+        Duration::ZERO
+    } else {
+        BROKER_FALLBACK_GRACE
+    };
+    process_has_exited(HANDLE(launch.process.as_raw_handle()))
+        || launch.launched_at.elapsed() >= grace
 }
 
 fn set_window_cloak(hwnd: HWND, cloak: bool) -> bool {
@@ -6127,9 +6199,17 @@ struct PreCloakTracker {
 }
 
 impl PreCloakTracker {
-    fn new(requested_capture: CustomCaptureTechnique) -> Self {
+    fn new(
+        requested_capture: CustomCaptureTechnique,
+        sibling_windows: CustomSiblingWindows,
+    ) -> Self {
+        // **Two things have to be true before a window is cloaked from the outside**: the preset
+        // asked for it (`Sibling Windows` is not `Disabled`) and the technique can survive it. A
+        // window that is meant to stand on screen is the one a stray cloak kills outright, which
+        // is why `DirectWindow` keeps its carve-out whatever the preset says.
         Self {
-            enabled: requested_capture != CustomCaptureTechnique::DirectWindow,
+            enabled: sibling_windows.cloaks()
+                && requested_capture != CustomCaptureTechnique::DirectWindow,
             cloaked_hwnds: HashSet::new(),
         }
     }
@@ -6187,8 +6267,12 @@ struct JobChildPreHook {
 
 impl JobChildPreHook {
     fn new(launch: &Launch, effective_capture: CustomCaptureTechnique) -> Self {
-        let wants_hook = launch.requested_capture == CustomCaptureTechnique::InProcessHook
-            || uses_hook_enforcement(launch.placement);
+        // **The gate on writing this app's DLL into another process.** A job child is a pid this
+        // app never began, so the pre-attach is a `Child Processes` question and not only a
+        // capture-technique one: a preset that asked for the launched pid alone gets no injector.
+        let wants_hook = (launch.requested_capture == CustomCaptureTechnique::InProcessHook
+            || uses_hook_enforcement(launch.placement))
+            && launch.child_scope != CustomChildScope::Disabled;
         let desired_capture = if launch.requested_capture == CustomCaptureTechnique::InProcessHook {
             CustomCaptureTechnique::InProcessHook
         } else {
@@ -6415,23 +6499,24 @@ impl Drop for JobChildPreHook {
 
 /// Owned PID set after adoption: launched tree union active job PIDs union adopted brokered tree (only if newly spawned).
 fn owned_pids_for(
-    launch_id: u64,
+    launch: &Launch,
     launch_pid: u32,
     source_pid: u32,
     source_is_new: bool,
 ) -> Vec<u32> {
     let my_pid = std::process::id();
     let mut owned = Vec::new();
-    for pid in process_tree(launch_pid)
+    let depth = launch.child_scope.depth();
+    for pid in process_tree_to(launch_pid, depth)
         .into_iter()
-        .chain(active_job_pids(launch_id))
+        .chain(discovery_job_pids(launch))
     {
         if pid != 0 && pid != my_pid && !owned.contains(&pid) {
             owned.push(pid);
         }
     }
-    if source_is_new && source_pid != 0 {
-        for pid in process_tree(source_pid) {
+    if source_is_new && source_pid != 0 && depth != CustomChildDepth::LaunchedOnly {
+        for pid in process_tree_to(source_pid, depth) {
             if pid != 0 && pid != my_pid && !owned.contains(&pid) {
                 owned.push(pid);
             }
@@ -6478,7 +6563,10 @@ fn census<'a>(
         images,
         creation_times,
         keep,
-        hide_others,
+        // **The preset's `Sibling Windows` row, and only where the caller asked at all.** A
+        // caller that says `false` (every discovery pass) still hides nothing, and a preset that
+        // says so hides nothing either — the two are one gate because they are one question.
+        hide_others: hide_others && launch.sibling_windows.hides(),
         mode,
         candidates: Vec::new(),
     };
@@ -6697,7 +6785,7 @@ fn wait_for_a_window_offscreen_staged(
     let mut images: ProcessImages = HashMap::new();
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut first_hidden: Option<(Instant, HWND)> = None;
-    let mut pre_cloak = PreCloakTracker::new(launch.requested_capture);
+    let mut pre_cloak = PreCloakTracker::new(launch.requested_capture, launch.sibling_windows);
     let mut pre_hook = JobChildPreHook::new(launch, effective_capture);
     let initial_job_pids = active_job_pids(launch.id);
     pre_hook.poll(launch, &initial_job_pids);
@@ -6720,15 +6808,7 @@ fn wait_for_a_window_offscreen_staged(
     };
     let _guard = WinEventGuard(hook);
 
-    let broker_grace = if launch.packaged_broker {
-        Duration::ZERO
-    } else {
-        BROKER_FALLBACK_GRACE
-    };
-    let fallback_allowed = |launch: &Launch| -> bool {
-        process_has_exited(HANDLE(launch.process.as_raw_handle()))
-            || launch.launched_at.elapsed() >= broker_grace
-    };
+    let fallback_allowed = broker_fallback_allowed;
 
     let check_now = |processes: &[u32],
                      images: &mut ProcessImages,
@@ -8363,11 +8443,7 @@ fn wait_for_a_window_in_process_hook(
             },
         );
         let mut best = look.best_candidate();
-        if best.is_none()
-            && (launch.packaged_broker
-                || process_has_exited(HANDLE(launch.process.as_raw_handle()))
-                || started.elapsed() >= BROKER_FALLBACK_GRACE)
-        {
+        if best.is_none() && broker_fallback_allowed(launch) {
             let look_fb = census(
                 launch,
                 &processes,
@@ -9176,7 +9252,7 @@ fn wait_for_a_window(
     let mut creation_times: HashMap<u32, Option<u64>> = HashMap::new();
     let mut first_hook_candidate: Option<(Instant, HWND)> = None;
     let mut dumped_300ms = false;
-    let mut pre_cloak = PreCloakTracker::new(launch.requested_capture);
+    let mut pre_cloak = PreCloakTracker::new(launch.requested_capture, launch.sibling_windows);
     let mut pre_hook = JobChildPreHook::new(launch, effective_capture);
     let initial_job_pids = active_job_pids(launch.id);
     pre_hook.poll(launch, &initial_job_pids);
@@ -9195,15 +9271,7 @@ fn wait_for_a_window(
     };
     let _guard = WinEventGuard(hook);
 
-    let broker_grace = if launch.packaged_broker {
-        Duration::ZERO
-    } else {
-        BROKER_FALLBACK_GRACE
-    };
-    let fallback_allowed = |launch: &Launch| -> bool {
-        process_has_exited(HANDLE(launch.process.as_raw_handle()))
-            || launch.launched_at.elapsed() >= broker_grace
-    };
+    let fallback_allowed = broker_fallback_allowed;
 
     let check_now = |processes: &[u32],
                      images: &mut ProcessImages,
@@ -9522,8 +9590,20 @@ unsafe fn process_creation_time(pid: u32) -> Option<u64> {
 /// a viewer and its renderer — is a program whose window is not the one the launched id owns, and
 /// the tree is what finds it.
 fn process_tree(pid: u32) -> Vec<u32> {
+    process_tree_to(pid, CustomChildDepth::WholeTree)
+}
+
+/// The same walk, to the depth a preset's `Child Processes` row asks for.
+///
+/// **`LaunchedOnly` is the whole of the gate on discovery**: no pid past the launched one is
+/// returned, so `discovery_processes`, `owned_pids_for` and the teardown sweeps — every reader of
+/// this walk — are bounded by it without knowing it exists.
+fn process_tree_to(pid: u32, depth: CustomChildDepth) -> Vec<u32> {
     if pid == 0 {
         return Vec::new();
+    }
+    if depth == CustomChildDepth::LaunchedOnly {
+        return vec![pid];
     }
     /// How many processes are looked up: a tree is a handful, and a bound keeps a snapshot walk
     /// that cannot end a walk that does.
@@ -9540,6 +9620,11 @@ fn process_tree(pid: u32) -> Vec<u32> {
             if !found.contains(&child) {
                 found.push(child);
             }
+        }
+        // One level is the launched pid and what it started directly, which is the first pass of
+        // this loop and nothing after it.
+        if depth == CustomChildDepth::OneLevel && at >= 1 {
+            break;
         }
     }
     found
@@ -11213,6 +11298,7 @@ mod tests {
             pid: 0,
             job: None,
             processes_before: Vec::new(),
+            child_scope: CustomChildScope::ChildrenAndGrandchildren,
         }
     }
 
@@ -12152,6 +12238,53 @@ mod tests {
         assert!(lines[1].ends_with(" second line"));
     }
 
+    /// The walk the `Child Processes` row stands for: the launched pid, one level, or the tree.
+    #[test]
+    fn child_scope_depth_bounds_the_process_walk() {
+        // Nothing is walked for a pid of zero, at any depth.
+        for depth in [
+            CustomChildDepth::LaunchedOnly,
+            CustomChildDepth::OneLevel,
+            CustomChildDepth::WholeTree,
+        ] {
+            assert!(process_tree_to(0, depth).is_empty());
+        }
+
+        let me = std::process::id();
+        // `LaunchedOnly` is the whole of the gate: the answer is the pid asked about and nothing
+        // else, whatever the machine says is below it.
+        assert_eq!(
+            process_tree_to(me, CustomChildDepth::LaunchedOnly),
+            vec![me]
+        );
+        // One level is the launched pid first, exactly as the whole tree begins, so a caller that
+        // reads the head of either gets the pid it started from.
+        let one = process_tree_to(me, CustomChildDepth::OneLevel);
+        let whole = process_tree_to(me, CustomChildDepth::WholeTree);
+        assert_eq!(one.first(), Some(&me));
+        assert_eq!(whole.first(), Some(&me));
+        assert!(
+            one.len() <= whole.len(),
+            "{one:?} must not exceed {whole:?}"
+        );
+        assert_eq!(process_tree(me), whole);
+
+        // `process_tree_to` is monotone in depth, which is what lets the row be a widening.
+        let scope_depths = [
+            CustomChildScope::Disabled.depth(),
+            CustomChildScope::Children.depth(),
+            CustomChildScope::ChildrenAndGrandchildren.depth(),
+        ];
+        assert_eq!(
+            scope_depths,
+            [
+                CustomChildDepth::LaunchedOnly,
+                CustomChildDepth::OneLevel,
+                CustomChildDepth::WholeTree,
+            ]
+        );
+    }
+
     #[test]
     fn tiered_candidate_classification_and_ranking() {
         // Owner blocking logic: only visible owners larger than 1x1 block candidates.
@@ -12489,38 +12622,81 @@ mod tests {
             "threads_of_process(self) {my_tids:?} must include current thread {my_tid}"
         );
 
-        let direct_tracker = PreCloakTracker::new(CustomCaptureTechnique::DirectWindow);
+        // Today's behaviour is `CloakAndHide`, which cloaks everything but `DirectWindow`.
+        let direct_tracker = PreCloakTracker::new(
+            CustomCaptureTechnique::DirectWindow,
+            CustomSiblingWindows::CloakAndHide,
+        );
         assert!(!direct_tracker.enabled);
-        let hook_tracker = PreCloakTracker::new(CustomCaptureTechnique::InProcessHook);
+        let hook_tracker = PreCloakTracker::new(
+            CustomCaptureTechnique::InProcessHook,
+            CustomSiblingWindows::CloakAndHide,
+        );
         assert!(hook_tracker.enabled);
-        let layered_tracker = PreCloakTracker::new(CustomCaptureTechnique::InvisibleLayered);
+        let layered_tracker = PreCloakTracker::new(
+            CustomCaptureTechnique::InvisibleLayered,
+            CustomSiblingWindows::CloakAndHide,
+        );
         assert!(layered_tracker.enabled);
 
-        let dummy_launch = |requested_capture: CustomCaptureTechnique| -> Launch {
-            let handle = unsafe {
-                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, std::process::id())
-                    .expect("open current process query handle")
+        // The preset's own row: nothing is cloaked at all where it says so, and `Cloak` alone is
+        // still enough to cloak.
+        assert!(
+            !PreCloakTracker::new(
+                CustomCaptureTechnique::InProcessHook,
+                CustomSiblingWindows::Disabled
+            )
+            .enabled
+        );
+        assert!(
+            PreCloakTracker::new(
+                CustomCaptureTechnique::InProcessHook,
+                CustomSiblingWindows::Cloak
+            )
+            .enabled
+        );
+
+        let dummy_launch_with =
+            |requested_capture: CustomCaptureTechnique, child_scope: CustomChildScope| -> Launch {
+                let handle = unsafe {
+                    OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, std::process::id())
+                        .expect("open current process query handle")
+                };
+                Launch {
+                    path: PathBuf::from("sample.custom"),
+                    initial_own: None,
+                    provisional: None,
+                    packaged_broker: false,
+                    process: Arc::new(unsafe { OwnedHandle::from_raw_handle(handle.0) }),
+                    pid: 1,
+                    tid: 1,
+                    exe: "stub.exe".to_owned(),
+                    previous_foreground: 0,
+                    windows_before: Vec::new(),
+                    processes_before: Vec::new(),
+                    launch_filetime: 0,
+                    launched_at: Instant::now(),
+                    placement: CustomPlacement::FollowTray,
+                    requested_capture,
+                    child_scope,
+                    broker_fallback: false,
+                    sibling_windows: CustomSiblingWindows::CloakAndHide,
+                    install_dir: None,
+                    id: 1,
+                }
             };
-            Launch {
-                path: PathBuf::from("sample.custom"),
-                initial_own: None,
-                provisional: None,
-                packaged_broker: false,
-                process: Arc::new(unsafe { OwnedHandle::from_raw_handle(handle.0) }),
-                pid: 1,
-                tid: 1,
-                exe: "stub.exe".to_owned(),
-                previous_foreground: 0,
-                windows_before: Vec::new(),
-                processes_before: Vec::new(),
-                launch_filetime: 0,
-                launched_at: Instant::now(),
-                placement: CustomPlacement::FollowTray,
+        // A launch as the tests below have always read it: the walk on, which is where the two
+        // rows were absent and the behaviour was today's.
+        let dummy_launch = |requested_capture: CustomCaptureTechnique| -> Launch {
+            dummy_launch_with(
                 requested_capture,
-                install_dir: None,
-                id: 1,
-            }
+                CustomChildScope::ChildrenAndGrandchildren,
+            )
         };
+        let dummy_launch_with_scope =
+            |requested_capture: CustomCaptureTechnique, scope: CustomChildScope| -> Launch {
+                dummy_launch_with(requested_capture, scope)
+            };
 
         // Wait cap shrinks from 5ms to 1ms for the first 150ms when waiting for a 64-bit job child.
         let offscreen_launch = dummy_launch(CustomCaptureTechnique::OffScreen);
@@ -12532,6 +12708,35 @@ mod tests {
         let pre = JobChildPreHook::new(&hook_launch, CustomCaptureTechnique::InvisibleLayered);
         assert!(pre.enabled);
         assert_eq!(pre.wait_cap_ms(&hook_launch), 1);
+
+        // `Child Processes = Disabled` is the gate on writing this app's DLL into a pid it never
+        // began, so the pre-attach does not happen however the capture method is set.
+        let no_children_launch = dummy_launch_with_scope(
+            CustomCaptureTechnique::InProcessHook,
+            CustomChildScope::Disabled,
+        );
+        assert!(
+            !JobChildPreHook::new(&no_children_launch, CustomCaptureTechnique::InProcessHook)
+                .enabled
+        );
+        // ... and a hook-enforced placement does not route around it either.
+        let mut hook_placement_launch = dummy_launch_with_scope(
+            CustomCaptureTechnique::OffScreen,
+            CustomChildScope::Disabled,
+        );
+        hook_placement_launch.placement = CustomPlacement::Hook;
+        assert!(
+            !JobChildPreHook::new(&hook_placement_launch, CustomCaptureTechnique::OffScreen)
+                .enabled
+        );
+        // A preset that asked for children at all keeps the pre-attach.
+        let children_launch = dummy_launch_with_scope(
+            CustomCaptureTechnique::InProcessHook,
+            CustomChildScope::Children,
+        );
+        assert!(
+            JobChildPreHook::new(&children_launch, CustomCaptureTechnique::InProcessHook).enabled
+        );
 
         // `select_hook_or_census_candidate` immediately adopts a titled captured HWND >= 64x64
         // when no larger visible Census window is present.
