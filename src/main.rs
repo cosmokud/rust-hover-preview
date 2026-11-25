@@ -5,6 +5,7 @@ mod cache;
 mod config;
 mod engines;
 mod formats;
+mod others_cache;
 mod paths;
 mod readers;
 mod shell;

@@ -13,11 +13,11 @@ use super::defaults::{
     parse_text_font_scale, sanitize_animated_fps_max, sanitize_animated_webp_budget_mb,
     sanitize_audio_mark_offset_y, sanitize_decode_budget_gb, sanitize_document_cache_mb,
     sanitize_general_disk_cache_mb, sanitize_hdr_exposure, sanitize_image_cache_mb,
-    sanitize_image_disk_cache_mb, sanitize_pin_zoom_bounce_ms, sanitize_pin_zoom_bounce_power,
-    sanitize_pin_zoom_bounce_speed_ms, sanitize_program_path, sanitize_spinner_delay_ms,
-    sanitize_text_font_scale_percent, sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms,
-    sanitize_ttc_face, sanitize_update_check_hours, sanitize_volume, sanitize_webp_playback_fps,
-    CONFIG_SECTION,
+    sanitize_image_disk_cache_mb, sanitize_others_cache_mb, sanitize_pin_zoom_bounce_ms,
+    sanitize_pin_zoom_bounce_power, sanitize_pin_zoom_bounce_speed_ms, sanitize_program_path,
+    sanitize_spinner_delay_ms, sanitize_text_font_scale_percent,
+    sanitize_text_scroll_far_edge_grace_pixels, sanitize_tick_ms, sanitize_ttc_face,
+    sanitize_update_check_hours, sanitize_volume, sanitize_webp_playback_fps, CONFIG_SECTION,
 };
 use super::migrate;
 use super::setting_types::{
@@ -271,6 +271,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "image_cache_mb",
             Some(sanitize_image_cache_mb(self.image_cache_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "others_cache_mb",
+            Some(sanitize_others_cache_mb(self.others_cache_mb).to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -584,6 +589,11 @@ impl AppConfig {
             CONFIG_SECTION,
             "animated_webp_budget_mb",
             Some(sanitize_animated_webp_budget_mb(self.animated_webp_budget_mb).to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "respect_away_timer",
+            Some(self.respect_away_timer.to_string()),
         );
         ini.set(
             CONFIG_SECTION,
@@ -953,6 +963,11 @@ impl AppConfig {
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "image_cache_mb") {
             if let Ok(value) = u32::try_from(value) {
                 self.image_cache_mb = sanitize_image_cache_mb(value);
+            }
+        }
+        if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "others_cache_mb") {
+            if let Ok(value) = u32::try_from(value) {
+                self.others_cache_mb = sanitize_others_cache_mb(value);
             }
         }
         // A picture's backdrop, by its own name. The one setting every preview was drawn over
@@ -1369,6 +1384,12 @@ impl AppConfig {
             engine_idle_from_ini(ini, "libreoffice_idle", "libreoffice_persistent");
         if let Ok(Some(value)) = ini.getuint(CONFIG_SECTION, "afk_timer_seconds") {
             self.afk_timer_seconds = sanitize_afk_timer_secs(value);
+        }
+        // Whether the away timer reaches this app's own memory caches as well as its engines (see
+        // `app::away_flush`). It sits beside the away time itself rather than beside the budgets
+        // under `Memory`, because what it turns is the timer's reach rather than a size.
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "respect_away_timer") {
+            self.respect_away_timer = value;
         }
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "video_hw_accel") {
             self.video_hw_accel = value;

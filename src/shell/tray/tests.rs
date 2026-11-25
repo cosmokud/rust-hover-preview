@@ -1040,6 +1040,10 @@ fn the_document_scale_ranges_are_not_another_submenus_range() {
             ..ID_TRAY_IMAGE_DISK_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
         ID_TRAY_GENERAL_DISK_CACHE_BASE
             ..ID_TRAY_GENERAL_DISK_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
+        // And the one cache under `Memory` that is not a stack of frames: a page that was parsed,
+        // an archive's listing, and the picture the image converter develops (see `others_cache`).
+        ID_TRAY_OTHERS_CACHE_BASE
+            ..ID_TRAY_OTHERS_CACHE_BASE + OTHERS_CACHE_SIZE_CHOICES_MB.len() as u16,
         ID_TRAY_THEME_CUSTOM_BASE..ID_TRAY_THEME_CUSTOM_BASE + ids::MAX_TRAY_CUSTOM_THEMES as u16,
     ];
 
@@ -1114,6 +1118,47 @@ fn the_largest_cache_size_is_one_the_setting_keeps() {
             "a disk cache's largest item"
         );
     }
+}
+
+/// **What is kept in memory is offered in sizes the settings keep, and the `Others` budget is one
+/// of them.** The row is a size rather than a count because the three caches it bounds hold three
+/// different shapes of thing — a parsed page, an archive's listing, a developed picture — and what
+/// a hand wants to know is how much of its own memory they may take (see `others_cache`).
+#[test]
+fn the_others_budget_offers_sizes_the_setting_keeps() {
+    assert_eq!(
+        OTHERS_CACHE_SIZE_CHOICES_MB[0], MAX_OTHERS_CACHE_MB,
+        "the largest size offered is the largest the setting keeps"
+    );
+
+    assert_eq!(
+        cache_size_label(DEFAULT_OTHERS_CACHE_MB, DEFAULT_OTHERS_CACHE_MB),
+        "128 MB (Default)",
+        "the size the app starts at is the one marked"
+    );
+
+    assert!(
+        OTHERS_CACHE_SIZE_CHOICES_MB.contains(&DEFAULT_OTHERS_CACHE_MB),
+        "and it is one of the sizes offered, so the mark has an item to sit on"
+    );
+
+    assert_eq!(
+        *OTHERS_CACHE_SIZE_CHOICES_MB
+            .last()
+            .expect("a smallest size is offered"),
+        0,
+        "a budget of nothing is a cache switched off rather than a size to be corrected"
+    );
+
+    // And the row beside it: the switch is what the away timer reaches the caches *with*, and a
+    // machine that has never written the file is the machine that flushes — the default is the
+    // whole of what the row means for every config written before it existed.
+    let default = crate::config::config::AppConfig::default().respect_away_timer;
+    assert_eq!(
+        default, DEFAULT_RESPECT_AWAY_TIMER,
+        "the default is written down once, in `defaults`"
+    );
+    assert!(default, "the flush is made where the app starts");
 }
 
 /// The `Image`, `Video` and `Animated` submenus are one
@@ -1362,6 +1407,10 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_IMAGE_CACHE_BASE + IMAGE_CACHE_SIZE_CHOICES_MB.len() as u16,
         ),
         (
+            ID_TRAY_OTHERS_CACHE_BASE,
+            ID_TRAY_OTHERS_CACHE_BASE + OTHERS_CACHE_SIZE_CHOICES_MB.len() as u16,
+        ),
+        (
             ID_TRAY_DOCUMENT_CACHE_BASE,
             ID_TRAY_DOCUMENT_CACHE_BASE + DISK_CACHE_SIZE_CHOICES_MB.len() as u16,
         ),
@@ -1431,6 +1480,7 @@ fn the_audio_scaling_range_sits_apart_from_every_other_id() {
             ID_TRAY_REMEMBER_VIDEO_VOLUME,
             ID_TRAY_VIDEO_SUBTITLES,
             ID_TRAY_VIDEO_HW_ACCEL,
+            ID_TRAY_RESPECT_AWAY_TIMER,
             ID_TRAY_VIDEO_LOOP,
             ID_TRAY_AUDIO_LOOP,
             ID_TRAY_VIDEO_SHUFFLE,
@@ -2081,6 +2131,7 @@ fn every_range_the_tray_hands_out_resolves_and_no_two_share_an_id() {
                 "ANIMATED_WEBP_BUDGET_CHOICES_MB" => {
                     ids::ANIMATED_WEBP_BUDGET_CHOICES_MB.len() as u16
                 }
+                "OTHERS_CACHE_SIZE_CHOICES_MB" => ids::OTHERS_CACHE_SIZE_CHOICES_MB.len() as u16,
                 "DOCUMENT_SCALE_CHOICES" => DOCUMENT_SCALE_CHOICES.len() as u16,
                 "BITMAP_SCALE_CHOICES" => BITMAP_SCALE_CHOICES.len() as u16,
                 "AUDIO_SCALE_CHOICES" => AUDIO_SCALE_CHOICES.len() as u16,

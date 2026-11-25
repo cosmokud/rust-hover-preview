@@ -45,8 +45,12 @@ const WINDOW_CACHE_MAX_ENTRIES: usize = 6;
 /// Documents one thread keeps parse progress for. Small: it is there so a scroll
 /// can continue rather than to remember every file ever hovered.
 const SYNTAX_PROGRESS_MAX_ENTRIES: usize = 8;
-/// Parsed documents kept in memory, keyed by file and rendering options.
-const DOC_CACHE_MAX_ENTRIES: usize = 24;
+/// How many parsed documents the count bound allows, which is what a machine that has not written
+/// `others_cache_mb` is held to as well: the *bytes* are the budget the tray names (see
+/// `others_cache::trim`), and this is the backstop under it so that a hundred empty files cannot
+/// fill a map of a hundred entries for a figure they do not reach. Parsed documents are the largest
+/// of the three caches under `Others`, so this is the one that has to have a ceiling of its own.
+const DOC_CACHE_MAX_ENTRIES: usize = 256;
 /// A text file as it is read: the decoded text and where its lines start.
 ///
 /// Styling is deliberately not part of this. A line table costs eight bytes per
@@ -261,6 +265,64 @@ type DocumentCache = crate::cache::BoundedCache<DocKey, Arc<CachedDocument>>;
 static DOCUMENTS: Lazy<Mutex<DocumentCache>> =
     Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(DOC_CACHE_MAX_ENTRIES)));
 
+/// What one parsed document costs to hold, as an estimate measured from the parts that make it up:
+/// its own text, the offset of every line in it, and — once anything has drawn it — every line as
+/// it is drawn, which is a copy of the text in its own runs.
+///
+/// A document that has not been drawn is its text and its index alone, which is what a sweep that
+/// hovers a folder of logs leaves held; the drawn lines are added when the page that asked for them
+/// built them, because they are the larger half of a document and they are only there once
+/// something has read the page.
+fn bytes_of(document: &CachedDocument) -> usize {
+    let text = document.doc.text.capacity().max(document.doc.text.len());
+    let index = crate::others_cache::table_bytes(document.doc.line_starts.len());
+    let drawn = document
+        .drawn
+        .lock()
+        .ok()
+        .and_then(|drawn| {
+            drawn
+                .as_ref()
+                .map(|lines| lines.iter().map(String::len).sum())
+        })
+        .unwrap_or(0);
+
+    crate::others_cache::held_bytes(text, index, drawn)
+}
+
+/// What the parsed documents are holding between them, in bytes (see `others_cache::trim`).
+pub(crate) fn document_bytes_held() -> usize {
+    DOCUMENTS
+        .lock()
+        .map(|cache| {
+            cache
+                .iter_mru()
+                .map(|(_, document)| bytes_of(document))
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// Give the least recently used document back, answering what it freed.
+///
+/// A document a window is *drawing* is not this cache's to end: what the window holds is an `Arc`
+/// of it, so the entry goes and the picture stays, and the bytes freed are the ones this cache was
+/// counting.
+pub(crate) fn drop_the_oldest_document() -> Option<usize> {
+    let mut cache = DOCUMENTS.lock().ok()?;
+    let (_, document) = cache.pop_lru()?;
+
+    Some(bytes_of(&document))
+}
+
+/// Empty the parsed documents, which is what the away timer asks for once nobody is at the
+/// keyboard to hover a page (see `app::away_flush`).
+pub(crate) fn clear_documents() {
+    if let Ok(mut cache) = DOCUMENTS.lock() {
+        cache.clear();
+    }
+}
+
 /// Syntax definitions from syntect plus the ones it does not bundle, built once
 /// on the first text hover. Individual syntaxes are still parsed lazily.
 pub(super) static SYNTAXES: Lazy<SyntaxSet> = Lazy::new(two_face::syntax::extra_no_newlines);
@@ -323,6 +385,10 @@ pub(super) fn document(path: &Path, options: TextPreviewOptions) -> Option<Arc<C
     if let Ok(mut cache) = DOCUMENTS.lock() {
         cache.insert(key, Arc::clone(&document));
     }
+
+    // And what is over the budget the tray names goes now rather than at the next parse that
+    // happens to pass through here (see `others_cache::trim`).
+    crate::others_cache::trim();
 
     Some(document)
 }

@@ -270,10 +270,10 @@ impl NameScroll {
         };
 
         // **Measured, not counted.** A card's name is a file's name, and a file can be called
-        // `漢字Kanji name`: a Chinese glyph in it is drawn out of the font the system links in, which
-        // is about twice as wide as the face's own. A name counted at one advance a character was a
-        // name measured shorter than it is drawn, so it was judged to fit the card and then clipped
-        // at rest instead of scrolled (see `page::text_width`).
+        // `漢字Sample file`: a Chinese glyph in it is drawn out of the font the system
+        // links in, which is about twice as wide as the face's own. A name counted at one advance a
+        // character was a name measured shorter than it is drawn, so it was judged to fit the card
+        // and then clipped at rest instead of scrolled (see `page::text_width`).
         Self::fitted(
             text_width(&name_style(), name, advance, scale),
             room,

@@ -197,9 +197,12 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **`Image`** = the pictures ImageMagick developed, kept as temp files.
     - **`General`** = the subtitle tracks a film's embedded ones are copied into, and the track facts a sound was read for, kept as temp files; `0` draws a film without its subtitles and reads every sound again.
   - **Memory** — What a preview may cost in RAM between hovers.
+    - **`Respect Away Timer`** — checked by default: the moment **Engine → Away Timer** runs out is the one every cache here is given back at as well as the engines it has always let go — the decoded frames, the held runs of an animated picture, the parsed pages, the archive listings and the picture the image converter develops. It fires once per away period, and nothing that is on screen is taken by it: a pin that is up (or minimized, or a bubble, or a window of its own) keeps what it is drawing and flushes when it goes, provided the user is still away.
+      - Off, the away timer bounds the engines alone, which is what the app did before the row existed.
     - **`Decode Budget`** — `16 GB` down to `512 MB`; default `1 GB`. A file past it gets no preview.
     - **`Image`** — decoded frames kept in memory, `16 GB` down to `0 MB`.
     - **`Animated Image`** — the room a pinned picture's held run of frames is given — an animated GIF as much as a WebP — `8 GB` down to `64 MB`.
+    - **`Others`** — the caches that are not stacks of frames, held under one total: a parsed page of text, an archive's listing, and the picture ImageMagick develops for a preview too large for the frame cache. `16 GB` down to `0 MB`, default **`128 MB`**; what is over the budget goes least-recently-used first, and `0` holds none of them between hovers.
   - **Explorer Poll** — How often the app checks Explorer while a folder window is focused: `15 ms` (`default`), `31`, `47`, `63`, or `78 ms`.
     - Lower answers a move sooner; higher is lighter on CPU and Explorer.
   - **Hardware Acceleration (MPV Only)** — checked by default: a film mpv plays is decoded on the graphics card through mpv's own `--hwdec=auto`, whose safe list and software fallback are that player's business.

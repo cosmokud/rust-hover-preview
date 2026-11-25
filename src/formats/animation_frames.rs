@@ -141,6 +141,18 @@ struct TimelineKey {
 static TIMELINES: Lazy<Mutex<crate::cache::BoundedCache<TimelineKey, Option<Arc<FrameTimeline>>>>> =
     Lazy::new(|| Mutex::new(crate::cache::BoundedCache::new(TIMELINES_MAX_ENTRIES)));
 
+/// Give back every frame run that was walked, which is what the away timer asks for once nobody is
+/// at the keyboard to drag a picture's track (see `app::away_flush`).
+///
+/// Nothing on screen is taken by it: the arms of a transport bar that is up hold the timeline they
+/// were drawn from, so the entry goes and the bar stays, and what a second one costs is one walk of
+/// a file's own block list rather than a decode of any frame of it.
+pub(crate) fn clear_timelines() {
+    if let Ok(mut timelines) = TIMELINES.lock() {
+        timelines.clear();
+    }
+}
+
 /// The timeline of the file at `path`, or nothing where its container says nothing
 /// that can be walked — which is a bar with no length to drag, rather an animation the
 /// app will not play.

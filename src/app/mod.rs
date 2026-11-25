@@ -1,5 +1,6 @@
 pub(crate) mod afk;
 pub(crate) mod app_icon;
+pub(crate) mod away_flush;
 pub(crate) mod detach;
 pub(crate) mod dialogs;
 pub(crate) mod elevation;
