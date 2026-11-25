@@ -245,6 +245,42 @@ const TREE_POLL: Duration = Duration::from_millis(200);
 /// the two it is the event target that is visible at birth, because the launch hides the other.
 const THE_SMALLEST_PICTURE: i64 = 64 * 64;
 
+/// The smallest a window may be, in either direction, and still be a picture **when it has never been
+/// seen visible**.
+///
+/// A hidden candidate is a guess: nothing of it has been composited, so its rectangle is all there is
+/// to judge it by, and an area alone cannot tell a document from a program's own furniture — **VLC
+/// puts up a top-level `Static` window titled `VLC ghk 3.0.24` at 136x39 before its media window
+/// exists**, and at 5304 px² that cleared 64x64 and was adopted as the picture: the hover became a
+/// white box while the real 1936x1192 window arrived 150 ms later, which is exactly the empty box a
+/// VLC preset showed. Its 39-pixel height is what says it is a strip of text rather than a place a
+/// picture is drawn, and the floor leaves the windows that already worked alone: mpv's first hidden
+/// window is 136x100, and 100 clears this.
+const THE_SMALLEST_SIDE: i32 = 64;
+
+/// What a window's rectangle is worth to the ranking: the area it is drawn in, and whether either of
+/// its sides is too thin for a picture (see `THE_SMALLEST_SIDE`).
+///
+/// Carried rather than recomputed because `classify_candidate` has to answer from the shape as well as
+/// the size, and a caller holding a `window_rect` has both already.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct WindowSize {
+    area: i64,
+    /// True where a side is thinner than a picture's: a tooltip, a status strip, an event target.
+    a_strip: bool,
+}
+
+impl WindowSize {
+    fn of(rect: RECT) -> Self {
+        let width = (rect.right - rect.left).max(0);
+        let height = (rect.bottom - rect.top).max(0);
+        Self {
+            area: i64::from(width) * i64::from(height),
+            a_strip: width.min(height) < THE_SMALLEST_SIDE,
+        }
+    }
+}
+
 /// How often the program's window is looked at again, and kept at the box if the program moved
 /// itself: a window shown again by its own program, or restored by it, is one the Shell would
 /// compose at the place the program chose rather than at the hover's.
@@ -1162,11 +1198,18 @@ fn classify_candidate(
     owner_blocking: bool,
     tool_window: bool,
     visible: bool,
-    area: i64,
+    size: WindowSize,
 ) -> Option<CandidateTier> {
-    if titled && !strictly_owned && !tool_window && area >= THE_SMALLEST_PICTURE {
+    // **A window never seen visible is held to a picture's *shape* as well as its size**, because its
+    // rectangle is all that is known about it: a program's tooltip is a titled, unowned, non-tool
+    // window too, and VLC's is 136x39 (see `THE_SMALLEST_SIDE`). One that has been seen is judged as
+    // before, so a small program's window is a small picture rather than no picture at all.
+    let a_strip = !visible && size.a_strip;
+    let area = size.area;
+    if titled && !strictly_owned && !tool_window && !a_strip && area >= THE_SMALLEST_PICTURE {
         Some(CandidateTier::Main)
-    } else if titled && !owner_blocking && !tool_window && area >= THE_SMALLEST_PICTURE {
+    } else if titled && !owner_blocking && !tool_window && !a_strip && area >= THE_SMALLEST_PICTURE
+    {
         Some(CandidateTier::HiddenOwner)
     } else if visible && !owner_blocking && !tool_window && area >= THE_SMALLEST_PICTURE {
         Some(CandidateTier::UntitledVisible)
@@ -6618,10 +6661,13 @@ impl Census<'_> {
         let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
         let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
         let mut rect = RECT::default();
-        let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
-            (rect.right - rect.left).max(0) as i64 * (rect.bottom - rect.top).max(0) as i64
+        let size = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+            WindowSize::of(rect)
         } else {
-            0
+            WindowSize {
+                area: 0,
+                a_strip: true,
+            }
         };
 
         if let Some(tier) = classify_candidate(
@@ -6630,13 +6676,13 @@ impl Census<'_> {
             owner_blocking,
             tool_window,
             visible,
-            area,
+            size,
         ) {
             self.candidates.push((
                 CandidateRank {
                     tier,
                     visible,
-                    area,
+                    area: size.area,
                 },
                 hwnd,
             ));
@@ -8363,14 +8409,23 @@ fn validate_captured_hwnd(hwnd: HWND) -> Option<(i64, bool, HWND)> {
         return None;
     }
     let mut rect = RECT::default();
-    let area = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
-        (rect.right - rect.left).max(0) as i64 * (rect.bottom - rect.top).max(0) as i64
+    let size = if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+        WindowSize::of(rect)
     } else {
-        0
+        WindowSize {
+            area: 0,
+            a_strip: true,
+        }
     };
     let titled = unsafe { GetWindowTextLengthW(hwnd) } > 0;
-    if titled || area >= THE_SMALLEST_PICTURE {
-        Some((area, titled, hwnd))
+    let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
+    // The rule a census candidate is held to, and the letter of it: a titled window that has never
+    // been seen and is a strip is a tooltip rather than a picture (see `THE_SMALLEST_SIDE`).
+    if !visible && size.a_strip {
+        return None;
+    }
+    if titled || size.area >= THE_SMALLEST_PICTURE {
+        Some((size.area, titled, hwnd))
     } else {
         None
     }
@@ -12330,32 +12385,62 @@ mod tests {
         assert!(owner_rect_is_blocking(true, true, Some((800, 600))));
         assert!(!owner_is_blocking(HWND::default()));
 
-        // Tier classification rules.
-        let doc_area = THE_SMALLEST_PICTURE;
-        let tool_area = TOOLWINDOW_FALLBACK_MIN_AREA;
+        // Tier classification rules, asked in the shape a window was found in: VLC's own two
+        // windows are the cases this is written against.
+        let size = |w: i32, h: i32| WindowSize {
+            area: i64::from(w) * i64::from(h),
+            a_strip: w.min(h) < THE_SMALLEST_SIDE,
+        };
+        let picture = size(640, 480);
+        let tool_area = size(160, 120);
+
         assert_eq!(
-            classify_candidate(true, false, false, false, false, doc_area),
+            classify_candidate(true, false, false, false, false, picture),
             Some(CandidateTier::Main)
         );
         assert_eq!(
-            classify_candidate(true, true, false, false, false, doc_area),
+            classify_candidate(true, true, false, false, false, picture),
             Some(CandidateTier::HiddenOwner)
         );
+
+        // **A window never seen visible is held to a picture's shape.** VLC puts up a titled,
+        // unowned, non-tool `Static` at 136x39 (`VLC ghk 3.0.24`) before its media window exists, and
+        // adopting it was the white box: at 5304 px² it cleared 64x64 and lost to nothing.
         assert_eq!(
-            classify_candidate(false, false, false, false, true, doc_area),
+            classify_candidate(true, false, false, false, false, size(136, 39)),
+            None,
+            "VLC's own `VLC ghk 3.0.24` static is a strip, not a picture"
+        );
+        // The tooltip clears the *old* floor (it is 5304 px2, and 64x64 is 4096), which is the whole
+        // of why it used to win; what stops it now is its 39-pixel height.
+        let tooltip = size(136, 39);
+        assert!(tooltip.area >= THE_SMALLEST_PICTURE);
+        assert!(tooltip.a_strip);
+        // The windows that already worked are untouched: mpv's first hidden window is 136x100.
+        assert_eq!(
+            classify_candidate(true, false, false, false, false, size(136, 100)),
+            Some(CandidateTier::Main)
+        );
+        // Seen visible, a small window is a small picture rather than no picture at all.
+        assert_eq!(
+            classify_candidate(true, false, false, false, true, size(136, 39)),
+            Some(CandidateTier::Main)
+        );
+        assert_eq!(
+            classify_candidate(false, false, false, false, true, size(64, 64)),
             Some(CandidateTier::UntitledVisible)
         );
         assert_eq!(
-            classify_candidate(false, true, false, false, true, doc_area),
+            classify_candidate(false, true, false, false, true, size(64, 64)),
             Some(CandidateTier::UntitledVisible)
         );
         assert_eq!(
-            classify_candidate(false, false, false, false, false, doc_area),
+            classify_candidate(false, false, false, false, false, size(640, 480)),
             None,
             "hidden untitled window must be rejected"
         );
         assert_eq!(
-            classify_candidate(false, false, false, true, true, tool_area - 1),
+            classify_candidate(false, false, false, true, true, size(159, 119)),
             None,
             "small toolwindow below 160x120 must be rejected"
         );
@@ -12369,12 +12454,12 @@ mod tests {
             "hidden toolwindow must be rejected"
         );
         assert_eq!(
-            classify_candidate(true, true, true, false, true, 1920 * 1080),
+            classify_candidate(true, true, true, false, true, size(1920, 1080)),
             None,
             "dialog/popup owned by visible non-tiny window must be rejected across all tiers"
         );
         assert_eq!(
-            classify_candidate(false, true, true, true, true, 1920 * 1080),
+            classify_candidate(false, true, true, true, true, size(1920, 1080)),
             None
         );
 
