@@ -14,10 +14,11 @@
 use super::document::{styled_window, CachedDocument, DocLine, LineBlock};
 use super::frame::{FindHighlights, ScrollBar, Selection};
 use crate::text::text_paint::{
-    blend, fill_rect, luminance, plain_style, rgb, scaled, DibSurface, RunPainter, TextMetrics,
-    TextStyle, BODY_LEVEL, SIZE_LEVELS,
+    blend, character_advances, fill_rect, luminance, plain_style, rgb, scaled, DibSurface,
+    RunPainter, TextMetrics, TextStyle, BODY_LEVEL, SIZE_LEVELS,
 };
 use crate::text::text_theme::LoadedTheme;
+use std::sync::Arc;
 use windows::Win32::Foundation::RECT;
 
 /// Shortest the thumb gets, so a document of a thousand screens still has
@@ -49,6 +50,52 @@ pub(super) struct LaidRun {
     style: TextStyle,
     pub(super) x: i32,
     pub(super) width: i32,
+    /// The width of each character of this run where one number a character does not say it — a run
+    /// with Chinese in it is drawn out of the font the system links in, at widths the fixed-pitch
+    /// face knows nothing of — and nothing where the run is one cell a character.
+    ///
+    /// It is what the run's own edges are worked out from, so a selection's wash, a find's band and
+    /// a caret stand on the glyph they belong to (see [`cell_edge`]).
+    pub(super) advances: Option<Arc<[i32]>>,
+}
+
+impl LaidRun {
+    /// The left edge of character `offset` of this run, in frame coordinates.
+    fn edge(&self, offset: usize) -> i32 {
+        cell_edge(
+            self.x,
+            self.width,
+            self.text.chars().count(),
+            self.advances.as_deref(),
+            offset,
+        )
+    }
+}
+
+/// The left edge of character `offset` of a run that starts at `x` and is `width` pixels wide over
+/// `characters` of them.
+///
+/// **A fixed-pitch face is one number a character only for the characters it carries.** A Chinese
+/// glyph is drawn out of the font the system links in, at a width of its own, so a run holding one
+/// is measured and carries the width of each of its characters; a run that is one cell a character
+/// has none, and its edges are the even split of its width that they always were.
+///
+/// Both the painting and the reading of a page are worked out here, so a caret, a selection's wash
+/// and a press cannot disagree about where a character is.
+pub(super) fn cell_edge(
+    x: i32,
+    width: i32,
+    characters: usize,
+    advances: Option<&[i32]>,
+    offset: usize,
+) -> i32 {
+    match advances.filter(|advances| advances.len() == characters) {
+        Some(advances) => x + advances.iter().take(offset.min(characters)).sum::<i32>(),
+        None => {
+            let advance = width as f32 / characters.max(1) as f32;
+            x + (offset.min(characters) as f32 * advance).round() as i32
+        }
+    }
 }
 
 pub(super) struct LaidLine {
@@ -234,16 +281,11 @@ pub(super) fn layout(
 
             let mut style = plain_style(BODY_LEVEL);
             style.foreground = blend(rgb(theme.foreground()), rgb(theme.background()), 0.45);
-            let advance = metrics.advance[BODY_LEVEL as usize].max(1);
-            let width = text.chars().count() as i32 * advance;
+            let run = laid_run(text, style, padding + gutter, metrics);
+            let width = run.width;
 
             body.lines.push(LaidLine {
-                runs: vec![LaidRun {
-                    text,
-                    style,
-                    x: padding + gutter,
-                    width,
-                }],
+                runs: vec![run],
                 top: body.y,
                 height: note_height,
                 left: padding + gutter,
@@ -554,12 +596,65 @@ fn for_each_token(line: &DocLine, mut visit: impl FnMut(Token) -> bool) {
     }
 }
 
+/// A run of text placed at `x`, with the width its own characters have: one cell a character for a
+/// run of a fixed-pitch face's own characters, and the widths GDI gave each of them for a run
+/// holding one the face has no glyph for (see [`character_advances`]).
+fn laid_run(text: String, style: TextStyle, x: i32, metrics: &TextMetrics) -> LaidRun {
+    let advances = character_advances(&style, &text, metrics.scale);
+    placed_run(text, style, x, advances, metrics)
+}
+
+/// The run `laid_run` makes, of character widths that have already been measured — so a token the
+/// layout has measured to find out how wide it is is not measured a second time to place it.
+fn placed_run(
+    text: String,
+    style: TextStyle,
+    x: i32,
+    advances: Option<Arc<[i32]>>,
+    metrics: &TextMetrics,
+) -> LaidRun {
+    let width = advances.as_deref().map_or_else(
+        || {
+            let advance = metrics.advance[(style.level as usize).min(SIZE_LEVELS - 1)].max(1);
+            text.chars().count() as i32 * advance
+        },
+        |advances| advances.iter().sum(),
+    );
+
+    LaidRun {
+        text,
+        style,
+        x,
+        width,
+        advances,
+    }
+}
+
+/// The width of the characters `[from, to)` of a run whose own character widths are `advances`, or
+/// of the same characters at one `advance` each where the run is a fixed-pitch one.
+fn slice_width(advances: Option<&[i32]>, from: usize, to: usize, advance: i32) -> i32 {
+    let counted = |from: usize, to: usize| to.saturating_sub(from) as i32 * advance;
+
+    match advances {
+        Some(advances) => advances
+            .get(from..to)
+            .map_or_else(|| counted(from, to), |slice| slice.iter().sum()),
+        None => counted(from, to),
+    }
+}
+
 /// One document line's visual lines, wrapped at the page edge and at most
 /// `max_lines` of them, each with the character of the document line it starts at.
 /// A word wider than the page — a URL, a hash — is cut rather than allowed to run
 /// off it, and a space that lands at a wrap point is dropped instead of starting a
 /// line. The indentation a document line begins with is not at a wrap point and is
 /// drawn where the line's own characters put it.
+///
+/// A token is measured through GDI rather than counted, because a character Consolas has no glyph
+/// for — a Chinese one — is drawn out of the font the system links in, at a width of its own: a
+/// line counted at one advance a character is laid out shorter than it is painted, and everything
+/// after the first such character lands inside the ink of the one before it (see
+/// [`character_advances`]).
 ///
 /// What the offsets are for is a selection: a copy is taken from the document
 /// rather than from what was drawn, so a wrap point has to say where the next
@@ -583,7 +678,9 @@ fn wrap_line(
     for_each_token(line, |token| {
         let count = token.text.chars().count();
         let advance = metrics.advance[(token.style.level as usize).min(SIZE_LEVELS - 1)].max(1);
-        let width = count as i32 * advance;
+        let token_advances = character_advances(&token.style, &token.text, metrics.scale);
+        let advances = token_advances.as_deref();
+        let width = slice_width(advances, 0, count, advance);
 
         if token.space {
             // A space with no room left is the space at a wrap point: it is
@@ -599,12 +696,13 @@ fn wrap_line(
             if !runs.is_empty() && x + width > limit {
                 return true;
             }
-            runs.push(LaidRun {
-                text: token.text,
-                style: token.style,
+            runs.push(placed_run(
+                token.text,
+                token.style,
                 x,
-                width,
-            });
+                token_advances,
+                metrics,
+            ));
             x += width;
             return true;
         }
@@ -623,33 +721,46 @@ fn wrap_line(
         // A word that fits where the line stands is taken whole, so only one too
         // wide for the room left of it is ever split.
         if width <= limit - x {
-            runs.push(LaidRun {
-                text: token.text,
-                style: token.style,
+            runs.push(placed_run(
+                token.text,
+                token.style,
                 x,
-                width,
-            });
+                token_advances,
+                metrics,
+            ));
             x += width;
             emitted += count;
             return true;
         }
 
         // A word too wide for the room left of it is split across the lines it
-        // takes, and nothing else reaches here.
+        // takes, and nothing else reaches here. The split is at the character the
+        // room runs out on, which is a character GDI has measured: one cell a
+        // character would cut a line of Chinese short of the edge and leave the
+        // rest of the glyph hanging past it.
         let characters: Vec<char> = token.text.chars().collect();
         let mut offset = 0usize;
         while offset < characters.len() {
-            let available = (((limit - x).max(advance)) / advance) as usize;
-            let take = (characters.len() - offset).min(available.max(1));
-            let text: String = characters[offset..offset + take].iter().collect();
-            let chunk = take as i32 * advance;
+            let room = limit - x;
+            let mut take = 0usize;
+            let mut taken = 0i32;
+            while offset + take < characters.len() {
+                let next = slice_width(advances, offset + take, offset + take + 1, advance);
+                // One character is always taken, however wide the box is: a box
+                // narrower than a single glyph still draws it rather than nothing.
+                if take > 0 && taken + next > room {
+                    break;
+                }
+                taken += next;
+                take += 1;
+            }
+            let take = take.max(1);
 
-            runs.push(LaidRun {
-                text,
-                style: token.style,
-                x,
-                width: chunk,
-            });
+            let text: String = characters[offset..offset + take].iter().collect();
+            let chunk = slice_width(advances, offset, offset + take, advance);
+            let piece = advances.map(|advances| Arc::from(&advances[offset..offset + take]));
+
+            runs.push(placed_run(text, token.style, x, piece, metrics));
             x += chunk;
             offset += take;
             emitted += take;
@@ -1026,22 +1137,24 @@ pub(super) unsafe fn paint(
             };
 
             if marks.is_empty() {
-                painter.draw(
+                painter.draw_at(
                     &run.text,
                     rect.left,
                     rect,
                     &run.style,
                     run.style.foreground,
                     run_background,
+                    run.advances.as_deref(),
                 );
                 continue;
             }
 
             // The run is drawn in the pieces the marks cut it into, each with the colour of the
             // highest mark that covers it: the text before a mark as usual, the mark without
-            // touching its background, and the text after it as usual.
+            // touching its background, and the text after it as usual. The pieces are cut where the
+            // run's own characters end, which is a measured column rather than one cell a character
+            // where GDI drew a Chinese glyph at a width of its own (see `cell_edge`).
             let characters: Vec<char> = run.text.chars().collect();
-            let advance = run.width as f32 / characters.len().max(1) as f32;
             let mut edges = vec![0usize, run_characters];
             for (from, to, _) in &marks {
                 edges.push(*from);
@@ -1078,9 +1191,13 @@ pub(super) unsafe fn paint(
                 };
 
                 let piece: String = characters[start..end].iter().collect();
-                let left = run.x + (start as f32 * advance).round() as i32;
-                let right = run.x + (end as f32 * advance).round() as i32;
-                painter.draw(
+                let left = run.edge(start);
+                let right = run.edge(end);
+                let advances = run
+                    .advances
+                    .as_deref()
+                    .and_then(|advances| advances.get(start..end));
+                painter.draw_at(
                     &piece,
                     left,
                     RECT {
@@ -1091,6 +1208,7 @@ pub(super) unsafe fn paint(
                     &run.style,
                     foreground,
                     background,
+                    advances,
                 );
             }
         }
