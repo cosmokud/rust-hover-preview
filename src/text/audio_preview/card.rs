@@ -11,7 +11,7 @@
 
 use super::page::{
     bar_band, bar_row, build_page, control_boxes, facts_edge, facts_right, facts_row, facts_width,
-    holds, paint, text_width,
+    holds, name_style, paint, text_width,
 };
 use crate::config::config::TextTheme;
 use crate::readers::audio_track::Track;
@@ -25,7 +25,7 @@ use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
 /// The cell the card's mark is drawn in, in header advances: the room the dot keeps and the room
 /// the name begins after. The dot itself is drawn rather than set as a glyph, at a fifth of the
 /// ripples a beat stands around it (see `super::page::mark`).
-pub(super) const MARK_CELL_ADVANCES: i32 = 2;
+pub(crate) const MARK_CELL_ADVANCES: i32 = 2;
 
 /// Room between the last fact and the clock at the right edge.
 pub(super) const TIME_GAP_ADVANCES: i32 = 3;
@@ -265,11 +265,20 @@ impl NameScroll {
     /// room the card leaves for it, at the font the card is drawn in, and nothing at all where
     /// the name fits — a card whose name is drawn once and held.
     pub(crate) fn of(name: &str, width: u32, dpi: u32, options: AudioPreviewOptions) -> Self {
-        let Some((advance, room)) = name_room(width, dpi, options) else {
+        let Some((advance, room, scale)) = name_room(width, dpi, options) else {
             return Self::fitted(0, 0, 1);
         };
 
-        Self::fitted(text_width(name, advance), room, advance)
+        // **Measured, not counted.** A card's name is a file's name, and a file can be called
+        // `漢字Kanji name`: a Chinese glyph in it is drawn out of the font the system links in, which
+        // is about twice as wide as the face's own. A name counted at one advance a character was a
+        // name measured shorter than it is drawn, so it was judged to fit the card and then clipped
+        // at rest instead of scrolled (see `page::text_width`).
+        Self::fitted(
+            text_width(&name_style(), name, advance, scale),
+            room,
+            advance,
+        )
     }
 
     /// The scroll a run `want` pixels wide needs in `room` pixels of it, at the advance of the font it
@@ -369,7 +378,7 @@ impl NameScroll {
 /// the mark's cell, both in advances of the header's font — and it is worked out here for the
 /// one caller that has none of that in hand: the preview loop, which owns the scroll and needs
 /// to know both where it turns around and how fast to move it.
-fn name_room(width: u32, dpi: u32, options: AudioPreviewOptions) -> Option<(i32, i32)> {
+fn name_room(width: u32, dpi: u32, options: AudioPreviewOptions) -> Option<(i32, i32, f32)> {
     let dc = unsafe { CreateCompatibleDC(None) };
     if dc.0.is_null() {
         return None;
@@ -379,7 +388,7 @@ fn name_room(width: u32, dpi: u32, options: AudioPreviewOptions) -> Option<(i32,
         let advance = metrics.advance[HEADER_LEVEL as usize].max(1);
         let room = width as i32 - metrics.padding * 2 - advance * MARK_CELL_ADVANCES;
 
-        (advance, room)
+        (advance, room, metrics.scale)
     });
     unsafe {
         let _ = DeleteDC(dc);
@@ -415,16 +424,18 @@ pub(crate) fn facts_scroll(
     let scroll = TextMetrics::new(dc, dpi, options.font_scale_percent)
         .map(|metrics| {
             let advance = metrics.advance[BODY_LEVEL as usize].max(1);
+            let scale = metrics.scale;
             let left = metrics.padding;
             let right = facts_edge(
                 &card.facts,
                 left,
-                facts_right(card, width as i32 - metrics.padding, advance),
+                facts_right(card, width as i32 - metrics.padding, advance, scale),
                 advance,
+                scale,
             );
 
             NameScroll::fitted(
-                facts_width(&card.facts, advance),
+                facts_width(&card.facts, advance, scale),
                 (right - left).max(0),
                 advance,
             )
@@ -462,7 +473,7 @@ pub(crate) fn facts_rect(
         RECT {
             left: metrics.padding,
             top: row.top,
-            right: facts_right(card, width as i32 - metrics.padding, advance),
+            right: facts_right(card, width as i32 - metrics.padding, advance, metrics.scale),
             bottom: row.top + row.height,
         }
     });

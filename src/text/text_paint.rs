@@ -208,6 +208,66 @@ pub(crate) fn character_advances(style: &TextStyle, text: &str, scale: f32) -> O
     Some(advances)
 }
 
+/// The width of a run of text at a style, measured where a count of characters is not the whole
+/// of it.
+///
+/// A page laid out as `characters × advance` is a page laid out for the characters the face carries.
+/// A run holding one it does not — a Chinese glyph, a kana, an emoji — is drawn out of the font the
+/// system links in, at a width of its own, so the run is measured instead (see
+/// [`character_advances`]). Everything ASCII takes the count, which is the arithmetic every page of
+/// source or prose has always had.
+pub(crate) fn run_width(style: &TextStyle, text: &str, advance: i32, scale: f32) -> i32 {
+    match character_advances(style, text, scale) {
+        Some(advances) => advances.iter().sum(),
+        None => text.chars().count() as i32 * advance.max(1),
+    }
+}
+
+/// `text` cut to `room` pixels at a style, with an ellipsis where it was cut — measured, so a name
+/// of Chinese is cut where its own glyphs run out rather than where a count of Latin ones would.
+///
+/// A run that does not fit at all comes back empty rather than as an ellipsis on its own, which is
+/// what the callers that cut names rely on: a mark with no room is a mark that would be drawn over
+/// what stands beside it.
+pub(crate) fn fit_to_width(
+    style: &TextStyle,
+    text: &str,
+    room: i32,
+    advance: i32,
+    scale: f32,
+) -> String {
+    if room <= 0 {
+        return String::new();
+    }
+    if run_width(style, text, advance, scale) <= room {
+        return text.to_string();
+    }
+
+    let ellipsis = run_width(style, "…", advance, scale);
+    let budget = room - ellipsis;
+    if budget <= 0 {
+        return String::new();
+    }
+
+    // The longest prefix that fits, found by bisection over the character boundaries: both
+    // measures only grow with the text, so the answer is one boundary and no walk is needed.
+    let boundaries: Vec<usize> = text.char_indices().skip(1).map(|(at, _)| at).collect();
+    let (mut low, mut high) = (0usize, boundaries.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if run_width(style, &text[..boundaries[middle]], advance, scale) <= budget {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+
+    match low.checked_sub(1).map(|index| boundaries[index]) {
+        Some(at) => format!("{}…", &text[..at]),
+        None => String::new(),
+    }
+}
+
 /// One measurement of one run, through the thread's own scratch surface.
 fn measure_character_advances(style: &TextStyle, text: &str, scale: f32) -> Option<Arc<[i32]>> {
     let wide: Vec<u16> = text.encode_utf16().collect();

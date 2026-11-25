@@ -405,6 +405,11 @@ fn natural_order(left: &str, right: &str) -> std::cmp::Ordering {
 // ----------------------------------------------------------------------- page
 
 /// One run of the page: a piece of text drawn at `x`, in one style.
+///
+/// `width` is measured rather than counted (see `text_width`), so an entry named in Chinese is as
+/// wide as its own glyphs are drawn. Nothing of a run is ever cut out of it — a name too long for
+/// its column is cut to a string before it becomes a run — so the painting is GDI's own layout,
+/// which is the one the measurement was taken from.
 struct PageRun {
     text: String,
     x: i32,
@@ -443,6 +448,22 @@ fn build_page(
     let gap = body_advance * SIZE_GAP_ADVANCES;
     let icon_cell = body_advance * (ICON_CELL_ADVANCES + ICON_TEXT_GAP_ADVANCES);
     let indent = body_advance * INDENT_SPACES;
+    let scale = metrics.scale;
+
+    // The style a name is set in, which is the one its width has to be measured at: an entry's name
+    // can hold a Chinese glyph, and a glyph the face has none of is drawn out of the font the
+    // system links in, at a width of its own.
+    let name_style = |bold: bool| {
+        let mut style = plain_style(BODY_LEVEL);
+        style.foreground = rgb(theme.foreground());
+        style.bold = bold;
+        style
+    };
+    let size_style = {
+        let mut style = plain_style(BODY_LEVEL);
+        style.foreground = blend(rgb(theme.foreground()), rgb(theme.background()), 0.45);
+        style
+    };
 
     let page_color = rgb(theme.background());
     let foreground = rgb(theme.foreground());
@@ -457,21 +478,26 @@ fn build_page(
     let size_column = rows
         .iter()
         .filter(|row| !row.is_dir)
-        .map(|row| text_width(&format_size(row.size), body_advance))
+        .map(|row| text_width(&size_style, &format_size(row.size), body_advance, scale))
         .max()
         .unwrap_or(body_advance * 3)
-        .max(text_width("size", body_advance));
+        .max(text_width(&size_style, "size", body_advance, scale));
 
     // The width the page would like: the widest row, or the header, whichever
     // asks for more. It is clamped to the box the way every preview's size is.
     let header = header_runs(listing, name, files, folders, metrics, foreground, muted);
-    let header_width: i32 = header.iter().map(|run| run.width).sum();
+    let header_width: i32 = header
+        .iter()
+        .map(|run| run.x + run.width)
+        .max()
+        .unwrap_or(0)
+        - header.first().map_or(0, |run| run.x);
     let widest_row = rows
         .iter()
         .map(|row| {
             indent * row.depth as i32
                 + icon_cell
-                + text_width(&row.name, body_advance)
+                + text_width(&name_style(row.is_dir), &row.name, body_advance, scale)
                 + gap
                 + if row.is_dir { 0 } else { size_column }
         })
@@ -552,17 +578,15 @@ fn build_page(
         }
 
         let name_left = left + if face.is_some() { icon_cell } else { 0 };
-        let mut name_style = plain_style(BODY_LEVEL);
-        name_style.foreground = foreground;
-        name_style.bold = row.is_dir;
+        let name_style = name_style(row.is_dir);
 
         // An entry that cannot be read without a password says so beside its name, and the
         // name gives way to the mark rather than the mark being cut off with it: what the
         // mark says is not in the name, so a long name must not be what hides it.
         let mark = if row.encrypted { ENCRYPTED_MARK } else { "" };
-        let room = name_room - name_left - text_width(mark, body_advance);
-        let name = cut_to_width(&row.name, room, body_advance);
-        let name_width = text_width(&name, body_advance);
+        let room = name_room - name_left - text_width(&name_style, mark, body_advance, scale);
+        let name = cut_to_width(&name_style, &row.name, room, body_advance, scale);
+        let name_width = text_width(&name_style, &name, body_advance, scale);
         runs.push(PageRun {
             text: name,
             x: name_left,
@@ -571,24 +595,20 @@ fn build_page(
         });
 
         if !mark.is_empty() {
-            let mut mark_style = plain_style(BODY_LEVEL);
-            mark_style.foreground = muted;
             runs.push(PageRun {
                 text: mark.to_string(),
                 x: name_left + name_width,
-                width: text_width(mark, body_advance),
-                style: mark_style,
+                width: text_width(&size_style, mark, body_advance, scale),
+                style: size_style,
             });
         }
 
         if !row.is_dir {
-            let mut size_style = plain_style(BODY_LEVEL);
-            size_style.foreground = muted;
             let size = format_size(row.size);
             runs.push(PageRun {
-                text: size.clone(),
                 x: content_right - size_column,
-                width: size_column.max(text_width(&size, body_advance)),
+                width: size_column.max(text_width(&size_style, &size, body_advance, scale)),
+                text: size,
                 style: size_style,
             });
         }
@@ -603,15 +623,13 @@ fn build_page(
     }
 
     if note_needed {
-        let mut style = plain_style(BODY_LEVEL);
-        style.foreground = muted;
         let note = note_text(listing, hidden);
         lines.push(PageLine {
             runs: vec![PageRun {
-                text: note.clone(),
                 x: padding,
-                width: text_width(&note, body_advance),
-                style,
+                width: text_width(&size_style, &note, body_advance, scale),
+                text: note,
+                style: size_style,
             }],
             top,
             height: body_height,
@@ -663,17 +681,21 @@ fn header_runs(
     });
     x += cell;
 
+    let scale = metrics.scale;
     let mut push = |runs: &mut Vec<PageRun>, text: &str, bold: bool, color: [u8; 3]| {
         let mut style = plain_style(HEADER_LEVEL);
         style.bold = bold;
         style.foreground = color;
+        // The header is a line of prose about the archive, and the archive's own name can hold a
+        // Chinese glyph: measured, so a run after it is not placed inside its ink.
+        let width = text_width(&style, text, advance, scale);
         runs.push(PageRun {
             text: text.to_string(),
             x,
-            width: text_width(text, advance),
+            width,
             style,
         });
-        x += text_width(text, advance);
+        x += width;
     };
 
     push(&mut runs, name, true, foreground);
@@ -832,29 +854,20 @@ fn paint(surface: &DibSurface, page: &Page, theme: &LoadedTheme, scale: f32) {
 
 // ----------------------------------------------------------------------- text
 
-/// The width of a run of text, counted the way the rest of the page is: the face
-/// is fixed pitch, so a count of characters is the whole measurement.
-fn text_width(text: &str, advance: i32) -> i32 {
-    text.chars().count() as i32 * advance.max(1)
+/// The width of a run of text at a style, measured where a count of characters is not the whole of
+/// it: the face is fixed pitch for the characters it carries, and an entry's name can hold a
+/// Chinese glyph, which is drawn out of the font the system links in at a width of its own (see
+/// `text_paint::character_advances`).
+fn text_width(style: &TextStyle, text: &str, advance: i32, scale: f32) -> i32 {
+    crate::text::text_paint::run_width(style, text, advance, scale)
 }
 
-/// A name cut to the room it has, with an ellipsis where it was cut. A name that
-/// does not fit at all is dropped rather than drawn over the size column.
-fn cut_to_width(text: &str, room: i32, advance: i32) -> String {
-    let advance = advance.max(1);
-    let room = (room / advance).max(0) as usize;
-    let characters = text.chars().count();
-    if characters <= room {
-        return text.to_string();
-    }
-    if room == 0 {
-        return String::new();
-    }
-
-    let mut cut: String = text.chars().take(room - 1).collect();
-    cut.push('…');
-
-    cut
+/// A name cut to the room it has, with an ellipsis where it was cut, measured rather than counted:
+/// a Chinese name is cut where its own glyphs run out, which is not where a count of Latin ones
+/// would have put the cut. A name that does not fit at all is dropped rather than drawn over the
+/// size column beside it.
+fn cut_to_width(style: &TextStyle, text: &str, room: i32, advance: i32, scale: f32) -> String {
+    crate::text::text_paint::fit_to_width(style, text, room, advance, scale)
 }
 
 /// A byte count as a person reads it: whole bytes below a kilobyte, one decimal
