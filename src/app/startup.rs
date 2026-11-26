@@ -37,11 +37,17 @@ use std::path::Path;
 use crate::app::elevation;
 use crate::app::task::{self, Refused};
 use windows::core::{w, PCWSTR};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
     HKEY, HKEY_CURRENT_USER, HKEY_USERS, KEY_QUERY_VALUE, KEY_READ, KEY_SET_VALUE, REG_BINARY,
     REG_CREATE_KEY_DISPOSITION, REG_OPTION_NON_VOLATILE, REG_SAM_FLAGS, REG_SZ,
 };
+use windows::Win32::System::Threading::WaitForSingleObject;
+use windows::Win32::UI::Shell::{
+    ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+};
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 /// The key a logon reads the commands to start out of, relative to the account's hive.
 const STARTUP_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
@@ -1306,9 +1312,6 @@ impl Applied {
     }
 }
 
-/// What `ShellExecuteW` answers when the person at the machine says no to the UAC prompt.
-const ELEVATION_CANCELLED: usize = 5;
-
 /// Start the scheduled task now, which is how this app comes back **elevated** after the row was
 /// turned on: the very record that starts it at a logon is the one that starts it here, so what a
 /// user gets is what they will get at the next logon rather than a second way of starting it.
@@ -1365,35 +1368,83 @@ pub(crate) fn compat_elevation_is_set() -> bool {
 /// make: registering or removing the scheduled task (see `app::task`).
 ///
 /// It is `runas` through the Shell, which is the documented way a process asks for elevation, and
-/// the prompt it raises is the platform's own. `true` is answered where the elevated copy was
-/// started — not where it succeeded, which is the helper's own answer and is reported by the row
-/// the user clicks next rather than by this call.
-/// `false` is answered where the person at the machine said no, or where nothing was started at
-/// all, and the caller treats both as "the row did not move".
-pub(crate) fn raise_to_elevation(apply: Applied) -> bool {
+/// the prompt it raises is the platform's own. What is answered is the **handle of the process the
+/// Shell began**, because the helper is a process of its own that says nothing back: it writes one
+/// thing and exits, and that exit is the only answer it ever gives. Nothing is said here about what
+/// the write did — the caller reads the machine for that (see `wait_for_the_helper`).
+///
+/// [`Elevated::Refused`] is answered where the person at the machine said no to the prompt, or where
+/// nothing was started at all, and the caller treats both as "the row did not move".
+pub(crate) fn raise_to_elevation(apply: Applied) -> Elevated {
     let Ok(exe) = env::current_exe() else {
-        return false;
+        return Elevated::Refused;
     };
 
     let file = wide(&crate::paths::plain_path(&exe));
     let parameters = wide(&format!("\"{ELEVATE_SWITCH}\" {}", apply.word()));
     let verb = wide("runas");
 
-    // Safety: the three strings are this function's own buffers living past the call, and the
-    // answer is a value rather than a handle this side has to close.
-    let started = unsafe {
-        windows::Win32::UI::Shell::ShellExecuteW(
-            windows::Win32::Foundation::HWND::default(),
-            PCWSTR(verb.as_ptr()),
-            PCWSTR(file.as_ptr()),
-            PCWSTR(parameters.as_ptr()),
-            PCWSTR::null(),
-            windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-        )
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        // The process handle is the whole reason this is `ShellExecuteEx` rather than
+        // `ShellExecute`: it is what the wait below is made of, and a wait that had nothing to wait
+        // on would be a poll with a deadline — a tray frozen for the whole of it whenever the write
+        // was refused. `NOASYNC` keeps the launch on this thread's own time rather than a
+        // background one's, since this thread goes on to wait for it.
+        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+        lpVerb: PCWSTR(verb.as_ptr()),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: PCWSTR(parameters.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
     };
 
-    // The Shell answers a refusal with a value of five or below rather than with a null handle.
-    started.0 as usize > ELEVATION_CANCELLED
+    // Safety: the three strings are this function's own buffers living past the call, and the
+    // structure is one this function owns and reads back.
+    if unsafe { ShellExecuteExW(&mut info) }.is_err() {
+        return Elevated::Refused;
+    }
+
+    // A Shell that began the copy without leaving a handle is a Shell that left this side nothing to
+    // wait on — answered as a start without one rather than as a handle of zeroes, so that the
+    // caller asks the machine instead of waiting on nothing.
+    Elevated::Started((!info.hProcess.is_invalid()).then_some(info.hProcess))
+}
+
+/// What the Shell answered when it was asked for an elevated copy of this app.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Elevated {
+    /// The copy was begun, with the handle of its process where the Shell left one to wait on.
+    Started(Option<HANDLE>),
+    /// The person at the machine answered no, or the Shell began nothing at all.
+    Refused,
+}
+
+/// Wait for the elevated copy to exit — the moment its one write is behind it — and close the handle
+/// the Shell left.
+///
+/// **It is a wait rather than a poll.** The helper is one `RegisterTaskDefinition` and an exit, and
+/// a poll of the machine had nothing to stop it early: a write the helper could not make was waited
+/// on for the whole deadline, which is half a minute of a tray that answered no click. What is
+/// waited on now is the process itself, and it is gone the moment its one write is behind it. The
+/// handle is closed here because it is this module's own and there is exactly one thing to do with
+/// it. A helper still running at the deadline is answered `false` and left alone: it is a process of
+/// its own, and nothing here may end it.
+pub(crate) fn wait_for_the_helper(helper: HANDLE) -> bool {
+    /// What a helper is given to make one COM call and leave. It is a ceiling on a machine under a
+    /// scanner's thumb rather than an expectation: the wait ends with the process, not with it.
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+    // Safety: a handle `ShellExecuteEx` answered with, which nothing else holds.
+    let exited =
+        unsafe { WaitForSingleObject(helper, DEADLINE.as_millis() as u32) } == WAIT_OBJECT_0;
+
+    // Safety: as above, and it is closed exactly once.
+    unsafe {
+        let _ = CloseHandle(helper);
+    }
+
+    exited
 }
 
 /// What an elevated helper is told to do, out of its own command line.

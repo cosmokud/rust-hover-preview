@@ -19,7 +19,13 @@
 //! `E_ACCESSDENIED` on a task folder in the root for a `HighestAvailable` principal, and
 //! `LeastPrivilege` in the root is refused too — the root folder's ACL is what decides it, not the
 //! run level. So every write here answers [`Refused::NeedsElevation`] where this process is not
-//! elevated, and what raises the prompt is the caller (`app::startup::the_elevated_helper`).
+//! elevated, and what raises the prompt is the caller (`app::startup::raise_to_elevation`).
+//!
+//! **And the token is not the only thing a write needs: COM has to be up.** `CoCreateInstance`
+//! answers `CO_E_NOTINITIALIZED` on a thread that never joined an apartment, and two of the threads
+//! that write a task have not — the elevated helper does its one write and exits before the tray's
+//! `CoInitializeEx`, and the reconciler at a start runs ahead of it. That is why the apartment is
+//! made here rather than asked of the caller (see [`connect`]).
 //!
 //! **Reading needs nothing.** A task's XML is exported by the Task Scheduler service to any caller
 //! that may read the folder, and the service keeps its own copy under
@@ -51,10 +57,11 @@
 //! space in it needs no quotes here — and adding them would be a path with quotes in it.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use windows::core::{BSTR, VARIANT};
 use windows::Win32::Foundation::VARIANT_BOOL;
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
+use windows::Win32::System::Com::{CoCreateInstance, CoIncrementMTAUsage, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::TaskScheduler::{
     ITaskService, TaskScheduler, TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
 };
@@ -361,9 +368,27 @@ pub(crate) fn run_now() -> Result<(), Refused> {
 }
 
 /// The Task Scheduler's own object, connected to this machine.
+///
+/// **The apartment is the process's, and it is made here rather than trusted to the caller.** A
+/// thread that has never joined one cannot create anything: `CoCreateInstance` answers
+/// `CO_E_NOTINITIALIZED` (measured: `0x800401F0`), and the two callers that write a task are exactly
+/// such threads — the elevated helper makes its one write and exits before the tray's own
+/// `CoInitializeEx`, and the reconciler at a start runs ahead of it too. A write that could not even
+/// be attempted was reported as the machine refusing one, which is the one answer a user cannot act
+/// on. `CoIncrementMTAUsage` is the platform's own answer for code that cannot control its caller:
+/// it puts the process in an apartment without moving the calling thread, and a thread that has used
+/// it can still join one of its own afterwards (measured: `S_OK`). The count is never given back —
+/// the process is what holds it, and this app's process lives until it is closed.
 fn connect() -> Option<ITaskService> {
-    // Safety: a local server object of the Shell's own; the apartment is the caller's, which for
-    // the tray's thread and for the elevated helper is one that has called `CoInitializeEx`.
+    static APARTMENT: OnceLock<()> = OnceLock::new();
+
+    APARTMENT.get_or_init(|| {
+        // Safety: a call of the platform's with no arguments; the cookie it answers is the
+        // process's and is deliberately not held, because it is never given back.
+        let _ = unsafe { CoIncrementMTAUsage() };
+    });
+
+    // Safety: a local server object of the Shell's own; the apartment is the process's, made above.
     unsafe {
         let service: ITaskService =
             CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -607,6 +632,44 @@ mod tests {
             )
             .is_none(),
             "a document of the right elements under the wrong root is not a task"
+        );
+    }
+
+    /// The Task Scheduler is reachable from a thread that never asked for an apartment of its own,
+    /// which is the thread the elevated helper makes its one write on. `CoCreateInstance` answers
+    /// `CO_E_NOTINITIALIZED` there, and a write that could not even be attempted used to be reported
+    /// as the machine refusing one — a dialog naming a security policy over a thread that had never
+    /// asked COM for anything (see `connect`).
+    #[test]
+    fn the_task_service_is_reachable_from_a_thread_with_no_apartment_of_its_own() {
+        let reached = std::thread::spawn(|| connect().is_some())
+            .join()
+            .expect("the probe thread answered");
+
+        assert!(
+            reached,
+            "a thread that has never called CoInitializeEx can still reach the Task Scheduler"
+        );
+    }
+
+    /// The document is one the Task Scheduler itself takes: `SetXmlText` parses it, so every element
+    /// sits where the service expects it and no value is out of range. That parser is the one a task
+    /// has to satisfy — the reader below can only check what it was written to check, and a document
+    /// only this app can read is a task no logon ever runs.
+    #[test]
+    fn the_document_is_one_the_task_scheduler_itself_takes() {
+        let exe = Path::new(r"C:\Program Files\Rust Hover Preview\rust-hover-preview.exe");
+        let service = connect().expect("the Task Scheduler answers");
+
+        // Safety: a definition of the service's own, and a document this app wrote.
+        let accepted = unsafe {
+            let definition = service.NewTask(0).expect("a new definition");
+            definition.SetXmlText(&BSTR::from(document(exe, r"DESKTOP\someone")))
+        };
+
+        assert!(
+            accepted.is_ok(),
+            "the service parses the document: {accepted:?}"
         );
     }
 

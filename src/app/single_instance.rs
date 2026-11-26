@@ -70,9 +70,11 @@ pub fn acquire() -> bool {
 /// Give up the single-instance name **while this process is still running**, which a tray that is
 /// about to be replaced by a copy of itself does so that the copy can take it.
 ///
-/// It is called immediately before the successor is started and nothing after it claims again: a
-/// process that has given the name up is committed to leaving, and the window it opens is the one
-/// Windows itself has when a program is closed and started again.
+/// It is called immediately before the successor is started, and the window it opens is the one
+/// Windows itself has when a program is closed and started again. The one thing that may claim
+/// after it is `acquire` from the hand-over's own failure path: a successor that could not be
+/// started at all is a copy that never took the name, so the copy still standing takes it back
+/// rather than staying as a second app beside a name nobody holds.
 pub(crate) fn let_go_early() {
     if let Ok(mut held) = HELD.lock() {
         // Dropped here rather than at the end of the process: `InstanceGuard`'s own `Drop` closes

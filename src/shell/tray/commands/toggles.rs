@@ -85,24 +85,78 @@ pub(in super::super) fn toggle_startup() {
 /// just wrote for a turn-off. What the user sees either way is the tray icon coming back as the copy
 /// a logon would start.
 fn hand_the_write_to_an_elevated_copy(apply: startup::Applied) {
-    if !startup::raise_to_elevation(apply) {
-        // The prompt was answered with no, or no elevated copy could be started at all: the row
-        // says the machine did not move, and nothing of this process's changes.
-        dialogs::report_startup_failure(startup::Outcome::NotWritten {
-            held: startup::is_startup_enabled(),
-        });
-        return;
-    }
+    let helper = match startup::raise_to_elevation(apply) {
+        startup::Elevated::Started(helper) => helper,
+        startup::Elevated::Refused => {
+            // The prompt was answered with no, or no elevated copy could be started at all: the row
+            // says the machine did not move, and nothing of this process's changes.
+            dialogs::report_startup_failure(startup::Outcome::NotWritten {
+                held: startup::is_startup_enabled(),
+            });
+            return;
+        }
+    };
 
-    // Waiting is what keeps this process alive until the machine holds what was asked for, so that the
-    // tray the user is looking at does not blink out of the task list before there is anything to
-    // come back to.
-    if !wait_for_the_helper(apply) {
+    // **The wait ends with the helper, not with a clock.** Waiting is what keeps this process alive
+    // until the machine holds what was asked for, so that the tray the user is looking at does not
+    // blink out of the task list before there is anything to come back to — but what is waited on is
+    // the helper's own process, which exits the moment its one write is behind it. A poll that ran
+    // to a deadline instead was this thread frozen for the whole of it, and a write the machine
+    // refused cost the user half a minute of a tray that answered no click.
+    let written = match helper {
+        Some(helper) => startup::wait_for_the_helper(helper) && the_machine_took_the_write(apply),
+        // The one Shell that begins the copy without leaving a handle leaves nothing to wait on, and
+        // the machine's own state is then what is asked, until it moves.
+        None => wait_for_the_write(apply),
+    };
+
+    if !written {
         dialogs::report_startup_failure(startup::Outcome::TaskRefused);
         return;
     }
 
     hand_over_to_the_successor();
+}
+
+/// Wait until the machine holds what the elevated copy was begun to write, for the Shell that began
+/// it without leaving a process to wait on.
+///
+/// It is the poll the process handle replaced, kept for the one case where there is no handle: the
+/// helper is one COM call and an exit, so this is a short deadline on a machine under a scanner's
+/// thumb rather than an expectation.
+fn wait_for_the_write(apply: startup::Applied) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    while Instant::now() < deadline {
+        if the_machine_took_the_write(apply) {
+            return true;
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    the_machine_took_the_write(apply)
+}
+
+/// Whether the machine now holds what the elevated copy was begun to write: the task that starts this
+/// copy at the highest run level for a turn-on, and the ordinary entry with no task beside it for a
+/// turn-off.
+///
+/// The helper says nothing back beyond exiting, so what it did is read off the machine rather than
+/// taken on trust — the same two reads the tray's rows are drawn from, asked once the process that
+/// was to make the write is gone.
+fn the_machine_took_the_write(apply: startup::Applied) -> bool {
+    match apply {
+        startup::Applied::TurnOn => {
+            let exe = std::env::current_exe().ok();
+            startup::task_facts()
+                .starts_this_copy(exe.as_deref().unwrap_or(std::path::Path::new("")))
+        }
+        startup::Applied::TurnOff => {
+            let machine = startup::machine();
+            machine.started().runs() && !machine.elevates()
+        }
+    }
 }
 
 /// Start the copy the machine now holds and end this one — the half of a hand-over that both
@@ -112,8 +166,13 @@ fn hand_the_write_to_an_elevated_copy(apply: startup::Applied) {
 /// while this process still holds it would find the app already running and exit, and the tray that
 /// was meant to come back would be no tray at all. So the name goes first (see
 /// `single_instance::let_go_early`), the successor is asked for, and only then does this process
-/// leave — and a successor that could not be started at all ends the run the ordinary way rather
-/// than leaving an app that has given up its name and is still standing.
+/// leave.
+///
+/// **And a name given up for a successor that did not come is taken back.** The machine is right —
+/// the task or the entry was written — and what failed is only this copy's replacement: a tray that
+/// stayed as the app's only window without being the app's only instance would be one a second copy
+/// could stand beside, two trays over one name nobody holds. Taking it back leaves the app exactly
+/// as it was, and the copy the machine now names is the one the next logon starts.
 fn hand_over_to_the_successor() {
     crate::app::single_instance::let_go_early();
 
@@ -129,39 +188,14 @@ fn hand_over_to_the_successor() {
         }
     };
 
-    if started {
-        crate::RUNNING.store(false, Ordering::SeqCst);
-        crate::shell::tray::leave_the_tray();
-    }
-}
-
-/// Wait until the machine holds what the elevated copy was begun to write, or until it has plainly
-/// given up. The helper is a process of its own and says nothing back, so what is waited for is the
-/// state it was begun to leave behind — the task for a turn-on, the ordinary entry for a turn-off.
-fn wait_for_the_helper(apply: startup::Applied) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(30);
-
-    while Instant::now() < deadline {
-        let ready = match apply {
-            startup::Applied::TurnOn => {
-                let exe = std::env::current_exe().ok();
-                crate::app::startup::task_facts()
-                    .starts_this_copy(exe.as_deref().unwrap_or(std::path::Path::new("")))
-            }
-            startup::Applied::TurnOff => {
-                let machine = startup::machine();
-                machine.started().runs() && !machine.elevates()
-            }
-        };
-
-        if ready {
-            return true;
-        }
-
-        std::thread::sleep(Duration::from_millis(150));
+    // A successor that did not start leaves this copy as the app: the name it gave up is taken
+    // again, and only a copy that got there first — which is then the app — keeps it.
+    if !started && crate::app::single_instance::acquire() {
+        return;
     }
 
-    false
+    crate::RUNNING.store(false, Ordering::SeqCst);
+    crate::shell::tray::leave_the_tray();
 }
 
 /// Whether the logon that starts this app starts it **elevated** — the row under `Run at Startup`,
