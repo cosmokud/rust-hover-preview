@@ -1,4 +1,4 @@
-//! The `Custom Preview` window: frameless audio-card-styled editor for custom preview presets.
+//! The `Custom Preview Editor` window: frameless audio-card-styled editor for custom preview presets.
 //!
 //! Runs on its own thread (opened from tray `WM_COMMAND`), single instance via `OPEN`/`WINDOW`.
 //! Uses native Win32 child controls (`EDIT`, `LISTBOX`, `COMBOBOX`, `msctls_trackbar32`,
@@ -84,6 +84,10 @@ use crate::ui::ask_card::{self, Question};
 use crate::CONFIG;
 
 const CLASS_NAME: PCWSTR = w!("RustHoverPreviewCustomPreview");
+/// What the editor's own caption says, and the title its drawn titlebar carries: one string so the two
+/// cannot drift. The tray's row and the file's heading keep the shorter `Custom Preview`, which is
+/// what the submenu and the configuration section are called.
+const WINDOW_TITLE: &str = "Custom Preview Editor";
 const SLIDER_CLASS: PCWSTR = w!("RustHoverPreviewThemedSlider");
 const TOGGLE_CLASS: PCWSTR = w!("RustHoverPreviewThemedToggle");
 
@@ -337,10 +341,16 @@ pub(super) const PLACEMENTS: [CustomPlacement; 3] = [
     CustomPlacement::Hook,
 ];
 
-fn placement_label(placement: CustomPlacement) -> &'static str {
+/// What one value of the `Placement` row reads as. **The `(Default)` mark follows the machine**:
+/// with the hook DLL beside the executable, `Tray -> Placement + Hook` is what a new preset is, so
+/// that is the row that says so; without it the mark is on the plain placement, which is then the
+/// only one a preset can be.
+fn placement_label(placement: CustomPlacement, hook_dll: bool) -> &'static str {
     match placement {
+        CustomPlacement::FollowTray if hook_dll => "Tray -> Placement",
         CustomPlacement::FollowTray => "Tray -> Placement (Default)",
         CustomPlacement::Forced => "Tray -> Placement + Forced",
+        CustomPlacement::Hook if hook_dll => "Tray -> Placement + Hook (Default)",
         CustomPlacement::Hook => "Tray -> Placement + Hook",
     }
 }
@@ -348,7 +358,7 @@ fn placement_label(placement: CustomPlacement) -> &'static str {
 fn placement_choice(placement: CustomPlacement, hook_dll: bool) -> &'static str {
     match placement {
         CustomPlacement::Hook if !hook_dll => "Tray -> Placement + Hook (.dll is missing)",
-        _ => placement_label(placement),
+        _ => placement_label(placement, hook_dll),
     }
 }
 
@@ -1023,7 +1033,7 @@ pub(super) fn create_window() -> Option<HWND> {
         };
         RegisterClassExW(&class);
 
-        let title = wide("Custom Preview");
+        let title = wide(WINDOW_TITLE);
         let style = WS_OVERLAPPED
             | WS_CAPTION
             | WS_SYSMENU
@@ -1880,7 +1890,7 @@ unsafe fn paint_window(state: &mut State, hdc: HDC) {
             right: state.rects.btn_min.left - scale(8, dpi),
             bottom: state.rects.titlebar.bottom - 1,
         };
-        let mut title_w: Vec<u16> = "Custom Preview".encode_utf16().collect();
+        let mut title_w: Vec<u16> = WINDOW_TITLE.encode_utf16().collect();
         DrawTextW(
             hdc,
             &mut title_w,
@@ -2459,12 +2469,17 @@ unsafe fn build(hwnd: HWND) -> State {
     }
     unsafe { combo_add(scaling, "Custom…") };
 
+    // **Every combo, and `Picture Window` among them.** This list is what gives a combo its owner
+    // draw: one missing from it keeps the stock Win32 paint — a white box with a themed arrow in a
+    // dark editor — which is the whole of what a row that "looks ancient" is (see
+    // `combo_subclass_proc`). `Picture Window` was the one left out.
     for combo in [
         window_mode_combo,
         path_method_combo,
         capture_technique_combo,
         child_scope_combo,
         sibling_windows_combo,
+        picture_window_combo,
         promotion_technique_combo,
         placement_combo,
         scaling,
@@ -5912,7 +5927,12 @@ unsafe fn add_preset(state: &mut State) {
         name = format!("New Preset {number}");
     }
 
-    state.presets.push(CustomPreset::named(&name));
+    // **A new preset is the machine's own default, not the table's.** `Tray -> Placement + Hook`
+    // where the hook DLL is there to hold the window, and the plain placement where it is not (see
+    // `CustomPlacement::default_on_this_machine`).
+    let mut preset = CustomPreset::named(&name);
+    preset.placement = CustomPlacement::default_on_this_machine();
+    state.presets.push(preset);
     state.selected = Some(state.presets.len() - 1);
     unsafe { set_text(state.hwnd, ID_SEARCH, "") };
     unsafe { rebuild_list(state) };
@@ -6888,6 +6908,15 @@ fn wide(text: &str) -> Vec<u16> {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    /// What the window's own `Add` seeds a new preset with, for a test: the name it would give it is
+    /// unique per preset, so the caller gets the placement back rather than the name.
+    unsafe fn add_preset_for_test(state: &mut State) -> CustomPlacement {
+        let before = state.presets.len();
+        unsafe { add_preset(state) };
+        assert_eq!(state.presets.len(), before + 1, "Add makes one preset");
+        state.presets[before].placement
+    }
     use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
     use windows::Win32::UI::Controls::{ODA_DRAWENTIRE, ODS_FLAGS, ODT_COMBOBOX};
     use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
@@ -8336,28 +8365,57 @@ pub(super) mod tests {
 
             let combo = GetDlgItem(hwnd, ID_PLACEMENT).unwrap_or_default();
             assert!(IsWindowEnabled(combo).as_bool());
+            // **The row shows what the preset stores**, not what a new preset would be given: this one
+            // was made by `CustomPreset::named`, whose placement is the plain one.
             assert_eq!(
                 SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0,
-                0,
-                "defaults to FollowTray (index 0)"
+                placement_index(CustomPlacement::FollowTray) as isize,
+                "a preset stored as the plain placement reads as that"
             );
             assert_eq!(state.presets[0].placement, CustomPlacement::FollowTray);
+
+            // **And a preset the window makes is the machine's own default** — the hook where the DLL
+            // beside this executable can hold a window, the plain placement where it cannot (see
+            // `CustomPlacement::default_on_this_machine`).
+            let added = add_preset_for_test(state);
+            assert_eq!(
+                added,
+                if state.hook_dll {
+                    CustomPlacement::Hook
+                } else {
+                    CustomPlacement::FollowTray
+                },
+                "Add seeds the placement this machine can enforce"
+            );
+            state.presets.clear();
+            state.presets.push(CustomPreset::named("PlaceTest"));
+            state.selected = Some(0);
+            rebuild_list(state);
+            fill_fields(state);
 
             assert_eq!(PLACEMENTS.len(), 3);
             assert_eq!(PLACEMENTS[0], CustomPlacement::FollowTray);
             assert_eq!(
-                placement_label(CustomPlacement::FollowTray),
-                "Tray -> Placement (Default)"
+                placement_label(CustomPlacement::FollowTray, state.hook_dll),
+                if state.hook_dll {
+                    "Tray -> Placement"
+                } else {
+                    "Tray -> Placement (Default)"
+                }
             );
             assert_eq!(PLACEMENTS[1], CustomPlacement::Forced);
             assert_eq!(
-                placement_label(CustomPlacement::Forced),
+                placement_label(CustomPlacement::Forced, state.hook_dll),
                 "Tray -> Placement + Forced"
             );
             assert_eq!(PLACEMENTS[2], CustomPlacement::Hook);
             assert_eq!(
-                placement_label(CustomPlacement::Hook),
-                "Tray -> Placement + Hook"
+                placement_label(CustomPlacement::Hook, state.hook_dll),
+                if state.hook_dll {
+                    "Tray -> Placement + Hook (Default)"
+                } else {
+                    "Tray -> Placement + Hook"
+                }
             );
 
             assert_eq!(
@@ -8366,7 +8424,7 @@ pub(super) mod tests {
             );
             assert_eq!(
                 placement_choice(CustomPlacement::Hook, true),
-                "Tray -> Placement + Hook"
+                "Tray -> Placement + Hook (Default)"
             );
             assert!(!placement_selectable(CustomPlacement::Hook, false));
             assert!(placement_selectable(CustomPlacement::Forced, false));

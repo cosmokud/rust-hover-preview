@@ -140,9 +140,9 @@ use windows::Win32::Graphics::Dwm::{
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
 };
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, FillRect, GetMonitorInfoW, GetStockObject, InvalidateRect,
-    MonitorFromRect, UpdateWindow, HBRUSH, HGDIOBJ, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    NULL_BRUSH,
+    ClientToScreen, CreateSolidBrush, DeleteObject, FillRect, GetMonitorInfoW, GetStockObject,
+    InvalidateRect, MonitorFromRect, UpdateWindow, HBRUSH, HGDIOBJ, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST, NULL_BRUSH,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
@@ -3373,10 +3373,8 @@ fn run_it(
                             ..Default::default()
                         };
                         let _ = unsafe { SetWindowPlacement(source, &placement) };
-                        let ask = the_ask_for(
-                            (target_rect.2, target_rect.3),
-                            source_size(source, window_mode),
-                        );
+                        let ask =
+                            the_ask_for_window(source, (target_rect.2, target_rect.3), window_mode);
                         the_ask = Some(ask);
                         park_offscreen(source, ask.0, ask.1, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
@@ -3500,9 +3498,10 @@ fn run_it(
                             if aligned_behind_host(source, target_rect) {
                                 PlacementMode::BehindHost
                             } else {
-                                let ask = the_ask_for(
+                                let ask = the_ask_for_window(
+                                    source,
                                     (target_rect.2, target_rect.3),
-                                    source_size(source, window_mode),
+                                    window_mode,
                                 );
                                 the_ask = Some(ask);
                                 park_offscreen(source, ask.0, ask.1, ctx);
@@ -3904,7 +3903,13 @@ fn run_it(
         was_layout_none = false;
         let (x, y) = (layout.pos_x, layout.pos_y);
         let (width, height) = (layout.preview_w as i32, layout.preview_h as i32);
-        let host_rect = (x, y, width, height);
+        // **The hover is the box plus the chrome the program draws around its picture.** The box is the
+        // room cut to the file's shape, and the picture — the program's client — is what goes on it; a
+        // player composed from its whole window instead gets the box *minus* its caption and border,
+        // which is a client wider than the film and the black bars down the sides that follow from it
+        // (see `chrome_of`). Read every poll, because a program that restyles itself restyles this.
+        let chrome = chrome_now(source, window_mode);
+        let host_rect = the_host_for((x, y, width, height), chrome);
         if !(forced
             && placed_mode == Some(PlacementMode::DirectWindow)
             && placed_host_rect == Some(host_rect))
@@ -4004,8 +4009,7 @@ fn run_it(
                             if aligned_behind_host(source, host_rect) {
                                 expected_rect = window_rect(source);
                             } else {
-                                let ask =
-                                    the_ask_for((width, height), source_size(source, window_mode));
+                                let ask = the_ask_for_window(source, (width, height), window_mode);
                                 cp_trace!(
                                     "run_it: inprocess_behind_host_fallback_offscreen id={} host={:?} ask={:?}",
                                     launch.id,
@@ -4060,7 +4064,7 @@ fn run_it(
                                 Some(session.view.hook_hits()),
                             );
                             let ask = the_ask.unwrap_or_else(|| {
-                                the_ask_for((width, height), source_size(source, window_mode))
+                                the_ask_for_window(source, (width, height), window_mode)
                             });
                             the_ask = Some(ask);
                             session
@@ -4246,7 +4250,7 @@ fn run_it(
                         active_hook_view.map(|v| v.hook_hits()),
                     );
                     if !place_behind_host(source, host_rect, window_mode, ctx) {
-                        let ask = the_ask_for((width, height), source_size(source, window_mode));
+                        let ask = the_ask_for_window(source, (width, height), window_mode);
                         the_ask = Some(ask);
                         park_offscreen(source, ask.0, ask.1, ctx);
                         placed_mode = Some(PlacementMode::OffScreen);
@@ -4571,6 +4575,33 @@ fn layout_for(
     }
 }
 
+/// The chrome a program draws around its picture **now**, read off the window itself: `(left, top,
+/// extra_w, extra_h)` as [`chrome_of`] defines it, and zeros for a window whose frame is stripped.
+///
+/// A window that will not say where its client stands — destroyed, or not yet made — is answered with
+/// no chrome, which is the box as it stands: the hover is then exactly as it was before this was read.
+fn chrome_now(window: HWND, window_mode: CustomWindowMode) -> (i32, i32, i32, i32) {
+    if window_mode != CustomWindowMode::Normal {
+        return (0, 0, 0, 0);
+    }
+    let Some(visible) = visible_frame_rect(window) else {
+        return (0, 0, 0, 0);
+    };
+    let mut client = RECT::default();
+    if unsafe { GetClientRect(window, &mut client) }.is_err() {
+        return (0, 0, 0, 0);
+    }
+    let mut origin = POINT::default();
+    if !unsafe { ClientToScreen(window, &mut origin) }.as_bool() {
+        return (0, 0, 0, 0);
+    }
+    chrome_of(
+        visible,
+        origin,
+        (client.right - client.left, client.bottom - client.top),
+    )
+}
+
 /// The size the program's window is asked for: the box's own shape, raised to the smallest size the
 /// window will take at that shape.
 ///
@@ -4584,7 +4615,22 @@ fn layout_for(
 /// composed into the box at exactly that shape (see `the_picture_in`): the hover is the size the
 /// setting says it is and the program's picture fills it, the window being off every display where
 /// it stands.
-fn the_ask_for(box_: (i32, i32), taken: (u32, u32)) -> (i32, i32) {
+fn the_ask_for(box_: (i32, i32), taken: (u32, u32), chrome: (i32, i32, i32, i32)) -> (i32, i32) {
+    // **The ask is a window and the box is a client**, so the frame is taken off what the window took
+    // and added back to what it is asked for (see `chrome_of`). A `Borderless` program has none, and
+    // the two halves of this are the identity.
+    let extra = (chrome.2.max(0) as u32, chrome.3.max(0) as u32);
+    let taken_client = (
+        taken.0.saturating_sub(extra.0),
+        taken.1.saturating_sub(extra.1),
+    );
+    let client = the_client_ask_for(box_, taken_client);
+    (client.0 + extra.0 as i32, client.1 + extra.1 as i32)
+}
+
+/// [`the_ask_for`] in client space: the box's own shape, raised to the smallest client the window will
+/// take at that shape.
+fn the_client_ask_for(box_: (i32, i32), taken: (u32, u32)) -> (i32, i32) {
     let box_ = (box_.0.max(1), box_.1.max(1));
     let shape = box_.0 as f32 / box_.1 as f32;
 
@@ -4594,6 +4640,16 @@ fn the_ask_for(box_: (i32, i32), taken: (u32, u32)) -> (i32, i32) {
     let height = ((width as f32 / shape).ceil() as i32).max(1);
 
     (width, height)
+}
+
+/// [`the_ask_for`] for a window that is standing: the chrome is read off the window rather than passed
+/// in, which is what every caller inside a placement has.
+fn the_ask_for_window(window: HWND, box_: (i32, i32), window_mode: CustomWindowMode) -> (i32, i32) {
+    the_ask_for(
+        box_,
+        source_size(window, window_mode),
+        chrome_now(window, window_mode),
+    )
 }
 
 /// Fast intrinsic dimensions of `path` (SVG, PDF, image, video, design, vector) without spawning
@@ -4676,6 +4732,43 @@ fn source_size(window: HWND, window_mode: CustomWindowMode) -> (u32, u32) {
     (
         (rect.right - rect.left).max(0) as u32,
         (rect.bottom - rect.top).max(0) as u32,
+    )
+}
+
+/// The chrome a program draws around its picture, as `(left, top, extra_w, extra_h)`: where its client
+/// sits inside the frame the user sees, and how much of that frame the chrome takes altogether.
+///
+/// **This is the whole of the black-bar fault, and it is a fact about the window rather than about the
+/// file.** A program's *client* is where it draws the document; the caption, the resize border and the
+/// invisible Win11 shadow margins are the frame around it. A preview composited from the whole window
+/// therefore gives the document only the box *minus* the frame — and a player handed a box 4 % wider
+/// than the film's own shape fills the height and draws the remainder as black bars either side.
+/// Measured on MPV Player: a 1200x675 box composed as a whole window is a 1184x636 client, a shape of
+/// 1.861 against the film's 1.778, and 27 px of black sit at each side of a 16:9 film. The same window
+/// with a *client* of 1200x675 draws no bars at all.
+///
+/// So the host is grown by this and the client is put on the box (see [`the_host_for`]): the caption
+/// keeps its strip at the top of the hover and the picture fills everything under it.
+fn chrome_of(visible: RECT, client_origin: POINT, client: (i32, i32)) -> (i32, i32, i32, i32) {
+    let left = (client_origin.x - visible.left).max(0);
+    let top = (client_origin.y - visible.top).max(0);
+    let extra_w = ((visible.right - visible.left) - client.0.max(0)).max(0);
+    let extra_h = ((visible.bottom - visible.top) - client.1.max(0)).max(0);
+    (left, top, extra_w, extra_h)
+}
+
+/// The host a box is drawn in: the box's own rectangle, grown by the chrome the program draws around
+/// its picture — so the picture lands exactly on the box and the caption lands beside it (see
+/// [`chrome_of`] for why the box alone is the box a player letterboxes in).
+///
+/// `Borderless` is a program with its frame stripped, and `(0, 0, 0, 0)` leaves it exactly the box.
+fn the_host_for(box_: (i32, i32, i32, i32), chrome: (i32, i32, i32, i32)) -> (i32, i32, i32, i32) {
+    let (left, top, extra_w, extra_h) = chrome;
+    (
+        box_.0 - left,
+        box_.1 - top,
+        (box_.2 + extra_w).max(1),
+        (box_.3 + extra_h).max(1),
     )
 }
 
@@ -5259,7 +5352,7 @@ fn place_invisible_layered(
 
     // If app's min-size floor refused `(tw, th)`, resize on-monitor to `the_ask_for` keeping aspect ratio.
     let taken = source_size(window, window_mode);
-    let ask = the_ask_for((hw, hh), taken);
+    let ask = the_ask_for((hw, hh), taken, chrome_now(window, window_mode));
     if ask != (tw, th) {
         *the_ask = (ask != (hw, hh)).then_some(ask);
         let (wx2, wy2, ww2, wh2) = behind_host_window_rect((hx, hy, ask.0, ask.1), insets);
@@ -5891,10 +5984,7 @@ fn snap_source(
         SnapAction::KeepOffScreen => PlacementMode::OffScreen,
         SnapAction::ReparkOffScreen => {
             let ask = the_ask.unwrap_or_else(|| {
-                the_ask_for(
-                    (target_rect.2, target_rect.3),
-                    source_size(source, window_mode),
-                )
+                the_ask_for_window(source, (target_rect.2, target_rect.3), window_mode)
             });
             *the_ask = Some(ask);
             park_offscreen(source, ask.0, ask.1, ctx);
@@ -5906,10 +5996,7 @@ fn snap_source(
                 *the_ask = None;
                 PlacementMode::BehindHost
             } else {
-                let ask = the_ask_for(
-                    (target_rect.2, target_rect.3),
-                    source_size(source, window_mode),
-                );
+                let ask = the_ask_for_window(source, (target_rect.2, target_rect.3), window_mode);
                 *the_ask = Some(ask);
                 park_offscreen(source, ask.0, ask.1, ctx);
                 PlacementMode::OffScreen
@@ -7635,7 +7722,7 @@ fn run_offscreen_staged_settle_and_reveal(
     let mode = if place_behind_host(source, host_rect, window_mode, ctx) {
         PlacementMode::BehindHost
     } else {
-        let ask = the_ask_for((hw, hh), source_size(source, window_mode));
+        let ask = the_ask_for_window(source, (hw, hh), window_mode);
         *state.the_ask = Some(ask);
         if ctx.forced {
             apply_hook_rect_now(
@@ -8155,35 +8242,14 @@ impl Drop for InProcessHookSession {
     }
 }
 
-/// Beside the executable first, so a portable zip carries its own copy; then the per-user folder,
-/// which is where a lone executable's copy has to be put by hand. Tests run from
-/// `target/<profile>/deps/`, and the DLL that build made is in `target/<profile>/` above them.
+/// The hook DLL this build would load, if the machine has one (see [`crate::paths::hook_dll`]).
+///
+/// It is the path module's search rather than this one's, because the configuration asks the same
+/// question about the same file: a preset's `Placement` row reads whether the hook can be used, and
+/// a fresh preset's default is the hook where it can be. One search, so "the DLL is there" cannot
+/// mean two things in two places.
 fn find_hook_dll() -> Option<PathBuf> {
-    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    hook_dll_candidates(&dir, user_hook_folder())
-        .into_iter()
-        .find(|path| path.is_file())
-}
-
-/// The order `find_hook_dll` searches, as paths: beside the executable, one level above it, then
-/// the per-user folder.
-fn hook_dll_candidates(dir: &Path, user_folder: Option<PathBuf>) -> Vec<PathBuf> {
-    const NAME: &str = "custom_preview_hook.dll";
-    let mut candidates = vec![dir.join(NAME)];
-    if let Some(parent) = dir.parent() {
-        candidates.push(parent.join(NAME));
-    }
-    candidates.extend(user_folder.map(|folder| folder.join(NAME)));
-    candidates
-}
-
-/// `<local appdata>\rust-hover-preview` — local and not the roaming folder `config.ini` lives in,
-/// which a domain profile syncs and no binary belongs in.
-fn user_hook_folder() -> Option<PathBuf> {
-    if let Some(portable) = crate::paths::data_root() {
-        return Some(portable.to_path_buf());
-    }
-    directories::BaseDirs::new().map(|base| base.data_local_dir().join("rust-hover-preview"))
+    crate::paths::hook_dll()
 }
 
 /// Whether a launch would find the hook DLL, read once for the preset editor's Capture Technique
@@ -8921,7 +8987,7 @@ fn reveal_in_process_hook(
     );
 
     if !fits_host {
-        let ask = the_ask_for((hw, hh), source_size(source, window_mode));
+        let ask = the_ask_for_window(source, (hw, hh), window_mode);
         *state.the_ask = Some(ask);
         cp_trace!(
             "reveal_hook: stage_ask id={} ask={:?} hw_hh=({},{})",
@@ -9105,7 +9171,7 @@ fn reveal_in_process_hook(
                 let _ = unsafe { UpdateWindow(source) };
                 PlacementMode::BehindHost
             } else {
-                let ask = the_ask_for((hw, hh), source_size(source, window_mode));
+                let ask = the_ask_for_window(source, (hw, hh), window_mode);
                 cp_trace!(
                     "reveal_hook: behind_host_degrade_offscreen id={} ask={:?} cur_win={:?} cur_vis={:?}",
                     launch.id,
@@ -9161,7 +9227,7 @@ fn reveal_in_process_hook(
         if ctx.forced && !is_window_offscreen(source) {
             let ask = state
                 .the_ask
-                .unwrap_or_else(|| the_ask_for((hw, hh), source_size(source, window_mode)));
+                .unwrap_or_else(|| the_ask_for_window(source, (hw, hh), window_mode));
             *state.the_ask = Some(ask);
             session
                 .view
@@ -10422,8 +10488,9 @@ mod tests {
     fn a_window_is_asked_for_the_shape_of_the_box_it_will_not_take() {
         // The box is cut to the picture's 4:3 shape and Paint will not be smaller than 704x500, so
         // it is asked for the box's shape at the smallest size that clears the floor it answered
-        // with.
-        let asked = the_ask_for((80, 60), (704, 500));
+        // with. No chrome: this is the `Borderless` window, and the two halves of `the_ask_for` are
+        // then the identity.
+        let asked = the_ask_for((80, 60), (704, 500), (0, 0, 0, 0));
         assert_eq!(
             asked,
             (704, 528),
@@ -10440,7 +10507,7 @@ mod tests {
         // A tall box is asked for at its own shape too, tall past the floor's own height. This is
         // the reported hover: a 2135x6012 picture's box refused its width was a window in a band of
         // background above and below the picture.
-        let asked = the_ask_for((490, 1380), (704, 1380));
+        let asked = the_ask_for((490, 1380), (704, 1380), (0, 0, 0, 0));
         assert_eq!(
             asked,
             (704, 1983),
@@ -10453,10 +10520,72 @@ mod tests {
             "so the picture fills the box rather than standing letterboxed in it"
         );
 
+        // **And the frame a program draws around its picture is counted.** MPV Player's window takes
+        // a 16x32 frame over its client, so a 1200x675 box is a window asked for 1216x707 — which is
+        // the whole of the black-bar fix: the *client* is the box's shape, so the player draws no
+        // bars in it (see `chrome_of`).
+        let chrome = (8, 31, 16, 32);
+        let asked = the_ask_for((1200, 675), (1200, 675), chrome);
+        assert_eq!(
+            asked,
+            (1216, 707),
+            "a framed window is asked for its client plus its frame"
+        );
+        assert_eq!(
+            (asked.0 - chrome.2, asked.1 - chrome.3),
+            (1200, 675),
+            "and the client inside that ask is the box exactly"
+        );
+
         // A window that took the box is asked for nothing more, and one that will not say what it
         // took leaves the box it was asked for.
-        assert_eq!(the_ask_for((600, 400), (600, 400)), (600, 400));
-        assert_eq!(the_ask_for((600, 400), (0, 0)), (600, 400));
+        assert_eq!(
+            the_ask_for((600, 400), (600, 400), (0, 0, 0, 0)),
+            (600, 400)
+        );
+        assert_eq!(the_ask_for((600, 400), (0, 0), (0, 0, 0, 0)), (600, 400));
+    }
+
+    #[test]
+    fn the_host_is_the_box_grown_by_the_chrome_and_the_client_lands_on_the_box() {
+        // A player's frame: the client stands 8 px in and 31 px down from the visible frame, and the
+        // frame is 16 x 32 larger than the client — the numbers measured on MPV Player.
+        let chrome = (8, 31, 16, 32);
+        let box_ = (300, 200, 1200, 675);
+        let host = the_host_for(box_, chrome);
+        assert_eq!(
+            host,
+            (292, 169, 1216, 707),
+            "the host is grown up and left by the chrome, and by it in size"
+        );
+        assert_eq!(
+            (host.0 + chrome.0, host.1 + chrome.1),
+            (box_.0, box_.1),
+            "so the client's own corner lands on the box's corner"
+        );
+        assert_eq!(
+            (host.2 - chrome.2, host.3 - chrome.3),
+            (box_.2, box_.3),
+            "and the client is the box exactly, which is the shape the player needs"
+        );
+
+        // A `Borderless` program has no frame, so the host is the box and nothing moves.
+        assert_eq!(the_host_for(box_, (0, 0, 0, 0)), box_);
+
+        // `chrome_of` is the other half: where the client stands inside the frame, and how much of it
+        // the frame takes.
+        let visible = RECT {
+            left: 300,
+            top: 200,
+            right: 1500,
+            bottom: 875,
+        };
+        let origin = POINT { x: 308, y: 231 };
+        assert_eq!(
+            chrome_of(visible, origin, (1184, 636)),
+            (8, 31, 16, 39),
+            "the client's inset, and the difference between the frame and the client"
+        );
     }
 
     #[test]
@@ -11106,7 +11235,7 @@ mod tests {
         // over whatever a lone executable's folder holds.
         let dir = Path::new(r"C:\apps\rhp");
         let user = PathBuf::from(r"C:\users\u\AppData\Local\rust-hover-preview");
-        let candidates = hook_dll_candidates(dir, Some(user));
+        let candidates = crate::paths::hook_dll_candidates(dir, Some(user));
         assert_eq!(
             candidates,
             vec![
@@ -11117,7 +11246,7 @@ mod tests {
             ]
         );
         // No local-appdata folder on the machine is two candidates rather than a panic.
-        assert_eq!(hook_dll_candidates(dir, None).len(), 2);
+        assert_eq!(crate::paths::hook_dll_candidates(dir, None).len(), 2);
     }
 
     #[test]

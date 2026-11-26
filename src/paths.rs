@@ -4,6 +4,12 @@
 //! thing to hand a Shell call, a browser URL or a media source: a file named in that
 //! form is a file none of them can find. The prefix comes off before anything is
 //! pointed at a file, and a share keeps its server.
+//!
+//! **And the one file this app looks for beside itself**: the custom preview's hook DLL, whose
+//! presence is what a preset's `Placement` row and a fresh preset's default both turn on (see
+//! [`hook_dll`]). It lives here rather than beside the hook it is loaded by because the
+//! configuration asks it too, and a configuration that reached into the preview module to answer
+//! would be a lock held across a `LoadLibrary`.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -138,6 +144,41 @@ fn file_url_of(path: &Path, escape: bool) -> Option<String> {
     }
 
     Some(url)
+}
+
+/// The name every search below looks for.
+pub(crate) const HOOK_DLL_NAME: &str = "custom_preview_hook.dll";
+
+/// Where the custom preview's hook DLL would be loaded from, if it is anywhere.
+///
+/// Beside the executable first, so a portable zip carries its own copy; then the per-user folder,
+/// which is where a lone executable's copy has to be put by hand. Tests run from
+/// `target/<profile>/deps/`, and the DLL that build made is in `target/<profile>/` above them.
+pub(crate) fn hook_dll() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    hook_dll_candidates(&dir, hook_user_folder())
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
+/// The order [`hook_dll`] searches, as paths: beside the executable, one level above it, then the
+/// per-user folder.
+pub(crate) fn hook_dll_candidates(dir: &Path, user_folder: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut candidates = vec![dir.join(HOOK_DLL_NAME)];
+    if let Some(parent) = dir.parent() {
+        candidates.push(parent.join(HOOK_DLL_NAME));
+    }
+    candidates.extend(user_folder.map(|folder| folder.join(HOOK_DLL_NAME)));
+    candidates
+}
+
+/// `<local appdata>\rust-hover-preview` — local and not the roaming folder `config.ini` lives in,
+/// which a domain profile syncs and no binary belongs in.
+fn hook_user_folder() -> Option<PathBuf> {
+    if let Some(portable) = data_root() {
+        return Some(portable.to_path_buf());
+    }
+    directories::BaseDirs::new().map(|base| base.data_local_dir().join("rust-hover-preview"))
 }
 
 #[cfg(test)]
