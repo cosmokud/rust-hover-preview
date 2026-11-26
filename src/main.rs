@@ -134,10 +134,13 @@ fn main() {
 
     // Bail out before any hook, window, or thread is created when the app is
     // already running, so only the first instance stays in the tray.
-    let _instance_guard = match app::single_instance::acquire() {
-        Some(guard) => guard,
-        None => return,
-    };
+    // A launch that is a second instance ends here, before any hook, window or thread of it is made.
+    // The claim itself is kept by the module rather than by this frame, so that a tray ending itself
+    // for a copy of itself can hand the name over before that copy looks for it (see
+    // `single_instance::let_go_early`).
+    if !app::single_instance::acquire() {
+        return;
+    }
     trace.step("instance guard");
 
     // The facts this run publishes are a section of its own from here on (see `app::seam::the_facts`),

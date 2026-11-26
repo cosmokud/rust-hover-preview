@@ -102,20 +102,37 @@ fn hand_the_write_to_an_elevated_copy(apply: startup::Applied) {
         return;
     }
 
-    // And the hand-over: the machine is asked to start this app the way it now would at a logon,
-    // and this process goes the way `Exit` takes it — the copy that comes up finds the mutex free
-    // because this one is gone.
-    match apply {
-        startup::Applied::TurnOn => {
-            let _ = startup::start_the_task();
-        }
-        startup::Applied::TurnOff => {
-            startup::start_through_the_entry();
-        }
-    }
+    hand_over_to_the_successor();
+}
 
-    crate::RUNNING.store(false, Ordering::SeqCst);
-    crate::shell::tray::leave_the_tray();
+/// Start the copy the machine now holds and end this one — the half of a hand-over that both
+/// directions share.
+///
+/// **The single-instance name is given up before the successor is started, not after.** A copy begun
+/// while this process still holds it would find the app already running and exit, and the tray that
+/// was meant to come back would be no tray at all. So the name goes first (see
+/// `single_instance::let_go_early`), the successor is asked for, and only then does this process
+/// leave — and a successor that could not be started at all ends the run the ordinary way rather
+/// than leaving an app that has given up its name and is still standing.
+fn hand_over_to_the_successor() {
+    crate::app::single_instance::let_go_early();
+
+    let started = {
+        let machine = startup::machine();
+
+        match machine.started() {
+            // The elevated answer: the record Windows itself will run at the next logon.
+            startup::Started::Task => startup::start_the_task(),
+            // The ordinary one: the value a logon runs, started through the Shell's own token so
+            // that it is the unelevated copy rather than a second elevated one.
+            _ => startup::start_through_the_entry(),
+        }
+    };
+
+    if started {
+        crate::RUNNING.store(false, Ordering::SeqCst);
+        crate::shell::tray::leave_the_tray();
+    }
 }
 
 /// Wait until the machine holds what the elevated copy was begun to write, or until it has plainly
@@ -189,7 +206,13 @@ pub(in super::super) fn toggle_run_as_administrator() {
         return;
     }
 
-    let outcome = if on {
+    // **The row above decides what a logon does, and this one decides how.** On, the mechanism is
+    // the task; off, it is the ordinary `Run` value — because `run_at_startup` is still on, and a
+    // startup that was left with neither would be a switch that turned off more than its own row.
+    // `enable_startup` is what writes the value and takes the task away in one pass, so both
+    // directions go through it while the row above says yes; only a startup that is not wanted at
+    // all is the call that removes both.
+    let outcome = if on || wanted {
         startup::enable_startup()
     } else {
         startup::disable_startup()
@@ -224,12 +247,10 @@ pub(in super::super) fn toggle_run_as_administrator() {
     // this process with an administrator's token, and an unelevated copy is what a logon will now
     // start — so the tray is replaced by that copy rather than left standing as the old state.
     if !on {
-        // The entry is written, so the copy to be looking at is the one it names: this one asks for
-        // that copy and leaves, and the tray that comes back is the unelevated one a logon starts.
-        if startup::start_through_the_entry() {
-            crate::RUNNING.store(false, Ordering::SeqCst);
-            crate::shell::tray::leave_the_tray();
-        }
+        // The entry is written, so the copy to be looking at is the one it names: this one hands the
+        // single-instance name over, asks for that copy and leaves, and the tray that comes back is
+        // the unelevated one a logon starts.
+        hand_over_to_the_successor();
     }
 }
 

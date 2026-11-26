@@ -1422,33 +1422,27 @@ pub(crate) fn apply_for_the_helper(apply: Applied) -> bool {
         return false;
     };
 
-    match apply {
-        Applied::TurnOn => {
-            let Some(user) = elevation::desktop_user_name() else {
-                return false;
-            };
+    // The mark on the exe goes with the row in both directions: it is the other way this machine can
+    // be asked for an elevated launch, and a machine left carrying it with nothing that starts it is
+    // a machine where an ordinary `Run` value does nothing at all (see `remove_compat_elevation`).
+    let mark_gone = remove_compat_elevation(&exe);
 
-            if task::register(&exe, &user).is_err() {
-                return false;
-            }
+    // **What a logon does is the file's answer, and what this launch changes is only the mechanism.**
+    // A `run_at_startup` that is still on is an ordinary entry written in place of the task rather
+    // than nothing at all — which is `enable_startup`'s own answer once the mark is gone and
+    // `run_as_administrator` is off — and only a startup nobody wants is removed whole.
+    let wanted = crate::CONFIG
+        .lock()
+        .map(|config| config.run_at_startup)
+        .unwrap_or(false);
 
-            // The two are alternatives: a machine carrying both starts the app twice at a logon,
-            // once unelevated from the registry and once elevated from the task.
-            delete_entry();
-            delete_approved();
+    let outcome = match (apply, wanted) {
+        (Applied::TurnOn, _) => enable_startup(),
+        (Applied::TurnOff, true) => enable_startup(),
+        (Applied::TurnOff, false) => disable_startup(),
+    };
 
-            task::facts().starts_this_copy(&exe)
-        }
-        Applied::TurnOff => {
-            delete_entry();
-            delete_approved();
-            // The mark first: an exe asking for elevation is one a `Run` value never starts, so a
-            // machine left carrying it after this row was turned off is a machine where a logon
-            // runs nothing at all (see `remove_compat_elevation`).
-            let _ = remove_compat_elevation(&exe);
-            task::unregister().is_ok() || !task::facts().present
-        }
-    }
+    outcome.settled() && mark_gone
 }
 
 /// A string as the Shell's own call wants it: UTF-16, terminated.
