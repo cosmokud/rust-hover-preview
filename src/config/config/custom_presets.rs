@@ -362,6 +362,27 @@ pub enum CustomPlacement {
 }
 
 impl CustomPlacement {
+    /// What a preset that has never had the row set reads as on this machine.
+    ///
+    /// **`Tray -> Placement + Hook` where the hook can be had, the plain placement where it
+    /// cannot.** The hook is the placement that holds a program's window where the hover put it
+    /// whatever the program itself tries — a resize, a move, a maximize, a foreground grab — and the
+    /// DLL it needs ships beside this executable, so on a machine that has it there is no reason for
+    /// a new preset to be the weaker of the two. Without the DLL the row reads `(.dll is missing)`
+    /// and cannot be picked at all (see `placement_selectable`), which is why the fallback is the
+    /// plain placement rather than an enforcement nothing would answer.
+    ///
+    /// **This is the default, not a migration.** A preset whose file says `placement=tray` was
+    /// chosen that way by whoever wrote it, and it keeps it: only a preset with no such key at all
+    /// — `Add`, and a section written before the row existed — is answered here.
+    pub fn default_on_this_machine() -> Self {
+        if crate::paths::hook_dll().is_some() {
+            Self::Hook
+        } else {
+            Self::FollowTray
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::FollowTray => "tray",
@@ -1152,6 +1173,7 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         }
 
         let mut preset = CustomPreset::named(&name);
+        preset.placement = CustomPlacement::default_on_this_machine();
         if let Some(enabled) = ini.get(section, "enabled") {
             if let Some(val) = parse_enabled(&enabled) {
                 preset.enabled = val;
@@ -1938,11 +1960,25 @@ mod tests {
     }
 
     #[test]
-    fn placement_round_trips_and_defaults_to_follow_tray() {
+    fn placement_round_trips_and_defaults_to_the_machines_own_placement() {
+        // The struct's own default is the plain placement, and it is the same on every machine: what
+        // varies is the *row's* default, which is asked of the machine where a preset is made (see
+        // `CustomPlacement::default_on_this_machine`). A table that read the disk is a table a test
+        // could not assert.
         assert_eq!(CustomPlacement::default(), CustomPlacement::FollowTray);
         assert_eq!(
             CustomPreset::named("Fresh").placement,
             CustomPlacement::FollowTray
+        );
+        let expected_default = CustomPlacement::default_on_this_machine();
+        assert_eq!(
+            expected_default,
+            if crate::paths::hook_dll().is_some() {
+                CustomPlacement::Hook
+            } else {
+                CustomPlacement::FollowTray
+            },
+            "the hook where the DLL is there to hold the window, the plain placement where it is not"
         );
         let cases = [
             (CustomPlacement::FollowTray, "tray"),
@@ -1968,11 +2004,17 @@ mod tests {
             assert_eq!(read.custom_presets[0].placement, placement);
         }
 
-        // Missing or unknown value falls back to FollowTray.
+        // **A preset with no `placement` key at all is a new one, and reads the machine's default.**
+        // A key that says `tray` was chosen by whoever wrote the file, and it is left alone; an
+        // unknown value is not a choice either and takes the same default as a missing key.
         let mut legacy = Ini::new();
         legacy.set("custom:missing", "name", Some("Missing".into()));
         legacy.set("custom:missing", "exe", Some("a.exe".into()));
         legacy.set("custom:missing", "extensions", Some("png".into()));
+        legacy.set("custom:chosen", "name", Some("Chosen".into()));
+        legacy.set("custom:chosen", "exe", Some("c.exe".into()));
+        legacy.set("custom:chosen", "extensions", Some("png".into()));
+        legacy.set("custom:chosen", "placement", Some("tray".into()));
         legacy.set("custom:unknown", "name", Some("Unknown".into()));
         legacy.set("custom:unknown", "exe", Some("b.exe".into()));
         legacy.set("custom:unknown", "extensions", Some("png".into()));
@@ -1980,10 +2022,21 @@ mod tests {
 
         let mut read = AppConfig::default();
         read_all(&legacy, &mut read);
-        assert_eq!(read.custom_presets.len(), 2);
-        for p in &read.custom_presets {
-            assert_eq!(p.placement, CustomPlacement::FollowTray);
-        }
+        assert_eq!(read.custom_presets.len(), 3);
+        let by_name = |name: &str| {
+            read.custom_presets
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.placement)
+                .expect("the preset was read")
+        };
+        assert_eq!(by_name("Missing"), expected_default);
+        assert_eq!(by_name("Unknown"), expected_default);
+        assert_eq!(
+            by_name("Chosen"),
+            CustomPlacement::FollowTray,
+            "a preset whose file names the plain placement keeps it"
+        );
     }
 
     #[test]
