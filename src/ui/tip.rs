@@ -233,11 +233,11 @@ const CAPTURE_TECHNIQUE_WORDS: &[&str] = &[
      preview is that window's picture of it. On-screen, so the compositor always has it.",
     "The window is parked past the edge of every display and the preview is drawn from it there. The \
      simplest road, and the one furthest from the pointer.",
+    "The window is staged past every display, given a moment to settle, then revealed in place in \
+     one step across a compositor flush — so nothing of it is ever seen arriving.",
     "The program's own window is placed at the preview's box, click-through and topmost, with no \
      picture of this app's and no thumbnail. The fastest, and the only one where the program is the \
      window you see.",
-    "The window is staged past every display, given a moment to settle, then revealed in place in \
-     one step across a compositor flush — so nothing of it is ever seen arriving.",
 ];
 
 /// `Child Processes`, value by value.

@@ -231,8 +231,8 @@ pub(super) const CAPTURE_TECHNIQUES: [CustomCaptureTechnique; 6] = [
     CustomCaptureTechnique::InvisibleLayered,
     CustomCaptureTechnique::BehindHost,
     CustomCaptureTechnique::OffScreen,
-    CustomCaptureTechnique::DirectWindow,
     CustomCaptureTechnique::OffscreenStaged,
+    CustomCaptureTechnique::DirectWindow,
 ];
 
 fn capture_technique_label(technique: CustomCaptureTechnique) -> &'static str {
@@ -409,8 +409,8 @@ pub(super) const EDITOR_LABELS: [&str; 16] = [
     "Path Method",
     "Capture Method",
     "Child Processes",
-    "Broker Fallback",
     "Sibling Windows",
+    "Broker Fallback",
     "Picture Window",
     "Promotion",
     "Placement",
@@ -433,8 +433,8 @@ const LABEL_CONTROLS: [i32; EDITOR_LABELS.len()] = [
     ID_PATH_METHOD,
     ID_CAPTURE_TECHNIQUE,
     ID_CHILD_SCOPE,
-    ID_BROKER_FALLBACK,
     ID_SIBLING_WINDOWS,
+    ID_BROKER_FALLBACK,
     ID_PICTURE_WINDOW,
     ID_PROMOTION_TECHNIQUE,
     ID_PLACEMENT,
@@ -2237,7 +2237,6 @@ unsafe fn build(hwnd: HWND) -> State {
             ID_CHILD_SCOPE,
         )
     });
-    controls.push(unsafe { create_themed_toggle(hwnd, ID_BROKER_FALLBACK, false, false) });
     controls.push(unsafe {
         child(
             hwnd,
@@ -2253,6 +2252,7 @@ unsafe fn build(hwnd: HWND) -> State {
             ID_SIBLING_WINDOWS,
         )
     });
+    controls.push(unsafe { create_themed_toggle(hwnd, ID_BROKER_FALLBACK, false, false) });
     controls.push(unsafe {
         child(
             hwnd,
@@ -4918,11 +4918,6 @@ unsafe fn lay_out(state: &mut State) {
     );
     y += row + gap;
 
-    // Broker Fallback: the activator/stub road, a toggle because it is on or off.
-    let broker_toggle_w = scale(42, dpi);
-    place(ID_BROKER_FALLBACK, field_left, y, broker_toggle_w, row);
-    y += row + gap;
-
     // Sibling Windows: what happens to the program's own other windows.
     place(
         ID_SIBLING_WINDOWS,
@@ -4933,9 +4928,14 @@ unsafe fn lay_out(state: &mut State) {
     );
     y += row + gap;
 
+    // Broker Fallback: the activator/stub road, a toggle because it is on or off.
+    let broker_toggle_w = scale(42, dpi);
+    place(ID_BROKER_FALLBACK, field_left, y, broker_toggle_w, row);
+    y += row + gap;
+
     // Picture Window: which of them is the picture, where the program made more than one of a
-    // size the file could be drawn at. A question about the winner, so it stands beside the row
-    // about the losers rather than beside the capture techniques.
+    // size the file could be drawn at. A question about the winner, so it stands past the rows
+    // about the other windows rather than beside the capture techniques.
     place(
         ID_PICTURE_WINDOW,
         field_left,
@@ -7976,9 +7976,10 @@ pub(super) mod tests {
                 "Invisible Layered"
             );
             assert_eq!(
-                CAPTURE_TECHNIQUES[5],
+                CAPTURE_TECHNIQUES[4],
                 CustomCaptureTechnique::OffscreenStaged
             );
+            assert_eq!(CAPTURE_TECHNIQUES[5], CustomCaptureTechnique::DirectWindow);
             assert_eq!(
                 capture_technique_label(CustomCaptureTechnique::OffscreenStaged),
                 "Off-Screen Staged (-10000 -> Reveal)"
@@ -7994,8 +7995,8 @@ pub(super) mod tests {
                 state.dirtied = false;
             }
 
-            // Program -> Arguments -> Path Method -> Capture Method -> Child Processes -> Broker
-            // Fallback -> Sibling Windows -> Promotion -> Placement -> Window (controls & labels) in
+            // Program -> Arguments -> Path Method -> Capture Method -> Child Processes -> Sibling
+            // Windows -> Broker Fallback -> Promotion -> Placement -> Window (controls & labels) in
             // Tab order.
             assert_eq!(EDITOR_LABELS.len(), 16);
             assert_eq!(EDITOR_LABELS[3], "Program");
@@ -8003,8 +8004,8 @@ pub(super) mod tests {
             assert_eq!(EDITOR_LABELS[5], "Path Method");
             assert_eq!(EDITOR_LABELS[6], "Capture Method");
             assert_eq!(EDITOR_LABELS[7], "Child Processes");
-            assert_eq!(EDITOR_LABELS[8], "Broker Fallback");
-            assert_eq!(EDITOR_LABELS[9], "Sibling Windows");
+            assert_eq!(EDITOR_LABELS[8], "Sibling Windows");
+            assert_eq!(EDITOR_LABELS[9], "Broker Fallback");
             assert_eq!(EDITOR_LABELS[10], "Picture Window");
             assert_eq!(EDITOR_LABELS[11], "Promotion");
             assert_eq!(EDITOR_LABELS[12], "Placement");
@@ -8073,19 +8074,19 @@ pub(super) mod tests {
                 args_rc.top < path_method_rc.top
                     && path_method_rc.top < cap_rc.top
                     && cap_rc.top < children_rc.top
-                    && children_rc.top < broker_rc.top
-                    && broker_rc.top < siblings_rc.top
-                    && siblings_rc.top < picture_rc.top
+                    && children_rc.top < siblings_rc.top
+                    && siblings_rc.top < broker_rc.top
+                    && broker_rc.top < picture_rc.top
                     && picture_rc.top < promo_rc.top
                     && promo_rc.top < place_rc.top
                     && place_rc.top < win_rc.top,
-                "Row order must be Arguments ({}) < Path Method ({}) < Capture Method ({}) < Child Processes ({}) < Broker Fallback ({}) < Sibling Windows ({}) < Picture Window ({}) < Promotion ({}) < Placement ({}) < Window ({})",
+                "Row order must be Arguments ({}) < Path Method ({}) < Capture Method ({}) < Child Processes ({}) < Sibling Windows ({}) < Broker Fallback ({}) < Picture Window ({}) < Promotion ({}) < Placement ({}) < Window ({})",
                 args_rc.top,
                 path_method_rc.top,
                 cap_rc.top,
                 children_rc.top,
-                broker_rc.top,
                 siblings_rc.top,
+                broker_rc.top,
                 picture_rc.top,
                 promo_rc.top,
                 place_rc.top,
@@ -8113,18 +8114,18 @@ pub(super) mod tests {
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, children_combo, false).ok(),
-                Some(broker_toggle),
-                "Tab from Child Processes must move to Broker Fallback"
-            );
-            assert_eq!(
-                GetNextDlgTabItem(hwnd, broker_toggle, false).ok(),
                 Some(siblings_combo),
-                "Tab from Broker Fallback must move to Sibling Windows"
+                "Tab from Child Processes must move to Sibling Windows"
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, siblings_combo, false).ok(),
+                Some(broker_toggle),
+                "Tab from Sibling Windows must move to Broker Fallback"
+            );
+            assert_eq!(
+                GetNextDlgTabItem(hwnd, broker_toggle, false).ok(),
                 Some(picture_combo),
-                "Tab from Sibling Windows must move to Picture Window"
+                "Tab from Broker Fallback must move to Picture Window"
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, picture_combo, false).ok(),
@@ -8142,8 +8143,8 @@ pub(super) mod tests {
                 "Tab from Placement must move to Window"
             );
 
-            // Labels 4..=13: Arguments < Path Method < Capture Method < Child Processes < Broker
-            // Fallback < Sibling Windows < Picture Window < Promotion < Placement < Window.
+            // Labels 4..=13: Arguments < Path Method < Capture Method < Child Processes < Sibling
+            // Windows < Broker Fallback < Picture Window < Promotion < Placement < Window.
             let label_top = |index: i32| -> i32 {
                 let mut rc = RECT::default();
                 let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(
