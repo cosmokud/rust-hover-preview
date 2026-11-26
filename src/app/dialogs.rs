@@ -239,6 +239,14 @@ pub(crate) fn report_startup_failure(outcome: crate::app::startup::Outcome) {
         return;
     }
 
+    // And a task that stayed is the row half in place rather than a write that failed: the entry is
+    // written and a logon starts the app elevated beside it, which is the one thing turning the row
+    // off was about.
+    if let crate::app::startup::Outcome::TaskStayed = outcome {
+        report_task_stayed();
+        return;
+    }
+
     let state = match outcome {
         // The machine refused the write and still holds the opposite of what was asked for.
         crate::app::startup::Outcome::NotWritten { held: false } => {
@@ -303,6 +311,43 @@ fn report_mark_failure(on: bool) {
     };
 
     report(text);
+}
+
+/// What the `Run as administrator` row says when the ordinary entry was written and the task that
+/// starts this app elevated could not be taken away.
+///
+/// **A logon would start the app twice.** The value starts it unelevated and the task starts it
+/// elevated, and which of the two is left standing is whatever Windows begins second — so the row
+/// reads as off while a logon still starts an administrator's copy. Nothing else is written over:
+/// a task this token may not delete is one the same row, run from an elevated copy of this app, can.
+fn report_task_stayed() {
+    report(
+        "The ordinary startup entry is written, but the task that starts this app as an \
+         administrator could not be removed.\n\n\
+         A logon would now start this app twice — once unelevated from the entry and once elevated \
+         from the task — which is not what the row asked for. Deleting `\\RustHoverPreview` in Task \
+         Scheduler, or turning this row on and off again from an administrator's copy of this app, \
+         will do it.\n\n\
+         A security policy, an antivirus tool, or a Task Scheduler this process may not reach is the \
+         usual reason. The rest of this app is unaffected.",
+    );
+}
+
+/// What the tray says when the copy it started to replace it never stood up.
+///
+/// **The row is in place; only this process's replacement is not.** The machine holds what the row
+/// asked for — the task and the mark for an elevated start, the ordinary entry without them for an
+/// unelevated one — and what did not happen is this tray being replaced by the copy that would run
+/// under it. Leaving anyway would be the app gone with nothing to come back to, so this one stays
+/// and says so: the same change is had by exiting and starting the app again.
+pub(crate) fn report_restart_failure() {
+    report(
+        "The change is in place, but this app could not restart itself.\n\n\
+         The tray you are looking at is the copy that was running, and the next start of this app — \
+         Exit, then the app again — is the one the change is about. Nothing of this app is lost, and \
+         the setting itself is saved.\n\n\
+         A program that Windows will not start, or one that ended as it began, is the usual reason.",
+    );
 }
 
 /// A box that reports rather than asks, for what has already happened and cannot be refused.

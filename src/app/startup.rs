@@ -100,6 +100,11 @@ pub(crate) enum Outcome {
     /// put on leaves a logon elevated and every other launch not, and one that could not be taken off
     /// leaves a `Run` value beside it that Windows starts nothing from.
     MarkRefused { on: bool },
+    /// The ordinary `Run` value was written, but the scheduled task that starts this app **elevated**
+    /// at a logon could not be taken away: a logon would start it twice, once unelevated from the
+    /// value and once elevated from the task. It is what turning the `Run as administrator` row off
+    /// answers when the token at hand may write a value but not delete a task.
+    TaskStayed,
 }
 
 impl Outcome {
@@ -212,7 +217,53 @@ pub(crate) fn enable_startup() -> Outcome {
         return enable_the_task(&exe_path);
     }
 
+    write_the_entry_and_take_the_task_away(&exe_path)
+}
+
+/// Write the ordinary `Run` value and take the elevated task away — the machine a logon starts
+/// unelevated from — **without asking the file whether it wants an elevated start**.
+///
+/// **It is the answer the `Run as administrator` row gives when it is turned off, and the one call
+/// that can be trusted to give it.** [`enable_startup`] asks [`elevated_start_wanted`], which reads
+/// the mark on the file as well as the file's own setting: right for a logon, wrong for this row,
+/// whose whole subject is that mark. A write that asked would be answered by a mark that had not
+/// gone yet — or by one the machine would not let go of — and would register the task the row is
+/// turning off, which is the state this call exists to make impossible.
+///
+/// A task the machine will not take away is answered rather than ignored: a logon that starts this
+/// app elevated beside the value that starts it unelevated is not what the row asked for.
+pub(crate) fn settle_as_unelevated() -> Outcome {
+    let Ok(exe_path) = env::current_exe() else {
+        return Outcome::NotWritten { held: false };
+    };
+
     let written = write_entry(&exe_path) && enable_approved();
+    let held = is_entry_enabled_here();
+
+    if !written || !held {
+        return Outcome::NotWritten { held };
+    }
+
+    // A task this token may not delete is a task that still starts the app at a logon — elevated,
+    // and beside the value just written — which is the one state the row cannot be left in.
+    if task::unregister().is_err() && task::facts().present {
+        return Outcome::TaskStayed;
+    }
+
+    if elevation::runs_under_another_account() {
+        // The entry was written into another account's hive rather than this process's own, which
+        // is still the right entry — the one the logon of the desktop's account reads — and is
+        // worth saying, because nothing in this account's own `Run` key will show it.
+        elevation::desktop_user_sid().map_or(Outcome::Settled, Outcome::AnotherAccount)
+    } else {
+        Outcome::Settled
+    }
+}
+
+/// The entry half of [`enable_startup`], with the task's removal as something that may be refused:
+/// the ordinary answer of a process that may write a `Run` value but not delete a task.
+fn write_the_entry_and_take_the_task_away(exe_path: &Path) -> Outcome {
+    let written = write_entry(exe_path) && enable_approved();
     let held = is_entry_enabled_here();
 
     if !written || !held {
@@ -442,21 +493,12 @@ fn file_asks_for_elevation(path: &Path) -> bool {
 /// The compatibility layers this machine holds for one executable, as the words they are written
 /// as, or nothing where there is no entry for it.
 fn compat_layers_value(path: &Path) -> Option<String> {
-    let mut hkey = HKEY::default();
-    // Safety: a handle is written into a local, and this call closes it.
-    let opened = unsafe {
-        RegOpenKeyExW(
-            HKEY_CURRENT_USER,
-            COMPAT_LAYERS_KEY,
-            0,
-            KEY_QUERY_VALUE,
-            &mut hkey,
-        )
-    };
-
-    if opened.is_err() {
-        return None;
-    }
+    // **One door for the read and the write.** The key is opened through `open_layers`, which is the
+    // hive a write goes to: the desktop account's where this process was elevated into another one,
+    // and this account's own otherwise. A read from `HKEY_CURRENT_USER` while the write went to
+    // `HKEY_USERS\<the desktop's SID>` would be two answers about two different keys, and the mark
+    // this app put on would be a mark it could never see to take off.
+    let hkey = open_layers(KEY_QUERY_VALUE)?;
 
     let layers = read_layers(hkey, path);
 
@@ -588,10 +630,18 @@ fn layers_value_name(path: &Path) -> Vec<u16> {
 /// Answers whether the mark is gone afterwards, which is a machine with none at all as much as one
 /// whose layers no longer name it.
 fn remove_compat_elevation(path: &Path) -> bool {
-    let Some(hkey) = open_layers(KEY_QUERY_VALUE | KEY_SET_VALUE) else {
-        // No key at all is no entry at all, and an entry is the only thing this was asked to
-        // remove.
+    // **What is asked is the machine afterwards, not the write.** A key this process may not open,
+    // or a value it may not read, used to be answered as "no mark at all" — which is the one answer
+    // that leaves the mark on the file while the row says it is off, and a machine that starts
+    // nothing at a logon because Windows starts no `Run` value whose file asks for elevation. So the
+    // mark is read first, through the same hive the write goes to, and a mark that is there and
+    // cannot be reached is a mark that did not go.
+    if !file_asks_for_elevation(path) {
         return true;
+    }
+
+    let Some(hkey) = open_layers(KEY_QUERY_VALUE | KEY_SET_VALUE) else {
+        return false;
     };
 
     let Some(layers) = read_layers(hkey, path) else {
@@ -599,7 +649,7 @@ fn remove_compat_elevation(path: &Path) -> bool {
         unsafe {
             let _ = RegCloseKey(hkey);
         }
-        return true;
+        return false;
     };
 
     let kept = layers_without_the_mark(&layers);
@@ -1137,7 +1187,9 @@ pub fn honour_the_configuration() -> bool {
     // not to run, one naming a copy that has since moved — is what the write below is for.
     let settled = !wanted
         || match (before.started(), wants_elevation) {
-            (Started::Entry, false) => true,
+            // A task beside the entry is the app starting twice at a logon — once unelevated from
+            // the value and once elevated from the task — so the entry is settled only on its own.
+            (Started::Entry, false) => !before.task_present,
             (Started::Task, true) => true,
             // A machine carrying both starts the app twice, which is the one state nothing is
             // written over: the answer that leaves it is the one the task is for, so the two are
@@ -1472,7 +1524,11 @@ pub(crate) fn start_through_the_entry() -> bool {
         return false;
     };
 
-    crate::app::hand_off::open(&crate::paths::plain_path(&exe), None)
+    // **The Shell's own token, whatever the hand-off setting says.** `Elevate Hand-Offs` is about the
+    // programs this app opens for the user; a copy of this app replacing this one is the row being
+    // turned off, and the token is the whole of what that is about — a restart that came back
+    // elevated would leave the tray standing as the state the row has just stopped asking for.
+    crate::app::hand_off::shell_execute(&crate::paths::plain_path(&exe), None, "open")
 }
 
 /// What this app knows about the machine's task, for a reader that has to wait on it.
@@ -1629,7 +1685,11 @@ pub(crate) fn apply_for_the_helper(apply: Applied) -> bool {
 
     let outcome = match (apply, wanted) {
         (Applied::TurnOn, _) => enable_startup(),
-        (Applied::TurnOff, true) => enable_startup(),
+        // Off, the answer is the row's rather than the file's: the ordinary entry is written and
+        // the task taken away whatever the mark said a moment ago. The mark has just been cleared
+        // above, and a write that read it back would be asking a question this call has already
+        // answered.
+        (Applied::TurnOff, true) => settle_as_unelevated(),
         (Applied::TurnOff, false) => disable_startup(),
     };
 

@@ -1,6 +1,7 @@
 //! Named-mutex guard that keeps the app to a single running instance.
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use std::os::windows::ffi::OsStrExt;
@@ -8,7 +9,7 @@ use std::os::windows::ffi::OsStrExt;
 use once_cell::sync::Lazy;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, GetLastError, BOOL, ERROR_ALREADY_EXISTS, HANDLE};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
 
 /// Session-local (`Local\`) so each signed-in user gets their own instance and
 /// tray icon.
@@ -47,6 +48,15 @@ impl Drop for InstanceGuard {
     }
 }
 
+/// How long a copy that has taken the app's name is watched before it is believed to be the app:
+/// a copy that dies in the first moments of its life — on a machine under a scanner's thumb, or on
+/// a start that fails before its first window — is a copy that never stood, and a tray that left
+/// for one would be the app gone with nothing to come back to.
+const A_SUCCESSOR_SETTLES_IN: Duration = Duration::from_millis(250);
+
+/// How often the name is asked about while a hand-over waits for its successor.
+const THE_NAME_IS_ASKED_THIS_OFTEN: Duration = Duration::from_millis(25);
+
 /// Claims the single-instance guard, answering `false` when another instance already holds it and
 /// this process should exit.
 ///
@@ -60,9 +70,11 @@ pub fn acquire() -> bool {
         return false;
     }
 
-    if let Ok(mut held) = HELD.lock() {
-        *held = guard;
-    }
+    // A poisoned lock is still the slot this guard belongs in: a guard dropped here because a panic
+    // happened to be unwinding elsewhere would give the name up while this process is running, and
+    // a second copy would stand beside it.
+    let mut held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *held = guard;
 
     true
 }
@@ -76,10 +88,60 @@ pub fn acquire() -> bool {
 /// started at all is a copy that never took the name, so the copy still standing takes it back
 /// rather than staying as a second app beside a name nobody holds.
 pub(crate) fn let_go_early() {
-    if let Ok(mut held) = HELD.lock() {
-        // Dropped here rather than at the end of the process: `InstanceGuard`'s own `Drop` closes
-        // the handle, and closing the last handle is what releases the name.
-        let _ = held.take();
+    // Dropped here rather than at the end of the process: `InstanceGuard`'s own `Drop` closes the
+    // handle, and closing the last handle is what releases the name. A poisoned lock is taken the
+    // same way round — the guard is in it, and a hand-over that skipped it would start a successor
+    // that finds the app already running and leaves.
+    let mut held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _ = held.take();
+}
+
+/// Wait for the copy a hand-over started to take the app's name, and answer whether it did.
+///
+/// **A start that was accepted is not a copy that stood.** The Shell answers that it took a
+/// request, and a task whose own instance is already running starts nothing at all; what proves a
+/// successor is the app's own name, which only a copy that got as far as being the app holds. And a
+/// copy that takes the name and dies a moment later is not one either, so the name is watched for
+/// `A_SUCCESSOR_SETTLES_IN` before the answer is yes.
+pub(crate) fn wait_for_a_successor(bound: Duration) -> bool {
+    wait_for(INSTANCE_MUTEX, bound, A_SUCCESSOR_SETTLES_IN)
+}
+
+fn wait_for(name: PCWSTR, bound: Duration, settles_in: Duration) -> bool {
+    let deadline = Instant::now() + bound;
+    let mut taken_at: Option<Instant> = None;
+
+    loop {
+        match (held(name), taken_at) {
+            (true, None) => taken_at = Some(Instant::now()),
+            (true, Some(since)) if since.elapsed() >= settles_in => return true,
+            // A name that was taken and given up again is a copy that did not stand: what is waited
+            // for is the next one, until the bound runs out.
+            (false, Some(_)) => taken_at = None,
+            _ => {}
+        }
+
+        if Instant::now() >= deadline {
+            return taken_at.is_some();
+        }
+
+        std::thread::sleep(THE_NAME_IS_ASKED_THIS_OFTEN);
+    }
+}
+
+/// Whether the name is held by some process, asked without claiming it.
+fn held(name: PCWSTR) -> bool {
+    // Safety: the name is opened for the least a handle can be asked of it, and the handle this
+    // call answers with is closed here. A name nobody holds is an error rather than a handle.
+    match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, name) } {
+        Ok(handle) => {
+            // Safety: the handle `OpenMutexW` made and nothing else holds.
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -150,5 +212,49 @@ mod tests {
         let _ = acquire();
         let_go_early();
         let_go_early();
+    }
+
+    /// The rule a hand-over's wait is made of: a name nobody holds is not a successor, a name that is
+    /// held is, and a copy that takes the name and gives it up again is not one either.
+    #[test]
+    fn a_successor_is_a_copy_that_holds_the_name() {
+        let name = a_name_of_its_own("successor");
+
+        assert!(
+            !wait_for(
+                PCWSTR(name.as_ptr()),
+                Duration::from_millis(120),
+                Duration::ZERO
+            ),
+            "a name nobody holds is a copy that never came"
+        );
+
+        let held = claim(PCWSTR(name.as_ptr())).expect("a name nobody holds");
+        assert!(
+            wait_for(
+                PCWSTR(name.as_ptr()),
+                Duration::from_millis(500),
+                Duration::ZERO
+            ),
+            "a copy that took the name is one that stood"
+        );
+
+        // A copy that dies before it settles is not one: the name is watched for a moment, and what
+        // it is watched for is a holder that is still there at the end of it.
+        let dying = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            drop(held);
+        });
+
+        assert!(
+            !wait_for(
+                PCWSTR(name.as_ptr()),
+                Duration::from_millis(600),
+                Duration::from_millis(200)
+            ),
+            "a copy that gave the name up again is a copy that did not stand"
+        );
+
+        let _ = dying.join();
     }
 }

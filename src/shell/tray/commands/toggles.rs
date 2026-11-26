@@ -179,7 +179,12 @@ fn what_the_machine_holds(apply: startup::Applied) -> startup::Outcome {
                 // The mark still on the file is a `Run` value Windows starts nothing from, so the
                 // machine is not the one the row asked to be left with either way.
                 (_, true) => startup::Outcome::MarkRefused { on: false },
-                (true, false) => startup::Outcome::Settled,
+                // The entry is what a logon runs and no task is left beside it: the unelevated copy
+                // is the one that starts, which is what the row asked for.
+                (true, false) if !machine.task_present => startup::Outcome::Settled,
+                // A task that stayed starts the app elevated as well, so a logon that runs both is
+                // not the machine the row asked for.
+                (true, false) => startup::Outcome::TaskStayed,
                 (false, false) => startup::Outcome::TaskRefused,
             }
         }
@@ -200,6 +205,11 @@ fn what_the_machine_holds(apply: startup::Applied) -> startup::Outcome {
 /// stayed as the app's only window without being the app's only instance would be one a second copy
 /// could stand beside, two trays over one name nobody holds. Taking it back leaves the app exactly
 /// as it was, and the copy the machine now names is the one the next logon starts.
+/// How long a successor is given to take the app's single-instance name. A copy takes it in the
+/// first moments of its life — before its first window, hook or thread — so this is a ceiling on a
+/// machine under a scanner's thumb rather than an expectation.
+const THE_SUCCESSOR_TAKES_THE_NAME_IN: Duration = Duration::from_secs(10);
+
 fn hand_over_to_the_successor() {
     crate::app::single_instance::let_go_early();
 
@@ -215,9 +225,23 @@ fn hand_over_to_the_successor() {
         }
     };
 
-    // A successor that did not start leaves this copy as the app: the name it gave up is taken
+    // **What makes a successor real is the app's own name, not the answer to the start.** The Shell
+    // answers that it took a request, and a scheduled task whose own instance is already running
+    // starts nothing at all — both are a tray that would be gone with nothing to come back to. A copy
+    // that holds the single-instance name is a copy that got as far as being the app, and one that is
+    // still holding it a moment later is one that stood (see
+    // `single_instance::wait_for_a_successor`).
+    let standing = started
+        && crate::app::single_instance::wait_for_a_successor(THE_SUCCESSOR_TAKES_THE_NAME_IN);
+
+    // A successor that did not stand leaves this copy as the app: the name it gave up is taken
     // again, and only a copy that got there first — which is then the app — keeps it.
-    if !started && crate::app::single_instance::acquire() {
+    if !standing && crate::app::single_instance::acquire() {
+        // **The row is in place; what did not happen is this copy's replacement.** Leaving anyway
+        // would be the app gone with nothing to come back to — the tray that was there for the row
+        // the user just flipped is better than none at all, and the one thing they cannot act on is
+        // an app that vanished without saying why.
+        dialogs::report_restart_failure();
         return;
     }
 
@@ -250,15 +274,25 @@ pub(in super::super) fn toggle_run_as_administrator() {
     // own properties, and it is what the row says when it is read back from the machine.
     let on = !(machine.elevates() || startup::compat_elevation_is_set());
 
-    // **The mark's direction is the row's direction.** Off, it goes first: a machine still asking for
-    // elevation is one `enable_startup` would answer with a task rather than the entry this row is
-    // leaving behind. On, it is written by the write itself — after the task and never before,
-    // because Windows starts no `Run` value whose file carries it (see `startup::enable_the_task`).
-    let mark_gone = !on || startup::clear_compat_elevation();
+    // **The mark's direction is the row's direction.** Off, it goes first, and it is the whole of
+    // what the row is turning off: a machine still asking for elevation starts no `Run` value, so an
+    // entry written under it is a logon that starts nothing — and the write below would answer with
+    // the task rather than the entry, which is the opposite of the row. On, it is written by the
+    // write itself — after the task and never before, because Windows starts no `Run` value whose
+    // file carries it (see `startup::enable_the_task`).
+    let mark_gone = on || startup::clear_compat_elevation();
 
     commit_config(|config| {
         config.run_as_administrator = on;
     });
+
+    // **A mark that did not go is said out loud before anything is restarted.** Under it nothing
+    // starts at a logon at all — Windows starts no `Run` value whose file asks for elevation — and a
+    // checkmark that flipped back by itself is the one thing a user cannot act on.
+    if !mark_gone {
+        dialogs::report_startup_failure(startup::Outcome::MarkRefused { on: false });
+        return;
+    }
 
     let wanted = crate::CONFIG
         .lock()
@@ -276,20 +310,41 @@ pub(in super::super) fn toggle_run_as_administrator() {
     if !wanted {
         if on && !machine.entry_present && !startup::set_compat_elevation() {
             dialogs::report_startup_failure(startup::Outcome::MarkRefused { on: true });
+            return;
+        }
+
+        // Off, the tray standing here is an administrator's copy under a row that says otherwise,
+        // and nothing at a logon is no reason to keep it: what is started is the executable itself,
+        // unelevated, exactly as the next launch by hand will be — and the row is in place either
+        // way, so a copy that does not come leaves this one where it is and says so.
+        if !on {
+            hand_over_to_the_successor();
         }
 
         return;
     }
 
-    // **The row above decides what a logon does, and this one decides how.** On, the mechanism is
-    // the task; off, it is the ordinary `Run` value — because `run_at_startup` is still on, and a
-    // startup that was left with neither would be a switch that turned off more than its own row.
-    // `enable_startup` is what writes the value and takes the task away in one pass, so both
-    // directions go through it while the row above says yes.
-    let outcome = startup::enable_startup();
+    // **The row above decides whether a logon starts this app; this one decides how.** On, the
+    // mechanism is the task — and the mark beside it — which is a machine write that needs the
+    // elevated token, so an unelevated run hands it to an elevated copy of itself. Off, it is the
+    // ordinary `Run` value with the task taken away, and that is asked for rather than derived: a
+    // write that asked the machine whether it wanted an elevated start would be answered by the mark
+    // this row has just cleared, and a mark that did not go would answer with the task the row is
+    // turning off (see `startup::settle_as_unelevated`).
+    let outcome = if on {
+        startup::enable_startup()
+    } else {
+        startup::settle_as_unelevated()
+    };
 
     match outcome {
-        startup::Outcome::NeedsElevation | startup::Outcome::TaskRefused => {
+        // **A write this token may not make is one an elevated copy of this app can.** Registering
+        // the task and deleting it are both `E_ACCESSDENIED` without the elevated token, so a row
+        // whose write answered with the task is handed over rather than reported as a machine that
+        // refused it.
+        startup::Outcome::NeedsElevation
+        | startup::Outcome::TaskRefused
+        | startup::Outcome::TaskStayed => {
             hand_the_write_to_an_elevated_copy(if on {
                 startup::Applied::TurnOn
             } else {
@@ -302,14 +357,6 @@ pub(in super::super) fn toggle_run_as_administrator() {
             return;
         }
         _ => {}
-    }
-
-    if !mark_gone {
-        // The row asked for the mark to be gone and the machine kept it: what a logon does is not
-        // what the row says it does — Windows starts no `Run` value under that mark — and that is
-        // said out loud rather than left to a checkmark.
-        dialogs::report_startup_failure(startup::Outcome::MarkRefused { on: false });
-        return;
     }
 
     // And the hand-over, in the one direction that needs it: turning the elevated start off leaves
