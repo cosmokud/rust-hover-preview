@@ -1257,9 +1257,9 @@ fn forget_sightings() {
 /// on MPV Player's `mpv.exe`: the `mpv smtc` helper is born at 25–50 ms and the film's window at
 /// 195–280 ms, so a settle shorter than that adopts the helper anyway and the row does nothing.
 ///
-/// **And it is not paid where there is nothing to choose.** A program with a single picture-shaped
-/// window — Paint, PhotoCraft, Dragon, SVP's own `mpv.exe`, VLC once its video window is up — has
-/// already answered which window is the picture, so it is adopted as quickly as `Largest` adopts it.
+/// **What it costs a program that is not MPV Player**: two thirds of a second before a preview that
+/// appears after a hidden window has stood still, because until the program stops making windows
+/// there is no telling the last one from the next one. A window the program *shows* skips the wait.
 const NEWEST_HIDDEN_SETTLE: Duration = Duration::from_millis(350);
 
 /// What the census has watched appear, so that "the window the program made last" is a fact about
@@ -1329,23 +1329,24 @@ fn select_the_picture(
     let biggest = same_class.iter().map(|(rank, _)| rank.area).max()?;
     let comparable_area = biggest.saturating_mul(COMPARABLE_AREA_PERCENT) / 100;
     let mut best: Option<(CandidateRank, HWND, Instant)> = None;
-    let mut comparable = 0usize;
     for (rank, item) in same_class {
         if rank.area < comparable_area {
             continue;
         }
-        comparable += 1;
         let seen_at = sightings.seen_at(item).unwrap_or_else(Instant::now);
         if best.is_none_or(|(_, _, at)| seen_at >= at) {
             best = Some((rank, item, seen_at));
         }
     }
     let (rank, item, _) = best?;
-    // **The settle is the price of a choice, and is not paid where there is nothing to choose.**
-    // A program with one window a picture could be drawn in has already said which window that is,
-    // so it is taken as fast as `Largest` takes it; the wait exists only where two windows are of
-    // the same size class and the newer one is the one the row wants.
-    if !rank.visible && comparable > 1 && !sightings.has_settled() {
+    // **A hidden winner waits for the program to stop making windows, whatever it looks like.** A
+    // window that is up is the program's own answer and is taken at once; a window nobody has seen
+    // is a guess, and the guess this row exists to correct is exactly the case where *one* bigger
+    // window is already there and the right one is still to come — MPV Player's helper is alone on
+    // the desktop from 25 ms to 250 ms, so "one candidate is nothing to choose" is what adopted it.
+    // Measured: skipping this wait for a single hidden candidate adopts `mpv smtc` at 26 ms, and
+    // waiting adopts the film at 578 ms.
+    if !rank.visible && !sightings.has_settled() {
         return None;
     }
     if item != largest.1 {
@@ -12782,15 +12783,19 @@ mod tests {
             "a hidden winner waits for the program to stop making windows"
         );
 
-        // **One candidate of its size class is not a choice, so nothing is waited for.** A program
-        // with a single picture-shaped window — Paint, PhotoCraft, Dragon, SVP's own mpv — is
-        // adopted as fast as `Largest` adopts it, unsettled or not.
+        // **A lone hidden candidate is still a guess**, and the case this row exists for has exactly
+        // one candidate for the first 200 ms: MPV Player's helper stands alone until the film's
+        // window arrives. So one is enough to make the wait necessary.
         let alone = vec![(rank(1976 * 1112), helper)];
         assert_eq!(
-            select_the_picture(&alone, &unsettled, CustomPictureWindow::NewestComparable)
+            select_the_picture(&alone, &unsettled, CustomPictureWindow::NewestComparable),
+            None,
+            "one hidden candidate is not yet the program's last window"
+        );
+        assert_eq!(
+            select_the_picture(&alone, &settled, CustomPictureWindow::NewestComparable)
                 .map(|(_, hwnd)| hwnd),
-            Some(helper),
-            "a single candidate is the answer, not a wait"
+            Some(helper)
         );
 
         // A window the program *shows* is its own answer and is taken at once, settle or not.
