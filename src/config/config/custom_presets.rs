@@ -2146,12 +2146,11 @@ mod tests {
     /// files (`…/2026`, `-`, `02`, …), asked for each of them, and played none.
     #[test]
     fn a_quoted_path_is_never_read_as_a_run_of_flags() {
-        let real = r#""file:///E:/Videos/2026 - 02 - Batch/Sample Show/Sample Show - 82 (1080p).mkv""#;
+        let real =
+            r#""file:///E:/Videos/2026 - 02 - Batch/Sample Show/Sample Show - 82 (1080p).mkv""#;
         assert_eq!(
             parse_arguments(real),
-            vec![
-                r"file:///E:/Videos/2026 - 02 - Batch/Sample Show/Sample Show - 82 (1080p).mkv"
-            ]
+            vec![r"file:///E:/Videos/2026 - 02 - Batch/Sample Show/Sample Show - 82 (1080p).mkv"]
         );
 
         // A plain path with a space in it is one argument as well, and so is a name that happens to
@@ -2235,10 +2234,7 @@ mod tests {
                 "{method:?} handed over {spelled}"
             );
         }
-        assert_eq!(
-            CustomPathMethod::Plain.spell(verbatim),
-            r"E:\Videos\82.mkv"
-        );
+        assert_eq!(CustomPathMethod::Plain.spell(verbatim), r"E:\Videos\82.mkv");
         assert_eq!(
             CustomPathMethod::ForwardSlashes.spell(verbatim),
             "E:/Videos/82.mkv"
