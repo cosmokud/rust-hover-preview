@@ -76,8 +76,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::config::config::{
     sanitize_arguments, sanitize_program_input, CustomCaptureTechnique, CustomChildScope,
-    CustomPathMethod, CustomPlacement, CustomPreset, CustomPromotionTechnique, CustomScaling,
-    CustomSiblingWindows, CustomWindowMode, PreviewScale, TextTheme, MAX_PRESETS,
+    CustomPathMethod, CustomPictureWindow, CustomPlacement, CustomPreset, CustomPromotionTechnique,
+    CustomScaling, CustomSiblingWindows, CustomWindowMode, PreviewScale, TextTheme, MAX_PRESETS,
 };
 use crate::text::{text_paint, text_theme};
 use crate::ui::ask_card::{self, Question};
@@ -171,6 +171,7 @@ pub(super) const ID_CHILD_SCOPE: i32 = 132;
 pub(super) const ID_BROKER_FALLBACK: i32 = 133;
 pub(super) const ID_SIBLING_WINDOWS: i32 = 134;
 pub(super) const ID_PATH_METHOD: i32 = 135;
+pub(super) const ID_PICTURE_WINDOW: i32 = 136;
 const ID_LABEL_BASE: i32 = 140;
 /// The titlebar's three buttons are drawn by the window rather than laid out as controls, so their
 /// ids exist only as the keys a tip is written under (see `ui::tip`).
@@ -296,6 +297,25 @@ fn sibling_windows_index(mode: CustomSiblingWindows) -> usize {
         .unwrap_or(SIBLING_WINDOW_MODES.len() - 1)
 }
 
+pub(super) const PICTURE_WINDOWS: [CustomPictureWindow; 2] = [
+    CustomPictureWindow::Largest,
+    CustomPictureWindow::NewestComparable,
+];
+
+fn picture_window_label(mode: CustomPictureWindow) -> &'static str {
+    match mode {
+        CustomPictureWindow::Largest => "Largest (Default)",
+        CustomPictureWindow::NewestComparable => "Newest Comparable",
+    }
+}
+
+fn picture_window_index(mode: CustomPictureWindow) -> usize {
+    PICTURE_WINDOWS
+        .iter()
+        .position(|held| *held == mode)
+        .unwrap_or(0)
+}
+
 pub(super) const PROMOTION_TECHNIQUES: [CustomPromotionTechnique; 2] = [
     CustomPromotionTechnique::DirectPromotion,
     CustomPromotionTechnique::OpenAsNewProcess,
@@ -367,7 +387,7 @@ fn path_method_index(method: CustomPathMethod) -> usize {
         .unwrap_or(0)
 }
 
-pub(super) const EDITOR_LABELS: [&str; 15] = [
+pub(super) const EDITOR_LABELS: [&str; 16] = [
     "Enabled",
     "Name",
     "Extensions",
@@ -378,6 +398,7 @@ pub(super) const EDITOR_LABELS: [&str; 15] = [
     "Child Processes",
     "Broker Fallback",
     "Sibling Windows",
+    "Picture Window",
     "Promotion",
     "Placement",
     "Window",
@@ -401,6 +422,7 @@ const LABEL_CONTROLS: [i32; EDITOR_LABELS.len()] = [
     ID_CHILD_SCOPE,
     ID_BROKER_FALLBACK,
     ID_SIBLING_WINDOWS,
+    ID_PICTURE_WINDOW,
     ID_PROMOTION_TECHNIQUE,
     ID_PLACEMENT,
     ID_WINDOW_MODE,
@@ -414,6 +436,7 @@ fn is_combo(id: u32) -> bool {
         || id == ID_CAPTURE_TECHNIQUE as u32
         || id == ID_CHILD_SCOPE as u32
         || id == ID_SIBLING_WINDOWS as u32
+        || id == ID_PICTURE_WINDOW as u32
         || id == ID_PROMOTION_TECHNIQUE as u32
         || id == ID_PLACEMENT as u32
         || id == ID_SCALING as u32
@@ -1090,6 +1113,7 @@ unsafe fn apply_theme(state: &mut State) {
             ID_CAPTURE_TECHNIQUE,
             ID_CHILD_SCOPE,
             ID_SIBLING_WINDOWS,
+            ID_PICTURE_WINDOW,
             ID_PROMOTION_TECHNIQUE,
             ID_PLACEMENT,
             ID_SCALING,
@@ -2228,6 +2252,21 @@ unsafe fn build(hwnd: HWND) -> State {
                     | CBS_OWNERDRAWFIXED as u32
                     | CBS_HASSTRINGS as u32,
             ),
+            ID_PICTURE_WINDOW,
+        )
+    });
+    controls.push(unsafe {
+        child(
+            hwnd,
+            w!("COMBOBOX"),
+            "",
+            child_style(
+                WS_TABSTOP.0
+                    | WS_VSCROLL.0
+                    | CBS_DROPDOWNLIST as u32
+                    | CBS_OWNERDRAWFIXED as u32
+                    | CBS_HASSTRINGS as u32,
+            ),
             ID_PROMOTION_TECHNIQUE,
         )
     });
@@ -2388,6 +2427,11 @@ unsafe fn build(hwnd: HWND) -> State {
     let sibling_windows_combo = unsafe { GetDlgItem(hwnd, ID_SIBLING_WINDOWS) }.unwrap_or_default();
     for mode in SIBLING_WINDOW_MODES {
         unsafe { combo_add(sibling_windows_combo, sibling_windows_label(mode)) };
+    }
+
+    let picture_window_combo = unsafe { GetDlgItem(hwnd, ID_PICTURE_WINDOW) }.unwrap_or_default();
+    for mode in PICTURE_WINDOWS {
+        unsafe { combo_add(picture_window_combo, picture_window_label(mode)) };
     }
 
     let promotion_technique_combo =
@@ -4871,6 +4915,18 @@ unsafe fn lay_out(state: &mut State) {
     );
     y += row + gap;
 
+    // Picture Window: which of them is the picture, where the program made more than one of a
+    // size the file could be drawn at. A question about the winner, so it stands beside the row
+    // about the losers rather than beside the capture techniques.
+    place(
+        ID_PICTURE_WINDOW,
+        field_left,
+        y,
+        field_w,
+        row + combo_drop_height(dpi),
+    );
+    y += row + gap;
+
     place(
         ID_PROMOTION_TECHNIQUE,
         field_left,
@@ -5042,6 +5098,7 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
         | ID_CAPTURE_TECHNIQUE
         | ID_CHILD_SCOPE
         | ID_SIBLING_WINDOWS
+        | ID_PICTURE_WINDOW
         | ID_PROMOTION_TECHNIQUE
         | ID_PLACEMENT
         | ID_SCALING => {
@@ -5056,6 +5113,8 @@ unsafe fn command(state: &mut State, id: i32, notice: u32) {
                     unsafe { child_scope_chosen(state) };
                 } else if id == ID_SIBLING_WINDOWS {
                     unsafe { sibling_windows_chosen(state) };
+                } else if id == ID_PICTURE_WINDOW {
+                    unsafe { picture_window_chosen(state) };
                 } else if id == ID_PROMOTION_TECHNIQUE {
                     unsafe { promotion_technique_chosen(state) };
                 } else if id == ID_PLACEMENT {
@@ -5157,6 +5216,7 @@ unsafe fn fill_fields(state: &mut State) {
             ID_CAPTURE_TECHNIQUE,
             ID_CHILD_SCOPE,
             ID_SIBLING_WINDOWS,
+            ID_PICTURE_WINDOW,
             ID_PROMOTION_TECHNIQUE,
             ID_PLACEMENT,
             ID_SCALING,
@@ -5184,6 +5244,7 @@ unsafe fn fill_fields(state: &mut State) {
     let child_scope = preset.child_scope;
     let broker_fallback = preset.broker_fallback;
     let sibling_windows = preset.sibling_windows;
+    let picture_window = preset.picture_window;
     let promotion_technique = preset.promotion_technique;
     let placement = preset.placement;
     let scaling = preset.scaling;
@@ -5284,6 +5345,14 @@ unsafe fn fill_fields(state: &mut State) {
             LPARAM(0),
         );
 
+        let picture_window_combo = GetDlgItem(state.hwnd, ID_PICTURE_WINDOW).unwrap_or_default();
+        SendMessageW(
+            picture_window_combo,
+            CB_SETCURSEL,
+            WPARAM(picture_window_index(picture_window)),
+            LPARAM(0),
+        );
+
         let promotion_combo = GetDlgItem(state.hwnd, ID_PROMOTION_TECHNIQUE).unwrap_or_default();
         let promotion_index = PROMOTION_TECHNIQUES
             .iter()
@@ -5373,6 +5442,7 @@ fn combo_id_of(hwnd: HWND, control: HWND) -> Option<i32> {
         ID_CAPTURE_TECHNIQUE,
         ID_CHILD_SCOPE,
         ID_SIBLING_WINDOWS,
+        ID_PICTURE_WINDOW,
         ID_PROMOTION_TECHNIQUE,
         ID_PLACEMENT,
         ID_WINDOW_MODE,
@@ -5701,6 +5771,7 @@ unsafe fn set_fields_enabled(state: &State, enabled: bool) {
         ID_CHILD_SCOPE,
         ID_BROKER_FALLBACK,
         ID_SIBLING_WINDOWS,
+        ID_PICTURE_WINDOW,
         ID_PROMOTION_TECHNIQUE,
         ID_PLACEMENT,
         ID_SCALING,
@@ -6222,6 +6293,28 @@ unsafe fn sibling_windows_chosen(state: &mut State) {
     };
     if let Some(preset) = state.presets.get_mut(index) {
         preset.sibling_windows = mode;
+    }
+    state.dirtied = true;
+}
+
+/// `Picture Window`: which of the program's windows is the picture.
+unsafe fn picture_window_chosen(state: &mut State) {
+    if state.loading {
+        return;
+    }
+    let Some(index) = state.selected else {
+        return;
+    };
+    let combo = unsafe { GetDlgItem(state.hwnd, ID_PICTURE_WINDOW) }.unwrap_or_default();
+    let choice = unsafe { SendMessageW(combo, CB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+    let Some(mode) = usize::try_from(choice)
+        .ok()
+        .and_then(|choice| PICTURE_WINDOWS.get(choice).copied())
+    else {
+        return;
+    };
+    if let Some(preset) = state.presets.get_mut(index) {
+        preset.picture_window = mode;
     }
     state.dirtied = true;
 }
@@ -7869,7 +7962,7 @@ pub(super) mod tests {
             // Program -> Arguments -> Path Method -> Capture Method -> Child Processes -> Broker
             // Fallback -> Sibling Windows -> Promotion -> Placement -> Window (controls & labels) in
             // Tab order.
-            assert_eq!(EDITOR_LABELS.len(), 15);
+            assert_eq!(EDITOR_LABELS.len(), 16);
             assert_eq!(EDITOR_LABELS[3], "Program");
             assert_eq!(EDITOR_LABELS[4], "Arguments");
             assert_eq!(EDITOR_LABELS[5], "Path Method");
@@ -7877,14 +7970,16 @@ pub(super) mod tests {
             assert_eq!(EDITOR_LABELS[7], "Child Processes");
             assert_eq!(EDITOR_LABELS[8], "Broker Fallback");
             assert_eq!(EDITOR_LABELS[9], "Sibling Windows");
-            assert_eq!(EDITOR_LABELS[10], "Promotion");
-            assert_eq!(EDITOR_LABELS[11], "Placement");
-            assert_eq!(EDITOR_LABELS[12], "Window");
+            assert_eq!(EDITOR_LABELS[10], "Picture Window");
+            assert_eq!(EDITOR_LABELS[11], "Promotion");
+            assert_eq!(EDITOR_LABELS[12], "Placement");
+            assert_eq!(EDITOR_LABELS[13], "Window");
             let args_edit = GetDlgItem(hwnd, ID_ARGUMENTS).unwrap_or_default();
             let path_method_combo = GetDlgItem(hwnd, ID_PATH_METHOD).unwrap_or_default();
             let children_combo = GetDlgItem(hwnd, ID_CHILD_SCOPE).unwrap_or_default();
             let broker_toggle = GetDlgItem(hwnd, ID_BROKER_FALLBACK).unwrap_or_default();
             let siblings_combo = GetDlgItem(hwnd, ID_SIBLING_WINDOWS).unwrap_or_default();
+            let picture_combo = GetDlgItem(hwnd, ID_PICTURE_WINDOW).unwrap_or_default();
             let promo_combo = GetDlgItem(hwnd, ID_PROMOTION_TECHNIQUE).unwrap_or_default();
             let place_combo = GetDlgItem(hwnd, ID_PLACEMENT).unwrap_or_default();
             let win_combo = GetDlgItem(hwnd, ID_WINDOW_MODE).unwrap_or_default();
@@ -7896,10 +7991,12 @@ pub(super) mod tests {
                 mut children_rc,
                 mut broker_rc,
                 mut siblings_rc,
+                mut picture_rc,
                 mut promo_rc,
                 mut place_rc,
                 mut win_rc,
             ) = (
+                RECT::default(),
                 RECT::default(),
                 RECT::default(),
                 RECT::default(),
@@ -7928,6 +8025,10 @@ pub(super) mod tests {
                 siblings_combo,
                 &mut siblings_rc,
             );
+            let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(
+                picture_combo,
+                &mut picture_rc,
+            );
             let _ =
                 windows::Win32::UI::WindowsAndMessaging::GetWindowRect(promo_combo, &mut promo_rc);
             let _ =
@@ -7939,16 +8040,18 @@ pub(super) mod tests {
                     && cap_rc.top < children_rc.top
                     && children_rc.top < broker_rc.top
                     && broker_rc.top < siblings_rc.top
-                    && siblings_rc.top < promo_rc.top
+                    && siblings_rc.top < picture_rc.top
+                    && picture_rc.top < promo_rc.top
                     && promo_rc.top < place_rc.top
                     && place_rc.top < win_rc.top,
-                "Row order must be Arguments ({}) < Path Method ({}) < Capture Method ({}) < Child Processes ({}) < Broker Fallback ({}) < Sibling Windows ({}) < Promotion ({}) < Placement ({}) < Window ({})",
+                "Row order must be Arguments ({}) < Path Method ({}) < Capture Method ({}) < Child Processes ({}) < Broker Fallback ({}) < Sibling Windows ({}) < Picture Window ({}) < Promotion ({}) < Placement ({}) < Window ({})",
                 args_rc.top,
                 path_method_rc.top,
                 cap_rc.top,
                 children_rc.top,
                 broker_rc.top,
                 siblings_rc.top,
+                picture_rc.top,
                 promo_rc.top,
                 place_rc.top,
                 win_rc.top
@@ -7985,8 +8088,13 @@ pub(super) mod tests {
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, siblings_combo, false).ok(),
+                Some(picture_combo),
+                "Tab from Sibling Windows must move to Picture Window"
+            );
+            assert_eq!(
+                GetNextDlgTabItem(hwnd, picture_combo, false).ok(),
                 Some(promo_combo),
-                "Tab from Sibling Windows must move to Promotion"
+                "Tab from Picture Window must move to Promotion"
             );
             assert_eq!(
                 GetNextDlgTabItem(hwnd, promo_combo, false).ok(),
@@ -7999,8 +8107,8 @@ pub(super) mod tests {
                 "Tab from Placement must move to Window"
             );
 
-            // Labels 4..=12: Arguments < Path Method < Capture Method < Child Processes < Broker
-            // Fallback < Sibling Windows < Promotion < Placement < Window.
+            // Labels 4..=13: Arguments < Path Method < Capture Method < Child Processes < Broker
+            // Fallback < Sibling Windows < Picture Window < Promotion < Placement < Window.
             let label_top = |index: i32| -> i32 {
                 let mut rc = RECT::default();
                 let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(
@@ -8009,14 +8117,14 @@ pub(super) mod tests {
                 );
                 rc.top
             };
-            let label_tops: Vec<i32> = (4..=12).map(label_top).collect();
+            let label_tops: Vec<i32> = (4..=13).map(label_top).collect();
             assert!(
                 label_tops.windows(2).all(|pair| pair[0] < pair[1]),
                 "Label order must match row order: {label_tops:?}"
             );
             let mut plcrc = RECT::default();
             let _ = windows::Win32::UI::WindowsAndMessaging::GetWindowRect(
-                GetDlgItem(hwnd, ID_LABEL_BASE + 11).unwrap_or_default(),
+                GetDlgItem(hwnd, ID_LABEL_BASE + 12).unwrap_or_default(),
                 &mut plcrc,
             );
             assert!(

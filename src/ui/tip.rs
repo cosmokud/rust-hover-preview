@@ -53,10 +53,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::custom_preview_settings::{
     rgb, scale, Palette, ID_ADD, ID_ARGUMENTS, ID_BROKER_FALLBACK, ID_BROWSE, ID_CAPTURE_TECHNIQUE,
     ID_CHILD_SCOPE, ID_CLOSE_BUTTON, ID_DELETE, ID_ENABLED, ID_EXE, ID_EXTENSIONS, ID_LIST,
-    ID_NAME, ID_PATH_METHOD, ID_PLACEMENT, ID_PROMOTION_TECHNIQUE, ID_SCALING, ID_SCALING_DOWN,
-    ID_SCALING_PERCENT, ID_SCALING_UP, ID_SEARCH, ID_SIBLING_WINDOWS, ID_STATUS, ID_TITLEBAR_CLOSE,
-    ID_TITLEBAR_MAXIMIZE, ID_TITLEBAR_MINIMIZE, ID_VOLUME, ID_VOLUME_DOWN, ID_VOLUME_ENABLED,
-    ID_VOLUME_UP, ID_VOLUME_VALUE, ID_WINDOW_MODE,
+    ID_NAME, ID_PATH_METHOD, ID_PICTURE_WINDOW, ID_PLACEMENT, ID_PROMOTION_TECHNIQUE, ID_SCALING,
+    ID_SCALING_DOWN, ID_SCALING_PERCENT, ID_SCALING_UP, ID_SEARCH, ID_SIBLING_WINDOWS, ID_STATUS,
+    ID_TITLEBAR_CLOSE, ID_TITLEBAR_MAXIMIZE, ID_TITLEBAR_MINIMIZE, ID_VOLUME, ID_VOLUME_DOWN,
+    ID_VOLUME_ENABLED, ID_VOLUME_UP, ID_VOLUME_VALUE, ID_WINDOW_MODE,
 };
 
 /// What one control says about itself, and what each of its values says, all of it measured before a
@@ -157,6 +157,12 @@ pub(super) fn editor(id: i32) -> Option<Wording> {
             "What happens to the program's other windows while one of them is the picture.",
             SIBLING_WINDOW_WORDS,
         ),
+        ID_PICTURE_WINDOW => listed(
+            "Which of the program's windows is the picture, where it made more than one a document \
+             could be drawn in. The other remains a window of its own; Sibling Windows says what \
+             happens to it.",
+            PICTURE_WINDOW_WORDS,
+        ),
         ID_PROMOTION_TECHNIQUE => listed(
             "What the pin key does with this preview.",
             PROMOTION_TECHNIQUE_WORDS,
@@ -254,6 +260,18 @@ const SIBLING_WINDOW_WORDS: &[&str] = &[
      instead of hidden, because hiding one leaves the window that asked for it disabled.",
 ];
 
+/// `Picture Window`, value by value.
+const PICTURE_WINDOW_WORDS: &[&str] = &[
+    "The largest window the program made that a picture could be drawn in — what every preset did \
+     before this row existed, and right for a program that makes its document window first or \
+     biggest.",
+    "Of the windows of that same size class, the one the program made last, once it has stopped \
+     making them. Right for a program whose own helper comes up first and larger: MPV Player's \
+     mpv.exe is built with SMTC support, and its `mpv smtc` window is born 200 ms before the film \
+     and is handed the preview's own box, so Largest adopts the helper and the preview is a white \
+     still frame.",
+];
+
 /// `Promotion`, value by value.
 const PROMOTION_TECHNIQUE_WORDS: &[&str] = &[
     "The preview becomes the window: the running program's window is detached, uncloaked and \
@@ -309,6 +327,7 @@ pub(super) const EXPLAINED: &[i32] = &[
     ID_CHILD_SCOPE,
     ID_BROKER_FALLBACK,
     ID_SIBLING_WINDOWS,
+    ID_PICTURE_WINDOW,
     ID_PROMOTION_TECHNIQUE,
     ID_PLACEMENT,
     ID_WINDOW_MODE,

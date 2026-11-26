@@ -188,6 +188,10 @@ path_method=plain
 extensions=jpg, png
 window_mode=normal
 capture_technique=in_process_hook
+child_scope=disabled
+broker_fallback=false
+sibling_windows=cloak_and_hide
+picture_window=largest
 promotion_technique=direct_promotion
 placement=tray
 scaling=tray
@@ -201,6 +205,10 @@ volume=100
   - `extensions` — the names it claims, without dots.
   - `window_mode` — `normal` (the program's own frame) or `borderless`.
   - `capture_technique` — how the program's window is kept out of sight while it is previewed: `in_process_hook` (default; needs `custom_preview_hook.dll` beside the executable — or, for a lone executable, in `%LOCALAPPDATA%\rust-hover-preview` — and falls back to `invisible_layered` without it), `invisible_layered`, `behind_host`, `off_screen`, `direct_window`, `offscreen_staged`.
+  - `child_scope` — how far past the launched program a window may be looked for, and so how far this app may hide, and on teardown end, a process you never named: `disabled` (default; the launched pid alone, no tree walk, no Job Object members, no hook written into a child), `children` (one level down), or `children_and_grandchildren` (as deep as the parent links go).
+  - `broker_fallback` — `false` (default) or `true`: whether a pid begun by an activator or an installer stub may be adopted, found by the preset's image name or its install folder after the launched tree has shown nothing.
+  - `sibling_windows` — what happens to the program's *other* windows: `disabled`, `cloak` (each candidate is `DWMWA_CLOAK`ed while the picture is chosen), or `cloak_and_hide` (default; and once one is chosen the rest are hidden — a modal `#32770` dialog is closed instead).
+  - `picture_window` — which of the program's windows *is* the picture: `largest` (default; the largest window a document could be drawn in, what every preset did before this key existed) or `newest_comparable` (of the windows in that same size class — within 60 % of the largest — the one the program made last, once it has stopped making windows). The second is for a program whose own helper window comes up first and larger: MPV Player's `mpv.exe` is built with Windows media-controls support, and its `mpv smtc` window is created about 200 ms before the film and is handed this app's own preview box, so `largest` adopts the helper and the preview is a white still frame.
   - `promotion_technique` — what the pin key does: `direct_promotion` (default; the live preview window is let go and raised) or `open_as_new_process`.
   - `placement` — how the program's window is held at the hover's box, where the program has an opinion of its own: `tray` (default; the window is placed once and trusted), `tray_forced` (it is moved back when it drifts, with the box shifted clear of the pointer where the two would overlap), or `tray_hook` (the hook refuses a size, a move, a maximize or a minimize from inside the program, and re-snaps it; needs the DLL, and reads as `tray_forced` without one).
   - `scaling` — `tray` (default; follow the file's own kind's scaling row) or any share the tray offers: `fit`, `screen 100`, `screen 75`, `screen 50`, or a percentage such as `200`.

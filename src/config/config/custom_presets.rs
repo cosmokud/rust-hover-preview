@@ -230,6 +230,69 @@ pub enum CustomChildDepth {
     WholeTree,
 }
 
+/// Which of the program's windows is the picture, when it made more than one of them a picture could
+/// be.
+///
+/// **Not the same question as [`CustomSiblingWindows`].** That row is about the windows *around* the
+/// picture — the splash, the About box — and this one is about which window the picture *is*. They
+/// are separate because a program can be wrong about the first and right about the second, and
+/// because the wrong answer here is the one the user sees as an empty preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CustomPictureWindow {
+    /// The largest picture-shaped window in the best tier: what every preset did before this row
+    /// existed, and what a program that makes its document window first and largest wants.
+    #[default]
+    Largest,
+    /// Of the windows in the best tier whose area is within [`COMPARABLE_AREA_PERCENT`] of the
+    /// largest, the one the program made **last** — once it has stopped making windows, so a helper
+    /// born first cannot be mistaken for the picture.
+    ///
+    /// **MPV Player is why this exists.** Its `mpv.exe` is built with `win32-smtc`, and that feature
+    /// puts up a top-level `mpv-smtc` window titled `mpv smtc` about 200 ms before the video window
+    /// — and because this app's launch hands `STARTF_USESIZE` to the program, USER32 gives *that*
+    /// helper the preview's own box. A titled, unowned, non-tool window at 1976x1112 against the
+    /// video window's 1936x1119 is the same tier, the same visibility and 1.4 % more area, so it won
+    /// and was composed as the picture: a white, frozen rectangle where the film should be. SVP's
+    /// `mpv.exe` is the same version without the feature, which is why one build previewed and the
+    /// other did not.
+    NewestComparable,
+}
+
+impl CustomPictureWindow {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Largest => "largest",
+            Self::NewestComparable => "newest_comparable",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "largest" | "biggest" | "area" => Some(Self::Largest),
+            "newest_comparable" | "newest-comparable" | "newest" | "latest" => {
+                Some(Self::NewestComparable)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the choice prefers the window made last; the ranking asks this (see
+    /// `select_best_candidate_by`).
+    pub fn prefers_the_newest(self) -> bool {
+        self == Self::NewestComparable
+    }
+}
+
+/// How much of the largest candidate's area a window must cover to count as a picture of the same
+/// document rather than a different thing altogether.
+///
+/// The margin exists so that the row cannot turn "the document window owns the box" into "a small
+/// toast owns the box": only windows that are the same *size class* as the largest compete on
+/// creation order. Measured against the case that made the row (MPV Player's 1976x1112 helper
+/// against its 1936x1119 film: 98.6 %), and left clear of the furniture those programs also make —
+/// a splash or a tooltip is a few per cent of the box, not sixty.
+pub const COMPARABLE_AREA_PERCENT: i64 = 60;
+
 /// What a custom preview does with the program's *other* windows — the splash, the About box, the
 /// second document — while one of them is the picture.
 ///
@@ -539,6 +602,9 @@ pub struct CustomPreset {
     pub broker_fallback: bool,
     /// What happens to the program's other windows while one of them is the picture.
     pub sibling_windows: CustomSiblingWindows,
+    /// Which of the program's windows is the picture: the largest, or the last one it made of the
+    /// same size class (see [`CustomPictureWindow`]).
+    pub picture_window: CustomPictureWindow,
     /// Promotion technique used when pinning / opening this preset's file.
     pub promotion_technique: CustomPromotionTechnique,
     /// Placement strategy used for this preset's preview window.
@@ -566,6 +632,7 @@ impl Default for CustomPreset {
             child_scope: CustomChildScope::default(),
             broker_fallback: false,
             sibling_windows: CustomSiblingWindows::default(),
+            picture_window: CustomPictureWindow::default(),
             promotion_technique: CustomPromotionTechnique::default(),
             placement: CustomPlacement::default(),
             scaling: CustomScaling::default(),
@@ -1000,6 +1067,11 @@ pub fn write_all(config: &AppConfig, ini: &mut Ini) {
         );
         ini.set(
             &section,
+            "picture_window",
+            Some(preset.picture_window.as_str().to_string()),
+        );
+        ini.set(
+            &section,
             "promotion_technique",
             Some(preset.promotion_technique.as_str().to_string()),
         );
@@ -1115,6 +1187,11 @@ pub fn read_all(ini: &Ini, config: &mut AppConfig) {
         if let Some(siblings) = ini.get(section, "sibling_windows") {
             if let Some(parsed) = CustomSiblingWindows::from_str(&siblings) {
                 preset.sibling_windows = parsed;
+            }
+        }
+        if let Some(picture) = ini.get(section, "picture_window") {
+            if let Some(parsed) = CustomPictureWindow::from_str(&picture) {
+                preset.picture_window = parsed;
             }
         }
         if let Some(technique) = ini.get(section, "promotion_technique") {
@@ -1727,6 +1804,60 @@ mod tests {
         assert_eq!(read.custom_presets.len(), 2);
         for p in &read.custom_presets {
             assert_eq!(p.sibling_windows, CustomSiblingWindows::CloakAndHide);
+        }
+    }
+
+    #[test]
+    fn picture_window_round_trips_and_defaults_to_largest() {
+        // **Today's ranking is the default**, so a file written before this key existed previews
+        // exactly as it did: the largest window in the best tier, whatever order they arrived in.
+        assert_eq!(CustomPictureWindow::default(), CustomPictureWindow::Largest);
+        assert_eq!(
+            CustomPreset::named("Fresh").picture_window,
+            CustomPictureWindow::Largest
+        );
+        assert!(!CustomPictureWindow::Largest.prefers_the_newest());
+        assert!(CustomPictureWindow::NewestComparable.prefers_the_newest());
+
+        let cases = [
+            (CustomPictureWindow::Largest, "largest"),
+            (CustomPictureWindow::NewestComparable, "newest_comparable"),
+        ];
+        for (picture, expected_str) in cases {
+            let mut preset = CustomPreset::named("PictureTest");
+            preset.exe = "player.exe".into();
+            preset.set_extensions_text("mkv");
+            preset.picture_window = picture;
+
+            let cfg = config_with(vec![preset]);
+            let mut ini = Ini::new();
+            write_all(&cfg, &mut ini);
+            assert_eq!(
+                ini.get("custom:picturetest", "picture_window").as_deref(),
+                Some(expected_str)
+            );
+
+            let mut read = AppConfig::default();
+            read_all(&ini, &mut read);
+            assert_eq!(read.custom_presets[0].picture_window, picture);
+        }
+
+        // A key this build does not know, and a section that never had one, both read as the
+        // ranking every preset had before the row existed.
+        let mut legacy = Ini::new();
+        legacy.set("custom:missing", "name", Some("Missing".into()));
+        legacy.set("custom:missing", "exe", Some("a.exe".into()));
+        legacy.set("custom:missing", "extensions", Some("mkv".into()));
+        legacy.set("custom:junk", "name", Some("Junk".into()));
+        legacy.set("custom:junk", "exe", Some("b.exe".into()));
+        legacy.set("custom:junk", "extensions", Some("mkv".into()));
+        legacy.set("custom:junk", "picture_window", Some("bogus".into()));
+
+        let mut read = AppConfig::default();
+        read_all(&legacy, &mut read);
+        assert_eq!(read.custom_presets.len(), 2);
+        for p in &read.custom_presets {
+            assert_eq!(p.picture_window, CustomPictureWindow::Largest);
         }
     }
 

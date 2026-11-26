@@ -209,9 +209,9 @@ use super::video_probe::cached_video_geometry;
 use crate::app::engine_processes;
 use crate::config::config::{
     build_launch_args_with, custom_preset_for, CustomCaptureTechnique, CustomChildDepth,
-    CustomChildScope, CustomPathMethod, CustomPlacement, CustomPreset, CustomPromotionTechnique,
-    CustomScaling, CustomSiblingWindows, CustomWindowMode, PreviewScale, PreviewType,
-    DEFAULT_AUDIO_SCALE,
+    CustomChildScope, CustomPathMethod, CustomPictureWindow, CustomPlacement, CustomPreset,
+    CustomPromotionTechnique, CustomScaling, CustomSiblingWindows, CustomWindowMode, PreviewScale,
+    PreviewType, COMPARABLE_AREA_PERCENT, DEFAULT_AUDIO_SCALE,
 };
 use crate::readers::{pdf_preview, svg_preview, video_player};
 use crate::CONFIG;
@@ -525,6 +525,9 @@ struct Launch {
     broker_fallback: bool,
     /// What happens to the program's other windows while one of them is the picture.
     sibling_windows: CustomSiblingWindows,
+    /// Which of the program's windows is the picture, read once at launch for the same reason the
+    /// rows beside it are: a preset edited mid-hover cannot half-change what is already adopted.
+    picture_window: CustomPictureWindow,
     /// Dedicated install directory of the launched executable when safe for stub fallback matching.
     install_dir: Option<PathBuf>,
     /// Which launch this is, so that a worker begun for an earlier one stands down.
@@ -1230,6 +1233,125 @@ fn select_best_candidate<T: Copy>(candidates: &[(CandidateRank, T)]) -> Option<(
     best
 }
 
+thread_local! {
+    /// What this launch's discovery has watched appear, on the thread doing the watching.
+    ///
+    /// **One worker thread per launch**, so a thread-local is a per-launch record without a parameter
+    /// threaded through every census call: `show` spawns the worker that adopts the window, and it is
+    /// that thread which walks the desktop (see `run_it`).
+    static SIGHTINGS: RefCell<Sightings> = RefCell::new(Sightings::default());
+}
+
+/// Forget every sighting, at the start of a discovery wait.
+fn forget_sightings() {
+    let _ = SIGHTINGS.try_with(|held| held.borrow_mut().clear());
+}
+
+/// How long the program is watched for a *new* candidate before a hidden winner is taken, where the
+/// preset's `Picture Window` row asks for the window made last.
+///
+/// **The wait is the point of the row, not a cost of it.** A program that puts up a helper first and
+/// its document second is a program that is still making windows while the helper is the largest one
+/// there is; taking the last window made means knowing the program has stopped making them. Measured
+/// on MPV Player's `mpv.exe`: the `mpv smtc` helper is born at 25–50 ms and the film's window at
+/// 195–280 ms, so a settle shorter than that adopts the helper anyway and the row does nothing.
+const NEWEST_HIDDEN_SETTLE: Duration = Duration::from_millis(350);
+
+/// What the census has watched appear, so that "the window the program made last" is a fact about
+/// the launch rather than a guess about the z-order.
+///
+/// One per discovery wait, owned by the wait and handed to every census it takes: a census is one
+/// look at the desktop, and which window arrived when is the one thing a look cannot answer.
+#[derive(Default)]
+struct Sightings {
+    /// When each candidate window was first seen.
+    first_seen: HashMap<isize, Instant>,
+    /// The instant a candidate was last seen for the first time: the program's own last word on the
+    /// subject, and the clock the hidden settle is measured from.
+    last_new: Option<Instant>,
+}
+
+impl Sightings {
+    fn note(&mut self, hwnd: HWND) {
+        let raw = hwnd.0 as isize;
+        if self.first_seen.contains_key(&raw) {
+            return;
+        }
+        let now = Instant::now();
+        self.first_seen.insert(raw, now);
+        self.last_new = Some(now);
+    }
+
+    fn seen_at(&self, hwnd: HWND) -> Option<Instant> {
+        self.first_seen.get(&(hwnd.0 as isize)).copied()
+    }
+
+    fn clear(&mut self) {
+        self.first_seen.clear();
+        self.last_new = None;
+    }
+
+    /// Whether the program has stopped making candidate windows for long enough that the last one it
+    /// made can be taken as its last word.
+    fn has_settled(&self) -> bool {
+        self.last_new
+            .is_none_or(|at| at.elapsed() >= NEWEST_HIDDEN_SETTLE)
+    }
+}
+
+/// The picture among `candidates`, on the terms the preset's `Picture Window` row names.
+///
+/// `Largest` is the ranking this app has always had. `NewestComparable` fixes the best tier and
+/// visibility first — a window the program *shows* still beats one it keeps hidden — and then, of the
+/// windows whose area is within [`COMPARABLE_AREA_PERCENT`] of the largest there, prefers the one made
+/// last. The margin is what keeps a toast from being mistaken for a document; the settle is what keeps
+/// the first of a program's own two windows from being mistaken for its last (see
+/// `NEWEST_HIDDEN_SETTLE`).
+fn select_the_picture(
+    candidates: &[(CandidateRank, HWND)],
+    sightings: &Sightings,
+    mode: CustomPictureWindow,
+) -> Option<(CandidateRank, HWND)> {
+    let largest = select_best_candidate(candidates)?;
+    if !mode.prefers_the_newest() {
+        return Some(largest);
+    }
+    let same_class: Vec<(CandidateRank, HWND)> = candidates
+        .iter()
+        .copied()
+        .filter(|(rank, _)| rank.tier == largest.0.tier && rank.visible == largest.0.visible)
+        .collect();
+    let biggest = same_class.iter().map(|(rank, _)| rank.area).max()?;
+    let comparable_area = biggest.saturating_mul(COMPARABLE_AREA_PERCENT) / 100;
+    let mut best: Option<(CandidateRank, HWND, Instant)> = None;
+    for (rank, item) in same_class {
+        if rank.area < comparable_area {
+            continue;
+        }
+        let seen_at = sightings.seen_at(item).unwrap_or_else(Instant::now);
+        if best.is_none_or(|(_, _, at)| seen_at >= at) {
+            best = Some((rank, item, seen_at));
+        }
+    }
+    let (rank, item, _) = best?;
+    if !rank.visible && !sightings.has_settled() {
+        return None;
+    }
+    if item != largest.1 {
+        cp_trace!(
+            "picture: newest_comparable chose hwnd=0x{:x} area={} visible={} over hwnd=0x{:x} \
+             area={} of {} candidates",
+            item.0 as usize,
+            rank.area,
+            rank.visible,
+            largest.1 .0 as usize,
+            largest.0.area,
+            candidates.len()
+        );
+    }
+    Some((rank, item))
+}
+
 static LAST_DUMPED_300MS_ID: AtomicU64 = AtomicU64::new(0);
 
 type ProcessImages = HashMap<u32, Option<PathBuf>>;
@@ -1454,6 +1576,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
     let child_scope = preset.child_scope;
     let broker_fallback = preset.broker_fallback;
     let sibling_windows = preset.sibling_windows;
+    let picture_window = preset.picture_window;
     let volume = preset.volume_enabled.then_some(preset.volume);
     let initial_own = base_size(path);
     let provisional = initial_own.and_then(|own| {
@@ -1626,6 +1749,7 @@ pub(super) fn show(path: &Path, at: Where) -> bool {
         child_scope,
         broker_fallback,
         sibling_windows,
+        picture_window,
         install_dir,
         id,
     };
@@ -6638,6 +6762,26 @@ impl Census<'_> {
         select_best_candidate(&self.candidates)
     }
 
+    /// Whether this look found anything a picture could be drawn in at all, settled or not. The
+    /// distinction matters where the row asks for the newest: a census that has candidates and has
+    /// not settled yet is *about* to answer, and a latch adopted in the meantime is the wrong window.
+    fn has_candidates(&self) -> bool {
+        !self.candidates.is_empty()
+    }
+
+    /// The picture among what this look found, on the terms the preset's `Picture Window` row names,
+    /// measured against what this launch has watched appear (see `select_the_picture`).
+    fn the_picture(&self) -> Option<(CandidateRank, HWND)> {
+        let mode = self.launch.picture_window;
+        if !mode.prefers_the_newest() {
+            return self.best_candidate();
+        }
+        SIGHTINGS
+            .try_with(|held| select_the_picture(&self.candidates, &held.borrow(), mode))
+            .ok()
+            .flatten()
+    }
+
     fn visit(&mut self, hwnd: HWND) {
         if hwnd.0 as isize == self.keep || hwnd.0.is_null() {
             return;
@@ -6678,6 +6822,10 @@ impl Census<'_> {
             visible,
             size,
         ) {
+            // **When it was first seen, recorded by the look that first saw it.** The ranking is a
+            // separate question (see `select_the_picture`); this is the one fact a single look at the
+            // desktop cannot answer, kept by the launch's own record rather than in the rank.
+            let _ = SIGHTINGS.try_with(|held| held.borrow_mut().note(hwnd));
             self.candidates.push((
                 CandidateRank {
                     tier,
@@ -6840,6 +6988,7 @@ fn wait_for_a_window_offscreen_staged(
     launch: &Launch,
     effective_capture: CustomCaptureTechnique,
 ) -> Option<DiscoveredWindow> {
+    forget_sightings();
     let deadline = Instant::now() + WINDOW_WAIT;
     let mut processes = discovery_processes(launch);
     update_owned_pids_if_current(launch, &processes);
@@ -6891,7 +7040,7 @@ fn wait_for_a_window_offscreen_staged(
             false,
             tree_only,
         );
-        if let Some((rank, window)) = look.best_candidate() {
+        if let Some((rank, window)) = look.the_picture() {
             pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
             if rank.visible {
                 return Some(window);
@@ -6919,7 +7068,7 @@ fn wait_for_a_window_offscreen_staged(
             false,
             with_fallback,
         );
-        if let Some((rank, window)) = look.best_candidate() {
+        if let Some((rank, window)) = look.the_picture() {
             pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
             if rank.visible {
                 return Some(window);
@@ -8436,7 +8585,19 @@ fn select_hook_or_census_candidate(
     valid_captured: Option<(i64, bool, HWND)>,
     first_candidate: &mut Option<(Instant, HWND)>,
     hidden_settle: Duration,
+    the_latch_has_no_say: bool,
 ) -> Option<HWND> {
+    // **The hook's latched handle is a guess at the picture, not the picture.** It is whatever the
+    // DLL saw first — the first window whose `WM_WINDOWPOSCHANGING` carried `SWP_SHOWWINDOW`, or one
+    // 64 pixels across with a caption — which for a program that makes a helper before its document
+    // is the helper. Where the preset asks for the window made last and the census found candidates
+    // of its own, the census is what answers; the latch is left for a look that found nothing it
+    // could classify.
+    let valid_captured = if the_latch_has_no_say {
+        None
+    } else {
+        valid_captured
+    };
     if let Some((rank, best_hwnd)) = best {
         if rank.visible {
             if let Some((cap_area, true, cap_hwnd)) = valid_captured {
@@ -8478,6 +8639,7 @@ fn wait_for_a_window_in_process_hook(
     session: &InProcessHookSession,
     effective_capture: CustomCaptureTechnique,
 ) -> Option<DiscoveredWindow> {
+    forget_sightings();
     let started = Instant::now();
     let deadline = started + WINDOW_WAIT;
     let mut processes = discovery_processes(launch);
@@ -8514,7 +8676,8 @@ fn wait_for_a_window_in_process_hook(
                 allow_image_fallback: false,
             },
         );
-        let mut best = look.best_candidate();
+        let mut best = look.the_picture();
+        let mut looked = look.has_candidates();
         if best.is_none() && broker_fallback_allowed(launch) {
             let look_fb = census(
                 launch,
@@ -8527,7 +8690,8 @@ fn wait_for_a_window_in_process_hook(
                     allow_image_fallback: true,
                 },
             );
-            best = look_fb.best_candidate();
+            best = look_fb.the_picture();
+            looked |= look_fb.has_candidates();
         }
 
         let found = select_hook_or_census_candidate(
@@ -8535,6 +8699,7 @@ fn wait_for_a_window_in_process_hook(
             valid_captured,
             &mut first_candidate,
             Duration::from_millis(40),
+            launch.picture_window.prefers_the_newest() && looked,
         );
         if let Some(window) = found {
             if !launch_still_wanted(launch) {
@@ -9315,6 +9480,7 @@ fn wait_for_a_window(
     launch: &Launch,
     effective_capture: CustomCaptureTechnique,
 ) -> Option<DiscoveredWindow> {
+    forget_sightings();
     let started = Instant::now();
     let deadline = started + WINDOW_WAIT;
     let mut processes = discovery_processes(launch);
@@ -9367,7 +9533,7 @@ fn wait_for_a_window(
             false,
             tree_only,
         );
-        let best = look.best_candidate();
+        let best = look.the_picture();
         if let Some((_, window)) = best {
             pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
         }
@@ -9377,6 +9543,7 @@ fn wait_for_a_window(
                 valid_captured,
                 first_hook_candidate,
                 Duration::from_millis(40),
+                launch.picture_window.prefers_the_newest() && look.has_candidates(),
             ) {
                 pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
                 return Some(window);
@@ -9398,7 +9565,7 @@ fn wait_for_a_window(
                 false,
                 tree_only,
             );
-            let chosen = look2.best_candidate().map(|(_, w)| w).or(Some(window));
+            let chosen = look2.the_picture().map(|(_, w)| w).or(Some(window));
             if let Some(w) = chosen {
                 pre_cloak.try_cloak(w, pre_hook.session(), pid_of(w));
             }
@@ -9422,7 +9589,7 @@ fn wait_for_a_window(
             false,
             with_fallback,
         );
-        let best_fb = look.best_candidate();
+        let best_fb = look.the_picture();
         if let Some((_, window)) = best_fb {
             pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
         }
@@ -9432,6 +9599,7 @@ fn wait_for_a_window(
                 valid_captured,
                 first_hook_candidate,
                 Duration::from_millis(40),
+                launch.picture_window.prefers_the_newest() && look.has_candidates(),
             ) {
                 pre_cloak.try_cloak(window, pre_hook.session(), pid_of(window));
                 return Some(window);
@@ -9455,7 +9623,7 @@ fn wait_for_a_window(
                 false,
                 with_fallback,
             );
-            let chosen = look2.best_candidate().map(|(_, w)| w).or(Some(window));
+            let chosen = look2.the_picture().map(|(_, w)| w).or(Some(window));
             if let Some(w) = chosen {
                 pre_cloak.try_cloak(w, pre_hook.session(), pid_of(w));
             }
@@ -12532,6 +12700,123 @@ mod tests {
         );
     }
 
+    /// The row that answers MPV Player: a helper window born first and 1.4 % larger must not win when
+    /// the preset asks for the window the program made last.
+    ///
+    /// The two handles stand for `mpv smtc` (1976x1112, created first) and the film's own window
+    /// (1936x1119, created second): the same tier, both unseen, and the helper the larger of the two —
+    /// which is exactly the case measured on `C:\Program Files\MPV Player\mpv.exe`.
+    #[test]
+    fn the_newest_comparable_picture_is_the_film_and_not_the_helper_before_it() {
+        let helper = HWND(0x10 as *mut _);
+        let film = HWND(0x20 as *mut _);
+        let toast = HWND(0x30 as *mut _);
+
+        let rank = |area: i64| CandidateRank {
+            tier: CandidateTier::Main,
+            visible: false,
+            area,
+        };
+        let candidates = vec![
+            (rank(1976 * 1112), helper),
+            (rank(1936 * 1119), film),
+            // A splash of a different size class: comparable on tier, not on size, so it never
+            // competes on creation order however late it arrives.
+            (rank(320 * 200), toast),
+        ];
+
+        // A record where the helper was seen first and the film second, long enough ago that the
+        // program has stopped making windows.
+        let now = Instant::now();
+        let settled = Sightings {
+            first_seen: HashMap::from([
+                (helper.0 as isize, now - Duration::from_millis(700)),
+                (film.0 as isize, now - Duration::from_millis(400)),
+                (toast.0 as isize, now - Duration::from_millis(100)),
+            ]),
+            last_new: Some(now - Duration::from_millis(400)),
+        };
+
+        assert_eq!(
+            select_the_picture(&candidates, &settled, CustomPictureWindow::Largest)
+                .map(|(_, hwnd)| hwnd),
+            Some(helper),
+            "`Largest` is the ranking every preset had, and it is what MPV Player fell over"
+        );
+        assert_eq!(
+            select_the_picture(&candidates, &settled, CustomPictureWindow::NewestComparable)
+                .map(|(_, hwnd)| hwnd),
+            Some(film),
+            "the film's window is the one made last of the same size class"
+        );
+
+        // **A program still making windows has not said which is its last.** With a window born
+        // 20 ms ago, the hidden picture waits instead of adopting the helper.
+        let unsettled = Sightings {
+            first_seen: settled.first_seen.clone(),
+            last_new: Some(Instant::now()),
+        };
+        assert_eq!(
+            select_the_picture(
+                &candidates,
+                &unsettled,
+                CustomPictureWindow::NewestComparable
+            ),
+            None,
+            "a hidden winner waits for the program to stop making windows"
+        );
+
+        // A window the program *shows* is its own answer and is taken at once, settle or not.
+        let visible = vec![
+            (
+                CandidateRank {
+                    visible: true,
+                    ..rank(1976 * 1112)
+                },
+                helper,
+            ),
+            (
+                CandidateRank {
+                    visible: true,
+                    ..rank(1936 * 1119)
+                },
+                film,
+            ),
+        ];
+        assert_eq!(
+            select_the_picture(&visible, &unsettled, CustomPictureWindow::NewestComparable)
+                .map(|(_, hwnd)| hwnd),
+            Some(film)
+        );
+
+        // The size class is the largest candidate's, so a splash well under it is not a candidate
+        // for "the last window the program made" even when it arrived last of all.
+        let only_big = vec![(rank(1976 * 1112), helper), (rank(1936 * 1119), film)];
+        let late_toast = Sightings {
+            first_seen: HashMap::from([
+                (helper.0 as isize, now - Duration::from_millis(700)),
+                (film.0 as isize, now - Duration::from_millis(400)),
+                (toast.0 as isize, now - Duration::from_millis(10)),
+            ]),
+            last_new: Some(now - Duration::from_millis(400)),
+        };
+        assert_eq!(
+            select_the_picture(
+                &only_big,
+                &late_toast,
+                CustomPictureWindow::NewestComparable
+            )
+            .map(|(_, hwnd)| hwnd),
+            Some(film)
+        );
+
+        // Nothing at all is still nothing.
+        assert_eq!(
+            select_the_picture(&[], &settled, CustomPictureWindow::NewestComparable),
+            None
+        );
+    }
+
     #[test]
     fn safe_app_install_dir_rejects_shallow_and_generic_containers() {
         // Shallow paths (< 3 normal components beyond root/prefix) are rejected.
@@ -12797,6 +13082,7 @@ mod tests {
                     child_scope,
                     broker_fallback: false,
                     sibling_windows: CustomSiblingWindows::CloakAndHide,
+                    picture_window: CustomPictureWindow::Largest,
                     install_dir: None,
                     id: 1,
                 }
@@ -12865,6 +13151,7 @@ mod tests {
                 Some((THE_SMALLEST_PICTURE, true, cap_hwnd)),
                 &mut first_cand,
                 Duration::from_millis(40),
+                false,
             ),
             Some(cap_hwnd)
         );
@@ -12881,8 +13168,74 @@ mod tests {
                 Some((THE_SMALLEST_PICTURE, true, cap_hwnd)),
                 &mut first_cand,
                 Duration::from_millis(40),
+                false,
             ),
             Some(census_hwnd)
+        );
+
+        // **Where the preset asks for the window made last, the latch does not get a say.** The
+        // hook's handle is whatever the DLL saw first, so a census that has candidates wins even
+        // where the latch is the larger of the two — the case MPV Player's `mpv smtc` helper is.
+        let hidden_census = Some((
+            CandidateRank {
+                tier: CandidateTier::Main,
+                visible: false,
+                area: THE_SMALLEST_PICTURE + 1000,
+            },
+            census_hwnd,
+        ));
+        let bigger_latch = Some((THE_SMALLEST_PICTURE + 5000, true, cap_hwnd));
+        // A hidden winner still settles for 40 ms, which is the wait this branch has always had.
+        let mut first_cand = None;
+        assert_eq!(
+            select_hook_or_census_candidate(
+                hidden_census,
+                bigger_latch,
+                &mut first_cand,
+                Duration::from_millis(40),
+                true,
+            ),
+            None
+        );
+        // And once it has, the census's window is the one taken — not the larger latch.
+        let settled = Some((Instant::now() - Duration::from_millis(45), census_hwnd));
+        let mut first_cand = settled;
+        assert_eq!(
+            select_hook_or_census_candidate(
+                hidden_census,
+                bigger_latch,
+                &mut first_cand,
+                Duration::from_millis(40),
+                true,
+            ),
+            Some(census_hwnd)
+        );
+        // With the row at its default, the same two windows give the latch, which is what every
+        // preset did before the row existed.
+        let mut first_cand = settled;
+        assert_eq!(
+            select_hook_or_census_candidate(
+                hidden_census,
+                bigger_latch,
+                &mut first_cand,
+                Duration::from_millis(40),
+                false,
+            ),
+            Some(cap_hwnd)
+        );
+        // And where the look found nothing to classify at all, the caller passes `false` and the
+        // latch is still what answers — a program whose only window is one the census refuses is not
+        // left with no preview.
+        let mut first_cand = None;
+        assert_eq!(
+            select_hook_or_census_candidate(
+                None,
+                bigger_latch,
+                &mut first_cand,
+                Duration::from_millis(40),
+                false,
+            ),
+            Some(cap_hwnd)
         );
     }
 }
