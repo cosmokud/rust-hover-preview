@@ -59,9 +59,13 @@ pub(in super::super) fn toggle_startup() {
     match outcome {
         // The logon that is to start this app has to start it elevated, which is a scheduled task,
         // and a task is a machine write this token may not make. What an unelevated run does about
-        // that is hand the write to an elevated copy of itself (see `elevate_the_startup_write`).
+        // that is hand the write to an elevated copy of itself (see `hand_the_write_to_an_elevated_copy`).
         startup::Outcome::NeedsElevation | startup::Outcome::TaskRefused => {
-            elevate_the_startup_write(enable);
+            hand_the_write_to_an_elevated_copy(if enable {
+                startup::Applied::TurnOn
+            } else {
+                startup::Applied::TurnOff
+            });
         }
         other if !other.settled() => dialogs::report_startup_failure(other),
         _ => {}
@@ -70,22 +74,17 @@ pub(in super::super) fn toggle_startup() {
 
 /// Hand the one write an unelevated process may not make — registering or removing the scheduled
 /// task that starts this app **elevated** at a logon — to an elevated copy of this app, and then
-/// become that copy rather than keeping two of them.
+/// become what that write leaves behind rather than keeping two of them.
 ///
 /// **The elevated copy is started first and this one leaves second**, which is the order the single
 /// instance mutex allows: a second tray begun while this one still holds the mutex would exit, and
 /// the elevated copy would then be the app's only process — which is exactly what the row asked for
 /// and what the tray the user is looking at would no longer be. So the helper is begun (it writes
-/// one task and exits, and takes no mutex), and then this process starts the *tray* again from the
-/// task it just registered and ends itself. What the user sees is the tray icon coming back, now
-/// attended by a process whose token is the elevated one, which is the state the row describes.
-fn elevate_the_startup_write(enable: bool) {
-    let apply = if enable {
-        startup::Applied::TurnOn
-    } else {
-        startup::Applied::TurnOff
-    };
-
+/// one thing and exits, and takes no mutex), and this process then starts whatever the machine now
+/// holds and ends itself: the task it just registered for a turn-on, or the ordinary `Run` value it
+/// just wrote for a turn-off. What the user sees either way is the tray icon coming back as the copy
+/// a logon would start.
+fn hand_the_write_to_an_elevated_copy(apply: startup::Applied) {
     if !startup::raise_to_elevation(apply) {
         // The prompt was answered with no, or no elevated copy could be started at all: the row
         // says the machine did not move, and nothing of this process's changes.
@@ -95,39 +94,50 @@ fn elevate_the_startup_write(enable: bool) {
         return;
     }
 
-    if !enable {
-        // A removal needs nothing started afterwards: the machine is now what was asked for, and
-        // this copy of the app is already the unelevated one.
-        return;
-    }
-
-    // The helper writes the task and exits; the task is then started by the login it is written for,
-    // whose run level is the elevated one. Waiting for the helper is what keeps this process alive
-    // until the switch exists, so that the tray the user is looking at does not blink out of the
-    // task list before there is anything to come back to.
-    if !wait_for_the_helper() {
+    // Waiting is what keeps this process alive until the machine holds what was asked for, so that the
+    // tray the user is looking at does not blink out of the task list before there is anything to
+    // come back to.
+    if !wait_for_the_helper(apply) {
         dialogs::report_startup_failure(startup::Outcome::TaskRefused);
         return;
     }
 
-    // And the hand-over: the task is started, this process goes the way `Exit` takes it. The copy
-    // the task starts is a fresh one, which finds the mutex free because this one is gone.
-    let _ = crate::app::startup::start_the_task();
+    // And the hand-over: the machine is asked to start this app the way it now would at a logon,
+    // and this process goes the way `Exit` takes it — the copy that comes up finds the mutex free
+    // because this one is gone.
+    match apply {
+        startup::Applied::TurnOn => {
+            let _ = startup::start_the_task();
+        }
+        startup::Applied::TurnOff => {
+            startup::start_through_the_entry();
+        }
+    }
+
     crate::RUNNING.store(false, Ordering::SeqCst);
     crate::shell::tray::leave_the_tray();
 }
 
-/// Wait until the machine has a task that starts this copy, or until the elevated copy has plainly
+/// Wait until the machine holds what the elevated copy was begun to write, or until it has plainly
 /// given up. The helper is a process of its own and says nothing back, so what is waited for is the
-/// state it was begun to leave behind.
-fn wait_for_the_helper() -> bool {
+/// state it was begun to leave behind — the task for a turn-on, the ordinary entry for a turn-off.
+fn wait_for_the_helper(apply: startup::Applied) -> bool {
     let deadline = Instant::now() + Duration::from_secs(30);
-    let exe = std::env::current_exe().ok();
 
     while Instant::now() < deadline {
-        if crate::app::startup::task_facts()
-            .starts_this_copy(exe.as_deref().unwrap_or(std::path::Path::new("")))
-        {
+        let ready = match apply {
+            startup::Applied::TurnOn => {
+                let exe = std::env::current_exe().ok();
+                crate::app::startup::task_facts()
+                    .starts_this_copy(exe.as_deref().unwrap_or(std::path::Path::new("")))
+            }
+            startup::Applied::TurnOff => {
+                let machine = startup::machine();
+                machine.started().runs() && !machine.elevates()
+            }
+        };
+
+        if ready {
             return true;
         }
 
@@ -142,25 +152,34 @@ fn wait_for_the_helper() -> bool {
 ///
 /// Turning it on registers a scheduled task with the highest run level, which is a machine write
 /// that needs the elevated token, so an unelevated run hands it to an elevated copy of itself
-/// exactly as the startup row does (see `elevate_the_startup_write`) and comes back elevated.
-/// Turning it off removes that task, which needs the same token, and leaves this process running:
-/// a run that is already elevated stays so until it is restarted, because a token is the platform's
-/// rather than this app's — the rows then say what the machine will do at the next logon, which is
-/// what they are for.
+/// exactly as the startup row does (see `hand_the_write_to_an_elevated_copy`) and comes back elevated.
+///
+/// **Turning it off is the mirror of turning it on, all the way down.** The mark on the exe is
+/// cleared first (a `RUNASADMIN` layer is the same request, and Windows starts no `Run` value whose
+/// exe carries it), then the machine is left with the ordinary entry, and *then* the tray restarts
+/// itself through that entry so that the icon that comes back is the unelevated copy — the one the
+/// next logon will start. Turning it off without that restart left an administrator's tray running
+/// under a row that said otherwise, which is the state this is written to avoid.
 pub(in super::super) fn toggle_run_as_administrator() {
     let machine = startup::machine();
-    // What is flipped is the machine, and what is read to decide which way is the machine too — with
-    // one addition: a run that is elevated right now is a run the user has asked for elevation of,
-    // and a task that was never written must not read as a checked row over a process whose token
-    // is already the elevated one.
-    let on = !(machine.elevates() || crate::app::elevation::is_elevated());
+    // The mark on the file counts as the row being on: it is the same request, made in Windows'
+    // own properties, and it is what the row says when it is read back from the machine.
+    let on = !(machine.elevates() || startup::compat_elevation_is_set());
+
+    // **The mark is cleared before the file is written, whichever way the row is going.** A
+    // `RUNASADMIN` layer on the exe is the same request as this row and Winsows starts no `Run`
+    // value whose exe carries it, so the two would otherwise argue: turning the row on would leave a
+    // mark that the mechanism underneath no longer needed, and turning it off would leave a machine
+    // asking for elevation with nothing that starts it. Off, it is the thing being turned off; on,
+    // it is replaced by the task, which is the answer the row keeps.
+    let mark_gone = startup::clear_compat_elevation();
 
     commit_config(|config| {
         config.run_as_administrator = on;
     });
 
-    // A choice with nothing to start at a logon is a choice the file keeps until there is: the task
-    // is written by the row above it, which is where the prompt is raised (see `app::startup`).
+    // Nothing at a logon is nothing to elevate yet: the choice is kept in the file, and the row
+    // above writes the task — and raises the one prompt — when it is turned on (see `app::startup`).
     let wanted = crate::CONFIG
         .lock()
         .map(|config| config.run_at_startup)
@@ -178,10 +197,39 @@ pub(in super::super) fn toggle_run_as_administrator() {
 
     match outcome {
         startup::Outcome::NeedsElevation | startup::Outcome::TaskRefused => {
-            elevate_the_startup_write(on)
+            hand_the_write_to_an_elevated_copy(if on {
+                startup::Applied::TurnOn
+            } else {
+                startup::Applied::TurnOff
+            });
+            return;
         }
-        other if !other.settled() => dialogs::report_startup_failure(other),
+        other if !other.settled() => {
+            dialogs::report_startup_failure(other);
+            return;
+        }
         _ => {}
+    }
+
+    if !mark_gone {
+        // The row asked for the mark to be gone and the machine kept it: what a logon does is not
+        // what the row says it does, and that is said out loud rather than left to a checkmark.
+        dialogs::report_startup_failure(startup::Outcome::NotWritten {
+            held: startup::is_startup_enabled(),
+        });
+        return;
+    }
+
+    // And the hand-over, in the one direction that needs it: turning the elevated start off leaves
+    // this process with an administrator's token, and an unelevated copy is what a logon will now
+    // start — so the tray is replaced by that copy rather than left standing as the old state.
+    if !on {
+        // The entry is written, so the copy to be looking at is the one it names: this one asks for
+        // that copy and leaves, and the tray that comes back is the unelevated one a logon starts.
+        if startup::start_through_the_entry() {
+            crate::RUNNING.store(false, Ordering::SeqCst);
+            crate::shell::tray::leave_the_tray();
+        }
     }
 }
 

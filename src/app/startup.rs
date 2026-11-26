@@ -278,6 +278,14 @@ pub(crate) fn disable_startup() -> Outcome {
     delete_entry();
     delete_approved();
 
+    // And the mark on the exe, which is the other way this machine can be told to start elevated:
+    // an exe asking for elevation with nothing that starts it is a machine a person has to fix in
+    // Windows' own properties before an ordinary entry starts anything at all (see
+    // `remove_compat_elevation`).
+    if let Ok(exe) = env::current_exe() {
+        let _ = remove_compat_elevation(&exe);
+    }
+
     // A task this process may not delete is a task that still starts the app — which is the state
     // the caller is told about rather than one it is left to discover at the next logon.
     let task_gone = task::unregister().is_ok() || !task::facts().present;
@@ -431,15 +439,23 @@ fn compat_layers_value(path: &Path) -> Option<String> {
         return None;
     }
 
-    // The value's name is the path, spelled as the compatibility tab wrote it: the exact key is
-    // asked for, and a lookup that misses is not retried in another case — one that differs only in
-    // case would be a second entry for one file, which the tab does not make.
-    let name: Vec<u16> = path
-        .as_os_str()
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let layers = read_layers(hkey, path);
+
+    // Safety: the handle this call opened and nothing else holds.
+    unsafe {
+        let _ = RegCloseKey(hkey);
+    }
+
+    layers
+}
+
+/// The layer value a key of `AppCompatFlags\Layers` holds for one executable.
+///
+/// The value's name is the path, spelled as the compatibility tab wrote it: the exact key is asked
+/// for, and a lookup that misses is not retried in another case — one that differs only in case
+/// would be a second entry for one file, which the tab does not make.
+fn read_layers(hkey: HKEY, path: &Path) -> Option<String> {
+    let name = layers_value_name(path);
 
     let mut size: u32 = 0;
     // Safety: a size is written into a local; the value's bytes are not offered yet.
@@ -456,23 +472,157 @@ fn compat_layers_value(path: &Path) -> Option<String> {
     .is_ok()
         && size >= 2;
 
-    let layers = if sized {
-        let mut buffer = vec![0u8; size as usize];
-        let read = unsafe {
-            RegQueryValueExW(
-                hkey,
-                PCWSTR(name.as_ptr()),
-                None,
-                None,
-                Some(buffer.as_mut_ptr()),
-                Some(&mut size),
-            )
-        }
-        .is_ok();
+    if !sized {
+        return None;
+    }
 
-        read.then(|| decode_string(&buffer[..size.min(buffer.len() as u32) as usize]))
-    } else {
-        None
+    let mut buffer = vec![0u8; size as usize];
+    // Safety: a buffer of `size` bytes is offered, and the size is what is read back into.
+    let read = unsafe {
+        RegQueryValueExW(
+            hkey,
+            PCWSTR(name.as_ptr()),
+            None,
+            None,
+            Some(buffer.as_mut_ptr()),
+            Some(&mut size),
+        )
+    }
+    .is_ok();
+
+    read.then(|| decode_string(&buffer[..size.min(buffer.len() as u32) as usize]))
+}
+
+/// A layer value with the *Run this program as an administrator* word taken out of it.
+///
+/// **The word is one of a list, and only it goes.** A compatibility mode (`~ WIN8RTM`), a DPI fix or
+/// `HIGHDPIAWARE` beside it is the user's own setting on the file and is left exactly as written.
+/// `None` is a value that named nothing else and is therefore a value with no layers left in it —
+/// which is removed rather than written back as the `~` separator on its own, a run of characters
+/// that names no layer and is not a request Windows understands.
+fn layers_without_the_mark(layers: &str) -> Option<String> {
+    let words: Vec<&str> = layers.split_whitespace().collect();
+
+    // `~` is the list's own separator rather than a layer, and it opens a value that has one. A
+    // list left with layers in it keeps it — `~ WIN8RTM` is what Windows' own properties tab writes
+    // — and a list with none left is no value at all rather than a separator naming nothing.
+    let separator = words.first().is_some_and(|word| *word == "~");
+    let kept: Vec<&str> = words
+        .into_iter()
+        .filter(|word| *word != "~")
+        .filter(|word| !word.eq_ignore_ascii_case("RUNASADMIN"))
+        .collect();
+
+    if kept.is_empty() {
+        return None;
+    }
+
+    Some(match separator {
+        true => format!("~ {}", kept.join(" ")),
+        false => kept.join(" "),
+    })
+}
+
+/// The name a compatibility layer value is filed under: this copy's path, UTF-16 and terminated.
+fn layers_value_name(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// Take the *Run this program as an administrator* mark off this copy, which is what unchecking the
+/// `Run as administrator` row does.
+///
+/// **The mark has to go with the row, or the row cannot turn it off.** Windows never elevates a
+/// `Run` value and silently skips one whose exe asks for elevation, so a machine left carrying this
+/// flag beside an ordinary startup entry is a machine where nothing starts at all — the row would
+/// untick, the value would be written, and the next logon would run nothing. `RUNASADMIN` is one
+/// word among the layers a program may carry (compatibility modes, DPI fixes, `HIGHDPIAWARE`), so
+/// only that word is taken: the value is rewritten without it, and a value that is nothing but it
+/// leaves no empty string behind, because an empty layer is a request Windows does not understand.
+///
+/// The key is the **desktop account's** while this process is an elevated copy of another account,
+/// for the reason the `Run` entry is (see `app::elevation`): the compatibility flags are read for the
+/// user who starts the program, and that user is the one at the keyboard.
+///
+/// Answers whether the mark is gone afterwards, which is a machine with none at all as much as one
+/// whose layers no longer name it.
+fn remove_compat_elevation(path: &Path) -> bool {
+    let redirected = elevation::runs_under_another_account();
+    let mut hkey = HKEY::default();
+
+    let opened = {
+        let subkey = if redirected {
+            elevation::desktop_user_sid().map(|sid| {
+                format!("{sid}\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers")
+            })
+        } else {
+            None
+        };
+
+        match subkey {
+            // Safety: a handle is written into a local, and this call closes it.
+            Some(subkey) => {
+                let wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
+                unsafe {
+                    RegOpenKeyExW(
+                        HKEY_USERS,
+                        PCWSTR(wide.as_ptr()),
+                        0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE,
+                        &mut hkey,
+                    )
+                }
+            }
+            // Safety: as above.
+            None => unsafe {
+                RegOpenKeyExW(
+                    HKEY_CURRENT_USER,
+                    COMPAT_LAYERS_KEY,
+                    0,
+                    KEY_QUERY_VALUE | KEY_SET_VALUE,
+                    &mut hkey,
+                )
+            },
+        }
+    };
+
+    if opened.is_err() {
+        // No key at all is no entry at all, and an entry is the only thing this was asked to
+        // remove.
+        return true;
+    }
+
+    let Some(layers) = read_layers(hkey, path) else {
+        // Safety: the handle this call opened and nothing else holds.
+        unsafe {
+            let _ = RegCloseKey(hkey);
+        }
+        return true;
+    };
+
+    let kept = layers_without_the_mark(&layers);
+
+    let name = layers_value_name(path);
+
+    let status = match &kept {
+        // Safety: this app's own value for this copy's path in a key this call opened.
+        None => unsafe { RegDeleteValueW(hkey, PCWSTR(name.as_ptr())) },
+        Some(kept) => {
+            let written: Vec<u16> = kept.encode_utf16().chain(std::iter::once(0)).collect();
+            // Safety: the value's bytes are a UTF-16 string with its terminator.
+            unsafe {
+                RegSetValueExW(
+                    hkey,
+                    PCWSTR(name.as_ptr()),
+                    0,
+                    REG_SZ,
+                    Some(written.align_to::<u8>().1),
+                )
+            }
+        }
     };
 
     // Safety: the handle this call opened and nothing else holds.
@@ -480,7 +630,7 @@ fn compat_layers_value(path: &Path) -> Option<String> {
         let _ = RegCloseKey(hkey);
     }
 
-    layers
+    status.is_ok() && !entry_would_ask_for_elevation()
 }
 
 /// Write this copy's command line into the entry, creating the key where it is not there.
@@ -876,6 +1026,25 @@ pub fn honour_the_configuration() -> bool {
         .map(|config| (config.run_at_startup, config.run_as_administrator))
         .unwrap_or((false, false));
 
+    // **A mark the file no longer asks for is taken off the exe here as well as by the row.** The
+    // flag and the row are one request, so a file saying the elevated start is off — the row was
+    // turned off on a copy that could not reach the write, or the file was edited — is a machine
+    // that must not go on asking for elevation: a `Run` value under that mark starts nothing at all.
+    // A file that asks for the elevated start keeps it untouched, and where the mark is the only
+    // thing asking (a file never opened since it was set in Windows' own properties) nothing is
+    // cleared either: what a hand set, only a hand or the row takes off.
+    if wanted && !wants_elevation {
+        let _ = env::current_exe().is_ok_and(|exe| {
+            let marked = compat_layers_value(&exe).is_some_and(|layers| {
+                layers
+                    .split_whitespace()
+                    .any(|word| word.eq_ignore_ascii_case("RUNASADMIN"))
+            });
+
+            marked && remove_compat_elevation(&exe)
+        });
+    }
+
     // What the machine holds, and what is asked of it: an entry that starts this copy is settled
     // for the ordinary answer, a task that starts this copy at the highest run level is settled for
     // the elevated one, and anything else — nothing there, a value or a task Windows has been told
@@ -968,6 +1137,40 @@ mod tests {
         assert_eq!(
             executable_of(&written),
             r"C:\Program Files\Rust Hover Preview\app.exe"
+        );
+    }
+
+    /// The mark is one word of a list a program may carry, and only that word goes: a compatibility
+    /// mode, a DPI fix or a `HIGHDPIAWARE` beside it is the user's own setting and is left exactly
+    /// as it is — and a value that was nothing but the mark leaves no empty string behind, because an
+    /// empty layer is a request Windows does not understand.
+    #[test]
+    fn only_the_one_word_is_taken_off_a_layer_value() {
+        // A value that was nothing but the mark is no value at all: it is removed rather than left
+        // holding the list's own separator, which names no layer.
+        assert_eq!(layers_without_the_mark("RUNASADMIN"), None);
+        assert_eq!(layers_without_the_mark("~ RUNASADMIN"), None);
+        assert_eq!(layers_without_the_mark("RUNASADMIN ~"), None);
+
+        // A layer the user set beside it is theirs, and it stays — the mark is the one word taken.
+        assert_eq!(
+            layers_without_the_mark("~ RUNASADMIN HIGHDPIAWARE").as_deref(),
+            Some("~ HIGHDPIAWARE")
+        );
+        assert_eq!(
+            layers_without_the_mark("~ WIN8RTM runasadmin").as_deref(),
+            Some("~ WIN8RTM")
+        );
+        // And a value that does not name the mark is handed back as it was.
+        assert_eq!(
+            layers_without_the_mark("~ WIN8RTM").as_deref(),
+            Some("~ WIN8RTM")
+        );
+        // A word that only begins with it is not it.
+        assert_eq!(
+            layers_without_the_mark("~ RUNASADMINISTRATOR").as_deref(),
+            Some("~ RUNASADMINISTRATOR"),
+            "the word is compared whole"
         );
     }
 
@@ -1116,8 +1319,47 @@ pub(crate) fn start_the_task() -> bool {
     task::run_now().is_ok()
 }
 
+/// Start the copy of this app that the ordinary `Run` entry names, through the Shell, and leave the
+/// starting of it to Windows' own startup path.
+///
+/// It is the mirror of [`start_the_task`], and it exists for the same reason: a turn-off that left the
+/// tray standing as an administrator would be a tray a user has to restart by hand before the row
+/// they just unchecked means anything. What is done is what a logon does — the value is run — except
+/// that the value is run *unelevated*: `ShellExecuteW` through the Shell's own token, which is the one
+/// token that can start a program without raising a prompt (see `app::hand_off`, and the same road a
+/// launch from the Start menu takes).
+pub(crate) fn start_through_the_entry() -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+
+    crate::app::hand_off::open(&crate::paths::plain_path(&exe), None)
+}
+
 /// What this app knows about the machine's task, for a reader that has to wait on it.
 pub(crate) use task::facts as task_facts;
+
+/// Take the *Run this program as an administrator* mark off the copy that is running, for the row
+/// that is turning the elevated start back off.
+///
+/// It is a write to the user's own compatibility settings rather than to the startup entry, which is
+/// why it is a call of its own: a mark that was set on the file's **Properties → Compatibility** tab
+/// is the same request as this app's row, and unchecking the row has to be able to answer it — or the
+/// machine is left asking for elevation with nothing that starts it, where a `Run` value does nothing.
+pub(crate) fn clear_compat_elevation() -> bool {
+    env::current_exe().is_ok_and(|exe| remove_compat_elevation(&exe))
+}
+
+/// Whether the copy that is running carries that mark, which the row is drawn from.
+pub(crate) fn compat_elevation_is_set() -> bool {
+    env::current_exe().is_ok_and(|exe| {
+        compat_layers_value(&exe).is_some_and(|layers| {
+            layers
+                .split_whitespace()
+                .any(|word| word.eq_ignore_ascii_case("RUNASADMIN"))
+        })
+    })
+}
 
 /// Ask Windows to run an elevated copy of this app, which makes the one write this process may not
 /// make: registering or removing the scheduled task (see `app::task`).
@@ -1200,6 +1442,10 @@ pub(crate) fn apply_for_the_helper(apply: Applied) -> bool {
         Applied::TurnOff => {
             delete_entry();
             delete_approved();
+            // The mark first: an exe asking for elevation is one a `Run` value never starts, so a
+            // machine left carrying it after this row was turned off is a machine where a logon
+            // runs nothing at all (see `remove_compat_elevation`).
+            let _ = remove_compat_elevation(&exe);
             task::unregister().is_ok() || !task::facts().present
         }
     }
