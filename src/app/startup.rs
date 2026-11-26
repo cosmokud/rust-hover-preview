@@ -851,21 +851,6 @@ pub fn repair_startup_entry() -> bool {
     }
 }
 
-/// Turn a scheduled task Windows has been told not to run back on, and answer whether it was.
-///
-/// It is the other half of `is_entry_enabled` for a task: the `Disabled` switch in Task Scheduler
-/// (and in **Settings → Apps → Startup**, which lists the task beside the values) is a task that is
-/// there and starts nothing, and the row has to be able to say so rather than a checkmark over a
-/// logon entry that does not happen. Registering it again is what puts the switch back, since that
-/// write is the same one the row makes.
-fn enable_the_task_that_is_there(exe: &Path) -> bool {
-    let Some(user) = elevation::desktop_user_name() else {
-        return false;
-    };
-
-    task::register(exe, &user).is_ok() && task::facts().starts_this_copy(exe)
-}
-
 /// Note that this app has just been started, and make the machine's entry agree with the
 /// configuration that asked for it.
 ///
@@ -908,33 +893,33 @@ pub fn honour_the_configuration() -> bool {
 
     let outcome = match settled {
         true => Outcome::Settled,
+        // A task that is there, names this copy and is switched off is registered again rather than
+        // written from nothing: the same call, and the same reason the `Run` value's own flag is
+        // written by `enable_startup` (the register carries `SetEnabled(true)`).
         false => enable_startup(),
     };
 
-    // A task that is there, names this copy and is switched off is turned back on rather than
-    // registered from nothing: the same register, and the same reason the `Run` value's own flag is
-    // written by `enable_startup` (see `enable_the_task_that_is_there`).
-    let written = outcome.settled()
-        || wants_elevation
-            && before.task_present
-            && !before.task_enabled
-            && env::current_exe()
-                .ok()
-                .is_some_and(|exe| enable_the_task_that_is_there(&exe));
+    // **A write this token could not make is not a machine that refused one.** An unelevated process
+    // asking for an elevated start is answered `NeedsElevation`, and the file is left saying what the
+    // user asked for: bringing it into step with the machine there would erase the choice every time
+    // the row was read on a copy that cannot act on it yet, and the row itself already says the
+    // machine will not do it (see the label in `menus`).
+    let written = outcome.settled() && !settled;
 
-    // What the machine holds, written back where the file disagrees with it — which is the one
-    // direction this never argues: `true` asks for the entry (and has just been given it), and
-    // anything the machine refused is a `false` in the file rather than a lie in it.
-    let held = machine();
-    let running = held.started().runs();
-
-    if let Ok(mut config) = crate::CONFIG.lock() {
+    if !matches!(outcome, Outcome::NeedsElevation) {
+        // What the machine holds, written back where the file disagrees with it — which is the one
+        // direction this never argues: `true` asks for the entry (and has just been given it), and
+        // anything the machine refused is a `false` in the file rather than a lie in it.
+        let held = machine();
+        let running = held.started().runs();
         let elevated = held.elevates();
 
-        if config.run_at_startup != running || config.run_as_administrator != elevated {
-            config.run_at_startup = running;
-            config.run_as_administrator = elevated;
-            config.save();
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            if config.run_at_startup != running || config.run_as_administrator != elevated {
+                config.run_at_startup = running;
+                config.run_as_administrator = elevated;
+                config.save();
+            }
         }
     }
 
