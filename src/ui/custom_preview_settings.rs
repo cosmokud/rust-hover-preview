@@ -190,7 +190,10 @@ const EDIT_IDS: [i32; 7] = [
 ];
 
 pub(super) const SCALE_CHOICES: [(&str, CustomScaling); 5] = [
-    ("Follow Tray -> Scaling", CustomScaling::FollowTray),
+    (
+        "Follow Tray -> Scaling (Default)",
+        CustomScaling::FollowTray,
+    ),
     (
         "Fit to screen",
         CustomScaling::Override(PreviewScale::FitToScreen),
@@ -214,7 +217,7 @@ pub(super) const WINDOW_MODES: [CustomWindowMode; 2] =
 
 fn window_mode_label(mode: CustomWindowMode) -> &'static str {
     match mode {
-        CustomWindowMode::Normal => "Normal",
+        CustomWindowMode::Normal => "Normal (Default)",
         CustomWindowMode::Borderless => "Borderless",
     }
 }
@@ -263,7 +266,7 @@ pub(super) const CHILD_SCOPES: [CustomChildScope; 3] = [
 
 fn child_scope_label(scope: CustomChildScope) -> &'static str {
     match scope {
-        CustomChildScope::Disabled => "Disabled",
+        CustomChildScope::Disabled => "Disabled (Default)",
         CustomChildScope::Children => "Children",
         CustomChildScope::ChildrenAndGrandchildren => "Children + Grandchildren",
     }
@@ -304,8 +307,8 @@ pub(super) const PICTURE_WINDOWS: [CustomPictureWindow; 2] = [
 
 fn picture_window_label(mode: CustomPictureWindow) -> &'static str {
     match mode {
-        CustomPictureWindow::Largest => "Largest (Default)",
-        CustomPictureWindow::NewestComparable => "Newest Comparable",
+        CustomPictureWindow::Largest => "Largest",
+        CustomPictureWindow::NewestComparable => "Newest Comparable (Default)",
     }
 }
 
@@ -323,7 +326,7 @@ pub(super) const PROMOTION_TECHNIQUES: [CustomPromotionTechnique; 2] = [
 
 fn promotion_technique_label(technique: CustomPromotionTechnique) -> &'static str {
     match technique {
-        CustomPromotionTechnique::DirectPromotion => "Direct Promotion",
+        CustomPromotionTechnique::DirectPromotion => "Direct Promotion (Default)",
         CustomPromotionTechnique::OpenAsNewProcess => "Open as New Process",
     }
 }
@@ -336,7 +339,7 @@ pub(super) const PLACEMENTS: [CustomPlacement; 3] = [
 
 fn placement_label(placement: CustomPlacement) -> &'static str {
     match placement {
-        CustomPlacement::FollowTray => "Tray -> Placement",
+        CustomPlacement::FollowTray => "Tray -> Placement (Default)",
         CustomPlacement::Forced => "Tray -> Placement + Forced",
         CustomPlacement::Hook => "Tray -> Placement + Hook",
     }
@@ -7268,7 +7271,10 @@ pub(super) mod tests {
                 child_scope_index(CustomChildScope::Disabled) as isize
             );
             assert_eq!(CHILD_SCOPES.len(), 3);
-            assert_eq!(child_scope_label(CustomChildScope::Disabled), "Disabled");
+            assert_eq!(
+                child_scope_label(CustomChildScope::Disabled),
+                "Disabled (Default)"
+            );
             assert_eq!(child_scope_label(CustomChildScope::Children), "Children");
             assert_eq!(
                 child_scope_label(CustomChildScope::ChildrenAndGrandchildren),
@@ -8290,7 +8296,7 @@ pub(super) mod tests {
             );
             assert_eq!(
                 promotion_technique_label(CustomPromotionTechnique::DirectPromotion),
-                "Direct Promotion"
+                "Direct Promotion (Default)"
             );
             assert_eq!(
                 PROMOTION_TECHNIQUES[1],
@@ -8341,7 +8347,7 @@ pub(super) mod tests {
             assert_eq!(PLACEMENTS[0], CustomPlacement::FollowTray);
             assert_eq!(
                 placement_label(CustomPlacement::FollowTray),
-                "Tray -> Placement"
+                "Tray -> Placement (Default)"
             );
             assert_eq!(PLACEMENTS[1], CustomPlacement::Forced);
             assert_eq!(

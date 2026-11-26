@@ -239,22 +239,29 @@ pub enum CustomChildDepth {
 /// because the wrong answer here is the one the user sees as an empty preview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CustomPictureWindow {
-    /// The largest picture-shaped window in the best tier: what every preset did before this row
-    /// existed, and what a program that makes its document window first and largest wants.
-    #[default]
+    /// The largest picture-shaped window in the best tier, and nothing else considered. What every
+    /// preset did before this row existed, and what a program whose document window is the only one
+    /// of its size class gets anyway (see the settle below).
     Largest,
     /// Of the windows in the best tier whose area is within [`COMPARABLE_AREA_PERCENT`] of the
     /// largest, the one the program made **last** — once it has stopped making windows, so a helper
     /// born first cannot be mistaken for the picture.
     ///
-    /// **MPV Player is why this exists.** Its `mpv.exe` is built with `win32-smtc`, and that feature
-    /// puts up a top-level `mpv-smtc` window titled `mpv smtc` about 200 ms before the video window
-    /// — and because this app's launch hands `STARTF_USESIZE` to the program, USER32 gives *that*
-    /// helper the preview's own box. A titled, unowned, non-tool window at 1976x1112 against the
-    /// video window's 1936x1119 is the same tier, the same visibility and 1.4 % more area, so it won
-    /// and was composed as the picture: a white, frozen rectangle where the film should be. SVP's
-    /// `mpv.exe` is the same version without the feature, which is why one build previewed and the
-    /// other did not.
+    /// **MPV Player is why this exists, and why it is the default.** Its `mpv.exe` is built with
+    /// `win32-smtc`, and that feature puts up a top-level `mpv-smtc` window titled `mpv smtc` about
+    /// 200 ms before the video window — and because this app's launch hands `STARTF_USESIZE` to the
+    /// program, USER32 gives *that* helper the preview's own box. A titled, unowned, non-tool window
+    /// at 1976x1112 against the video window's 1936x1119 is the same tier, the same visibility and
+    /// 1.4 % more area, so it won as the picture: a white, frozen rectangle where the film should be.
+    /// SVP's `mpv.exe` is the same version without the feature, which is why one build previewed and
+    /// the other did not.
+    ///
+    /// **What it costs a program that is not MPV Player is nothing that was measured.** A program
+    /// with one picture-shaped window — SVP's `mpv.exe`, Windows 11's Paint, PhotoCraft, Dragon —
+    /// has already answered the question, so it is adopted without waiting: the settle is paid only
+    /// where two windows are of the same size class and the newer one is what this row asks for.
+    /// VLC's three windows were measured too: `largest` and this pick the same one.
+    #[default]
     NewestComparable,
 }
 
@@ -1808,13 +1815,17 @@ mod tests {
     }
 
     #[test]
-    fn picture_window_round_trips_and_defaults_to_largest() {
-        // **Today's ranking is the default**, so a file written before this key existed previews
-        // exactly as it did: the largest window in the best tier, whatever order they arrived in.
-        assert_eq!(CustomPictureWindow::default(), CustomPictureWindow::Largest);
+    fn picture_window_round_trips_and_defaults_to_newest_comparable() {
+        // **The window made last is the default**, which is the one MPV Player's helper window
+        // needed; a program with a single picture-shaped window is adopted without waiting for it
+        // (see `select_the_picture`), so nothing else pays for the choice.
+        assert_eq!(
+            CustomPictureWindow::default(),
+            CustomPictureWindow::NewestComparable
+        );
         assert_eq!(
             CustomPreset::named("Fresh").picture_window,
-            CustomPictureWindow::Largest
+            CustomPictureWindow::NewestComparable
         );
         assert!(!CustomPictureWindow::Largest.prefers_the_newest());
         assert!(CustomPictureWindow::NewestComparable.prefers_the_newest());
@@ -1843,7 +1854,7 @@ mod tests {
         }
 
         // A key this build does not know, and a section that never had one, both read as the
-        // ranking every preset had before the row existed.
+        // default rather than as a guess.
         let mut legacy = Ini::new();
         legacy.set("custom:missing", "name", Some("Missing".into()));
         legacy.set("custom:missing", "exe", Some("a.exe".into()));
@@ -1857,7 +1868,7 @@ mod tests {
         read_all(&legacy, &mut read);
         assert_eq!(read.custom_presets.len(), 2);
         for p in &read.custom_presets {
-            assert_eq!(p.picture_window, CustomPictureWindow::Largest);
+            assert_eq!(p.picture_window, CustomPictureWindow::NewestComparable);
         }
     }
 

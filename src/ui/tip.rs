@@ -262,14 +262,15 @@ const SIBLING_WINDOW_WORDS: &[&str] = &[
 
 /// `Picture Window`, value by value.
 const PICTURE_WINDOW_WORDS: &[&str] = &[
-    "The largest window the program made that a picture could be drawn in — what every preset did \
-     before this row existed, and right for a program that makes its document window first or \
-     biggest.",
+    "The largest window the program made that a picture could be drawn in, and nothing else \
+     considered. Right for a program that makes its document window first or biggest — and what \
+     MPV Player's own helper window wins, because this app hands it the preview's box.",
     "Of the windows of that same size class, the one the program made last, once it has stopped \
      making them. Right for a program whose own helper comes up first and larger: MPV Player's \
      mpv.exe is built with SMTC support, and its `mpv smtc` window is born 200 ms before the film \
      and is handed the preview's own box, so Largest adopts the helper and the preview is a white \
-     still frame.",
+     still frame. A program with only one window of that size class is adopted at once, so nothing \
+     waits for a choice there is to make; the wait is only between two windows of one size class.",
 ];
 
 /// `Promotion`, value by value.
