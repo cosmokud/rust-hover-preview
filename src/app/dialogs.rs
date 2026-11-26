@@ -231,6 +231,14 @@ pub(crate) fn report_install_failure(name: &str, code: i32) {
 /// from the tray — as a switch that does nothing — and the one thing a user can act on is what the
 /// machine refused.
 pub(crate) fn report_startup_failure(outcome: crate::app::startup::Outcome) {
+    // The mark on the file is not a startup entry, and a box headed "the startup entry could not be
+    // written" over it would be naming the wrong thing: what the machine refused is the one flag
+    // Windows reads for a launch that is not a logon's.
+    if let crate::app::startup::Outcome::MarkRefused { on } = outcome {
+        report_mark_failure(on);
+        return;
+    }
+
     let state = match outcome {
         // The machine refused the write and still holds the opposite of what was asked for.
         crate::app::startup::Outcome::NotWritten { held: false } => {
@@ -264,6 +272,37 @@ pub(crate) fn report_startup_failure(outcome: crate::app::startup::Outcome) {
     );
 
     report(&text);
+}
+
+/// What the `Run as administrator` row says when the mark on the file did not follow it, in the
+/// direction it was going.
+///
+/// **The two directions leave two different machines, and the box says which.** On, the task is in
+/// place and only a launch by hand is left unelevated — the row half in effect. Off, the ordinary
+/// entry is in place *beside* a mark that stops it, because Windows starts no `Run` value whose file
+/// asks for elevation — the row's removal leaving a machine where nothing starts at a logon at all,
+/// which is the one state a user has to be told about rather than left to find at the next start.
+fn report_mark_failure(on: bool) {
+    let text = match on {
+        true => "The administrator mark could not be written.\n\n\
+                 The task that starts this app at a logon is in place, so a logon will start it as \
+                 an administrator. What Windows would not take is the mark on the file itself — \
+                 `Run this program as an administrator`, in the file's own compatibility properties \
+                 — which is what makes a double-click, a shortcut or a file association ask for \
+                 administrator rights. Starting it by hand will not raise the prompt.\n\n\
+                 A security policy, an antivirus tool, or a profile this process may not write is \
+                 the usual reason. The rest of this app is unaffected.",
+        false => "The administrator mark could not be taken off.\n\n\
+                  The ordinary startup entry is written, but the mark Windows keeps on the file — \
+                  `Run this program as an administrator` — is still there, and Windows starts no \
+                  `Run` value whose file carries that mark. Nothing of this app will start at a \
+                  logon until it is removed: the file's own properties, or this row again, will do \
+                  it.\n\n\
+                  A security policy, an antivirus tool, or a profile this process may not write is \
+                  the usual reason. The rest of this app is unaffected.",
+    };
+
+    report(text);
 }
 
 /// A box that reports rather than asks, for what has already happened and cannot be refused.

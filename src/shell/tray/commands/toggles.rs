@@ -26,6 +26,7 @@ use crate::app::seam::{
 use crate::app::startup;
 use crate::config::config::PreviewType;
 use crate::config::{commit_config, publish_config_change};
+use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -47,9 +48,15 @@ pub(in super::super) fn toggle_startup() {
     // open — used to leave `run_at_startup=true` in the file beside no entry at all, which is the
     // one failure that reads as the app forgetting the choice it was given. The row says so as
     // well, since a switch that flips back by itself is a switch nobody trusts.
+    // The elevated row is in effect where a logon starts this app as an administrator **or** where
+    // the file asks for one on every launch, which are one row with two roads (see
+    // `toggle_run_as_administrator`).
     let (held, elevated) = {
         let held = startup::machine();
-        (held.started().runs(), held.elevates())
+        (
+            held.started().runs(),
+            held.elevates() || held.compat_elevation(),
+        )
     };
     commit_config(|config| {
         config.run_at_startup = held;
@@ -103,15 +110,20 @@ fn hand_the_write_to_an_elevated_copy(apply: startup::Applied) {
     // the helper's own process, which exits the moment its one write is behind it. A poll that ran
     // to a deadline instead was this thread frozen for the whole of it, and a write the machine
     // refused cost the user half a minute of a tray that answered no click.
-    let written = match helper {
-        Some(helper) => startup::wait_for_the_helper(helper) && the_machine_took_the_write(apply),
+    let exited = match helper {
+        Some(helper) => startup::wait_for_the_helper(helper),
         // The one Shell that begins the copy without leaving a handle leaves nothing to wait on, and
         // the machine's own state is then what is asked, until it moves.
         None => wait_for_the_write(apply),
     };
 
-    if !written {
-        dialogs::report_startup_failure(startup::Outcome::TaskRefused);
+    let outcome = match exited {
+        true => what_the_machine_holds(apply),
+        false => startup::Outcome::TaskRefused,
+    };
+
+    if !outcome.settled() {
+        dialogs::report_startup_failure(outcome);
         return;
     }
 
@@ -128,33 +140,48 @@ fn wait_for_the_write(apply: startup::Applied) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
 
     while Instant::now() < deadline {
-        if the_machine_took_the_write(apply) {
+        if what_the_machine_holds(apply).settled() {
             return true;
         }
 
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    the_machine_took_the_write(apply)
+    false
 }
 
-/// Whether the machine now holds what the elevated copy was begun to write: the task that starts this
-/// copy at the highest run level for a turn-on, and the ordinary entry with no task beside it for a
-/// turn-off.
+/// What the machine holds now, as the row reports it: settled where the elevated copy put in place
+/// what was asked for, and the outcome that names what it did not.
 ///
 /// The helper says nothing back beyond exiting, so what it did is read off the machine rather than
-/// taken on trust — the same two reads the tray's rows are drawn from, asked once the process that
-/// was to make the write is gone.
-fn the_machine_took_the_write(apply: startup::Applied) -> bool {
+/// taken on trust — the same reads the tray's rows are drawn from, asked once the process that was to
+/// make the write is gone. Both halves are asked: the task that starts this copy at a logon, and the
+/// mark on the file every other launch of it goes through.
+fn what_the_machine_holds(apply: startup::Applied) -> startup::Outcome {
     match apply {
         startup::Applied::TurnOn => {
             let exe = std::env::current_exe().ok();
-            startup::task_facts()
-                .starts_this_copy(exe.as_deref().unwrap_or(std::path::Path::new("")))
+            let task =
+                startup::task_facts().starts_this_copy(exe.as_deref().unwrap_or(Path::new("")));
+
+            match (task, startup::compat_elevation_is_set()) {
+                (false, _) => startup::Outcome::TaskRefused,
+                // The logon is elevated and every other launch is not, which is the row half in place.
+                (true, false) => startup::Outcome::MarkRefused { on: true },
+                (true, true) => startup::Outcome::Settled,
+            }
         }
         startup::Applied::TurnOff => {
             let machine = startup::machine();
-            machine.started().runs() && !machine.elevates()
+            let entry = machine.started().runs() && !machine.elevates();
+
+            match (entry, startup::compat_elevation_is_set()) {
+                // The mark still on the file is a `Run` value Windows starts nothing from, so the
+                // machine is not the one the row asked to be left with either way.
+                (_, true) => startup::Outcome::MarkRefused { on: false },
+                (true, false) => startup::Outcome::Settled,
+                (false, false) => startup::Outcome::TaskRefused,
+            }
         }
     }
 }
@@ -198,12 +225,18 @@ fn hand_over_to_the_successor() {
     crate::shell::tray::leave_the_tray();
 }
 
-/// Whether the logon that starts this app starts it **elevated** — the row under `Run at Startup`,
-/// and the one thing in this app that asks Windows for a token it does not have.
+/// Whether this app runs **elevated** — the row under `Run at Startup`, and the one thing in this
+/// app that asks Windows for a token it does not have.
 ///
-/// Turning it on registers a scheduled task with the highest run level, which is a machine write
-/// that needs the elevated token, so an unelevated run hands it to an elevated copy of itself
-/// exactly as the startup row does (see `hand_the_write_to_an_elevated_copy`) and comes back elevated.
+/// **The row is two mechanisms, because Windows has two ways to start this app.** A logon is the
+/// scheduled task with the highest run level, which is a machine write that needs the elevated token
+/// — an unelevated run hands it to an elevated copy of itself exactly as the startup row does (see
+/// `hand_the_write_to_an_elevated_copy`) and comes back elevated. Every other launch is the mark on
+/// the file itself, the *Run this program as an administrator* flag in its own compatibility
+/// properties: a double-click, a shortcut, an association and a `Start → Run` line all begin the
+/// executable and never touch the task, and that flag is the only thing Windows reads for one of
+/// them. Both are written together, because a row that meant "elevated at a logon" while saying
+/// "elevated" would be a row that lies about a double-click.
 ///
 /// **Turning it off is the mirror of turning it on, all the way down.** The mark on the exe is
 /// cleared first (a `RUNASADMIN` layer is the same request, and Windows starts no `Run` value whose
@@ -217,26 +250,34 @@ pub(in super::super) fn toggle_run_as_administrator() {
     // own properties, and it is what the row says when it is read back from the machine.
     let on = !(machine.elevates() || startup::compat_elevation_is_set());
 
-    // **The mark is cleared before the file is written, whichever way the row is going.** A
-    // `RUNASADMIN` layer on the exe is the same request as this row and Winsows starts no `Run`
-    // value whose exe carries it, so the two would otherwise argue: turning the row on would leave a
-    // mark that the mechanism underneath no longer needed, and turning it off would leave a machine
-    // asking for elevation with nothing that starts it. Off, it is the thing being turned off; on,
-    // it is replaced by the task, which is the answer the row keeps.
-    let mark_gone = startup::clear_compat_elevation();
+    // **The mark's direction is the row's direction.** Off, it goes first: a machine still asking for
+    // elevation is one `enable_startup` would answer with a task rather than the entry this row is
+    // leaving behind. On, it is written by the write itself — after the task and never before,
+    // because Windows starts no `Run` value whose file carries it (see `startup::enable_the_task`).
+    let mark_gone = !on || startup::clear_compat_elevation();
 
     commit_config(|config| {
         config.run_as_administrator = on;
     });
 
-    // Nothing at a logon is nothing to elevate yet: the choice is kept in the file, and the row
-    // above writes the task — and raises the one prompt — when it is turned on (see `app::startup`).
     let wanted = crate::CONFIG
         .lock()
         .map(|config| config.run_at_startup)
         .unwrap_or(false);
 
+    // **Nothing at a logon is nothing for the task to be, and the row still means what it says.**
+    // With `Run at Startup` off there is no mechanism to write and no prompt to raise — but every
+    // launch of the file is one the mark is for, and that is the half of this row a logon never goes
+    // through. The task is written by the row above, when it is turned on.
+    //
+    // An entry still on the machine is the one case nothing is written over: Windows starts no `Run`
+    // value whose file carries the mark, so a mark put on beside one would be a logon that starts
+    // nothing — and that entry is the row above's to remove, not this one's.
     if !wanted {
+        if on && !machine.entry_present && !startup::set_compat_elevation() {
+            dialogs::report_startup_failure(startup::Outcome::MarkRefused { on: true });
+        }
+
         return;
     }
 
@@ -244,13 +285,8 @@ pub(in super::super) fn toggle_run_as_administrator() {
     // the task; off, it is the ordinary `Run` value — because `run_at_startup` is still on, and a
     // startup that was left with neither would be a switch that turned off more than its own row.
     // `enable_startup` is what writes the value and takes the task away in one pass, so both
-    // directions go through it while the row above says yes; only a startup that is not wanted at
-    // all is the call that removes both.
-    let outcome = if on || wanted {
-        startup::enable_startup()
-    } else {
-        startup::disable_startup()
-    };
+    // directions go through it while the row above says yes.
+    let outcome = startup::enable_startup();
 
     match outcome {
         startup::Outcome::NeedsElevation | startup::Outcome::TaskRefused => {
@@ -270,10 +306,9 @@ pub(in super::super) fn toggle_run_as_administrator() {
 
     if !mark_gone {
         // The row asked for the mark to be gone and the machine kept it: what a logon does is not
-        // what the row says it does, and that is said out loud rather than left to a checkmark.
-        dialogs::report_startup_failure(startup::Outcome::NotWritten {
-            held: startup::is_startup_enabled(),
-        });
+        // what the row says it does — Windows starts no `Run` value under that mark — and that is
+        // said out loud rather than left to a checkmark.
+        dialogs::report_startup_failure(startup::Outcome::MarkRefused { on: false });
         return;
     }
 
