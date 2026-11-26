@@ -8,18 +8,27 @@
 //! than into this user's own. That is not what any of those rows means: `Open in Default App` is
 //! "look at this file in the program I chose", not "give that program my administrator's account".
 //!
-//! **The platform's own answer is to let the Shell start it.** `explorer.exe` runs with the ordinary
-//! token of the account at the desktop, so a program it starts runs with that token — Windows'
-//! documented behaviour, and the mechanism behind the well-known "run this unelevated" trick. This
-//! module's whole job is that one call: `Shell.Application`'s `ShellExecute`, performed through the
-//! Shell's automation object in the local server that is already running, which starts the target as
-//! the desktop user rather than as the caller.
+//! **The token to hand over is the Shell's own.** `explorer.exe` is the one process in the session
+//! that is certainly the desk the user is sitting at, and it runs with that account's ordinary token:
+//! duplicated from it, a program this app starts is started as the desktop user rather than as the
+//! caller (see [`as_the_desktop_user`]). A path is not a program, so it is handed to `explorer.exe`
+//! instead, whose own `ShellExecute` is what turns it into one — and which starts it with the same
+//! ordinary token, whether the Explorer that performs it is the copy already running or a second one
+//! this process begins (see [`open_as_the_desktop_user`]).
+//!
+//! **The Shell's automation object is not that road on this platform, measured.** `Shell.Application`
+//! is the object the well-known "start this unelevated" trick names, and it is registered here with
+//! an in-process server (`shell32.dll`) and **no** `LocalServer32`: `CoCreateInstance` with
+//! `CLSCTX_LOCAL_SERVER` answers `REGDB_E_CLASSNOTREG` (`0x80040154`), so a call through it is a
+//! hand-off that silently never happens. An in-process object would run with this process's own
+//! token anyway. What is written here is the mechanism rather than the name: a token taken from the
+//! process that is already at the desk.
 //!
 //! **It is a setting, and it starts off.** `elevate_hand_offs` — the tray's
 //! `System → Elevate Hand-Offs (Warning)` row — is off by default, which means every hand-off here is
-//! started through the Shell's token; on, the app starts them itself, with the token it has. The
-//! warning in that label is what the on state is: some program of a user's own really is one that
-//! only works as an administrator, and there is no way for this app to know which.
+//! started as the desktop user; on, the app starts them itself, with the token it has. The warning in
+//! that label is what the on state is: some program of a user's own really is one that only works as
+//! an administrator, and there is no way for this app to know which.
 //!
 //! **A preview engine is not a hand-off and keeps this process's token.** `mpv`, `ffplay`,
 //! LibreOffice, ImageMagick, calibre, PeaZip and f3d are started to be *looked at*, not used: the
@@ -31,16 +40,23 @@
 //! leaves this app's hands for the user's.
 
 use std::os::windows::process::CommandExt;
-use windows::core::{BSTR, PCWSTR, VARIANT};
-use windows::Win32::Foundation::HANDLE;
-use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_LOCAL_SERVER};
+
+use windows::core::{PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Security::{
+    DuplicateTokenEx, SecurityImpersonation, TokenPrimary, TOKEN_ALL_ACCESS, TOKEN_DUPLICATE,
+    TOKEN_QUERY,
+};
+use windows::Win32::System::Threading::{
+    CreateProcessWithTokenW, OpenProcess, OpenProcessToken, LOGON_WITH_PROFILE,
+    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOW,
+};
 use windows::Win32::UI::Shell::{
-    IShellDispatch2, Shell, ShellExecuteExW, SEE_MASK_ASYNCOK, SEE_MASK_HMONITOR, SHELLEXECUTEINFOW,
+    ShellExecuteExW, SEE_MASK_ASYNCOK, SEE_MASK_HMONITOR, SHELLEXECUTEINFOW,
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-/// Whether a hand-off should be started with the Shell's own (unelevated) token rather than this
-/// process's.
+/// Whether a hand-off should be started as the desktop user rather than with this process's token.
 ///
 /// Two facts decide it, and both are read every time a hand-off is made: an app that is not elevated
 /// has nothing to de-elevate, and a user who ticked `Elevate Hand-Offs (Warning)` has asked for the
@@ -57,47 +73,17 @@ pub(crate) fn through_the_shell() -> bool {
         .unwrap_or(false)
 }
 
-/// Ask the Shell to open `file` with `verb` — `open`, `runas`, `print`, or one of the file's own —
-/// and answer whether the Shell took the request.
-///
-/// `arguments` is the command line for a program named as the file, which is what a hand-off with
-/// parameters is: `winget install …` is `winget.exe` with its own switches. `None` is the ordinary
-/// case of a file the Shell opens by its association.
-pub(crate) fn shell_execute(file: &str, arguments: Option<&str>, verb: &str) -> bool {
-    // Safety: the Shell's automation object is a local server of the platform's own, and every
-    // interface this reaches is asked for and answered rather than assumed.
-    unsafe {
-        // `Shell.Application` is the platform's own automation object, and `IShellDispatch2` is the
-        // interface whose `ShellExecute` takes a verb and a command line — the one the documented
-        // "start this unelevated" road is walked with.
-        let Ok(shell): windows::core::Result<IShellDispatch2> =
-            CoCreateInstance(&Shell, None, CLSCTX_LOCAL_SERVER)
-        else {
-            return false;
-        };
-
-        let arguments = arguments.map_or_else(VARIANT::default, VARIANT::from);
-        let directory = VARIANT::default();
-        let verb = VARIANT::from(verb);
-        let show = VARIANT::from(1i32);
-
-        shell
-            .ShellExecute(&BSTR::from(file), &arguments, &directory, &verb, &show)
-            .is_ok()
-    }
-}
-
 /// Open `file` the way a hand-off of this app's always has — the Shell's `open` verb on that path or
-/// address — with one difference: on an elevated run the Shell performs it, so the program that
-/// comes up is the desktop user's rather than an administrator's.
+/// address — with one difference: on an elevated run the desktop user performs it, so the program
+/// that comes up is the desk's rather than an administrator's.
 ///
 /// `monitor` is the display a preview was standing on, which is what a pin's own open asks for; the
-/// Shell's automation object takes no display hint, so a de-elevated hand-off lands wherever the
+/// Shell's own open takes no display hint, so a hand-off made as the desktop user lands wherever the
 /// program decides. That is the one thing given up for the token, and it is the right way round: a
 /// window on the wrong display is moved by hand, an administrator's browser is not.
 pub(crate) fn open(file: &str, monitor: Option<isize>) -> bool {
     if through_the_shell() {
-        return shell_execute(file, None, "open");
+        return open_as_the_desktop_user(file);
     }
 
     let file = wide(file);
@@ -132,13 +118,148 @@ pub(crate) fn open(file: &str, monitor: Option<isize>) -> bool {
 /// its own switches, and the installer with `/S /R`.
 pub(crate) fn run(program: &str, arguments: &str) -> bool {
     if through_the_shell() {
-        return shell_execute(program, Some(arguments), "open");
+        return as_the_desktop_user(program, &format!("\"{program}\" {arguments}"));
     }
 
     crate::app::engine_processes::hidden_command(program)
         .raw_arg(arguments)
         .spawn()
         .is_ok()
+}
+
+/// Start a copy of this app as the desktop user, which is what a tray replacing itself needs: the
+/// copy that comes back is the unelevated one a launch by hand would start.
+///
+/// It is [`open`]'s sibling rather than its caller: the row that asks for it is turning an
+/// administrator's token **off**, so the token cannot be the thing the setting decides — a restart
+/// that came back elevated would leave the tray standing as the state the row has just stopped
+/// asking for.
+pub(crate) fn start_a_copy(exe: &str) -> bool {
+    if as_the_desktop_user(exe, &format!("\"{exe}\"")) {
+        return true;
+    }
+
+    // The token could not be had — a Shell this process may not open, or a machine whose Secondary
+    // Logon service will not start. The Shell is asked to open the path instead: an Explorer begun
+    // here is a second instance that forwards the path to the one already running, which is the
+    // desk's own and starts the copy with its token.
+    let explorer = explorer_path();
+    crate::app::engine_processes::hidden_command(&explorer)
+        .arg(exe)
+        .spawn()
+        .is_ok()
+}
+
+/// Open a path or an address with the desktop user's token: `explorer.exe` is handed it as its one
+/// argument, and the Shell that performs it turns it into the program the user's own settings say.
+///
+/// **A path is not a program, so it is not started as one.** What is started is the Shell with the
+/// path, which is the same call `Start → Run` makes; what it opens is the desktop user's program,
+/// because both the Explorer already running and a second one begun here run with that token.
+fn open_as_the_desktop_user(file: &str) -> bool {
+    let explorer = explorer_path();
+
+    if as_the_desktop_user(&explorer, &format!("\"{explorer}\" \"{file}\"")) {
+        return true;
+    }
+
+    // The token could not be had: the Shell is begun with this process's own, and it is still the
+    // running Explorer that performs the open, so the child is the desk's either way.
+    crate::app::engine_processes::hidden_command(&explorer)
+        .arg(file)
+        .spawn()
+        .is_ok()
+}
+
+/// Start `program` with `command_line` as the account at the desk, by duplicating the Shell's own
+/// token and starting the process with it.
+///
+/// **The token is the whole of it.** `CreateProcessWithTokenW` needs `SeImpersonatePrivilege`, which
+/// an elevated administrator's token carries and an ordinary run never asks for; a token that cannot
+/// be duplicated, or a process the machine refuses to start with it, answers `false` so that the
+/// caller can fall back rather than pretend.
+fn as_the_desktop_user(program: &str, command_line: &str) -> bool {
+    let Some(shell) = crate::app::elevation::shell_process_id() else {
+        return false;
+    };
+
+    // Safety: every handle this call opens is closed here, the two strings live past the call, and
+    // the structures are this function's own.
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, shell) else {
+            return false;
+        };
+
+        let mut token = HANDLE::default();
+        let opened = OpenProcessToken(process, TOKEN_DUPLICATE | TOKEN_QUERY, &mut token);
+        // Safety: the handle `OpenProcess` made and nothing else holds.
+        let _ = CloseHandle(process);
+
+        if opened.is_err() {
+            return false;
+        }
+
+        let mut primary = HANDLE::default();
+        let duplicated = DuplicateTokenEx(
+            token,
+            TOKEN_ALL_ACCESS,
+            None,
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut primary,
+        );
+        // Safety: the handle `OpenProcessToken` made and nothing else holds.
+        let _ = CloseHandle(token);
+
+        if duplicated.is_err() {
+            return false;
+        }
+
+        let program = wide(program);
+        let mut command_line = wide(command_line);
+        let startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            ..Default::default()
+        };
+        let mut info = PROCESS_INFORMATION::default();
+
+        let started = CreateProcessWithTokenW(
+            primary,
+            LOGON_WITH_PROFILE,
+            PCWSTR(program.as_ptr()),
+            PWSTR(command_line.as_mut_ptr()),
+            PROCESS_CREATION_FLAGS(0),
+            None,
+            PCWSTR::null(),
+            &startup,
+            &mut info,
+        );
+
+        // Safety: the duplicated token this call made, which the process does not keep.
+        let _ = CloseHandle(primary);
+
+        if started.is_err() {
+            return false;
+        }
+
+        // Safety: the two handles `CreateProcessWithTokenW` answered with, which nothing here waits
+        // on: the copy is the desktop user's process, not a child whose exit this app has a use for.
+        let _ = CloseHandle(info.hThread);
+        let _ = CloseHandle(info.hProcess);
+
+        true
+    }
+}
+
+/// The Shell's own executable, which is the program a path is handed to when what is wanted is for
+/// the Shell to open it.
+fn explorer_path() -> String {
+    std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"))
+        .join("explorer.exe")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// A string as the platform's calls want it: UTF-16, terminated.
@@ -150,8 +271,8 @@ fn wide(text: &str) -> Vec<u16> {
 mod tests {
     use super::*;
 
-    /// The one call that makes this module worth having: it is the Shell's own object that performs
-    /// a hand-off, and it is only asked for where a hand-off has something to de-elevate.
+    /// The one call that makes this module worth having: it is only asked for where a hand-off has
+    /// something to de-elevate, and never by an ordinary run.
     #[test]
     fn an_ordinary_run_hands_nothing_to_the_shell() {
         // A run that is not elevated has no elevated token for a child to inherit, so the token it
@@ -177,5 +298,21 @@ mod tests {
 
         assert_eq!(wide.last(), Some(&0));
         assert_eq!(String::from_utf16_lossy(&wide[..wide.len() - 1]), path);
+    }
+
+    /// The Shell is named by the machine rather than by a path this app decided, and the answer is
+    /// the one file that exists on every Windows install.
+    #[test]
+    fn the_shell_is_the_one_the_machine_names() {
+        let explorer = explorer_path();
+
+        assert!(
+            explorer.to_ascii_lowercase().ends_with("explorer.exe"),
+            "the Shell is `explorer.exe`, not `{explorer}`"
+        );
+        assert!(
+            std::path::Path::new(&explorer).is_file(),
+            "the Shell named by the machine is a file: {explorer}"
+        );
     }
 }

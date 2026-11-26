@@ -57,21 +57,7 @@ pub(crate) fn desktop_user_sid() -> Option<String> {
     static SID: OnceLock<Option<String>> = OnceLock::new();
 
     SID.get_or_init(|| {
-        // Safety: `GetShellWindow` answers a window or null, and the pid is read out of the
-        // window rather than out of anything this process holds.
-        let pid = unsafe {
-            let shell = GetShellWindow();
-            if shell.is_invalid() {
-                return None;
-            }
-            let mut pid = 0u32;
-            GetWindowThreadProcessId(shell, Some(&mut pid));
-            pid
-        };
-
-        if pid == 0 {
-            return None;
-        }
+        let pid = shell_process_id()?;
 
         // The Shell is a process of another program's, so it is asked for the least a token can
         // be opened through — and it is opened, not inherited: a handle this function made is a
@@ -84,6 +70,28 @@ pub(crate) fn desktop_user_sid() -> Option<String> {
         sid
     })
     .clone()
+}
+
+/// The process id of the Shell — the one process in the session that is certainly the desk the user
+/// is sitting at.
+///
+/// It is the account [`desktop_user_sid`] names, and it is the token every de-elevated start is made
+/// with: a program started as the Shell's account is a program of the user's, not of the
+/// administrator who answered the prompt (see `app::hand_off`).
+pub(crate) fn shell_process_id() -> Option<u32> {
+    // Safety: `GetShellWindow` answers a window or null, and the pid is read out of the window rather
+    // than out of anything this process holds.
+    let pid = unsafe {
+        let shell = GetShellWindow();
+        if shell.is_invalid() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(shell, Some(&mut pid));
+        pid
+    };
+
+    (pid != 0).then_some(pid)
 }
 
 /// The SID of the account this process runs as.

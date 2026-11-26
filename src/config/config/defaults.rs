@@ -196,10 +196,9 @@ pub const DEFAULT_RUN_AS_ADMINISTRATOR: bool = false;
 /// token, and an ordinary program that inherits one is a program running as administrator with no
 /// prompt raised for it: a browser, a text editor, a media player, `winrar`, a file an association
 /// points at. Off, everything under this app that is a hand-off to such a program is started
-/// through the Shell's own token instead — Windows' own documented way of starting a child
-/// unelevated (`Shell.Application`'s `ShellExecute`, which is `explorer.exe` doing the starting) —
-/// and `winget` installs into this user's profile rather than into whichever administrator the
-/// elevated token belongs to.
+/// with the Shell's own token instead — the token of the process at the desk, duplicated, which is
+/// what `explorer.exe` starts its own children with — and `winget` installs into this user's
+/// profile rather than into whichever administrator the elevated token belongs to.
 ///
 /// On, children are started as they always were, which is what a user is told the warning is for:
 /// some program of their own may be one that only works as an administrator.

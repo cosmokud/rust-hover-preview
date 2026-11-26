@@ -1524,11 +1524,11 @@ pub(crate) fn start_through_the_entry() -> bool {
         return false;
     };
 
-    // **The Shell's own token, whatever the hand-off setting says.** `Elevate Hand-Offs` is about the
+    // **The desktop's token, whatever the hand-off setting says.** `Elevate Hand-Offs` is about the
     // programs this app opens for the user; a copy of this app replacing this one is the row being
     // turned off, and the token is the whole of what that is about — a restart that came back
     // elevated would leave the tray standing as the state the row has just stopped asking for.
-    crate::app::hand_off::shell_execute(&crate::paths::plain_path(&exe), None, "open")
+    crate::app::hand_off::start_a_copy(&crate::paths::plain_path(&exe))
 }
 
 /// What this app knows about the machine's task, for a reader that has to wait on it.
