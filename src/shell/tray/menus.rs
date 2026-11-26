@@ -19,35 +19,37 @@ use super::ids::{
     ID_TRAY_CHECK_UPDATES, ID_TRAY_CUSTOM_PREVIEW_EDIT, ID_TRAY_CUSTOM_PREVIEW_ENABLE,
     ID_TRAY_DDS_BACKGROUND_BASE, ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE,
     ID_TRAY_DESIGN_BACKGROUND_BASE, ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE,
-    ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE,
-    ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_EVERYTHING_PREVIEWS, ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE,
-    ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE, ID_TRAY_GENERAL_DISK_CACHE_BASE,
-    ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE, ID_TRAY_IMAGE_CACHE_BASE,
-    ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE, ID_TRAY_LIBREOFFICE_IDLE_BASE,
-    ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE, ID_TRAY_MODEL_SCALE_BASE,
-    ID_TRAY_MPV_IDLE_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME, ID_TRAY_NORMALIZE_VOLUME,
-    ID_TRAY_OPEN_CONFIG, ID_TRAY_OTHERS_CACHE_BASE, ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE,
-    ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP, ID_TRAY_PIN_MINIMIZE_BUBBLE,
-    ID_TRAY_PIN_MINIMIZE_TASKBAR, ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS,
-    ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE, ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN,
-    ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE, ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO,
-    ID_TRAY_PIN_RESTORE, ID_TRAY_PIN_SCALING_UNTIL_RESIZED, ID_TRAY_PIN_SCALING_USE_SETTINGS,
-    ID_TRAY_PIN_UPDATE, ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
+    ID_TRAY_DOCUMENT_SCALE_BASE, ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ELEVATE_HAND_OFFS,
+    ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE, ID_TRAY_EVERYTHING_PREVIEWS, ID_TRAY_EXIT,
+    ID_TRAY_F3D_IDLE_BASE, ID_TRAY_FONT_BACKGROUND_BASE, ID_TRAY_FONT_SCALE_BASE,
+    ID_TRAY_GENERAL_DISK_CACHE_BASE, ID_TRAY_HTML_BACKGROUND_BASE, ID_TRAY_IMAGE_BACKGROUND_BASE,
+    ID_TRAY_IMAGE_CACHE_BASE, ID_TRAY_IMAGE_DISK_CACHE_BASE, ID_TRAY_IMAGE_SHUFFLE,
+    ID_TRAY_LIBREOFFICE_IDLE_BASE, ID_TRAY_MARKDOWN_RENDERED, ID_TRAY_MARKDOWN_SOURCE,
+    ID_TRAY_MODEL_SCALE_BASE, ID_TRAY_MPV_IDLE_BASE, ID_TRAY_NORMALIZE_VIDEO_VOLUME,
+    ID_TRAY_NORMALIZE_VOLUME, ID_TRAY_OPEN_CONFIG, ID_TRAY_OTHERS_CACHE_BASE,
+    ID_TRAY_PDF_AUTOFOCUS, ID_TRAY_PDF_FULL_MODE, ID_TRAY_PIN, ID_TRAY_PIN_ALWAYS_ON_TOP,
+    ID_TRAY_PIN_MINIMIZE_BUBBLE, ID_TRAY_PIN_MINIMIZE_TASKBAR,
+    ID_TRAY_PIN_MODE_AUDIO_CAMERA_FOLLOWS, ID_TRAY_PIN_MODE_AUDIO_END_OF_FILE_BASE,
+    ID_TRAY_PIN_MODE_AUDIO_PLAYLIST_ALWAYS_OPEN, ID_TRAY_PIN_MODE_VIDEO_END_OF_FILE_BASE,
+    ID_TRAY_PIN_PAUSE_AUDIO, ID_TRAY_PIN_PAUSE_VIDEO, ID_TRAY_PIN_RESTORE,
+    ID_TRAY_PIN_SCALING_UNTIL_RESIZED, ID_TRAY_PIN_SCALING_USE_SETTINGS, ID_TRAY_PIN_UPDATE,
+    ID_TRAY_PIN_UPDATE_HOVER, ID_TRAY_PIN_UPDATE_TOP, ID_TRAY_POSITION_BEST,
     ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
     ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
     ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_RESPECT_AWAY_TIMER,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
-    ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
-    ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
-    ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
-    ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN,
-    ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES,
-    ID_TRAY_TYPE_MODELS, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
-    ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
-    ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE,
-    ID_TRAY_VIDEO_SUBTITLES, ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE,
-    ID_TRAY_ZOOM_BACKGROUND_BASE, IMAGE_CACHE_SIZE_CHOICES_MB, MAX_TRAY_CUSTOM_THEMES,
-    OTHERS_CACHE_SIZE_CHOICES_MB, TRAY_CUSTOM_THEMES, ZOOM_BACKGROUND_CHOICES,
+    ID_TRAY_RUN_AS_ADMINISTRATOR, ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE,
+    ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP, ID_TRAY_TEXT_DONT_PREVIEW_SECRETS,
+    ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS, ID_TRAY_THEME_CUSTOM_BASE,
+    ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN,
+    ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED,
+    ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT,
+    ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_MODELS,
+    ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE,
+    ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE, ID_TRAY_VIDEO_HW_ACCEL,
+    ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
+    ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
+    IMAGE_CACHE_SIZE_CHOICES_MB, MAX_TRAY_CUSTOM_THEMES, OTHERS_CACHE_SIZE_CHOICES_MB,
+    TRAY_CUSTOM_THEMES, ZOOM_BACKGROUND_CHOICES,
 };
 use super::submenus::{
     animated_webp_budget_label, append_afk_timer_menu, append_audio_scale_menu, append_avoid_menu,
@@ -1863,21 +1865,35 @@ pub(super) unsafe fn populate_context_menu(
     // Settings → Apps → Startup, is a value that is there and starts nothing, and a checkmark
     // drawn from the value alone would be a yes on a machine where nothing happens. What is left of
     // that case is said in the label, since that entry is one click away from being put back.
-    let startup_present = startup::is_entry_present();
-    let startup_enabled = startup_present && startup::is_entry_enabled();
+    //
+    // **Both mechanisms are asked, because a logon can start this app two ways.** The `Run` value is
+    // the ordinary one; the scheduled task is the elevated one, and which of them a machine carries
+    // is the answer to whether `Run as administrator` is in effect (see `app::startup::machine`).
+    let machine = startup::machine();
+    let started = machine.started();
+    let entry_present = machine.entry_present;
+    let startup_enabled = started.runs();
+    let elevated_start = started == startup::Started::Task;
+    let via_task = elevated_start || (!machine.entry_present && machine.task_present);
     // And the one setting this app cannot undo from here: an executable marked *Run this program as
     // an administrator* is one Windows will never start from a `Run` value, because it never
-    // elevates one. The row says so rather than showing a checkmark over an entry that does nothing.
-    let startup_elevated = startup::entry_would_ask_for_elevation();
+    // elevates one — so that mark is a machine whose startup entry has to be the task instead, and
+    // a row that said the entry cannot work would be arguing with the mechanism this app put there.
+    let startup_elevated = machine.compat_elevation();
     let flags = MF_STRING
         | if startup_enabled {
             MF_CHECKED
         } else {
             MF_UNCHECKED
         };
-    let label = if startup_elevated {
-        "Run at Startup (needs Run as administrator turned off)"
-    } else if startup_present && !startup_enabled {
+
+    let label = if startup_elevated && !via_task {
+        "Run at Startup (elevated, via Task Scheduler)"
+    } else if via_task && !startup_enabled {
+        "Run at Startup (task turned off in Windows)"
+    } else if via_task {
+        "Run at Startup (via Task Scheduler)"
+    } else if entry_present && !startup_enabled {
         "Run at Startup (turned off in Windows)"
     } else {
         "Run at Startup"
@@ -1888,6 +1904,64 @@ pub(super) unsafe fn populate_context_menu(
         flags,
         ID_TRAY_STARTUP as usize,
         PCWSTR(label_wide.as_ptr()),
+    );
+
+    // And the one row under it: whether the logon that starts this app starts it **elevated**.
+    //
+    // **It is drawn from the machine rather than from the file**, the same way the row above it is:
+    // a scheduled task with the highest run level that names this copy is the answer, and a task
+    // somebody disabled, or one naming another copy, is not — so a checkmark here is a machine that
+    // will raise this app's token at the next logon, and nothing else is. The compatibility mark on
+    // the file is read as the same request, because it is the same request: Windows honours it for
+    // every launch that is not a `Run` value, and where it is set the row reads as on and the
+    // startup entry is a task rather than a value (see `app::startup::elevated_start_wanted`).
+    //
+    // It is **not** greyed while `Run at Startup` is off: elevation at a logon with nothing to start
+    // at a logon is a choice with no effect yet rather than one with no meaning, and the file keeps
+    // it until the row above it is turned on — which is when the prompt a task costs is raised.
+    let administrator_files = MF_STRING
+        | if elevated_start || startup_elevated {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        };
+    let _ = AppendMenuW(
+        system_menu,
+        administrator_files,
+        ID_TRAY_RUN_AS_ADMINISTRATOR as usize,
+        w!("Run as administrator"),
+    );
+
+    // And what this app does with the programs it hands a file over to while it is elevated.
+    //
+    // **Off is the safe side, and it is what a machine starts on.** An elevated copy's children
+    // inherit its elevated token, and an ordinary program that inherits one is a program running as
+    // administrator that nobody was prompted for — a browser, a media player, whatever an
+    // association points at. Off, every hand-off is started through the Shell's own unelevated
+    // token instead, and `winget` installs into this user's profile rather than into whichever
+    // administrator the elevated token belongs to (see `app::hand_off`). On, children are started
+    // as they always were, which is what the warning in the label is for.
+    //
+    // It is greyed while the app is not running elevated and the rows above it ask for nothing: a
+    // switch about what an elevated copy does with its children is a switch with nothing to say
+    // there. The two that ask are this process's own token and `Run as administrator` above it.
+    let app_is_elevated = crate::app::elevation::is_elevated();
+    let hand_offs = MF_STRING
+        | if snap.elevate_hand_offs {
+            MF_CHECKED
+        } else {
+            MF_UNCHECKED
+        }
+        | if app_is_elevated || elevated_start || startup_elevated {
+            MF_ENABLED
+        } else {
+            MF_GRAYED
+        };
+    let _ = AppendMenuW(
+        system_menu,
+        hand_offs,
+        ID_TRAY_ELEVATE_HAND_OFFS as usize,
+        w!("Elevate Hand-Offs (Warning)"),
     );
 
     let _ = AppendMenuW(system_menu, MF_SEPARATOR, 0, PCWSTR::null());

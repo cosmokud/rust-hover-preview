@@ -32,7 +32,7 @@ pub(crate) use commands::toggle_preview_enabled;
 // What an engine install, and an update the app put on without asking, say back to the tray
 // window: one `WM_APP`-style message onto the window that owns the loop it ends or settles (see
 // `app::winget`, `app::updates`).
-pub(crate) use event_loop::{note_install_finished, note_update_installed};
+pub(crate) use event_loop::{leave_the_tray, note_install_finished, note_update_installed};
 // The sizes the tray's `Text → Font Size` submenu offers, which is also what a `Ctrl` and a wheel over
 // a pinned page step through: one list of sizes for the whole app rather than a copy per door (see
 // `text_size_after_notches`).

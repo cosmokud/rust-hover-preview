@@ -59,6 +59,21 @@ impl AppConfig {
             "run_at_startup",
             Some(self.run_at_startup.to_string()),
         );
+        // The two halves of the elevated start: whether a logon starts this app as administrator,
+        // and what this app then does with the programs it hands a file over to. A file written
+        // before either existed holds neither, and is read as where this app starts — off — which
+        // is the ordinary run of every build before this one (see `DEFAULT_RUN_AS_ADMINISTRATOR`
+        // and `DEFAULT_ELEVATE_HAND_OFFS`).
+        ini.set(
+            CONFIG_SECTION,
+            "run_as_administrator",
+            Some(self.run_as_administrator.to_string()),
+        );
+        ini.set(
+            CONFIG_SECTION,
+            "elevate_hand_offs",
+            Some(self.elevate_hand_offs.to_string()),
+        );
         ini.set(
             CONFIG_SECTION,
             "check_for_updates",
@@ -700,6 +715,12 @@ impl AppConfig {
     pub(super) fn apply_ini(&mut self, ini: &Ini) {
         if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "run_at_startup") {
             self.run_at_startup = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "run_as_administrator") {
+            self.run_as_administrator = value;
+        }
+        if let Ok(Some(value)) = ini.getboolcoerce(CONFIG_SECTION, "elevate_hand_offs") {
+            self.elevate_hand_offs = value;
         }
         // Whether the app asks GitHub for a newer release on its own. A file written
         // before the setting existed has no key for it, so a fresh installation checks

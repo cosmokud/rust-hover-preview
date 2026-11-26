@@ -28,11 +28,12 @@
 use std::mem::size_of;
 use std::sync::OnceLock;
 
-use windows::core::PWSTR;
+use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
 use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
 use windows::Win32::Security::{
-    GetTokenInformation, TokenElevation, TokenUser, PSID, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
+    GetTokenInformation, LookupAccountSidW, TokenElevation, TokenUser, PSID, SID_NAME_USE,
+    TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -91,6 +92,111 @@ pub(crate) fn our_user_sid() -> Option<String> {
 
     SID.get_or_init(|| user_sid_of(unsafe { GetCurrentProcess() }))
         .clone()
+}
+
+/// The name of the account the desktop belongs to, spelled the way Task Scheduler and a logon
+/// trigger spell one (`MACHINE\user`), or nothing where there is no Shell to ask.
+///
+/// It is the same account [`desktop_user_sid`] answers with, read as a name because a scheduled
+/// task's trigger and principal are written as one: the SID of the Shell's own token is turned
+/// back into the name of the account it belongs to, and a machine that cannot spell it is a
+/// machine where the task falls back to the running account's own name (see `app::task`).
+pub(crate) fn desktop_user_name() -> Option<String> {
+    static NAME: OnceLock<Option<String>> = OnceLock::new();
+
+    NAME.get_or_init(|| {
+        let sid = desktop_user_sid()?;
+        account_name_of(&sid).or_else(|| std::env::var("USERNAME").ok())
+    })
+    .clone()
+}
+
+/// The name of the account a SID string names, as `MACHINE\user`.
+fn account_name_of(sid: &str) -> Option<String> {
+    let sid = sid_bytes_of(sid)?;
+
+    let mut name = [0u16; 256];
+    let mut name_len = name.len() as u32;
+    let mut domain = [0u16; 256];
+    let mut domain_len = domain.len() as u32;
+    let mut kind = SID_NAME_USE::default();
+
+    // Safety: the SID is a buffer this function made and owns, and the three out-parameters are
+    // locals whose sizes are the buffer lengths said beside them.
+    unsafe {
+        LookupAccountSidW(
+            PCWSTR::null(),
+            PSID(sid.as_ptr().cast_mut().cast()),
+            PWSTR(name.as_mut_ptr()),
+            &mut name_len,
+            PWSTR(domain.as_mut_ptr()),
+            &mut domain_len,
+            &mut kind,
+        )
+    }
+    .ok()?;
+
+    let name = String::from_utf16_lossy(&name[..name_len as usize]);
+    let domain = String::from_utf16_lossy(&domain[..domain_len as usize]);
+
+    Some(match domain.is_empty() {
+        true => name,
+        false => format!("{domain}\\{name}"),
+    })
+}
+
+/// A SID string turned back into the bytes a SID is.
+///
+/// `ConvertSidToStringSidW` has no inverse in the API this app links, so the spelling is parsed:
+/// `S-1-5-21-…`, where the first number is the revision, every group after it is one sub-authority,
+/// and the authority before them is one of two forms — a number, or a name of the well-known set
+/// (`SEC`, `NW`, `MD`, `BU`, …). A string that is not one answers nothing rather than a SID of
+/// zeroes, which would name the wrong account.
+fn sid_bytes_of(text: &str) -> Option<Vec<u8>> {
+    let mut parts = text.trim().split('-');
+
+    if !parts.next()?.eq_ignore_ascii_case("S") {
+        return None;
+    }
+
+    let revision: u8 = parts.next()?.parse().ok()?;
+    let authority = parts.next()?;
+    let authority: [u8; 6] = match authority.parse::<u64>() {
+        // A SID's identifier authority is a 48-bit big-endian number, so what fits is turned over
+        // whole rather than taken from the middle of a `u128`.
+        Ok(value) => {
+            let bytes = value.to_be_bytes();
+            bytes[2..].try_into().ok()?
+        }
+        Err(_) => {
+            // The named authorities, in the order the SID structure numbers them: `SEC` is 1,
+            // `NW` is 5, `MD` is 15. Every one the Shell can spell as a string is in this table.
+            let mut bytes = [0u8; 6];
+            match authority.to_ascii_uppercase().as_str() {
+                "SEC" => bytes[5] = 1,
+                "NW" => bytes[5] = 5,
+                "MD" => bytes[5] = 15,
+                _ => return None,
+            }
+            bytes
+        }
+    };
+
+    let sub_authorities: Vec<u32> = parts
+        .map(|part| part.parse::<u32>().ok())
+        .collect::<Option<Vec<u32>>>()?;
+
+    // A SID is `SID` plus one `u32` per sub-authority, which is the flexible array the struct is
+    // written with: the header is eight bytes and the count is a `u8` at offset one.
+    let mut bytes = Vec::with_capacity(8 + sub_authorities.len() * 4);
+    bytes.push(revision);
+    bytes.push(sub_authorities.len() as u8);
+    bytes.extend_from_slice(&authority);
+    for authority in sub_authorities {
+        bytes.extend_from_slice(&authority.to_le_bytes());
+    }
+
+    Some(bytes)
 }
 
 /// Whether this process runs as an account other than the one the desktop belongs to.
@@ -243,5 +349,47 @@ mod tests {
         // and reading it here must not be the thing that fails a test on a machine whose token
         // this process may not open.
         assert_eq!(is_elevated(), is_elevated());
+    }
+
+    #[test]
+    fn a_sid_spelling_is_parsed_back_into_the_bytes_of_one() {
+        // `S-1-5-21-…-1001` is revision 1, authority 5, and five sub-authorities — the shape every
+        // local account's SID has, and the one a task's trigger is written with.
+        let bytes = sid_bytes_of("S-1-5-21-3623811015-3361044348-30300820-1001")
+            .expect("a SID the Shell spelled is one this reads");
+
+        assert_eq!(bytes[0], 1, "the revision");
+        assert_eq!(
+            bytes[1], 5,
+            "five sub-authorities: the four groups and the account's id"
+        );
+        assert_eq!(bytes[2..8], [0, 0, 0, 0, 0, 5], "the authority, big-endian");
+        assert_eq!(
+            u32::from_le_bytes(bytes[12..16].try_into().unwrap()),
+            3623811015,
+            "the first of the four groups that name a local account"
+        );
+        assert_eq!(
+            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+            1001,
+            "the account's own id is the last sub-authority"
+        );
+
+        // A named authority is the number it stands for.
+        assert_eq!(
+            sid_bytes_of("S-1-SEC-0")
+                .expect("`SEC` is one of the names")
+                .get(2..8),
+            Some(&[0, 0, 0, 0, 0, 1][..])
+        );
+        assert_eq!(
+            sid_bytes_of("S-1-NW-32").expect("so is `NW`").get(2..8),
+            Some(&[0, 0, 0, 0, 0, 5][..])
+        );
+
+        // And a string that is not a SID names nothing rather than the account of zeroes.
+        for text in ["", "S-1", "S-x-5-1", "not a sid", "S-1-QQ-1", "S-1-5-x"] {
+            assert_eq!(sid_bytes_of(text), None, "`{text}` is not a SID");
+        }
     }
 }

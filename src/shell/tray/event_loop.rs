@@ -27,17 +27,18 @@ use super::commands::{
     set_trigger_key_mode, set_vector_background, set_vector_scale, set_video_engine,
     set_video_scale, set_video_volume, set_webview_idle, set_zoom_background,
     toggle_browse_dialog_preview, toggle_bypass_placement, toggle_check_for_updates,
-    toggle_custom_preview_enabled, toggle_everything_previews, toggle_loop,
-    toggle_normalize_video_volume, toggle_normalize_volume, toggle_pdf_autofocus,
+    toggle_custom_preview_enabled, toggle_elevate_hand_offs, toggle_everything_previews,
+    toggle_loop, toggle_normalize_video_volume, toggle_normalize_volume, toggle_pdf_autofocus,
     toggle_pdf_full_mode, toggle_pin_always_on_top, toggle_pin_camera_follows, toggle_pin_enabled,
     toggle_pin_pause_audio, toggle_pin_pause_video, toggle_pin_playlist_always_open,
     toggle_pin_shuffle, toggle_pin_update_enabled, toggle_pin_update_move_to_top,
     toggle_pin_update_on_hover, toggle_preview_enabled, toggle_preview_type,
     toggle_prioritize_keyboard, toggle_q_dir_previews, toggle_remember_audio_volume,
     toggle_remember_video_volume, toggle_render_html, toggle_respect_away_timer,
-    toggle_silent_auto_update, toggle_startup, toggle_text_dont_preview_secrets,
-    toggle_text_show_extensionless, toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled,
-    toggle_video_engine_fallback, toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
+    toggle_run_as_administrator, toggle_silent_auto_update, toggle_startup,
+    toggle_text_dont_preview_secrets, toggle_text_show_extensionless,
+    toggle_trigger_key_affect_pin_mode, toggle_trigger_key_enabled, toggle_video_engine_fallback,
+    toggle_video_hw_accel, toggle_video_subtitles, PinShuffle,
 };
 use super::ids::{
     AFK_TIMER_CHOICES_SECS, ANIMATED_WEBP_BUDGET_CHOICES_MB, AUDIO_SCALE_CHOICES,
@@ -51,7 +52,7 @@ use super::ids::{
     ID_TRAY_CUSTOM_PREVIEW_EDIT, ID_TRAY_CUSTOM_PREVIEW_ENABLE, ID_TRAY_DDS_BACKGROUND_BASE,
     ID_TRAY_DECODE_BUDGET_BASE, ID_TRAY_DELAY_BASE, ID_TRAY_DESIGN_BACKGROUND_BASE,
     ID_TRAY_DESIGN_SCALE_BASE, ID_TRAY_DOCUMENT_CACHE_BASE, ID_TRAY_DOCUMENT_SCALE_BASE,
-    ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
+    ID_TRAY_EBOOK_SCALE_BASE, ID_TRAY_ELEVATE_HAND_OFFS, ID_TRAY_ENABLE, ID_TRAY_ENGINE_IDLE_BASE,
     ID_TRAY_ENGINE_OFFICE_LIBRE, ID_TRAY_ENGINE_OFFICE_MS, ID_TRAY_EVERYTHING_PREVIEWS,
     ID_TRAY_EXIT, ID_TRAY_F3D_IDLE_BASE, ID_TRAY_FONT_100, ID_TRAY_FONT_110, ID_TRAY_FONT_125,
     ID_TRAY_FONT_150, ID_TRAY_FONT_175, ID_TRAY_FONT_200, ID_TRAY_FONT_250, ID_TRAY_FONT_300,
@@ -75,21 +76,23 @@ use super::ids::{
     ID_TRAY_POSITION_FOLLOW, ID_TRAY_PRIORITIZE_KEYBOARD, ID_TRAY_Q_DIR_PREVIEWS,
     ID_TRAY_REHOVER_DELAY_BASE, ID_TRAY_REMEMBER_VIDEO_VOLUME, ID_TRAY_REMEMBER_VOLUME,
     ID_TRAY_RENDER_HTML, ID_TRAY_RESET_LISTS, ID_TRAY_RESET_SETTINGS, ID_TRAY_RESPECT_AWAY_TIMER,
-    ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE, ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP,
-    ID_TRAY_TEXT_DONT_PREVIEW_SECRETS, ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS,
-    ID_TRAY_THEME_CUSTOM_BASE, ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE,
-    ID_TRAY_TRIGGER_AFFECT_PIN, ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE,
-    ID_TRAY_TRIGGER_ENABLED, ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN,
-    ID_TRAY_TYPE_DOCUMENT, ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES,
-    ID_TRAY_TYPE_MODELS, ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS,
-    ID_TRAY_UPDATE, ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE,
-    ID_TRAY_VIDEO_ENGINE_BASE, ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL,
-    ID_TRAY_VIDEO_LOOP, ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
+    ID_TRAY_RUN_AS_ADMINISTRATOR, ID_TRAY_SCALE_BASE, ID_TRAY_SETTLING_DELAY_BASE,
+    ID_TRAY_SILENT_AUTO_UPDATE, ID_TRAY_STARTUP, ID_TRAY_TEXT_DONT_PREVIEW_SECRETS,
+    ID_TRAY_TEXT_SCALE_BASE, ID_TRAY_TEXT_SHOW_EXTENSIONLESS, ID_TRAY_THEME_CUSTOM_BASE,
+    ID_TRAY_THEME_DARK, ID_TRAY_THEME_LIGHT, ID_TRAY_TICK_BASE, ID_TRAY_TRIGGER_AFFECT_PIN,
+    ID_TRAY_TRIGGER_DISABLE, ID_TRAY_TRIGGER_ENABLE, ID_TRAY_TRIGGER_ENABLED,
+    ID_TRAY_TYPE_ARCHIVES, ID_TRAY_TYPE_AUDIO, ID_TRAY_TYPE_DESIGN, ID_TRAY_TYPE_DOCUMENT,
+    ID_TRAY_TYPE_EBOOK, ID_TRAY_TYPE_FONTS, ID_TRAY_TYPE_IMAGES, ID_TRAY_TYPE_MODELS,
+    ID_TRAY_TYPE_TEXT, ID_TRAY_TYPE_VECTOR, ID_TRAY_TYPE_VIDEOS, ID_TRAY_UPDATE,
+    ID_TRAY_VECTOR_BACKGROUND_BASE, ID_TRAY_VECTOR_SCALE_BASE, ID_TRAY_VIDEO_ENGINE_BASE,
+    ID_TRAY_VIDEO_ENGINE_FALLBACK, ID_TRAY_VIDEO_HW_ACCEL, ID_TRAY_VIDEO_LOOP,
+    ID_TRAY_VIDEO_SCALE_BASE, ID_TRAY_VIDEO_SHUFFLE, ID_TRAY_VIDEO_SUBTITLES,
     ID_TRAY_VIDEO_VOLUME_BASE, ID_TRAY_WEBVIEW_IDLE_BASE, ID_TRAY_ZOOM_BACKGROUND_BASE,
     IMAGE_CACHE_SIZE_CHOICES_MB, INSTALL_COMMANDS, MAX_TRAY_CUSTOM_THEMES, MPV_COMMANDS,
     OTHERS_CACHE_SIZE_CHOICES_MB, PIN_END_OF_FILE_CHOICES, TASKBAR_CREATED, TICK_CHOICES_MS,
     TIMER_CHECK, TIMER_DUE, TIMING_DELAY_CHOICES_MS, TRAY_CLASS, TRAY_HWND, VIDEO_ENGINE_CHOICES,
-    WM_TRAYICON, WM_TRAY_INSTALL_FINISHED, WM_TRAY_UPDATE_INSTALLED, ZOOM_BACKGROUND_CHOICES,
+    WM_TRAYICON, WM_TRAY_INSTALL_FINISHED, WM_TRAY_LEAVE, WM_TRAY_UPDATE_INSTALLED,
+    ZOOM_BACKGROUND_CHOICES,
 };
 use super::menus::show_context_menu;
 use super::submenus::{install_engine, open_codec_page};
@@ -175,6 +178,15 @@ unsafe extern "system" fn tray_window_proc(
             // re-probed the machine and recorded what it installed, so what is left is the slot
             // that kept a second install from starting — and the menu is built when it is opened,
             // so the next opening is the one that lists the new answer.
+            // The app is ending itself for a copy that is already starting — the hand-over an
+            // elevated start makes (see `commands::toggles::elevate_the_startup_write`). It is
+            // posted rather than stored where the click happened because `PostQuitMessage`
+            // reaches only the calling thread's own queue, and the message loop is this one's.
+            WM_TRAY_LEAVE => {
+                RUNNING.store(false, Ordering::SeqCst);
+                PostQuitMessage(0);
+                LRESULT(0)
+            }
             WM_TRAY_INSTALL_FINISHED => {
                 winget::settle();
                 LRESULT(0)
@@ -217,6 +229,16 @@ unsafe extern "system" fn tray_window_proc(
                     }
                     ID_TRAY_STARTUP => {
                         toggle_startup();
+                    }
+                    // The two rows under it: whether the logon that starts this app starts it
+                    // elevated, and whether an elevated run hands a program it starts its own
+                    // token. The first is the one row of the tray that can raise a UAC prompt,
+                    // because what it writes is a scheduled task and a task is the machine's.
+                    ID_TRAY_RUN_AS_ADMINISTRATOR => {
+                        toggle_run_as_administrator();
+                    }
+                    ID_TRAY_ELEVATE_HAND_OFFS => {
+                        toggle_elevate_hand_offs();
                     }
                     ID_TRAY_UPDATE => {
                         // The update row answers three ways, and only one of them ends this app:
@@ -843,6 +865,16 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
         ..Default::default()
     };
     let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+/// Ask the tray to end itself, from the thread that answered a click: the app leaves the way `Exit`
+/// takes it, and whatever was started before the click is already starting (see `WM_TRAY_LEAVE`).
+pub(crate) fn leave_the_tray() {
+    let hwnd = HWND(TRAY_HWND.load(Ordering::Acquire) as *mut core::ffi::c_void);
+
+    if !hwnd.is_invalid() {
+        let _ = unsafe { PostMessageW(hwnd, WM_TRAY_LEAVE, WPARAM(0), LPARAM(0)) };
+    }
 }
 
 /// Tell the tray window that an install has finished, from the worker that ran it.

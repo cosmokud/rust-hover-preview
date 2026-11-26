@@ -107,7 +107,9 @@ pub(super) const SETTING_GROUPS: &[(&str, &[&str])] = &[
             "pin_update_enabled",
             "pin_update_move_to_top",
             "pin_update_on_hover",
+            "elevate_hand_offs",
             "preview_enabled",
+            "run_as_administrator",
             "run_at_startup",
             "theme",
             "toggle_key",
@@ -869,9 +871,16 @@ impl AppConfig {
         let taken = lists::held(self);
         let presets = self.custom_presets.clone();
         let is_first_run = self.is_first_run;
+        // **The elevated start is carried across for a reason of its own.** `run_as_administrator`
+        // is the one setting here whose off state is a scheduled task's removal, and a removal is a
+        // machine write that needs the elevated token: a reset that put it back to off would raise a
+        // UAC prompt in the middle of a question about settings, and would fail silently where the
+        // prompt was refused. So a reset leaves it, and the file goes on agreeing with the machine.
+        let run_as_administrator = self.run_as_administrator;
 
         *self = Self::default();
         self.is_first_run = is_first_run;
+        self.run_as_administrator = run_as_administrator;
         lists::put(self, taken);
         // A custom preview is the user's own program rather than a setting of this app's, so a
         // reset of the settings leaves the presets exactly as they were — the same reason the
@@ -912,6 +921,10 @@ impl AppConfig {
         }
 
         apart.sort();
+        // The one setting a reset cannot put back is not one it offers to: the row names what a
+        // reset would change, and a key it will leave exactly as it is is not one of them (see
+        // `reset_to_recommended`).
+        apart.retain(|(key, ..)| key != "run_as_administrator");
         apart
     }
 

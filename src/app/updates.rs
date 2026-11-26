@@ -60,10 +60,9 @@ use windows::Win32::Networking::WinHttp::{
     WINHTTP_QUERY_STATUS_CODE,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, SetWindowsHookExW, UnhookWindowsHookEx, IDNO, IDYES, MB_ICONINFORMATION,
-    MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNOCANCEL, SW_SHOWNORMAL, WH_CBT,
+    MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_YESNOCANCEL, WH_CBT,
 };
 
 /// Where this app's releases are published, and the two files a check asks for.
@@ -382,11 +381,14 @@ fn run_installer(version: &str) -> bool {
         return false;
     };
 
-    crate::app::engine_processes::hidden_command(installer)
-        .arg("/S")
-        .arg("/R")
-        .spawn()
-        .is_ok()
+    // **The installer is a hand-off and is started as the desktop user.** An update's own installer
+    // is a program that replaces this app in this user's folder, and on an elevated run it must not
+    // be an elevated one: what it would do as an administrator is write an installation into a
+    // token that is not the user's, which is the one thing an update must never do (`hand_off`).
+    match installer.to_str() {
+        Some(installer) => crate::app::hand_off::run(installer, "/S /R"),
+        None => false,
+    }
 }
 
 /// The other way to take the update, which is the `Manual` answer: the release
@@ -394,18 +396,10 @@ fn run_installer(version: &str) -> bool {
 /// nothing is run here — the page is where the installer is, and taking it from
 /// there is the user's own business — so the app is left exactly where it was.
 pub(crate) fn open_release_page() {
-    let url = wide(&format!("https://{RELEASE_HOST}{LATEST_PAGE}"));
-
-    unsafe {
-        let _ = ShellExecuteW(
-            HWND::default(),
-            w!("open"),
-            PCWSTR(url.as_ptr()),
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        );
-    }
+    // Through the one road this app hands anything over (see `app::hand_off`): the page comes up in
+    // the user's own browser, which on an elevated run is the browser the Shell starts rather than
+    // an administrator's.
+    crate::app::hand_off::open(&format!("https://{RELEASE_HOST}{LATEST_PAGE}"), None);
 }
 
 /// What the click on the update row is answered with: the buttons of the dialog,
