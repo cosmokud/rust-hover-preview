@@ -26,7 +26,7 @@
 //!
 //! And it is the same hook that has to *stop* there, because a region is a box on the
 //! screen and not a claim on what is in front of it: a pin can be behind another
-//! program — that is what `Pin Mode → Always On Top` off means — and a notch turned
+//! program — that is what `Pin Mode → Always on Top` off means — and a notch turned
 //! while the user is working in that program is that program's. So a notch belongs to
 //! this app only while the preview is the surface the pointer is standing on, which is
 //! the question the preview thread answers once a tick and publishes here: a pin raised

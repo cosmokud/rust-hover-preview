@@ -1649,7 +1649,7 @@ pub(crate) static PIN_PLAYLIST_DELTA: Fact<AtomicI32> = Fact::of(|facts| &facts.
 /// the user had clicked into — so a pin raised over the listing they were working in took no notch
 /// and had to be clicked once before it would scroll. The pointer is over the pin the whole time;
 /// the keyboard is in the listing behind it, which is the point of the raise (see
-/// `Pin Mode → Update Preview → Move To Top`).
+/// `Pin Mode → Update Preview → Move to Top`).
 ///
 /// It is published rather than asked here because a `WH_MOUSE_LL` callback may not walk the
 /// desktop to find out what is in front — the same reason the pin's key owners are published by
@@ -1742,7 +1742,7 @@ pub(crate) fn pin_volume_delta_pending() -> bool {
 pub(crate) static PIN_KEYS_OWNER: Fact<AtomicU64> = Fact::of(|facts| &facts.pin_keys_owner);
 pub(crate) static PIN_KEYS_VIDEO: Fact<AtomicU64> = Fact::of(|facts| &facts.pin_keys_video);
 
-/// Whether the standing pin is `Pin Mode → Always On Top`, published beside the two handles for
+/// Whether the standing pin is `Pin Mode → Always on Top`, published beside the two handles for
 /// the same reason: a window that is above everything is the window the pointer is over, so the
 /// notch a hand turns on it is the pin's whether or not the keyboard happens to be in it (see
 /// `pin_owns_foreground`).

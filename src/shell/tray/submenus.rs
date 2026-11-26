@@ -433,7 +433,7 @@ pub(super) fn update_available_label(version: &str) -> String {
     // A portable run cannot be updated by the installer the release carries, so its row says what
     // the click does there: opens the page the new zip is on.
     if crate::paths::portable() {
-        return format!("Update Available (v{version}) — download the portable zip");
+        return format!("Update Available (v{version}) — Download the Portable Zip");
     }
     format!("Update Available (v{version})")
 }

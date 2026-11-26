@@ -369,7 +369,7 @@ fn pin_owns_caret(owner: u64, video: u64, foreground: u64) -> bool {
 /// Zero for both handles is the answer that is not a pin's: what is on screen is a hover preview,
 /// which is put up under the pointer and stands in front of everything, so there is no window of
 /// anybody else's for a key or a wheel notch to be taken from. A pin is the opposite — it can be
-/// sitting behind another program, which is what `Pin Mode → Always On Top` off means — and while
+/// sitting behind another program, which is what `Pin Mode → Always on Top` off means — and while
 /// the user is in that program, what arrives there is that program's, not the pin's.
 ///
 /// It is the wheel hook's question as well as the keyboard hook's, which is why it is answered here
@@ -387,7 +387,7 @@ pub(crate) fn pin_owns_foreground(block: &'static crate::app::seam::ViewerFacts)
 
     // A pin that is Always On Top is the window the pointer is in wherever the keyboard is: it
     // stands over every other window, so the box the preview published is the box on screen and
-    // a notch turned in it is the pin's own (see `Pin Mode → Always On Top`). Without this the
+    // a notch turned in it is the pin's own (see `Pin Mode → Always on Top`). Without this the
     // setting's own name was a lie for the wheel — the pin hovered, was seen, and was not
     // scrolled until the user clicked it, which is a click a topmost window never needed.
     if crate::app::seam::the_pin_stands_over_everything(block) {

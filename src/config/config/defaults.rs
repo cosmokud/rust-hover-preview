@@ -181,7 +181,7 @@ pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
 /// `AWAITING_INSTALL`).
 pub const DEFAULT_SILENT_AUTO_UPDATE: bool = false;
 /// Whether Windows starts this app **as administrator** when it starts it with Windows — the
-/// `System -> Run as administrator` row, off where the app starts.
+/// `System -> Run as Administrator` row, off where the app starts.
 ///
 /// Off, this app is the ordinary one it has always been. On, the startup entry becomes a scheduled
 /// task with the logon trigger and the highest run level, which is the only mechanism Windows has

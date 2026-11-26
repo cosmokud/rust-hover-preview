@@ -3,7 +3,7 @@
 //! **Two mechanisms, one setting.** `run_at_startup` is answered by the machine: off, nothing at a
 //! logon starts this app; on, either a value under
 //! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` holds the command line a logon runs, or —
-//! where the user has also asked for `Run as administrator` — a scheduled task with a logon trigger
+//! where the user has also asked for `Run as Administrator` — a scheduled task with a logon trigger
 //! and the highest run level does, because a `Run` value is never elevated and no UAC prompt is ever
 //! raised for one (see `app::task`). This module is everything this app knows about both: writing
 //! them, removing them, reading them back, and deciding whether what is there is what starts the copy
@@ -102,7 +102,7 @@ pub(crate) enum Outcome {
     MarkRefused { on: bool },
     /// The ordinary `Run` value was written, but the scheduled task that starts this app **elevated**
     /// at a logon could not be taken away: a logon would start it twice, once unelevated from the
-    /// value and once elevated from the task. It is what turning the `Run as administrator` row off
+    /// value and once elevated from the task. It is what turning the `Run as Administrator` row off
     /// answers when the token at hand may write a value but not delete a task.
     TaskStayed,
 }
@@ -177,7 +177,7 @@ impl Machine {
     }
 
     /// Whether the machine would start this app at a logon, elevated: the whole of what the
-    /// `Run as administrator` row is drawn from.
+    /// `Run as Administrator` row is drawn from.
     pub(crate) fn elevates(&self) -> bool {
         self.started() == Started::Task
     }
@@ -223,7 +223,7 @@ pub(crate) fn enable_startup() -> Outcome {
 /// Write the ordinary `Run` value and take the elevated task away — the machine a logon starts
 /// unelevated from — **without asking the file whether it wants an elevated start**.
 ///
-/// **It is the answer the `Run as administrator` row gives when it is turned off, and the one call
+/// **It is the answer the `Run as Administrator` row gives when it is turned off, and the one call
 /// that can be trusted to give it.** [`enable_startup`] asks [`elevated_start_wanted`], which reads
 /// the mark on the file as well as the file's own setting: right for a logon, wrong for this row,
 /// whose whole subject is that mark. A write that asked would be answered by a mark that had not
@@ -613,7 +613,7 @@ fn layers_value_name(path: &Path) -> Vec<u16> {
 }
 
 /// Take the *Run this program as an administrator* mark off this copy, which is what unchecking the
-/// `Run as administrator` row does.
+/// `Run as Administrator` row does.
 ///
 /// **The mark has to go with the row, or the row cannot turn it off.** Windows never elevates a
 /// `Run` value and silently skips one whose exe asks for elevation, so a machine left carrying this
@@ -683,7 +683,7 @@ fn remove_compat_elevation(path: &Path) -> bool {
 }
 
 /// Put the *Run this program as an administrator* mark on this copy, which is what turning the
-/// `Run as administrator` row on does.
+/// `Run as Administrator` row on does.
 ///
 /// **The task is what a logon runs, and this mark is what every other launch goes through.** A
 /// double-click, a shortcut, an association and a `Start → Run` line all begin the executable itself

@@ -50,7 +50,7 @@ pub struct AppConfig {
     pub is_first_run: bool,
     pub run_at_startup: bool,
     /// Whether Windows starts this app as administrator when it starts it with Windows — the
-    /// `System -> Run as administrator` row, off where the app starts.
+    /// `System -> Run as Administrator` row, off where the app starts.
     ///
     /// It is a choice about the **machine** rather than about a preview: on, `Run at Startup`
     /// stops writing a `Run` value and registers a scheduled task that starts this copy with the

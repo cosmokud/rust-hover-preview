@@ -73,7 +73,7 @@ pub(crate) const TASK_NAME: &str = "RustHoverPreview";
 /// what this app put on their machine reads it.
 const TASK_DESCRIPTION: &str =
     "Starts Rust Hover Preview when you sign in, with administrator rights \
-     (the tray's System -> Run as administrator row).";
+     (the tray's System -> Run as Administrator row).";
 
 /// Why a write of the task did not happen.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

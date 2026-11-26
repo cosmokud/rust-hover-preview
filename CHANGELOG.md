@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **The tray's rows are the industry standard's title case, and `System → Run as Administrator` says so** — every word capitalized but an article, a short preposition or a coordinating conjunction, which is the rule Windows' own menus are written to and the one the rows around it already followed. The three that did not: `Run as administrator`, the only row in the tray whose second word was lowercase, and, in `Pin Mode`, `Always On Top` and `Move To Top`, whose short prepositions were capitalized — they are `Always on Top` and `Move to Top`, and the caption's `Always on Top` tooltip with them. The portable run's update row is title case in its second half too (`Update Available (v…) — Download the Portable Zip`), and the two reset rows carry the single-character ellipsis the rest of the app's menus use.
+- **A rule parts `Silent Auto-Update` from the three rows about the machine** — what the app does about updates, then where it stands: what a logon starts, how it starts, and what an elevated run hands over. Two different questions rather than one list of six.
+- **Turning `Elevate Hand-Offs (Warning)` on asks first** — the warning is in the label, and this is the warning said out loud: which hand-offs are affected (`Open in Default App`, `Open With...`, `Open Path`, `Edit Config.ini`, the release and engine pages, `winget` and an update's installer), that a browser, an editor or a player opened from here then runs as administrator and that `winget` installs for the administrator's account rather than your own, that the preview engines are unaffected, and that nothing is restarted — the next program opened takes the new setting. The second button is the default one, so Enter or a stray space leaves the setting off, and turning it *off* asks nothing, because nothing is handed over by the safe answer.
+
 ## [0.6.4] - 2026-11-27
 
 ### Added

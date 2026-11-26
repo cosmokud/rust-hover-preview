@@ -2257,6 +2257,96 @@ fn populate_context_menu_uses_single_snapshot_consistently() {
     let _ = unsafe { DestroyMenu(menu) };
 }
 
+/// The `System` submenu, row by row, as it is drawn: the update checks, a rule, where this app
+/// stands in the machine, a rule, the look, a rule, and the configuration's own rows.
+///
+/// **The labels are the industry standard's title case** — every word capitalized but an article, a
+/// short preposition or a coordinating conjunction — which is what `Run as Administrator` is, and
+/// what a row written `Run as administrator` beside `Run at Startup` was not. The rule under the
+/// update checks is held too, because it is the one thing about the order that says the two halves
+/// are two questions rather than one list.
+#[test]
+fn the_system_submenu_is_its_rows_in_the_order_and_the_case_they_are_drawn() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreatePopupMenu, DestroyMenu, GetMenuItemCount, GetMenuState, GetMenuStringW, GetSubMenu,
+        MFT_SEPARATOR, MF_BYPOSITION,
+    };
+
+    let _folder = crate::config::config::ConfigFolderOfItsOwn::take();
+    let snap = crate::config::config::AppConfig::default();
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    assert!(unsafe { menus::populate_context_menu(menu, &snap).is_some() });
+
+    // The `System` row is the one whose label carries the version the build is of.
+    let mut system = None;
+    for position in 0..unsafe { GetMenuItemCount(menu) } as u32 {
+        let mut text = [0u16; 128];
+        let written = unsafe { GetMenuStringW(menu, position, Some(&mut text), MF_BYPOSITION) };
+        let label = String::from_utf16_lossy(&text[..written as usize]);
+        if label.starts_with("System (v") {
+            system = Some(unsafe { GetSubMenu(menu, position as i32) });
+            break;
+        }
+    }
+    let system = system.expect("the tray has a System submenu");
+
+    // Every row of it in the order it is drawn, with `None` standing for a rule.
+    let mut rows: Vec<Option<String>> = Vec::new();
+    for position in 0..unsafe { GetMenuItemCount(system) } as u32 {
+        // `MFS_SEPARATOR` and `MFT_SEPARATOR` are the same bit, and the bindings export only the
+        // item *type* one: a rule is what `GetMenuState` reports it with.
+        let state = unsafe { GetMenuState(system, position, MF_BYPOSITION) };
+        if state & MFT_SEPARATOR.0 != 0 {
+            rows.push(None);
+            continue;
+        }
+        let mut text = [0u16; 160];
+        let written = unsafe { GetMenuStringW(system, position, Some(&mut text), MF_BYPOSITION) };
+        rows.push(Some(String::from_utf16_lossy(&text[..written as usize])));
+    }
+
+    let label = |index: usize| rows.get(index).cloned().flatten();
+
+    assert_eq!(label(0).as_deref(), Some("Check for Updates"));
+    assert_eq!(label(1).as_deref(), Some("Silent Auto-Update"));
+    assert_eq!(
+        label(2),
+        None,
+        "a rule parts the update checks from the rows about the machine"
+    );
+    // The startup row is the machine's answer rather than the file's, so it may carry a suffix —
+    // `(turned off in Windows)`, `(via Task Scheduler)` — and only its own words are held here.
+    assert!(
+        label(3)
+            .as_deref()
+            .is_some_and(|label| label.starts_with("Run at Startup")),
+        "the startup row names the startup: {:?}",
+        label(3)
+    );
+    assert_eq!(label(4).as_deref(), Some("Run as Administrator"));
+    assert_eq!(label(5).as_deref(), Some("Elevate Hand-Offs (Warning)"));
+    assert_eq!(label(6), None, "a rule parts the machine from the look");
+    assert_eq!(label(7).as_deref(), Some("Theme"));
+    assert_eq!(
+        label(8),
+        None,
+        "a rule parts the look from the configuration"
+    );
+    assert_eq!(label(9).as_deref(), Some("Edit Config.ini"));
+    assert_eq!(
+        label(10).as_deref(),
+        Some("Reset to Recommended Settings\u{2026}")
+    );
+    assert_eq!(label(11).as_deref(), Some("Reset Extension Lists\u{2026}"));
+    assert_eq!(
+        rows.len(),
+        12,
+        "the submenu is these twelve rows and nothing else"
+    );
+
+    let _ = unsafe { DestroyMenu(menu) };
+}
+
 #[test]
 fn toggle_pdf_full_mode_off_propagates_config_changed_before_close_pdf_pins() {
     use crate::app::seam::{self, PreviewMessage};

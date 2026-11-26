@@ -212,6 +212,41 @@ pub(crate) fn confirm_install(name: &str, id: &str) -> bool {
     confirm(&text, "Install", MB_ICONINFORMATION)
 }
 
+/// The question the `Elevate Hand-Offs` row asks before it is turned on.
+///
+/// **The warning is in the label, and this is the warning said out loud.** Turning the row on is
+/// the one direction that hands this process's administrator token to programs the user starts
+/// from here — a browser, an editor, a player, and `winget` installing into whichever account the
+/// token belongs to — so what that costs is read before the click is taken rather than after. Off
+/// is the safe side and it asks nothing: nothing is handed over by turning it off, and a box in
+/// front of the safe answer is one a user learns to click through.
+///
+/// The one thing that is *not* restarted is said too, because the row is a setting rather than an
+/// act: a hand-off reads it when the program is started, so the next file opened takes the new
+/// answer and the programs already on screen keep the token they have (see `app::hand_off`).
+///
+/// The preview engines are named as the exception they are: mpv, FFplay, LibreOffice, ImageMagick,
+/// calibre, PeaZip and f3d are started by this process whatever the row says, because a composited
+/// window, an injected hook and a job object need both processes at one integrity level — so a
+/// user who turns this on for a program of their own is not also turning it on for a preview.
+pub(crate) fn confirm_elevate_hand_offs() -> bool {
+    confirm(
+        "Turn on Elevate Hand-Offs?\n\n\
+         While this app is running as an administrator, every program it opens for you will be \
+         started with this app's administrator token instead of your own: Open in Default App, \
+         Open With..., Open Path, Edit Config.ini, the release and engine pages, winget, and an \
+         update's installer.\n\n\
+         So a browser, an editor or a player opened from here runs as administrator, and winget \
+         installs for the administrator's account rather than yours. Turn this on only for a \
+         program of your own that will not work otherwise.\n\n\
+         Preview engines are not affected: mpv, FFplay, LibreOffice, ImageMagick, calibre, PeaZip \
+         and f3d run with the app at either setting.\n\n\
+         Nothing is restarted: the next program you open takes the new setting.",
+        "Turn On",
+        MB_ICONWARNING,
+    )
+}
+
 /// What an install that failed says: the code `winget` left, what was left alone, and where the
 /// reason is — the console window that is still up, showing what winget printed.
 pub(crate) fn report_install_failure(name: &str, code: i32) {
@@ -275,7 +310,7 @@ pub(crate) fn report_startup_failure(outcome: crate::app::startup::Outcome) {
     report(&text);
 }
 
-/// What the `Run as administrator` row says when the mark on the file did not follow it, in the
+/// What the `Run as Administrator` row says when the mark on the file did not follow it, in the
 /// direction it was going.
 ///
 /// **The two directions leave two different machines, and the box says which.** On, the task is in
@@ -304,7 +339,7 @@ fn report_mark_failure(on: bool) {
     report(text);
 }
 
-/// What the `Run as administrator` row says when the ordinary entry was written and the task that
+/// What the `Run as Administrator` row says when the ordinary entry was written and the task that
 /// starts this app elevated could not be taken away.
 ///
 /// **A logon would start the app twice.** The value starts it unelevated and the task starts it

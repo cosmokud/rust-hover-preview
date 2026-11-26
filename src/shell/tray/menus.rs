@@ -252,7 +252,7 @@ pub(super) unsafe fn populate_context_menu(
                 MF_UNCHECKED
             },
         ID_TRAY_PIN_ALWAYS_ON_TOP as usize,
-        w!("Always On Top"),
+        w!("Always on Top"),
     );
 
     // The `Update Preview` submenu: whether a pin that is up is shown the file the user picks
@@ -290,7 +290,7 @@ pub(super) unsafe fn populate_context_menu(
         update_menu,
         move_to_top_flags,
         ID_TRAY_PIN_UPDATE_TOP as usize,
-        w!("Move To Top"),
+        w!("Move to Top"),
     );
     // Then a separator, because the row below is not the same kind of row: the pair above is what
     // an update is, and this is a second way the file that update names is chosen.
@@ -1858,6 +1858,11 @@ pub(super) unsafe fn populate_context_menu(
         w!("Silent Auto-Update"),
     );
 
+    // A separator, because the two rows above are what the app does about updates and the three
+    // below are where it stands in the machine: what a logon starts, how it starts, and what an
+    // elevated run hands over. Two different questions rather than one list.
+    let _ = AppendMenuW(system_menu, MF_SEPARATOR, 0, PCWSTR::null());
+
     // Add "Run at Startup" with checkmark: what starts this app is the entry, and the two can be
     // made to differ from outside this app. **The entry is asked twice, because Windows keeps two
     // facts about it**: the value under `Run` is the entry, and the flag under `StartupApproved\\Run`
@@ -1868,7 +1873,7 @@ pub(super) unsafe fn populate_context_menu(
     //
     // **Both mechanisms are asked, because a logon can start this app two ways.** The `Run` value is
     // the ordinary one; the scheduled task is the elevated one, and which of them a machine carries
-    // is the answer to whether `Run as administrator` is in effect (see `app::startup::machine`).
+    // is the answer to whether `Run as Administrator` is in effect (see `app::startup::machine`).
     let machine = startup::machine();
     let started = machine.started();
     let entry_present = machine.entry_present;
@@ -1889,7 +1894,7 @@ pub(super) unsafe fn populate_context_menu(
             MF_UNCHECKED
         };
 
-    // The mark alone is not a startup: with `Run as administrator` on and `Run at Startup` off the
+    // The mark alone is not a startup: with `Run as Administrator` on and `Run at Startup` off the
     // file asks for elevation on every launch and nothing starts at a logon, which is the plain row
     // rather than a mechanism it has not been given yet. Where an entry is there under that mark the
     // label says what has to replace it, because a `Run` value under it starts nothing.
@@ -1935,7 +1940,7 @@ pub(super) unsafe fn populate_context_menu(
         system_menu,
         administrator_files,
         ID_TRAY_RUN_AS_ADMINISTRATOR as usize,
-        w!("Run as administrator"),
+        w!("Run as Administrator"),
     );
 
     // And what this app does with the programs it hands a file over to while it is elevated.
@@ -1950,7 +1955,7 @@ pub(super) unsafe fn populate_context_menu(
     //
     // It is greyed while the app is not running elevated and the rows above it ask for nothing: a
     // switch about what an elevated copy does with its children is a switch with nothing to say
-    // there. The two that ask are this process's own token and `Run as administrator` above it.
+    // there. The two that ask are this process's own token and `Run as Administrator` above it.
     let app_is_elevated = crate::app::elevation::is_elevated();
     let hand_offs = MF_STRING
         | if snap.elevate_hand_offs {
@@ -2005,7 +2010,7 @@ pub(super) unsafe fn populate_context_menu(
         system_menu,
         settings_flags,
         ID_TRAY_RESET_SETTINGS as usize,
-        w!("Reset to Recommended Settings..."),
+        w!("Reset to Recommended Settings…"),
     );
 
     let lists_flags = if lists_apart.is_empty() {
@@ -2017,7 +2022,7 @@ pub(super) unsafe fn populate_context_menu(
         system_menu,
         lists_flags,
         ID_TRAY_RESET_LISTS as usize,
-        w!("Reset Extension Lists..."),
+        w!("Reset Extension Lists…"),
     );
 
     let system_label = system_menu_label(env!("CARGO_PKG_VERSION"));

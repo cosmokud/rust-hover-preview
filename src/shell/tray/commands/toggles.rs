@@ -373,9 +373,22 @@ pub(in super::super) fn toggle_run_as_administrator() {
 /// Whether the programs this app hands a file over to while it is elevated are started with this
 /// process's own token — the row a user ticks after being warned about what that means.
 ///
-/// Nothing is restarted by it: a hand-off is read at the moment a program is started, so the next
-/// file opened takes the new answer and the programs already on screen keep the token they have.
+/// **Turning it on is the direction that asks, and the asking is the warning.** Off is the safe
+/// side: every hand-off is started with the Shell's own unelevated token, so nothing inherits this
+/// process's administrator rights. On is the one answer that gives a program the user did not
+/// start as administrator that token, which is what the label's warning is about — so the whole of
+/// what it means is read in a box before the click is taken rather than after (see
+/// `dialogs::confirm_elevate_hand_offs`). Turning it off asks nothing: nothing is handed over by
+/// the safe answer, and a box in front of it is one a user learns to click through.
+///
+/// Nothing is restarted by either direction: a hand-off is read at the moment a program is started,
+/// so the next file opened takes the new answer and the programs already on screen keep the token
+/// they have.
 pub(in super::super) fn toggle_elevate_hand_offs() {
+    if !crate::config::snapshot().elevate_hand_offs && !dialogs::confirm_elevate_hand_offs() {
+        return;
+    }
+
     commit_config(|config| {
         config.elevate_hand_offs = !config.elevate_hand_offs;
     });

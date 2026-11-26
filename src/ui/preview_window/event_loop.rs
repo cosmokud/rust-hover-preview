@@ -688,7 +688,7 @@ pub fn run_preview_window() {
             // `window_state::a_press_puts_us_behind`). The ask crosses because the window is the viewer's and
             // the hook is the process that holds it — the same process for a pin and for a window of its own,
             // which is why a detached window answers this beside a pin. `lower_pinned_preview` keeps every
-            // rule of pin mode: a collapsed pin, one that is Always On Top and one whose `Move To Top` row is
+            // rule of pin mode: a collapsed pin, one that is Always On Top and one whose `Move to Top` row is
             // off are left exactly where they are, so an ask made while the setting holds the front is spent
             // and nothing moves. A viewer holding no window spends it and puts nothing anywhere.
             if let Some(window) = crate::app::seam::take_the_pin_behind_ask() {
@@ -2952,7 +2952,7 @@ pub fn run_preview_window() {
                         // forward: the file the user just picked is the one they are looking at
                         // next, and a pin left behind the listing it is following is a window they
                         // would have to find before they could see it (see
-                        // `Pin Mode → Update Preview → Move To Top`). The raise happens here rather
+                        // `Pin Mode → Update Preview → Move to Top`). The raise happens here rather
                         // than at the install so the pin answers the pick at once, with the wait
                         // for the file drawn in it where the read is not instant — and it keeps the
                         // band where a pick's press is holding it, because the click that made the

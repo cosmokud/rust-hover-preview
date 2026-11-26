@@ -1133,7 +1133,7 @@ impl PinTooltip {
                 Some(format!("Open With {}", self.default_app))
             }
             pin_chrome::CaptionButton::OpenWithList => Some("Open With...".to_string()),
-            pin_chrome::CaptionButton::AlwaysOnTop => Some("Always On Top".to_string()),
+            pin_chrome::CaptionButton::AlwaysOnTop => Some("Always on Top".to_string()),
             pin_chrome::CaptionButton::Detach => Some("Detach Window".to_string()),
             _ => None,
         }

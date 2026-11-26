@@ -559,7 +559,7 @@ unsafe fn a_window_inside(frame: HWND) -> HWND {
 }
 
 /// The pin put away into its bubble, with its own window on the desktop and a window of the test's
-/// opened over it — the arrangement a restore is asked in, with `Pin Mode → Always On Top` off.
+/// opened over it — the arrangement a restore is asked in, with `Pin Mode → Always on Top` off.
 ///
 /// The second window is made after the pin's, which is what puts it in front, and it is still there
 /// after the restore, so that a window which came back where a hidden one sits is a window that came
@@ -607,7 +607,7 @@ unsafe fn a_pin_put_away_into_its_bubble() -> (HWND, HWND) {
 }
 
 /// A pin brought back out of its bubble comes back in front of the windows that were opened over it,
-/// and takes the keyboard with it, with `Pin Mode → Always On Top` off.
+/// and takes the keyboard with it, with `Pin Mode → Always on Top` off.
 ///
 /// The fault this is a regression test for: a click on the bubble brought the window back *behind*
 /// whatever the user had been working in. What a restore asked of the window was a place — `HWND_TOP`
@@ -868,7 +868,7 @@ fn a_pin_brought_back_by_its_key_leaves_the_keyboard_in_the_listing() {
 }
 
 /// An update brings a pin that is put away into its bubble back up on the file the update names, and
-/// the bubble goes with it — with `Pin Mode → Update Preview → Move To Top` on and `Always On Top` off.
+/// the bubble goes with it — with `Pin Mode → Update Preview → Move to Top` on and `Always On Top` off.
 ///
 /// **The fault this is a regression test for** is the one the taskbar's own test is about, reached from
 /// the bubble: a put-away pin has no window in any band, so the row that says an update brings the pin
@@ -949,7 +949,7 @@ fn an_update_brings_a_pin_put_away_into_its_bubble_back_on_top() {
 
     assert!(
         an_update_brings_a_put_away_pin_back(),
-        "with `Move To Top` on, an update is the pin coming forward — and a pin that is away has          nothing to bring forward but itself"
+        "with `Move to Top` on, an update is the pin coming forward — and a pin that is away has          nothing to bring forward but itself"
     );
     let on_the_pin = pinned_path().expect("the file the pin is showing");
     assert!(
@@ -974,7 +974,7 @@ fn an_update_brings_a_pin_put_away_into_its_bubble_back_on_top() {
     );
     assert!(
         !unsafe { window_holds_the_topmost_band(pin_hwnd) },
-        "and no band is kept for it: `Pin Mode → Always On Top` is the only thing that keeps a pin over          other programs"
+        "and no band is kept for it: `Pin Mode → Always on Top` is the only thing that keeps a pin over          other programs"
     );
     // Safety: asks this thread's own keyboard, which a window of this test's is the only holder of.
     assert_ne!(
@@ -1026,7 +1026,7 @@ fn a_preview_update_keeps_the_band_for_the_listing_it_follows() {
     // **The three settings, which is what the rule is made of.**
     assert!(
         a_pin_follows_a_listing(false, true, true),
-        "a pin that is not Always On Top, with `Update Preview` on and `Move To Top` on, follows \
+        "a pin that is not Always On Top, with `Update Preview` on and `Move to Top` on, follows \
          the listing the user is in"
     );
     assert!(
@@ -1100,7 +1100,7 @@ fn a_preview_update_keeps_the_band_for_the_listing_it_follows() {
     unsafe { settle_z_order() };
     assert!(
         !PIN_FOLLOWING_BAND.load(Ordering::SeqCst),
-        "a pin whose `Move To Top` row is off follows nothing, and the band it was holding is not \
+        "a pin whose `Move to Top` row is off follows nothing, and the band it was holding is not \
          its own to keep"
     );
     assert!(
@@ -1222,7 +1222,7 @@ fn a_press_that_picks_no_file_puts_the_pin_back_behind_the_listing() {
     assert!(!pin_holds_the_front(), "and the cycle can be made again");
 
     // **And a band the raise took for the listing it follows is no answer to that press either.** With
-    // `Update Preview` and `Move To Top` on, a pin with `Always On Top` off takes the band at a raise and
+    // `Update Preview` and `Move to Top` on, a pin with `Always On Top` off takes the band at a raise and
     // holds it for the answer that click is owed; the press that names no file is what ends it, and the
     // pin goes behind the listing exactly as one that follows nothing — a band kept there is a pin over
     // the program the user works in, with the setting that says it must not be (see
@@ -2689,7 +2689,7 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
         "the band is the setting's, put on when the pin is shown, and not taken by a raise"
     );
 
-    // An update, with `Always On Top` off and `Move To Top` on: the pin is brought over the window it
+    // An update, with `Always On Top` off and `Move to Top` on: the pin is brought over the window it
     // follows, which is the one thing Windows will not do for a window of a process that is not in the
     // foreground (see `raise_pinned_preview`). The listing is put over the pin first, since that is
     // where a pick leaves it.
@@ -2745,7 +2745,7 @@ fn a_pin_that_is_a_window_of_its_own_goes_behind_the_press_and_comes_forward_on_
     unsafe { settle_z_order() };
     assert!(
         unsafe { stands_over(in_front, pin_hwnd) },
-        "with `Move To Top` off an update is a file swapped into the pin where it stands"
+        "with `Move to Top` off an update is a file swapped into the pin where it stands"
     );
 
     // Safety: both windows are this test's own, and every global written here is put back.
@@ -3222,7 +3222,7 @@ fn a_bubble_asked_for_at_a_point_stands_centred_on_it() {
 
 /// A pin of the browser's kind, a window of this suite's own, with a second window of the suite's
 /// opened over it: the arrangement a press on the band meets once the pair has been put behind
-/// something, with `Pin Mode → Always On Top` off.
+/// something, with `Pin Mode → Always on Top` off.
 ///
 /// The caller holds the room and puts back every global written here, the pin's own window handle
 /// and the setting included. The returned pair is `(in_front, pin)`.
