@@ -231,39 +231,111 @@ pub(crate) fn report_install_failure(name: &str, code: i32) {
 /// from the tray — as a switch that does nothing — and the one thing a user can act on is what the
 /// machine refused.
 pub(crate) fn report_startup_failure(outcome: crate::app::startup::Outcome) {
+    // The mark on the file is not a startup entry, and a box headed "the startup entry could not be
+    // written" over it would be naming the wrong thing: what the machine refused is the one flag
+    // Windows reads for a launch that is not a logon's.
+    if let crate::app::startup::Outcome::MarkRefused { on } = outcome {
+        report_mark_failure(on);
+        return;
+    }
+
+    // And a task that stayed is the row half in place rather than a write that failed: the entry is
+    // written and a logon starts the app elevated beside it, which is the one thing turning the row
+    // off was about.
+    if let crate::app::startup::Outcome::TaskStayed = outcome {
+        report_task_stayed();
+        return;
+    }
+
     let state = match outcome {
         // The machine refused the write and still holds the opposite of what was asked for.
         crate::app::startup::Outcome::NotWritten { held: false } => {
-            "Nothing of this app will start with Windows until the value is written."
+            "The app will not start when you sign in until this is fixed."
         }
         crate::app::startup::Outcome::NotWritten { held: true } => {
-            "The entry that is there still starts this app, so it reads as on."
+            "The old setting is still there, so the app still starts when you sign in."
         }
         crate::app::startup::Outcome::NeedsElevation => {
-            "Starting this app as an administrator is a scheduled task, and the Task Scheduler will \
-             not take one from a process without administrator rights. Nothing was written, and \
-             the elevated copy this asked for was not started."
+            "Changing the administrator startup needs administrator permission, and this app does \
+             not have it right now, so nothing was changed."
         }
         crate::app::startup::Outcome::TaskRefused => {
-            "The Task Scheduler refused the task that starts this app at a logon. Nothing was \
-             written, so the machine is exactly as it was."
+            "Windows would not accept the administrator startup, so nothing was changed."
         }
-        _ => "Something else is starting this app, so it still reads as on.",
+        _ => "Another startup setting is still in place, so the app still starts when you sign in.",
     };
 
-    // The task is named as the second thing that can be what starts this app, because it is what
-    // the answer is about on a machine where the row asked for administrator rights: a box that
-    // named only the `Run` key would be pointing at a value nothing asked for.
     let text = format!(
-        "The startup entry could not be written.\n\n\
-         Windows would not take either the value this app uses under HKCU\\Software\\Microsoft\\\
-         Windows\\CurrentVersion\\Run, which is what starts it at a logon, or the scheduled task \
-         `\\RustHoverPreview`, which is what starts it there as an administrator. {state}\n\n\
-         A security policy, an antivirus tool, or the answer No to the administrator prompt is the \
-         usual reason. The rest of this app is unaffected."
+        "Windows did not accept the startup setting.\n\n\
+         The app could not be added to the list of programs that start when you sign in. {state}\n\n\
+         This usually happens because of a security policy or antivirus software, or because the \
+         administrator prompt was answered with No. The rest of the app still works."
     );
 
     report(&text);
+}
+
+/// What the `Run as administrator` row says when the mark on the file did not follow it, in the
+/// direction it was going.
+///
+/// **The two directions leave two different machines, and the box says which.** On, the task is in
+/// place and only a launch by hand is left unelevated — the row half in effect. Off, the ordinary
+/// entry is in place *beside* a mark that stops it, because Windows starts no `Run` value whose file
+/// asks for elevation — the row's removal leaving a machine where nothing starts at a logon at all,
+/// which is the one state a user has to be told about rather than left to find at the next start.
+fn report_mark_failure(on: bool) {
+    let text = match on {
+        true => "The app will start as an administrator when you sign in, but starting it by hand \
+                 will not ask for administrator rights.\n\n\
+                 Windows would not accept the 'Run this program as an administrator' setting on the \
+                 app file. You can set it yourself in the file's Properties, on the Compatibility \
+                 tab.\n\n\
+                 This usually happens because of a security policy or antivirus software. The rest \
+                 of the app still works.",
+        false => "The app still asks for administrator rights when you start it by hand.\n\n\
+                  Windows would not remove the 'Run this program as an administrator' setting from \
+                  the app file, and while that setting is there the app will not start when you \
+                  sign in. You can remove it in the file's Properties, on the Compatibility tab, or \
+                  by turning this setting on and off again.\n\n\
+                  This usually happens because of a security policy or antivirus software. The rest \
+                  of the app still works.",
+    };
+
+    report(text);
+}
+
+/// What the `Run as administrator` row says when the ordinary entry was written and the task that
+/// starts this app elevated could not be taken away.
+///
+/// **A logon would start the app twice.** The value starts it unelevated and the task starts it
+/// elevated, and which of the two is left standing is whatever Windows begins second — so the row
+/// reads as off while a logon still starts an administrator's copy. Nothing else is written over:
+/// a task this token may not delete is one the same row, run from an elevated copy of this app, can.
+fn report_task_stayed() {
+    report(
+        "The app is set to start when you sign in, but the administrator startup could not be \
+         removed.\n\n\
+         Windows would now start the app twice when you sign in. To fix it, turn this setting on and \
+         off again, or delete the 'RustHoverPreview' task in the Windows Task Scheduler.\n\n\
+         This usually happens because of a security policy or antivirus software. The rest of the \
+         app still works.",
+    );
+}
+
+/// What the tray says when the copy it started to replace it never stood up.
+///
+/// **The row is in place; only this process's replacement is not.** The machine holds what the row
+/// asked for — the task and the mark for an elevated start, the ordinary entry without them for an
+/// unelevated one — and what did not happen is this tray being replaced by the copy that would run
+/// under it. Leaving anyway would be the app gone with nothing to come back to, so this one stays
+/// and says so: the same change is had by exiting and starting the app again.
+pub(crate) fn report_restart_failure() {
+    report(
+        "The setting is saved, but the app could not restart itself.\n\n\
+         Close the app from the tray menu and open it again to use the new setting.\n\n\
+         This usually happens when Windows will not start a new copy of the app, for example because \
+         of a security policy or antivirus software. Nothing else was changed.",
+    );
 }
 
 /// A box that reports rather than asks, for what has already happened and cannot be refused.

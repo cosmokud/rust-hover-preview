@@ -1875,10 +1875,12 @@ pub(super) unsafe fn populate_context_menu(
     let startup_enabled = started.runs();
     let elevated_start = started == startup::Started::Task;
     let via_task = elevated_start || (!machine.entry_present && machine.task_present);
-    // And the one setting this app cannot undo from here: an executable marked *Run this program as
-    // an administrator* is one Windows will never start from a `Run` value, because it never
-    // elevates one — so that mark is a machine whose startup entry has to be the task instead, and
-    // a row that said the entry cannot work would be arguing with the mechanism this app put there.
+    // And the mark the row writes on the file itself, which is the half a logon never goes through: a
+    // launch of the executable reads *Run this program as an administrator* and nothing else, so the
+    // row reads as on wherever that mark is there — including where a hand set it in Windows' own
+    // properties. It is also the one state this app cannot undo from here: Windows never starts a
+    // `Run` value whose file carries it, so an entry beside that mark is a machine whose startup has
+    // to be the task instead, which is what the row above says.
     let startup_elevated = machine.compat_elevation();
     let flags = MF_STRING
         | if startup_enabled {
@@ -1887,7 +1889,11 @@ pub(super) unsafe fn populate_context_menu(
             MF_UNCHECKED
         };
 
-    let label = if startup_elevated && !via_task {
+    // The mark alone is not a startup: with `Run as administrator` on and `Run at Startup` off the
+    // file asks for elevation on every launch and nothing starts at a logon, which is the plain row
+    // rather than a mechanism it has not been given yet. Where an entry is there under that mark the
+    // label says what has to replace it, because a `Run` value under it starts nothing.
+    let label = if startup_elevated && !via_task && entry_present {
         "Run at Startup (elevated, via Task Scheduler)"
     } else if via_task && !startup_enabled {
         "Run at Startup (task turned off in Windows)"
