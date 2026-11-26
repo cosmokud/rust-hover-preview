@@ -84,6 +84,17 @@
 //! `the_picture_in`): the hover is the size the preset's `scaling` says it is, and the program's
 //! picture fills it. It is one rule for every program rather than a list of programs: what the window
 //! will take is read off the window.
+//! **And the box is a client, while the picture is the whole frame around it.** A program draws its
+//! document in its *client*; the caption above it and the resize border round it are the frame, and
+//! a preview composed from the whole window gives the document only the box *minus* that frame — a
+//! player handed a client 4 % wider than the film's own shape fills the height and draws the rest as
+//! black bars either side. So the hover is **the box grown by the program's own frame** (see
+//! `the_host_for`), the window is placed so that its *visible frame* — the client plus that frame — is
+//! that grown rect (see `the_ask_for_host` and `behind_host_window_rect`), and the host is that rect
+//! too: the client lands on the box, the caption keeps the strip the hover grew by, and the picture
+//! is composed into the whole of the host rather than fitted into part of it. The frame is read off
+//! the window on every poll (`chrome_now`), so a program that restyles itself is followed, and a
+//! `Borderless` preset — whose frame is stripped — has none and is exactly the box it always was.
 //! **A program's window is not that size**: it opens at whatever size it was last left at — one
 //! left maximized is the whole display — so a box read off it is the size of the last file
 //! somebody opened with the program, and a tall picture is shown in a wide window that fills the
@@ -3350,7 +3361,9 @@ fn run_it(
         if was_hidden {
             // App honored `SW_HIDE`: atomically position + reveal via `SetWindowPlacement` so it never
             // flashes at its old saved coordinates.
-            if let Some(target_rect) = current_target_rect() {
+            if let Some(box_) = current_target_rect() {
+                let chrome = chrome_now(source, window_mode);
+                let target_rect = the_host_for(box_, chrome);
                 let ctx = placement_ctx_from_want(&launch, &processes, None, hook_view);
                 let mode = match capture_technique {
                     CustomCaptureTechnique::OffScreen => {
@@ -3373,8 +3386,7 @@ fn run_it(
                             ..Default::default()
                         };
                         let _ = unsafe { SetWindowPlacement(source, &placement) };
-                        let ask =
-                            the_ask_for_window(source, (target_rect.2, target_rect.3), window_mode);
+                        let ask = the_ask_for_window(source, (box_.2, box_.3), window_mode);
                         the_ask = Some(ask);
                         park_offscreen(source, ask.0, ask.1, ctx);
                         restore_foreground(launch.previous_foreground, &processes);
@@ -3447,6 +3459,7 @@ fn run_it(
                             place_invisible_layered(
                                 source,
                                 target_rect,
+                                chrome,
                                 window_mode,
                                 &mut the_ask,
                                 ctx,
@@ -3498,11 +3511,7 @@ fn run_it(
                             if aligned_behind_host(source, target_rect) {
                                 PlacementMode::BehindHost
                             } else {
-                                let ask = the_ask_for_window(
-                                    source,
-                                    (target_rect.2, target_rect.3),
-                                    window_mode,
-                                );
+                                let ask = the_ask_for_window(source, (box_.2, box_.3), window_mode);
                                 the_ask = Some(ask);
                                 park_offscreen(source, ask.0, ask.1, ctx);
                                 PlacementMode::OffScreen
@@ -3515,11 +3524,20 @@ fn run_it(
                 let _ = drain_settle_events(source, &launch, &processes);
                 expected_rect = window_rect(source);
             }
-        } else if let Some(target_rect) = current_target_rect() {
+        } else if let Some(box_) = current_target_rect() {
+            let chrome = chrome_now(source, window_mode);
+            let target_rect = the_host_for(box_, chrome);
             let ctx = placement_ctx_from_want(&launch, &processes, None, hook_view);
             // App ignored `SW_HIDE`: apply the selected capture technique immediately.
             placed_mode = Some(if invisible_layered {
-                place_invisible_layered(source, target_rect, window_mode, &mut the_ask, ctx);
+                place_invisible_layered(
+                    source,
+                    target_rect,
+                    chrome,
+                    window_mode,
+                    &mut the_ask,
+                    ctx,
+                );
                 restore_foreground(launch.previous_foreground, &processes);
                 PlacementMode::InvisibleLayered
             } else {
@@ -3527,6 +3545,7 @@ fn run_it(
                     source,
                     capture_technique,
                     target_rect,
+                    chrome,
                     window_mode,
                     ctx,
                     &mut the_ask,
@@ -3572,12 +3591,17 @@ fn run_it(
                 }
                 return;
             }
-            let Some(target_rect) = current_target_rect() else {
+            let Some(box_) = current_target_rect() else {
                 if is_current(launch.id) {
                     end_the_program();
                 }
                 return;
             };
+            // Everything that places `source` wants the frame its picture will be composed from — the
+            // box grown by the program's own caption and border (see `the_host_for`) — while the ask
+            // is a question about the box itself. One reading of the frame answers both.
+            let chrome = chrome_now(source, window_mode);
+            let target_rect = the_host_for(box_, chrome);
 
             if invisible_layered {
                 keep_source_invisible(source.0 as isize);
@@ -3610,7 +3634,14 @@ fn run_it(
                     the_ask = None;
                 }
                 placed_mode = Some(if invisible_layered {
-                    place_invisible_layered(source, target_rect, window_mode, &mut the_ask, ctx);
+                    place_invisible_layered(
+                        source,
+                        target_rect,
+                        chrome,
+                        window_mode,
+                        &mut the_ask,
+                        ctx,
+                    );
                     restore_foreground(launch.previous_foreground, &processes);
                     PlacementMode::InvisibleLayered
                 } else {
@@ -3618,6 +3649,7 @@ fn run_it(
                         source,
                         capture_technique,
                         target_rect,
+                        chrome,
                         window_mode,
                         ctx,
                         &mut the_ask,
@@ -4136,6 +4168,7 @@ fn run_it(
                             place_invisible_layered(
                                 source,
                                 host_rect,
+                                chrome,
                                 window_mode,
                                 &mut the_ask,
                                 ctx,
@@ -4165,7 +4198,7 @@ fn run_it(
                 the_ask = None;
             }
             placed_mode = Some(if invisible_layered {
-                place_invisible_layered(source, host_rect, window_mode, &mut the_ask, ctx);
+                place_invisible_layered(source, host_rect, chrome, window_mode, &mut the_ask, ctx);
                 restore_foreground(launch.previous_foreground, &processes);
                 PlacementMode::InvisibleLayered
             } else {
@@ -4173,6 +4206,7 @@ fn run_it(
                     source,
                     capture_technique,
                     host_rect,
+                    chrome,
                     window_mode,
                     ctx,
                     &mut the_ask,
@@ -4206,7 +4240,14 @@ fn run_it(
                             host_rect,
                             active_hook_view.map(|v| v.hook_hits()),
                         );
-                        place_invisible_layered(source, host_rect, window_mode, &mut the_ask, ctx);
+                        place_invisible_layered(
+                            source,
+                            host_rect,
+                            chrome,
+                            window_mode,
+                            &mut the_ask,
+                            ctx,
+                        );
                         restore_foreground(launch.previous_foreground, &processes);
                         expected_rect = window_rect(source);
                     }
@@ -4355,15 +4396,22 @@ fn run_it(
         }
 
         // Only after `source` is settled and aligned: size `host`, bind thumbnail, and show `host`.
+        //
+        // **The host is the whole of `host_rect`, not the box.** The picture a thumbnail composes is
+        // the program's visible frame — the client *and* the caption above it — so a host the size of
+        // the box alone is a host whose client is smaller than the picture, and the picture is then
+        // fitted into it with the background showing either side: bars drawn by the host rather than
+        // by the player. Placed at the grown rect the client is the picture exactly, and
+        // `the_picture_in` answers with the whole of it.
         if box_of_the_host != Some(host_rect) {
             let _ = unsafe {
                 SetWindowPos(
                     host,
                     HWND::default(),
-                    x,
-                    y,
-                    width,
-                    height,
+                    host_rect.0,
+                    host_rect.1,
+                    host_rect.2,
+                    host_rect.3,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 )
             };
@@ -4602,8 +4650,8 @@ fn chrome_now(window: HWND, window_mode: CustomWindowMode) -> (i32, i32, i32, i3
     )
 }
 
-/// The size the program's window is asked for: the box's own shape, raised to the smallest size the
-/// window will take at that shape.
+/// The size the program's window is asked for: the host rect — the box grown by the frame the program
+/// draws around its picture — raised to the smallest client the window will take at the box's shape.
 ///
 /// **A window that will not take the box is asked for a bigger box of the same shape.** The box is
 /// the room cut to the file's shape, so a tall picture's box is a narrow one — narrower than a
@@ -4615,15 +4663,22 @@ fn chrome_now(window: HWND, window_mode: CustomWindowMode) -> (i32, i32, i32, i3
 /// composed into the box at exactly that shape (see `the_picture_in`): the hover is the size the
 /// setting says it is and the program's picture fills it, the window being off every display where
 /// it stands.
-fn the_ask_for(box_: (i32, i32), taken: (u32, u32), chrome: (i32, i32, i32, i32)) -> (i32, i32) {
-    // **The ask is a window and the box is a client**, so the frame is taken off what the window took
-    // and added back to what it is asked for (see `chrome_of`). A `Borderless` program has none, and
-    // the two halves of this are the identity.
+/// **The ask is the frame the picture is composed from, and `taken_client` is a client.** A caller
+/// places the window so that this rect is its *visible frame* (see `behind_host_window_rect`),
+/// because the visible frame is what a DWM thumbnail composes and what the host is the size of. So
+/// the two halves are in one space each: the box and what the window took are clients, and the frame
+/// is added on the outside. Measured in different spaces — a window rect taken against a frame read
+/// off the visible one — the ask grew by its own invisible border on every poll, which left the
+/// program's client wider than the box and the player letterboxing the film inside it.
+fn the_ask_for(
+    box_: (i32, i32),
+    taken_client: (u32, u32),
+    chrome: (i32, i32, i32, i32),
+) -> (i32, i32) {
+    // **The ask is a frame and the box is a client**, so the frame is added to what the box is asked
+    // for (see `chrome_of`). A `Borderless` program has none, and the two halves of this are the
+    // identity.
     let extra = (chrome.2.max(0) as u32, chrome.3.max(0) as u32);
-    let taken_client = (
-        taken.0.saturating_sub(extra.0),
-        taken.1.saturating_sub(extra.1),
-    );
     let client = the_client_ask_for(box_, taken_client);
     (client.0 + extra.0 as i32, client.1 + extra.1 as i32)
 }
@@ -4642,14 +4697,10 @@ fn the_client_ask_for(box_: (i32, i32), taken: (u32, u32)) -> (i32, i32) {
     (width, height)
 }
 
-/// [`the_ask_for`] for a window that is standing: the chrome is read off the window rather than passed
-/// in, which is what every caller inside a placement has.
+/// [`the_ask_for`] for a window that is standing, given the box it is to be composed on: the client
+/// and the frame are read off the window, which is what every caller inside a placement has.
 fn the_ask_for_window(window: HWND, box_: (i32, i32), window_mode: CustomWindowMode) -> (i32, i32) {
-    the_ask_for(
-        box_,
-        source_size(window, window_mode),
-        chrome_now(window, window_mode),
-    )
+    the_ask_for(box_, client_size(window), chrome_now(window, window_mode))
 }
 
 /// Fast intrinsic dimensions of `path` (SVG, PDF, image, video, design, vector) without spawning
@@ -4719,6 +4770,18 @@ fn own_size(window: HWND) -> (u32, u32) {
     (800, 600)
 }
 
+/// The size of the client `window` draws its document in: the box a preview puts it on.
+fn client_size(window: HWND) -> (u32, u32) {
+    let mut rect = RECT::default();
+    if unsafe { GetClientRect(window, &mut rect) }.is_err() {
+        return (0, 0);
+    }
+    (
+        (rect.right - rect.left).max(0) as u32,
+        (rect.bottom - rect.top).max(0) as u32,
+    )
+}
+
 /// Captured size of `window`: full window rect in `Normal` mode, client rect in `Borderless` mode.
 fn source_size(window: HWND, window_mode: CustomWindowMode) -> (u32, u32) {
     let mut rect = RECT::default();
@@ -4770,6 +4833,42 @@ fn the_host_for(box_: (i32, i32, i32, i32), chrome: (i32, i32, i32, i32)) -> (i3
         (box_.2 + extra_w).max(1),
         (box_.3 + extra_h).max(1),
     )
+}
+
+/// [`the_host_for`] backwards: the box a host rect was grown from.
+fn the_box_of(
+    host_rect: (i32, i32, i32, i32),
+    chrome: (i32, i32, i32, i32),
+) -> (i32, i32, i32, i32) {
+    let (left, top, extra_w, extra_h) = chrome;
+    (
+        host_rect.0 + left,
+        host_rect.1 + top,
+        (host_rect.2 - extra_w).max(1),
+        (host_rect.3 - extra_h).max(1),
+    )
+}
+
+/// [`the_ask_for`] for a host that is standing: the host rect is the frame the picture is composed
+/// from, so the box is read back out of it (see [`the_box_of`]) and the ask is that same frame raised
+/// to the smallest client the program will take.
+///
+/// This is where the two spaces meet, and the black-bar fault lived in the meeting: the host is the
+/// box grown by the frame ([`the_host_for`]) and the ask is that same rect again, so a program that
+/// takes the ask has its client on the box and its picture on the host — nothing is fitted, and no
+/// bar is drawn by anyone. A caller that hands this the *box* rather than the host asks for the box
+/// and nothing more, which is what a placement that has not read the frame yet wants.
+///
+/// `chrome` is handed in rather than read again, so that the host rect and the ask are one reading of
+/// the frame: read twice they can answer differently — a window being restyled reports its caption a
+/// tick after it has one — and the ask then lands beside the host by the difference.
+fn the_ask_for_host(
+    window: HWND,
+    host_rect: (i32, i32, i32, i32),
+    chrome: (i32, i32, i32, i32),
+) -> (i32, i32) {
+    let (_, _, box_w, box_h) = the_box_of(host_rect, chrome);
+    the_ask_for((box_w, box_h), client_size(window), chrome)
 }
 
 /// The rectangle in the host's client the program's window is drawn in: the window's own client at
@@ -5306,6 +5405,7 @@ fn keep_source_invisible(source: isize) {
 fn place_invisible_layered(
     window: HWND,
     host_rect: (i32, i32, i32, i32),
+    chrome: (i32, i32, i32, i32),
     window_mode: CustomWindowMode,
     the_ask: &mut Option<(i32, i32)>,
     ctx: PlacementContext<'_>,
@@ -5350,9 +5450,12 @@ fn place_invisible_layered(
         let _ = unsafe { SetWindowPos(window, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
     }
 
-    // If app's min-size floor refused `(tw, th)`, resize on-monitor to `the_ask_for` keeping aspect ratio.
-    let taken = source_size(window, window_mode);
-    let ask = the_ask_for((hw, hh), taken, chrome_now(window, window_mode));
+    // If the program's floor refused `(tw, th)`, resize on-monitor to the ask, keeping the box's shape.
+    //
+    // The ask is taken from `host_rect` and not from `(hw, hh)` as a box: the host rect is already the
+    // box grown by the frame, and growing it again by the same frame is what made the ask climb by a
+    // caption on every poll (see `the_ask_for_host`).
+    let ask = the_ask_for_host(window, host_rect, chrome);
     if ask != (tw, th) {
         *the_ask = (ask != (hw, hh)).then_some(ask);
         let (wx2, wy2, ww2, wh2) = behind_host_window_rect((hx, hy, ask.0, ask.1), insets);
@@ -5954,10 +6057,12 @@ fn decide_snap_action(
 }
 
 /// Snap `source` according to `technique` and restore focus.
+#[allow(clippy::too_many_arguments)]
 fn snap_source(
     source: HWND,
     technique: CustomCaptureTechnique,
     target_rect: (i32, i32, i32, i32),
+    chrome: (i32, i32, i32, i32),
     window_mode: CustomWindowMode,
     ctx: PlacementContext<'_>,
     the_ask: &mut Option<(i32, i32)>,
@@ -5972,7 +6077,7 @@ fn snap_source(
         target_rect,
     ) {
         SnapAction::KeepInvisibleLayered => {
-            place_invisible_layered(source, target_rect, window_mode, the_ask, ctx);
+            place_invisible_layered(source, target_rect, chrome, window_mode, the_ask, ctx);
             restore_foreground(ctx.previous_foreground, ctx.processes);
             PlacementMode::InvisibleLayered
         }
@@ -5983,9 +6088,7 @@ fn snap_source(
         }
         SnapAction::KeepOffScreen => PlacementMode::OffScreen,
         SnapAction::ReparkOffScreen => {
-            let ask = the_ask.unwrap_or_else(|| {
-                the_ask_for_window(source, (target_rect.2, target_rect.3), window_mode)
-            });
+            let ask = the_ask.unwrap_or_else(|| the_ask_for_host(source, target_rect, chrome));
             *the_ask = Some(ask);
             park_offscreen(source, ask.0, ask.1, ctx);
             restore_foreground(ctx.previous_foreground, ctx.processes);
@@ -5996,7 +6099,7 @@ fn snap_source(
                 *the_ask = None;
                 PlacementMode::BehindHost
             } else {
-                let ask = the_ask_for_window(source, (target_rect.2, target_rect.3), window_mode);
+                let ask = the_ask_for_host(source, target_rect, chrome);
                 *the_ask = Some(ask);
                 park_offscreen(source, ask.0, ask.1, ctx);
                 PlacementMode::OffScreen
@@ -7591,12 +7694,15 @@ fn run_offscreen_staged_settle_and_reveal(
         return false;
     }
 
-    let Some(host_rect) = current_target_rect() else {
+    let Some(box_) = current_target_rect() else {
         if is_current(launch.id) {
             end_the_program();
         }
         return false;
     };
+    // The host is the box grown by the frame the program draws around its picture (see `the_host_for`).
+    let chrome = chrome_now(source, window_mode);
+    let host_rect = the_host_for(box_, chrome);
     if let Ok(mut slot) = LAST_HOST_RECT.lock() {
         *slot = Some(host_rect);
     }
@@ -7608,22 +7714,30 @@ fn run_offscreen_staged_settle_and_reveal(
     if make_source_invisible(source.0 as isize) {
         *state.invisible_layered = true;
         SOURCE_INVISIBLE_LAYERED.store(true, Ordering::SeqCst);
-        place_invisible_layered(source, host_rect, window_mode, state.the_ask, ctx);
+        place_invisible_layered(source, host_rect, chrome, window_mode, state.the_ask, ctx);
         if window_rect(source).is_some_and(|r| is_off_screen(&r, vscreen)) {
+            // The ask is the frame the picture is composed from, so the window is put where that
+            // frame — and not the window rect — lands on the host (see `the_ask_for_host`).
             let (aw, ah) = state.the_ask.unwrap_or((hw, hh));
+            let insets = if window_mode == CustomWindowMode::Normal {
+                dwm_frame_insets(source)
+            } else {
+                (0, 0, 0, 0)
+            };
+            let (wx, wy, ww, wh) = behind_host_window_rect((hx, hy, aw, ah), insets);
             if ctx.forced {
-                apply_hook_rect_now(active_hook, source, (hx, hy, aw, ah), ZORDER_BOTTOM);
+                apply_hook_rect_now(active_hook, source, (wx, wy, ww, wh), ZORDER_BOTTOM);
                 force_place_window(
                     source,
-                    (hx, hy, aw, ah),
+                    (wx, wy, ww, wh),
                     HWND_BOTTOM,
                     SET_WINDOW_POS_FLAGS(0),
                     ctx,
                 );
-                sync_hook_if_shifted(active_hook, source, (hx, hy));
+                sync_hook_if_shifted(active_hook, source, (wx, wy));
             } else {
                 let _ =
-                    unsafe { SetWindowPos(source, HWND_BOTTOM, hx, hy, aw, ah, SWP_NOACTIVATE) };
+                    unsafe { SetWindowPos(source, HWND_BOTTOM, wx, wy, ww, wh, SWP_NOACTIVATE) };
             }
             let _ = unsafe { InvalidateRect(source, None, false) };
             let _ = unsafe { UpdateWindow(source) };
@@ -7722,7 +7836,7 @@ fn run_offscreen_staged_settle_and_reveal(
     let mode = if place_behind_host(source, host_rect, window_mode, ctx) {
         PlacementMode::BehindHost
     } else {
-        let ask = the_ask_for_window(source, (hw, hh), window_mode);
+        let ask = the_ask_for_host(source, host_rect, chrome);
         *state.the_ask = Some(ask);
         if ctx.forced {
             apply_hook_rect_now(
@@ -8863,6 +8977,9 @@ fn reveal_in_process_hook(
     if let Ok(mut slot) = LAST_HOST_RECT.lock() {
         *slot = Some(host_rect);
     }
+    // One reading of the frame answers every ask below, so a window that is still being restyled
+    // cannot have the ask land beside the host it was grown from.
+    let chrome = chrome_now(source, window_mode);
     let ctx = placement_ctx_from_want(launch, processes, None, Some(&session.view));
     cp_trace!(
         "reveal_hook: start id={} src=0x{:x} host=0x{:x} host_rect={:?} hook_hits={} inv_layered={} forced={} cloaked={}",
@@ -8883,7 +9000,14 @@ fn reveal_in_process_hook(
             .cloak_enabled
             .store(0, Ordering::Release);
         let fallback_ctx = PlacementContext { hook: None, ..ctx };
-        place_invisible_layered(source, host_rect, window_mode, state.the_ask, fallback_ctx);
+        place_invisible_layered(
+            source,
+            host_rect,
+            chrome,
+            window_mode,
+            state.the_ask,
+            fallback_ctx,
+        );
         if *state.pre_cloaked {
             let _ = set_window_cloak(source, false);
             *state.pre_cloaked = false;
@@ -8987,7 +9111,7 @@ fn reveal_in_process_hook(
     );
 
     if !fits_host {
-        let ask = the_ask_for_window(source, (hw, hh), window_mode);
+        let ask = the_ask_for_host(source, host_rect, chrome);
         *state.the_ask = Some(ask);
         cp_trace!(
             "reveal_hook: stage_ask id={} ask={:?} hw_hh=({},{})",
@@ -9171,7 +9295,7 @@ fn reveal_in_process_hook(
                 let _ = unsafe { UpdateWindow(source) };
                 PlacementMode::BehindHost
             } else {
-                let ask = the_ask_for_window(source, (hw, hh), window_mode);
+                let ask = the_ask_for_host(source, host_rect, chrome);
                 cp_trace!(
                     "reveal_hook: behind_host_degrade_offscreen id={} ask={:?} cur_win={:?} cur_vis={:?}",
                     launch.id,
@@ -9227,7 +9351,7 @@ fn reveal_in_process_hook(
         if ctx.forced && !is_window_offscreen(source) {
             let ask = state
                 .the_ask
-                .unwrap_or_else(|| the_ask_for_window(source, (hw, hh), window_mode));
+                .unwrap_or_else(|| the_ask_for_host(source, host_rect, chrome));
             *state.the_ask = Some(ask);
             session
                 .view
@@ -9329,7 +9453,7 @@ fn run_in_process_hook_settle_and_reveal(
         window_rect(source)
     );
     if was_hidden {
-        let Some(target_rect) = current_target_rect() else {
+        let Some(box_) = current_target_rect() else {
             cp_trace!(
                 "settle_hook: abort id={} reason=no_target_rect_hidden",
                 launch.id
@@ -9339,6 +9463,7 @@ fn run_in_process_hook_settle_and_reveal(
             }
             return false;
         };
+        let target_rect = the_host_for(box_, chrome_now(source, window_mode));
         session.view.ensure_cloaked_and_locked();
         let insets = if window_mode == CustomWindowMode::Normal {
             dwm_frame_insets(source)
@@ -9415,7 +9540,7 @@ fn run_in_process_hook_settle_and_reveal(
             }
             return false;
         }
-        let Some(target_rect) = current_target_rect() else {
+        let Some(box_) = current_target_rect() else {
             cp_trace!(
                 "settle_hook: exit id={} reason=want_cleared elapsed_ms={}",
                 launch.id,
@@ -9430,6 +9555,7 @@ fn run_in_process_hook_settle_and_reveal(
             }
             return false;
         };
+        let target_rect = the_host_for(box_, chrome_now(source, window_mode));
         let insets = if window_mode == CustomWindowMode::Normal {
             dwm_frame_insets(source)
         } else {
@@ -9528,7 +9654,7 @@ fn run_in_process_hook_settle_and_reveal(
         }
         return false;
     }
-    let Some(host_rect) = current_target_rect() else {
+    let Some(box_) = current_target_rect() else {
         cp_trace!(
             "settle_hook: post_exit id={} reason=no_target_rect",
             launch.id
@@ -9539,6 +9665,9 @@ fn run_in_process_hook_settle_and_reveal(
         }
         return false;
     };
+    // The host is the box grown by the frame, and the reveal places the program's window so that
+    // frame lands on it (see `the_host_for` and `reveal_in_process_hook`).
+    let host_rect = the_host_for(box_, chrome_now(source, window_mode));
     reveal_in_process_hook(
         host,
         source,
@@ -10544,6 +10673,95 @@ mod tests {
             (600, 400)
         );
         assert_eq!(the_ask_for((600, 400), (0, 0), (0, 0, 0, 0)), (600, 400));
+    }
+
+    #[test]
+    fn the_ask_is_the_host_rect_so_the_client_lands_on_the_box_and_the_picture_on_the_host() {
+        // MPV Player's frame as measured on the running app: the client stands 1 px in and 31 px
+        // down from the visible frame, which is 2 x 32 larger than it — and Win11's invisible shadow
+        // border puts another 7 px round the window rect, so all three rects are different.
+        let chrome = (1, 31, 2, 32);
+        let insets = (7, 0, 7, 7);
+        let box_ = (300, 200, 1200, 675);
+
+        let host = the_host_for(box_, chrome);
+        let asked = the_ask_for((box_.2, box_.3), (1200, 675), chrome);
+        assert_eq!(
+            (asked.0, asked.1),
+            (host.2, host.3),
+            "the ask is the host rect: the frame the picture is composed from"
+        );
+
+        // Put the window where the ask says, and read back the three rects a placement sees.
+        let (wx, wy, ww, wh) = behind_host_window_rect((host.0, host.1, asked.0, asked.1), insets);
+        let visible = (
+            wx + insets.0,
+            wy + insets.1,
+            ww - insets.0 - insets.2,
+            wh - insets.1 - insets.3,
+        );
+        assert_eq!(
+            visible, host,
+            "the window's visible frame lands on the host, which is what a thumbnail composes"
+        );
+        let client = (
+            visible.0 + chrome.0,
+            visible.1 + chrome.1,
+            visible.2 - chrome.2,
+            visible.3 - chrome.3,
+        );
+        assert_eq!(
+            client, box_,
+            "and its client is the box exactly, which is the shape the player needs"
+        );
+
+        // The picture is that visible frame and the host's client is the whole of it: drawn 1:1,
+        // with no letterbox for either the player or the host to draw.
+        let picture = (visible.2, visible.3);
+        let destination = the_picture_in(host.2, host.3, picture);
+        assert_eq!(
+            (
+                destination.left,
+                destination.top,
+                destination.right,
+                destination.bottom
+            ),
+            (0, 0, host.2, host.3),
+            "the whole of the host's client is the picture, and none of the background shows"
+        );
+
+        // The box a host rect was grown from is read back out of it, which is how a placement handed
+        // the host rect asks for the box it stands on.
+        assert_eq!(the_box_of(host, chrome), box_);
+        assert_eq!(
+            the_box_of(host, (0, 0, 0, 0)),
+            host,
+            "and no frame leaves it alone"
+        );
+    }
+
+    #[test]
+    fn the_ask_is_a_fixed_point_once_the_window_has_taken_it() {
+        // The reported hover: a 2406x1353 box on a 1920x1080 film. The ask is the visible frame, so
+        // the client inside it is the box — and asking again with that client answers the same
+        // thing. Taking the *window* rect for the client instead is what made the ask grow by its own
+        // frame on every poll, leaving the player's client wider than the box.
+        let chrome = (1, 31, 2, 32);
+        let box_ = (2406, 1353);
+        let first = the_ask_for(box_, (1936, 1119), chrome);
+        assert_eq!(
+            first,
+            (2408, 1385),
+            "the box plus the frame, and nothing else"
+        );
+
+        let client = (first.0 - chrome.2, first.1 - chrome.3);
+        assert_eq!(client, box_, "the client inside the ask is the box");
+        let again = the_ask_for(box_, (client.0 as u32, client.1 as u32), chrome);
+        assert_eq!(
+            again, first,
+            "so the next poll asks for exactly the same window"
+        );
     }
 
     #[test]
