@@ -1131,7 +1131,19 @@ pub(super) fn pin_key_restores_bubble(collapsed: bool, explorer_focused: bool) -
 /// to keep alive across the call and nothing it can invalidate underneath it. The file itself belongs to
 /// whichever program the Shell starts, and this side has no handle on it to release.
 pub(super) unsafe fn open_path_with_default_app(path: &Path, hwnd: HWND) {
-    shell_open_on(hwnd, path);
+    // **A hand-off, and on an elevated run the Shell performs it.** The program the file opens in is
+    // the user's own — not an administrator's — so it is started as the desktop user rather than
+    // inheriting this process's elevated token, which is the whole of `app::hand_off`. The display
+    // hint is what is given up for that, and it is the right way round: a window on the wrong
+    // display is moved by hand, a browser running as administrator is not.
+    let file = plain_path(path);
+
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    let handed = crate::app::hand_off::open(&file, Some(monitor.0 as isize));
+
+    if !handed {
+        shell_open_on(hwnd, path);
+    }
 }
 
 /// Show a file where it lives: Windows Explorer comes up on the folder holding it **with the file

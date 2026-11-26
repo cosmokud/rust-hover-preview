@@ -180,6 +180,31 @@ pub const DEFAULT_CHECK_FOR_UPDATES: bool = true;
 /// tray's short tick takes it the moment the screen is empty (see `the_app_is_idle` and
 /// `AWAITING_INSTALL`).
 pub const DEFAULT_SILENT_AUTO_UPDATE: bool = false;
+/// Whether Windows starts this app **as administrator** when it starts it with Windows — the
+/// `System -> Run as administrator` row, off where the app starts.
+///
+/// Off, this app is the ordinary one it has always been. On, the startup entry becomes a scheduled
+/// task with the logon trigger and the highest run level, which is the only mechanism Windows has
+/// for starting a program elevated at a logon without a UAC prompt: a `Run` value is never elevated
+/// (see `app::startup` and `app::task`).
+pub const DEFAULT_RUN_AS_ADMINISTRATOR: bool = false;
+
+/// What this app does with what it hands over while it is elevated — the
+/// `System -> Elevate Hand-Offs (Warning)` row.
+///
+/// **Off is the safe side of the warning.** An elevated copy's children inherit its elevated
+/// token, and an ordinary program that inherits one is a program running as administrator with no
+/// prompt raised for it: a browser, a text editor, a media player, `winrar`, a file an association
+/// points at. Off, everything under this app that is a hand-off to such a program is started
+/// through the Shell's own token instead — Windows' own documented way of starting a child
+/// unelevated (`Shell.Application`'s `ShellExecute`, which is `explorer.exe` doing the starting) —
+/// and `winget` installs into this user's profile rather than into whichever administrator the
+/// elevated token belongs to.
+///
+/// On, children are started as they always were, which is what a user is told the warning is for:
+/// some program of their own may be one that only works as an administrator.
+pub const DEFAULT_ELEVATE_HAND_OFFS: bool = false;
+
 /// How often the update checks may ask GitHub, in hours — the one period both `System` rows
 /// share, since a silent install is an answer to a check and never a schedule of its own.
 ///

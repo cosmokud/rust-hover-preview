@@ -177,8 +177,11 @@ fn script(winget: &Path, id: &str, rc: &Path) -> String {
 /// Start the script in a console of its own, and answer with the exit code it left behind — or
 /// nothing where the window went before it wrote one.
 ///
-/// There is no deadline of this side's: the user is watching the install, closing the window is
-/// the way to end it, and a timeout would end an install nobody wanted ended.
+/// There is no deadline of this side's for an install it started itself: the user is watching the
+/// install, closing the window is the way to end it, and a timeout would end an install nobody
+/// wanted ended. A console the Shell started is the one case with one — this app has no handle on
+/// that process, so a window closed early would otherwise leave this worker waiting for a file that
+/// is never written — and the bound is long enough that no install of any engine reaches it.
 fn run(winget: &Path, id: &str) -> Option<i32> {
     let (path, rc) = paths(id);
 
@@ -188,14 +191,41 @@ fn run(winget: &Path, id: &str) -> Option<i32> {
 
     let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
 
-    let mut child = Command::new(comspec)
-        .arg("/c")
-        .arg(&path)
-        .creation_flags(CREATE_NEW_CONSOLE)
-        .spawn()
-        .ok()?;
+    // **`winget` is a hand-off, and on an elevated run the Shell starts it.** The console window is
+    // the user's own, `winget` installs into the profile of the account at the desktop rather than
+    // into whichever administrator an elevated token belongs to, and the progress the window shows
+    // is progress in an installation this user can actually run (`app::hand_off`). Off that road —
+    // an ordinary run — this is the console window this app has always opened.
+    let mut child = match crate::app::hand_off::through_the_shell() {
+        true => {
+            let line = format!("/c \"{}\"", path.display());
+            let started = crate::app::hand_off::run(&comspec.to_string_lossy(), &line);
+
+            if !started {
+                return None;
+            }
+
+            Started::ThroughTheShell
+        }
+        false => Started::Child(
+            Command::new(comspec)
+                .arg("/c")
+                .arg(&path)
+                .creation_flags(CREATE_NEW_CONSOLE)
+                .spawn()
+                .ok()?,
+        ),
+    };
+
+    let started_at = std::time::Instant::now();
 
     loop {
+        if matches!(child, Started::ThroughTheShell)
+            && started_at.elapsed() > THE_SHELLS_INSTALL_GIVES_UP_AFTER
+        {
+            return None;
+        }
+
         // A code that does not read back yet is a file still being written, and one more look is
         // cheaper than a failure read off half of it.
         if let Ok(text) = std::fs::read_to_string(&rc) {
@@ -204,12 +234,26 @@ fn run(winget: &Path, id: &str) -> Option<i32> {
             }
         }
 
-        if let Ok(Some(_)) = child.try_wait() {
-            return None;
+        // The child this side holds is one it started; a console the Shell started is a process
+        // this app has no handle on, and its answer is the code it leaves in the file above.
+        if let Started::Child(child) = &mut child {
+            if let Ok(Some(_)) = child.try_wait() {
+                return None;
+            }
         }
 
         std::thread::sleep(POLL);
     }
+}
+
+/// How long an install the Shell started is waited on: a bound rather than a deadline, since the
+/// console is no handle of this app's to watch (see `run`).
+const THE_SHELLS_INSTALL_GIVES_UP_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// What is holding the install's console window: a process this app started, or one the Shell did.
+enum Started {
+    Child(std::process::Child),
+    ThroughTheShell,
 }
 
 /// Point this process's `PATH` at the one the machine has now, machine values first and this user's

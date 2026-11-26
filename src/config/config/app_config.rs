@@ -9,16 +9,17 @@ use super::defaults::{
     DEFAULT_ANIMATED_WEBP_BUDGET_MB, DEFAULT_AUDIO_MARK_OFFSET_Y, DEFAULT_AUDIO_VOLUME,
     DEFAULT_BROWSE_DIALOG_PREVIEW_ENABLED, DEFAULT_CHECK_FOR_UPDATES,
     DEFAULT_CUSTOM_PREVIEW_ENABLED, DEFAULT_DECODE_BUDGET_GB, DEFAULT_DOCUMENT_CACHE_MB,
-    DEFAULT_EVERYTHING_PREVIEWS, DEFAULT_F3D_PATH, DEFAULT_GENERAL_DISK_CACHE_MB,
-    DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP, DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB,
-    DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH, DEFAULT_NORMALIZE_VIDEO_VOLUME,
-    DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE, DEFAULT_OTHERS_CACHE_MB,
-    DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE, DEFAULT_PIN_ZOOM_BOUNCE_GATE,
-    DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER, DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS,
-    DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_Q_DIR_PREVIEWS, DEFAULT_REMEMBER_AUDIO_VOLUME,
-    DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML, DEFAULT_RESPECT_AWAY_TIMER,
-    DEFAULT_SAME_FILE_REHOVER_DELAY_MS, DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE,
-    DEFAULT_SPINNER_DELAY_MS, DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
+    DEFAULT_ELEVATE_HAND_OFFS, DEFAULT_EVERYTHING_PREVIEWS, DEFAULT_F3D_PATH,
+    DEFAULT_GENERAL_DISK_CACHE_MB, DEFAULT_HDR_EXPOSURE, DEFAULT_HDR_TONE_MAP,
+    DEFAULT_HOVER_DELAY_MS, DEFAULT_IMAGE_CACHE_MB, DEFAULT_IMAGE_DISK_CACHE_MB, DEFAULT_MPV_PATH,
+    DEFAULT_NORMALIZE_VIDEO_VOLUME, DEFAULT_NORMALIZE_VOLUME, DEFAULT_OFFICE_ENGINE,
+    DEFAULT_OTHERS_CACHE_MB, DEFAULT_PDF_AUTOFOCUS, DEFAULT_PDF_FULL_MODE,
+    DEFAULT_PIN_ZOOM_BOUNCE_GATE, DEFAULT_PIN_ZOOM_BOUNCE_MS, DEFAULT_PIN_ZOOM_BOUNCE_POWER,
+    DEFAULT_PIN_ZOOM_BOUNCE_SPEED_MS, DEFAULT_PREVIEW_SCALE_PERCENT, DEFAULT_Q_DIR_PREVIEWS,
+    DEFAULT_REMEMBER_AUDIO_VOLUME, DEFAULT_REMEMBER_VIDEO_VOLUME, DEFAULT_RENDER_HTML,
+    DEFAULT_RESPECT_AWAY_TIMER, DEFAULT_RUN_AS_ADMINISTRATOR, DEFAULT_SAME_FILE_REHOVER_DELAY_MS,
+    DEFAULT_SETTLING_DELAY_MS, DEFAULT_SILENT_AUTO_UPDATE, DEFAULT_SPINNER_DELAY_MS,
+    DEFAULT_TEXT_DONT_PREVIEW_SECRETS, DEFAULT_TEXT_FONT_SCALE_PERCENT,
     DEFAULT_TEXT_SCROLL_FAR_EDGE_GRACE_PIXELS, DEFAULT_TEXT_SHOW_EXTENSIONLESS, DEFAULT_TICK_MS,
     DEFAULT_TOGGLE_KEY, DEFAULT_TTC_FACE, DEFAULT_UPDATE_CHECK_HOURS, DEFAULT_VIDEO_ENGINE,
     DEFAULT_VIDEO_ENGINE_FALLBACK, DEFAULT_VIDEO_HW_ACCEL, DEFAULT_VIDEO_SCALE_PERCENT,
@@ -48,6 +49,21 @@ use super::setting_types::{
 pub struct AppConfig {
     pub is_first_run: bool,
     pub run_at_startup: bool,
+    /// Whether Windows starts this app as administrator when it starts it with Windows — the
+    /// `System -> Run as administrator` row, off where the app starts.
+    ///
+    /// It is a choice about the **machine** rather than about a preview: on, `Run at Startup`
+    /// stops writing a `Run` value and registers a scheduled task that starts this copy with the
+    /// highest run level (see `app::startup` and `app::task`), and it is that task's presence that
+    /// the row's checkmark is drawn from. A file that asks for it without asking for
+    /// `run_at_startup` asks for nothing yet: the choise is kept and nothing is written until
+    /// something is actually to be started at a logon.
+    pub run_as_administrator: bool,
+    /// What this app does with the programs it hands a file over to while it is running elevated:
+    /// `System -> Elevate Hand-Offs (Warning)`. Off, the Shell's own unelevated token starts them
+    /// (see `app::hand_off`); on, they inherit this process's, which is what a user of a program
+    /// that only works as an administrator needs (see `DEFAULT_ELEVATE_HAND_OFFS`).
+    pub elevate_hand_offs: bool,
     /// Whether the app asks GitHub for a newer release on its own, at startup, on every opening
     /// of the menu and once per `update_check_hours` — on where the app starts, and the
     /// `System → Check for Updates` row is the switch (see `DEFAULT_CHECK_FOR_UPDATES`).
@@ -852,6 +868,8 @@ impl Default for AppConfig {
         Self {
             is_first_run: false,
             run_at_startup: true,
+            run_as_administrator: DEFAULT_RUN_AS_ADMINISTRATOR,
+            elevate_hand_offs: DEFAULT_ELEVATE_HAND_OFFS,
             check_for_updates: DEFAULT_CHECK_FOR_UPDATES,
             silent_auto_update: DEFAULT_SILENT_AUTO_UPDATE,
             update_check_hours: DEFAULT_UPDATE_CHECK_HOURS,

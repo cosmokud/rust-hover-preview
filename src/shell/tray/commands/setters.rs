@@ -43,11 +43,6 @@ use crate::config::config::{
 use crate::config::{commit_config, publish_config_change, snapshot};
 use crate::formats::codecs;
 use crate::{app::startup, CONFIG};
-use std::os::windows::ffi::OsStrExt;
-use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 /// What the trigger key does is a setting rather than a view of one, so the preview
 /// on screen is rebuilt: in disable mode a held key is what keeps previews away, and
@@ -1099,18 +1094,10 @@ pub(in super::super) fn set_settling_delay(index: u16) {
 /// opened with, and nothing is fetched or run here — what becomes of the page is the
 /// browser's own business (see `updates::open_release_page`).
 pub(in super::super) fn open_link(url: &str) {
-    let wide_url: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
-
-    unsafe {
-        let _ = ShellExecuteW(
-            HWND(std::ptr::null_mut()),
-            w!("open"),
-            PCWSTR(wide_url.as_ptr()),
-            PCWSTR(std::ptr::null()),
-            PCWSTR(std::ptr::null()),
-            SW_SHOWNORMAL,
-        );
-    }
+    // Through the one road this app hands anything over: on an elevated run the browser is started
+    // by the Shell, so the page comes up in the user's own browser rather than in an administrator's
+    // (see `app::hand_off`).
+    crate::app::hand_off::open(url, None);
 }
 
 pub(in super::super) fn open_config_file() {
@@ -1119,21 +1106,9 @@ pub(in super::super) fn open_config_file() {
     }
 
     if let Some(path) = crate::config::config::AppConfig::config_path() {
-        let wide_path: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-
-        unsafe {
-            let _ = ShellExecuteW(
-                HWND(std::ptr::null_mut()),
-                w!("open"),
-                PCWSTR(wide_path.as_ptr()),
-                PCWSTR(std::ptr::null()),
-                PCWSTR(std::ptr::null()),
-                SW_SHOWNORMAL,
-            );
-        }
+        // The file is handed to whatever edits an `.ini`, which on an elevated run is the user's own
+        // editor rather than one running as an administrator — the same rule every hand-off of this
+        // app's follows (see `app::hand_off`).
+        crate::app::hand_off::open(&crate::paths::plain_path(&path), None);
     }
 }

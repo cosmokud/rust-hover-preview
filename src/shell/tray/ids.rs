@@ -18,6 +18,9 @@ pub(super) const WM_TRAY_INSTALL_FINISHED: u32 = WM_USER + 2;
 pub(super) const WM_TRAY_UPDATE_INSTALLED: u32 = WM_USER + 3;
 #[allow(dead_code)]
 pub(super) const WM_TRAY_TICK: u32 = WM_USER + 4;
+/// The message that takes the tray down: posted when the app is to be ended and started again — the
+/// hand-over an elevated start makes, where the task starts a fresh copy and this one goes.
+pub(super) const WM_TRAY_LEAVE: u32 = WM_USER + 5;
 pub(super) const TIMER_CHECK: usize = 1;
 pub(super) const TIMER_DUE: usize = 2;
 pub(super) const DUE_TICK_MS: u32 = 1000;
@@ -201,6 +204,10 @@ define_tray_ids! {
     // Core & system rows
     ID_TRAY_EXIT : 1,
     ID_TRAY_STARTUP : 1,
+    // The two rows under `Run at Startup`: whether a logon starts this app as administrator, and
+    // what this app does with the programs it hands a file over to while it is elevated.
+    ID_TRAY_RUN_AS_ADMINISTRATOR : 1,
+    ID_TRAY_ELEVATE_HAND_OFFS : 1,
     ID_TRAY_ENABLE : 1,
     ID_TRAY_UPDATE : 1,
     ID_TRAY_OPEN_CONFIG : 1,

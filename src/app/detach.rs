@@ -22,6 +22,10 @@ pub(crate) const VIEWER: &str = "--viewer";
 pub(crate) enum Startup {
     /// The tray app, which is what a launch with no switch of ours on it is.
     Tray,
+    /// The elevated copy of the app that makes the one write a process without a token of its own
+    /// may not make — the scheduled task that starts this app at a logon (see `app::startup`). It
+    /// registers or removes that task and exits: no tray, no viewer, no instance.
+    Elevated(crate::app::startup::Applied),
     /// The viewer of the run named by the pid that comes with it: the process every preview is drawn in,
     /// which owns no listing and watches nothing of one (see `app::viewer` and `run_a_viewer`).
     Viewer(u32),
@@ -38,7 +42,21 @@ pub(crate) fn startup_mode() -> Startup {
 }
 
 fn parse(args: impl IntoIterator<Item = OsString>) -> Startup {
-    let mut args = args.into_iter();
+    // The elevated helper is a launch of its own kind rather than a mode of this one: it writes one
+    // thing and exits, and every road below is a road it does not take.
+    let arguments: Vec<OsString> = args.into_iter().collect();
+
+    if arguments
+        .iter()
+        .any(|arg| arg.to_str() == Some(crate::app::startup::ELEVATE_SWITCH))
+    {
+        // A launch that was begun for one write and cannot say which is one that must not stand as
+        // a second tray icon: nothing is started rather than the wrong thing.
+        return crate::app::startup::helper_request(arguments.iter().cloned())
+            .map_or(Startup::Refused, Startup::Elevated);
+    }
+
+    let mut args = arguments.into_iter();
     let mut a_viewer_was_asked_for = false;
     let mut viewer: Option<u32> = None;
 
@@ -111,6 +129,31 @@ mod tests {
     fn a_launch_with_no_switch_of_ours_on_it_is_the_tray_app() {
         assert_eq!(parse(arguments(&[])), Startup::Tray);
         assert_eq!(parse(arguments(&["--verbose"])), Startup::Tray);
+    }
+
+    #[test]
+    fn the_elevated_helper_is_a_launch_of_its_own_kind() {
+        use crate::app::startup::{Applied, ELEVATE_SWITCH};
+
+        assert_eq!(
+            parse(arguments(&[ELEVATE_SWITCH, "on"])),
+            Startup::Elevated(Applied::TurnOn)
+        );
+        assert_eq!(
+            parse(arguments(&[ELEVATE_SWITCH, "off"])),
+            Startup::Elevated(Applied::TurnOff)
+        );
+        // A word this app does not know is not a request to write anything, and it is not the
+        // tray either: a launch that was begun for one write and cannot say which is one that
+        // must not stand as a second tray icon.
+        assert_eq!(parse(arguments(&[ELEVATE_SWITCH])), Startup::Refused);
+        assert_eq!(
+            parse(arguments(&[ELEVATE_SWITCH, "maybe"])),
+            Startup::Refused
+        );
+        // And every other launch is what it always was.
+        assert_eq!(parse(arguments(&[])), Startup::Tray);
+        assert_eq!(parse(arguments(&["--viewer", "7"])), Startup::Viewer(7));
     }
 
     #[test]

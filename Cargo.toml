@@ -41,6 +41,11 @@ windows = { version = "0.58", features = [
     "Win32_System_JobObjects",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Registry",
+    # The Task Scheduler, which is the one mechanism Windows has for starting a program at a logon
+    # **elevated**: a `Run` value is never elevated and no UAC prompt is raised for one. The task
+    # this app registers is a logon trigger with the highest run level (see `app::task`), and the
+    # service is reached through its COM object rather than through `schtasks`.
+    "Win32_System_TaskScheduler",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
     "Win32_UI_Controls",

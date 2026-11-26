@@ -1,22 +1,27 @@
 //! Where Windows is told to start this app, and whether it still will.
 //!
-//! One value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` holds the command line a
-//! logon runs, and this module is everything this app knows about it: writing it, removing it,
-//! reading it back, and deciding whether what is there is what starts the copy running now.
+//! **Two mechanisms, one setting.** `run_at_startup` is answered by the machine: off, nothing at a
+//! logon starts this app; on, either a value under
+//! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` holds the command line a logon runs, or —
+//! where the user has also asked for `Run as administrator` — a scheduled task with a logon trigger
+//! and the highest run level does, because a `Run` value is never elevated and no UAC prompt is ever
+//! raised for one (see `app::task`). This module is everything this app knows about both: writing
+//! them, removing them, reading them back, and deciding whether what is there is what starts the copy
+//! running now.
 //!
-//! **The registry is the truth, and the configuration is a copy of it.** Whether this app starts
+//! **The machine is the truth, and the configuration is a copy of it.** Whether this app starts
 //! is a fact about the machine, so a row of the tray and `run_at_startup` in `config.ini` are both
-//! answered by asking the registry — an entry the user turned off in **Settings → Apps → Startup**,
+//! answered by asking the machine — an entry the user turned off in **Settings → Apps → Startup**,
 //! or one another tool removed, reads as the app that will not start rather than as the value the
 //! file remembers choosing.
 //!
-//! **Two things about that entry are the platform's rather than this app's, and both are answered
+//! **Two things about a `Run` entry are the platform's rather than this app's, and both are answered
 //! here.** Windows keeps a second value per entry under `Explorer\StartupApproved\Run`, holding
 //! whether the entry is *enabled*; a value that is present but disabled is an entry that never
 //! runs, and asking only whether the value is there answers yes for a machine where nothing
 //! starts. And the value only runs unelevated: Windows never raises a UAC prompt for a `Run` entry,
 //! so a command that requires elevation — an app marked *Run this program as an administrator* —
-//! is a command that does not start at all.
+//! is a command that does not start at all. That last fact is what the task above is for.
 //!
 //! **Which account's entry it is** is the other half of the same problem: this app installs per
 //! user and writes under `HKEY_CURRENT_USER`, which an elevated run answers with the hive of the
@@ -30,6 +35,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::app::elevation;
+use crate::app::task::{self, Refused};
 use windows::core::{w, PCWSTR};
 use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
@@ -72,12 +78,102 @@ pub(crate) enum Outcome {
     /// The entry was written into another account's hive, because this process is not running as
     /// the account the desktop belongs to. Carries that account's SID.
     AnotherAccount(String),
+    /// A logon will start this app, but it needs a scheduled task rather than a `Run` value, and
+    /// writing one needs the elevated token this process does not have. Nothing was written.
+    ///
+    /// It is the ordinary answer of an unelevated run whose machine already holds an entry that
+    /// asks for elevation — an exe marked *Run this program as an administrator* in its
+    /// compatibility properties, or a `run_as_administrator` a file asked for — and what the caller
+    /// does about it is hand the write to an elevated copy of this app (see `the_elevated_helper`).
+    NeedsElevation,
+    /// The row was asked for an elevated start and the machine refused the task for a reason of its
+    /// own: a policy, a broken Task Scheduler, a service that is not running.
+    TaskRefused,
 }
 
 impl Outcome {
     /// Whether what was asked for is what the machine holds.
     pub(crate) fn settled(&self) -> bool {
         matches!(self, Outcome::Settled | Outcome::AnotherAccount(_))
+    }
+}
+
+/// Which of the two mechanisms a machine's startup entry is, as the tray's rows are drawn from it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum Started {
+    /// Nothing at a logon starts this app.
+    #[default]
+    Nothing,
+    /// A `Run` value starts this copy, unelevated, which is the ordinary way this app has always
+    /// started with Windows.
+    Entry,
+    /// A scheduled task starts this copy with the highest run level — the row that asks Windows for
+    /// administrator rights at a logon.
+    Task,
+    /// One of the two is there and does not start anything this copy is party to: a `Run` value
+    /// another tool switched off, a task Task Scheduler disabled, an entry naming a copy that has
+    /// since moved, or a task registered for another account.
+    NotRunning,
+}
+
+impl Started {
+    /// Whether the machine starts this copy at a logon.
+    pub(crate) fn runs(&self) -> bool {
+        matches!(self, Started::Entry | Started::Task)
+    }
+}
+
+/// What the machine holds about the two mechanisms, asked once: it is four registry reads and two
+/// reads of a task, and every row of the `System` submenu is drawn from one answer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct Machine {
+    /// The `Run` value's presence, and whether its `StartupApproved` flag lets it run.
+    pub entry_present: bool,
+    pub entry_enabled: bool,
+    /// The entry names this copy of the app rather than another one.
+    pub entry_is_this_copy: bool,
+    /// The scheduled task: there, enabled, at the highest run level, and naming this copy.
+    pub task_present: bool,
+    pub task_enabled: bool,
+    pub task_elevated: bool,
+    pub task_is_this_copy: bool,
+}
+
+impl Machine {
+    /// Which mechanism, if either, starts this copy at a logon.
+    pub(crate) fn started(&self) -> Started {
+        if self.entry_present && self.entry_enabled && self.entry_is_this_copy {
+            Started::Entry
+        } else if self.task_present
+            && self.task_enabled
+            && self.task_elevated
+            && self.task_is_this_copy
+        {
+            Started::Task
+        } else if self.entry_present || self.task_present {
+            // One of the two is on the machine and starts nothing of this copy's: a value
+            // switched off in Task Manager, a task somebody disabled, or one naming another
+            // copy — which is what the row says rather than what it hides.
+            Started::NotRunning
+        } else {
+            Started::Nothing
+        }
+    }
+
+    /// Whether the machine would start this app at a logon, elevated: the whole of what the
+    /// `Run as administrator` row is drawn from.
+    pub(crate) fn elevates(&self) -> bool {
+        self.started() == Started::Task
+    }
+
+    /// Whether the exe is marked *Run this program as an administrator* in its own properties.
+    ///
+    /// The mark is one Windows honours for a program a person starts by hand — a launch from the
+    /// Start menu, a shortcut, an association raises the prompt for it — and the one a `Run` value
+    /// can never satisfy. Where it is set, the elevated start is the one the user asked for, whether
+    /// they asked for it here or in the file's properties (see `entry_would_ask_for_elevation`).
+    pub(crate) fn compat_elevation(&self) -> bool {
+        entry_would_ask_for_elevation()
     }
 }
 
@@ -101,12 +197,22 @@ pub(crate) fn enable_startup() -> Outcome {
         return Outcome::NotWritten { held: false };
     };
 
+    if elevated_start_wanted() {
+        return enable_the_task(&exe_path);
+    }
+
     let written = write_entry(&exe_path) && enable_approved();
-    let held = is_startup_enabled();
+    let held = is_entry_enabled_here();
 
     if !written || !held {
         return Outcome::NotWritten { held };
     }
+
+    // The task is the other half: a machine that carries one from an earlier answer would start
+    // this app twice at a logon — once unelevated from the registry and once elevated from the
+    // task — so the task goes with the answer that does not want it. A removal the machine refuses
+    // is not a failure of this write: what was asked for (the entry) is what is there.
+    let _ = task::unregister();
 
     if elevation::runs_under_another_account() {
         // The entry was written into another account's hive rather than this process's own, which
@@ -118,25 +224,113 @@ pub(crate) fn enable_startup() -> Outcome {
     }
 }
 
-/// Remove the entry, and the enabled flag Windows keeps beside it, so that a later re-enable is
-/// not answered by a disabled flag nobody wrote.
+/// Whether the logon that starts this app should start it **elevated**.
+///
+/// Two things ask for that, and the answer is either of them: the `run_as_administrator` a user set
+/// on the tray's row, and the *Run this program as an administrator* mark a user set on the file in
+/// Windows' own compatibility properties. The second is deliberately read as the first rather than
+/// warned about: the mark is the same request, Windows honours it for every launch that is not a
+/// `Run` value, and a row that said "this cannot work" over a machine where it now can would be a
+/// row arguing with the mechanism this app put on it.
+fn elevated_start_wanted() -> bool {
+    crate::CONFIG
+        .lock()
+        .map(|config| config.run_as_administrator)
+        .unwrap_or(false)
+        || entry_would_ask_for_elevation()
+}
+
+/// Write the scheduled task that starts this copy at a logon with the highest run level, and remove
+/// the `Run` value the same logon would otherwise also run.
+fn enable_the_task(exe_path: &Path) -> Outcome {
+    let user = elevation::desktop_user_name();
+    let Some(user) = user else {
+        // A machine with no Shell to ask is one where the account cannot be named, and a task
+        // registered for the wrong account is worse than no task: it is a logon entry nobody's
+        // logon reads.
+        return Outcome::NotWritten { held: false };
+    };
+
+    match task::register(exe_path, &user) {
+        Ok(()) => {
+            // The two are alternatives rather than both, so the value that would start an
+            // unelevated copy beside the elevated one goes. A registry this token may not write is
+            // not a reason to call the write failed: the task is what starts the app.
+            delete_entry();
+            delete_approved();
+
+            let held = task::facts().starts_this_copy(exe_path);
+
+            if held {
+                Outcome::Settled
+            } else {
+                Outcome::TaskRefused
+            }
+        }
+        Err(Refused::NeedsElevation) => Outcome::NeedsElevation,
+        Err(Refused::NoWrite) => Outcome::TaskRefused,
+    }
+}
+
+/// Remove both mechanisms: the `Run` value and its flag, and the scheduled task.
+///
 pub(crate) fn disable_startup() -> Outcome {
     delete_entry();
     delete_approved();
 
-    match is_startup_enabled() {
+    // And the mark on the exe, which is the other way this machine can be told to start elevated:
+    // an exe asking for elevation with nothing that starts it is a machine a person has to fix in
+    // Windows' own properties before an ordinary entry starts anything at all (see
+    // `remove_compat_elevation`).
+    if let Ok(exe) = env::current_exe() {
+        let _ = remove_compat_elevation(&exe);
+    }
+
+    // A task this process may not delete is a task that still starts the app — which is the state
+    // the caller is told about rather than one it is left to discover at the next logon.
+    let task_gone = task::unregister().is_ok() || !task::facts().present;
+
+    let held = is_entry_enabled_here() || !task_gone;
+
+    match held {
         true => Outcome::NotWritten { held: true },
         false => Outcome::Settled,
     }
 }
 
-/// Whether this app is registered to start when the user logs in, **and enabled**.
+/// Whether this app is registered to start when the user logs in, **and enabled** — by either
+/// mechanism, and naming this copy.
 ///
-/// Asked of the registry rather than of the configuration, because the registry is what actually
-/// starts it: the value's presence is the entry, and the flag Windows keeps beside it is whether
-/// that entry runs. An entry the user turned off in Task Manager, or one another tool removed, is
-/// answered as the app that will not start.
+/// Asked of the machine rather than of the configuration, because the machine is what actually
+/// starts it: the value's presence and its flags are the entry, and a task's presence and its flags
+/// are the task. An entry the user turned off in Task Manager, a task Task Scheduler disabled, an
+/// entry another tool removed, or one naming a copy that has since moved is answered as the app
+/// that will not start.
 pub(crate) fn is_startup_enabled() -> bool {
+    machine().started().runs()
+}
+
+/// What the machine holds about both mechanisms, as the tray's rows are drawn from it.
+pub(crate) fn machine() -> Machine {
+    let exe = env::current_exe().ok();
+    let facts = task::facts();
+
+    Machine {
+        entry_present: is_entry_present(),
+        entry_enabled: is_entry_enabled(),
+        entry_is_this_copy: entry_names_this_copy(),
+        task_present: facts.present,
+        task_enabled: facts.enabled,
+        task_elevated: facts.elevated,
+        task_is_this_copy: exe
+            .as_deref()
+            .is_some_and(|exe| facts.starts_this_copy(exe)),
+    }
+}
+
+/// Whether the `Run` value is there and Windows is allowed to run it, which is the half of
+/// `is_startup_enabled` that `enable_startup`'s read-back is made of.
+fn is_entry_enabled_here() -> bool {
     is_entry_present() && is_entry_enabled()
 }
 
@@ -245,15 +439,23 @@ fn compat_layers_value(path: &Path) -> Option<String> {
         return None;
     }
 
-    // The value's name is the path, spelled as the compatibility tab wrote it: the exact key is
-    // asked for, and a lookup that misses is not retried in another case — one that differs only in
-    // case would be a second entry for one file, which the tab does not make.
-    let name: Vec<u16> = path
-        .as_os_str()
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let layers = read_layers(hkey, path);
+
+    // Safety: the handle this call opened and nothing else holds.
+    unsafe {
+        let _ = RegCloseKey(hkey);
+    }
+
+    layers
+}
+
+/// The layer value a key of `AppCompatFlags\Layers` holds for one executable.
+///
+/// The value's name is the path, spelled as the compatibility tab wrote it: the exact key is asked
+/// for, and a lookup that misses is not retried in another case — one that differs only in case
+/// would be a second entry for one file, which the tab does not make.
+fn read_layers(hkey: HKEY, path: &Path) -> Option<String> {
+    let name = layers_value_name(path);
 
     let mut size: u32 = 0;
     // Safety: a size is written into a local; the value's bytes are not offered yet.
@@ -270,23 +472,157 @@ fn compat_layers_value(path: &Path) -> Option<String> {
     .is_ok()
         && size >= 2;
 
-    let layers = if sized {
-        let mut buffer = vec![0u8; size as usize];
-        let read = unsafe {
-            RegQueryValueExW(
-                hkey,
-                PCWSTR(name.as_ptr()),
-                None,
-                None,
-                Some(buffer.as_mut_ptr()),
-                Some(&mut size),
-            )
-        }
-        .is_ok();
+    if !sized {
+        return None;
+    }
 
-        read.then(|| decode_string(&buffer[..size.min(buffer.len() as u32) as usize]))
-    } else {
-        None
+    let mut buffer = vec![0u8; size as usize];
+    // Safety: a buffer of `size` bytes is offered, and the size is what is read back into.
+    let read = unsafe {
+        RegQueryValueExW(
+            hkey,
+            PCWSTR(name.as_ptr()),
+            None,
+            None,
+            Some(buffer.as_mut_ptr()),
+            Some(&mut size),
+        )
+    }
+    .is_ok();
+
+    read.then(|| decode_string(&buffer[..size.min(buffer.len() as u32) as usize]))
+}
+
+/// A layer value with the *Run this program as an administrator* word taken out of it.
+///
+/// **The word is one of a list, and only it goes.** A compatibility mode (`~ WIN8RTM`), a DPI fix or
+/// `HIGHDPIAWARE` beside it is the user's own setting on the file and is left exactly as written.
+/// `None` is a value that named nothing else and is therefore a value with no layers left in it —
+/// which is removed rather than written back as the `~` separator on its own, a run of characters
+/// that names no layer and is not a request Windows understands.
+fn layers_without_the_mark(layers: &str) -> Option<String> {
+    let words: Vec<&str> = layers.split_whitespace().collect();
+
+    // `~` is the list's own separator rather than a layer, and it opens a value that has one. A
+    // list left with layers in it keeps it — `~ WIN8RTM` is what Windows' own properties tab writes
+    // — and a list with none left is no value at all rather than a separator naming nothing.
+    let separator = words.first().is_some_and(|word| *word == "~");
+    let kept: Vec<&str> = words
+        .into_iter()
+        .filter(|word| *word != "~")
+        .filter(|word| !word.eq_ignore_ascii_case("RUNASADMIN"))
+        .collect();
+
+    if kept.is_empty() {
+        return None;
+    }
+
+    Some(match separator {
+        true => format!("~ {}", kept.join(" ")),
+        false => kept.join(" "),
+    })
+}
+
+/// The name a compatibility layer value is filed under: this copy's path, UTF-16 and terminated.
+fn layers_value_name(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+/// Take the *Run this program as an administrator* mark off this copy, which is what unchecking the
+/// `Run as administrator` row does.
+///
+/// **The mark has to go with the row, or the row cannot turn it off.** Windows never elevates a
+/// `Run` value and silently skips one whose exe asks for elevation, so a machine left carrying this
+/// flag beside an ordinary startup entry is a machine where nothing starts at all — the row would
+/// untick, the value would be written, and the next logon would run nothing. `RUNASADMIN` is one
+/// word among the layers a program may carry (compatibility modes, DPI fixes, `HIGHDPIAWARE`), so
+/// only that word is taken: the value is rewritten without it, and a value that is nothing but it
+/// leaves no empty string behind, because an empty layer is a request Windows does not understand.
+///
+/// The key is the **desktop account's** while this process is an elevated copy of another account,
+/// for the reason the `Run` entry is (see `app::elevation`): the compatibility flags are read for the
+/// user who starts the program, and that user is the one at the keyboard.
+///
+/// Answers whether the mark is gone afterwards, which is a machine with none at all as much as one
+/// whose layers no longer name it.
+fn remove_compat_elevation(path: &Path) -> bool {
+    let redirected = elevation::runs_under_another_account();
+    let mut hkey = HKEY::default();
+
+    let opened = {
+        let subkey = if redirected {
+            elevation::desktop_user_sid().map(|sid| {
+                format!("{sid}\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers")
+            })
+        } else {
+            None
+        };
+
+        match subkey {
+            // Safety: a handle is written into a local, and this call closes it.
+            Some(subkey) => {
+                let wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
+                unsafe {
+                    RegOpenKeyExW(
+                        HKEY_USERS,
+                        PCWSTR(wide.as_ptr()),
+                        0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE,
+                        &mut hkey,
+                    )
+                }
+            }
+            // Safety: as above.
+            None => unsafe {
+                RegOpenKeyExW(
+                    HKEY_CURRENT_USER,
+                    COMPAT_LAYERS_KEY,
+                    0,
+                    KEY_QUERY_VALUE | KEY_SET_VALUE,
+                    &mut hkey,
+                )
+            },
+        }
+    };
+
+    if opened.is_err() {
+        // No key at all is no entry at all, and an entry is the only thing this was asked to
+        // remove.
+        return true;
+    }
+
+    let Some(layers) = read_layers(hkey, path) else {
+        // Safety: the handle this call opened and nothing else holds.
+        unsafe {
+            let _ = RegCloseKey(hkey);
+        }
+        return true;
+    };
+
+    let kept = layers_without_the_mark(&layers);
+
+    let name = layers_value_name(path);
+
+    let status = match &kept {
+        // Safety: this app's own value for this copy's path in a key this call opened.
+        None => unsafe { RegDeleteValueW(hkey, PCWSTR(name.as_ptr())) },
+        Some(kept) => {
+            let written: Vec<u16> = kept.encode_utf16().chain(std::iter::once(0)).collect();
+            // Safety: the value's bytes are a UTF-16 string with its terminator.
+            unsafe {
+                RegSetValueExW(
+                    hkey,
+                    PCWSTR(name.as_ptr()),
+                    0,
+                    REG_SZ,
+                    Some(written.align_to::<u8>().1),
+                )
+            }
+        }
     };
 
     // Safety: the handle this call opened and nothing else holds.
@@ -294,7 +630,7 @@ fn compat_layers_value(path: &Path) -> Option<String> {
         let _ = RegCloseKey(hkey);
     }
 
-    layers
+    status.is_ok() && !entry_would_ask_for_elevation()
 }
 
 /// Write this copy's command line into the entry, creating the key where it is not there.
@@ -646,12 +982,23 @@ fn entry_names_this_copy() -> bool {
 /// spelling, since that is what starts it.
 pub fn repair_startup_entry() -> bool {
     // An entry that is gone is not written back here — whether this app starts is the user's choice,
-    // and a file that asks for it is answered by `honour_the_configuration` below.
-    if !is_entry_present() || entry_names_this_copy() {
+    // and a file that asks for it is answered by `honour_the_configuration` below. A task that is
+    // gone is the same absence, and it is `honour_the_configuration` that answers it too.
+    let held = machine();
+
+    if !matches!(held.started(), Started::NotRunning) {
         return false;
     }
 
-    enable_startup().settled()
+    // A copy that is named and does not start is put right in place, which is the one thing this
+    // repairs: a task somebody disabled in Task Scheduler is turned back on (see
+    // `honour_the_configuration` for the register that does it), and a value naming another copy
+    // is written in this app's own spelling, since that is what starts it.
+    match (held.task_present, held.entry_present) {
+        (true, _) => false,
+        (false, true) => enable_startup().settled(),
+        (false, false) => false,
+    }
 }
 
 /// Note that this app has just been started, and make the machine's entry agree with the
@@ -674,26 +1021,74 @@ pub fn repair_startup_entry() -> bool {
 /// ordinary case, and what it buys is that the row a user is about to read and the entry a logon
 /// will run are the same fact.
 pub fn honour_the_configuration() -> bool {
-    let wanted = crate::CONFIG
+    let (wanted, wants_elevation) = crate::CONFIG
         .lock()
-        .map(|config| config.run_at_startup)
-        .unwrap_or(false);
+        .map(|config| (config.run_at_startup, config.run_as_administrator))
+        .unwrap_or((false, false));
 
-    // An entry that is there, enabled and naming this copy is what was asked for, and nothing is
-    // written over it: an argument of the user's own after the path is left exactly as it stands.
-    let settled = !wanted || (is_entry_present() && is_entry_enabled() && entry_names_this_copy());
+    // **A mark the file no longer asks for is taken off the exe here as well as by the row.** The
+    // flag and the row are one request, so a file saying the elevated start is off — the row was
+    // turned off on a copy that could not reach the write, or the file was edited — is a machine
+    // that must not go on asking for elevation: a `Run` value under that mark starts nothing at all.
+    // A file that asks for the elevated start keeps it untouched, and where the mark is the only
+    // thing asking (a file never opened since it was set in Windows' own properties) nothing is
+    // cleared either: what a hand set, only a hand or the row takes off.
+    if wanted && !wants_elevation {
+        let _ = env::current_exe().is_ok_and(|exe| {
+            let marked = compat_layers_value(&exe).is_some_and(|layers| {
+                layers
+                    .split_whitespace()
+                    .any(|word| word.eq_ignore_ascii_case("RUNASADMIN"))
+            });
 
-    let written = !settled && enable_startup().settled();
+            marked && remove_compat_elevation(&exe)
+        });
+    }
 
-    // What the machine holds, written back where the file disagrees with it — which is the one
-    // direction this never argues: `true` asks for the entry (and has just been given it), and
-    // anything the machine refused is a `false` in the file rather than a lie in it.
-    let held = is_startup_enabled();
+    // What the machine holds, and what is asked of it: an entry that starts this copy is settled
+    // for the ordinary answer, a task that starts this copy at the highest run level is settled for
+    // the elevated one, and anything else — nothing there, a value or a task Windows has been told
+    // not to run, one naming a copy that has since moved — is what the write below is for.
+    let before = machine();
+    let settled = !wanted
+        || match (before.started(), wants_elevation) {
+            (Started::Entry, false) => true,
+            (Started::Task, true) => true,
+            // A machine carrying both starts the app twice, which is the one state nothing is
+            // written over: the answer that leaves it is the one the task is for, so the two are
+            // told apart by whether an elevated start is asked for.
+            _ => false,
+        };
 
-    if let Ok(mut config) = crate::CONFIG.lock() {
-        if config.run_at_startup != held {
-            config.run_at_startup = held;
-            config.save();
+    let outcome = match settled {
+        true => Outcome::Settled,
+        // A task that is there, names this copy and is switched off is registered again rather than
+        // written from nothing: the same call, and the same reason the `Run` value's own flag is
+        // written by `enable_startup` (the register carries `SetEnabled(true)`).
+        false => enable_startup(),
+    };
+
+    // **A write this token could not make is not a machine that refused one.** An unelevated process
+    // asking for an elevated start is answered `NeedsElevation`, and the file is left saying what the
+    // user asked for: bringing it into step with the machine there would erase the choice every time
+    // the row was read on a copy that cannot act on it yet, and the row itself already says the
+    // machine will not do it (see the label in `menus`).
+    let written = outcome.settled() && !settled;
+
+    if !matches!(outcome, Outcome::NeedsElevation) {
+        // What the machine holds, written back where the file disagrees with it — which is the one
+        // direction this never argues: `true` asks for the entry (and has just been given it), and
+        // anything the machine refused is a `false` in the file rather than a lie in it.
+        let held = machine();
+        let running = held.started().runs();
+        let elevated = held.elevates();
+
+        if let Ok(mut config) = crate::CONFIG.lock() {
+            if config.run_at_startup != running || config.run_as_administrator != elevated {
+                config.run_at_startup = running;
+                config.run_as_administrator = elevated;
+                config.save();
+            }
         }
     }
 
@@ -742,6 +1137,40 @@ mod tests {
         assert_eq!(
             executable_of(&written),
             r"C:\Program Files\Rust Hover Preview\app.exe"
+        );
+    }
+
+    /// The mark is one word of a list a program may carry, and only that word goes: a compatibility
+    /// mode, a DPI fix or a `HIGHDPIAWARE` beside it is the user's own setting and is left exactly
+    /// as it is — and a value that was nothing but the mark leaves no empty string behind, because an
+    /// empty layer is a request Windows does not understand.
+    #[test]
+    fn only_the_one_word_is_taken_off_a_layer_value() {
+        // A value that was nothing but the mark is no value at all: it is removed rather than left
+        // holding the list's own separator, which names no layer.
+        assert_eq!(layers_without_the_mark("RUNASADMIN"), None);
+        assert_eq!(layers_without_the_mark("~ RUNASADMIN"), None);
+        assert_eq!(layers_without_the_mark("RUNASADMIN ~"), None);
+
+        // A layer the user set beside it is theirs, and it stays — the mark is the one word taken.
+        assert_eq!(
+            layers_without_the_mark("~ RUNASADMIN HIGHDPIAWARE").as_deref(),
+            Some("~ HIGHDPIAWARE")
+        );
+        assert_eq!(
+            layers_without_the_mark("~ WIN8RTM runasadmin").as_deref(),
+            Some("~ WIN8RTM")
+        );
+        // And a value that does not name the mark is handed back as it was.
+        assert_eq!(
+            layers_without_the_mark("~ WIN8RTM").as_deref(),
+            Some("~ WIN8RTM")
+        );
+        // A word that only begins with it is not it.
+        assert_eq!(
+            layers_without_the_mark("~ RUNASADMINISTRATOR").as_deref(),
+            Some("~ RUNASADMINISTRATOR"),
+            "the word is compared whole"
         );
     }
 
@@ -840,4 +1269,183 @@ mod tests {
         assert!(!on(3));
         assert!(!on(1));
     }
+}
+
+// ------------------------------------------------------------- the elevated helper
+
+/// The switch that says this launch is an elevated copy of the tray app's that has one write to
+/// make and nothing else to do: it is begun by [`raise_to_elevation`], registers or removes the
+/// scheduled task, and exits. Never a tray, never a viewer (see `app::detach::startup_mode`).
+pub(crate) const ELEVATE_SWITCH: &str = "--apply-elevated-start";
+
+/// What the helper is told to do, as the word it is given after the switch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Applied {
+    /// Register the task for the copy of the app the helper itself is running from.
+    TurnOn,
+    /// Remove the task, and the `Run` value beside it.
+    TurnOff,
+}
+
+impl Applied {
+    /// The word the helper is told, and the one it reads back.
+    pub(crate) fn word(self) -> &'static str {
+        match self {
+            Applied::TurnOn => "on",
+            Applied::TurnOff => "off",
+        }
+    }
+
+    /// The request a word names, or nothing where it names none.
+    pub(crate) fn of(word: &str) -> Option<Self> {
+        match word {
+            "on" => Some(Applied::TurnOn),
+            "off" => Some(Applied::TurnOff),
+            _ => None,
+        }
+    }
+}
+
+/// What `ShellExecuteW` answers when the person at the machine says no to the UAC prompt.
+const ELEVATION_CANCELLED: usize = 5;
+
+/// Start the scheduled task now, which is how this app comes back **elevated** after the row was
+/// turned on: the very record that starts it at a logon is the one that starts it here, so what a
+/// user gets is what they will get at the next logon rather than a second way of starting it.
+///
+/// It is the elevated copy's own answer — the task raises a process whose token is the highest the
+/// account has — and the caller is an unelevated one that ends itself once it has been started.
+pub(crate) fn start_the_task() -> bool {
+    task::run_now().is_ok()
+}
+
+/// Start the copy of this app that the ordinary `Run` entry names, through the Shell, and leave the
+/// starting of it to Windows' own startup path.
+///
+/// It is the mirror of [`start_the_task`], and it exists for the same reason: a turn-off that left the
+/// tray standing as an administrator would be a tray a user has to restart by hand before the row
+/// they just unchecked means anything. What is done is what a logon does — the value is run — except
+/// that the value is run *unelevated*: `ShellExecuteW` through the Shell's own token, which is the one
+/// token that can start a program without raising a prompt (see `app::hand_off`, and the same road a
+/// launch from the Start menu takes).
+pub(crate) fn start_through_the_entry() -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+
+    crate::app::hand_off::open(&crate::paths::plain_path(&exe), None)
+}
+
+/// What this app knows about the machine's task, for a reader that has to wait on it.
+pub(crate) use task::facts as task_facts;
+
+/// Take the *Run this program as an administrator* mark off the copy that is running, for the row
+/// that is turning the elevated start back off.
+///
+/// It is a write to the user's own compatibility settings rather than to the startup entry, which is
+/// why it is a call of its own: a mark that was set on the file's **Properties → Compatibility** tab
+/// is the same request as this app's row, and unchecking the row has to be able to answer it — or the
+/// machine is left asking for elevation with nothing that starts it, where a `Run` value does nothing.
+pub(crate) fn clear_compat_elevation() -> bool {
+    env::current_exe().is_ok_and(|exe| remove_compat_elevation(&exe))
+}
+
+/// Whether the copy that is running carries that mark, which the row is drawn from.
+pub(crate) fn compat_elevation_is_set() -> bool {
+    env::current_exe().is_ok_and(|exe| {
+        compat_layers_value(&exe).is_some_and(|layers| {
+            layers
+                .split_whitespace()
+                .any(|word| word.eq_ignore_ascii_case("RUNASADMIN"))
+        })
+    })
+}
+
+/// Ask Windows to run an elevated copy of this app, which makes the one write this process may not
+/// make: registering or removing the scheduled task (see `app::task`).
+///
+/// It is `runas` through the Shell, which is the documented way a process asks for elevation, and
+/// the prompt it raises is the platform's own. `true` is answered where the elevated copy was
+/// started — not where it succeeded, which is the helper's own answer and is reported by the row
+/// the user clicks next rather than by this call.
+/// `false` is answered where the person at the machine said no, or where nothing was started at
+/// all, and the caller treats both as "the row did not move".
+pub(crate) fn raise_to_elevation(apply: Applied) -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+
+    let file = wide(&crate::paths::plain_path(&exe));
+    let parameters = wide(&format!("\"{ELEVATE_SWITCH}\" {}", apply.word()));
+    let verb = wide("runas");
+
+    // Safety: the three strings are this function's own buffers living past the call, and the
+    // answer is a value rather than a handle this side has to close.
+    let started = unsafe {
+        windows::Win32::UI::Shell::ShellExecuteW(
+            windows::Win32::Foundation::HWND::default(),
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR(parameters.as_ptr()),
+            PCWSTR::null(),
+            windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
+        )
+    };
+
+    // The Shell answers a refusal with a value of five or below rather than with a null handle.
+    started.0 as usize > ELEVATION_CANCELLED
+}
+
+/// What an elevated helper is told to do, out of its own command line.
+pub(crate) fn helper_request(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Option<Applied> {
+    let mut args = args.into_iter();
+
+    while let Some(arg) = args.next() {
+        if arg.to_str() == Some(ELEVATE_SWITCH) {
+            let word = args.next()?;
+            return Applied::of(word.to_str()?);
+        }
+    }
+
+    None
+}
+
+/// Do the one write this launch was begun for, and say whether the machine took it.
+///
+/// It is a function rather than the body of an `if` in `main` so that the reading of a task's facts
+/// and the writing of one are in the same place: what a helper answers is what the tray's next
+/// opening of its menu will read, and nothing here reports anything to anybody.
+pub(crate) fn apply_for_the_helper(apply: Applied) -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+
+    // The mark on the exe goes with the row in both directions: it is the other way this machine can
+    // be asked for an elevated launch, and a machine left carrying it with nothing that starts it is
+    // a machine where an ordinary `Run` value does nothing at all (see `remove_compat_elevation`).
+    let mark_gone = remove_compat_elevation(&exe);
+
+    // **What a logon does is the file's answer, and what this launch changes is only the mechanism.**
+    // A `run_at_startup` that is still on is an ordinary entry written in place of the task rather
+    // than nothing at all — which is `enable_startup`'s own answer once the mark is gone and
+    // `run_as_administrator` is off — and only a startup nobody wants is removed whole.
+    let wanted = crate::CONFIG
+        .lock()
+        .map(|config| config.run_at_startup)
+        .unwrap_or(false);
+
+    let outcome = match (apply, wanted) {
+        (Applied::TurnOn, _) => enable_startup(),
+        (Applied::TurnOff, true) => enable_startup(),
+        (Applied::TurnOff, false) => disable_startup(),
+    };
+
+    outcome.settled() && mark_gone
+}
+
+/// A string as the Shell's own call wants it: UTF-16, terminated.
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
 }
