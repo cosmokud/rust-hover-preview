@@ -209,6 +209,9 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - It is mpv's switch and nobody else's: FFmpeg's player is given no decode device, and the bubble's own frame reader decodes on a core.
     - A machine with no `mpv.exe` has no player for the switch to act on, so the row is greyed and unchecked there and a `config.ini` that says on is read as off.
 - **Engine**
+  - **Away Timer** — How long Explorer may be unreachable before an engine set to **Until Away** is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`. It is the first row of the submenu, above the engines it bounds.
+    - Counts time when no Explorer window is reachable on any monitor.
+    - A second Explorer window keeps engines warm.
   - **Video Engine** — Which engine plays a video.
     - **Best** (`default`) — The machine's own answer: mpv for every video where it is installed, and otherwise the media engine for a film at or under 3.2 megapixels and FFmpeg's player for a larger one or one it could not measure.
     - **MPV** — mpv alone.
@@ -222,9 +225,6 @@ A setting marked `(Default)` is what an untouched setting would be. The check or
     - **Microsoft Office** (`default`) — Uses the format's own app and falls back to LibreOffice.
     - **LibreOffice** — Draws every Office document.
     - LibreOffice is greyed out if not installed.
-  - **Away Timer** — How long Explorer may be unreachable before an engine set to **Until Away** is let go: `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute` (`default`), `30 seconds`, `15 seconds`.
-    - Counts time when no Explorer window is reachable on any monitor.
-    - A second Explorer window keeps engines warm.
   - **Microsoft Office TTL** — How long a family's Office app stays warm: `Indefinitely`, `1 hour`, `30 minutes`, `10 minutes`, `5 minutes`, `1 minute`, `30 seconds`, `Never (0 seconds)`, **Until Away** (`default`).
     - **Until Away** is kept while Explorer is reachable, then let go by **Away Timer**; a time is that long after the family's last page.
   - **LibreOffice TTL** — Same for the engine that draws CorelDRAW and nearby formats.

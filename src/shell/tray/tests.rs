@@ -2347,6 +2347,65 @@ fn the_system_submenu_is_its_rows_in_the_order_and_the_case_they_are_drawn() {
     let _ = unsafe { DestroyMenu(menu) };
 }
 
+/// The `Engine` submenu reads in the order its rows are used: **the clock the `Until Away` items are
+/// answered against first**, a rule, the two engine choices, a rule, then the TTLs — so the row that
+/// bounds every `Until Away` is read above the rows it bounds rather than between them.
+#[test]
+fn the_engine_submenu_leads_with_the_away_timer_then_the_engines_then_the_ttls() {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreatePopupMenu, DestroyMenu, GetMenuItemCount, GetMenuStringW, GetSubMenu, MF_BYPOSITION,
+    };
+
+    let _folder = crate::config::config::ConfigFolderOfItsOwn::take();
+    let snap = crate::config::config::AppConfig::default();
+    let menu = unsafe { CreatePopupMenu().unwrap() };
+    assert!(unsafe { menus::populate_context_menu(menu, &snap).is_some() });
+
+    let mut engine = None;
+    for position in 0..unsafe { GetMenuItemCount(menu) } as u32 {
+        let mut text = [0u16; 128];
+        let written = unsafe { GetMenuStringW(menu, position, Some(&mut text), MF_BYPOSITION) };
+        if String::from_utf16_lossy(&text[..written as usize]) == "Engine" {
+            engine = Some(unsafe { GetSubMenu(menu, position as i32) });
+            break;
+        }
+    }
+    let engine = engine.expect("the tray has an Engine submenu");
+
+    // Every row of it in the order it is drawn, with `None` standing for a rule. A rule is read
+    // from its having no label rather than from `GetMenuState`: the rows below are submenus, and
+    // the state a popup row is reported with is not one of the flags that says what it is.
+    let mut rows: Vec<Option<String>> = Vec::new();
+    for position in 0..unsafe { GetMenuItemCount(engine) } as u32 {
+        let mut text = [0u16; 160];
+        let written = unsafe { GetMenuStringW(engine, position, Some(&mut text), MF_BYPOSITION) };
+        if written == 0 {
+            rows.push(None);
+            continue;
+        }
+        rows.push(Some(String::from_utf16_lossy(&text[..written as usize])));
+    }
+
+    assert_eq!(
+        rows,
+        vec![
+            Some("Away Timer".to_string()),
+            None,
+            Some("Video Engine".to_string()),
+            Some("Office Engine".to_string()),
+            None,
+            Some("Microsoft Office TTL".to_string()),
+            Some("LibreOffice TTL".to_string()),
+            Some("WebView2 TTL".to_string()),
+            Some("MPV TTL".to_string()),
+            Some("F3D TTL".to_string()),
+        ],
+        "the timer, a rule, the engines, a rule, the TTLs"
+    );
+
+    let _ = unsafe { DestroyMenu(menu) };
+}
+
 #[test]
 fn toggle_pdf_full_mode_off_propagates_config_changed_before_close_pdf_pins() {
     use crate::app::seam::{self, PreviewMessage};

@@ -1704,28 +1704,29 @@ pub(super) unsafe fn populate_context_menu(
     let engine_menu_guard = MenuGuard::new()?;
     let engine_menu = engine_menu_guard.handle();
 
+    // How long Explorer has to be out of reach before an engine set to `Away` is let go. It is
+    // the first of the three blocks here, above the engine choices and the TTLs, because every
+    // TTL submenu below ends at an `Away` item that this is the answer for: a time those offer
+    // is what an engine given one is kept by, and this is what bounds the engines that are not
+    // (see `app::afk`). It also reads as the one row of the three that is about the clock rather
+    // than about an engine, so it is what the rest of the submenu is read against.
+    append_afk_timer_menu(engine_menu, snap);
+
+    // The timer above, the engines below.
+    let _ = AppendMenuW(engine_menu, MF_SEPARATOR, 0, PCWSTR::null());
+
     // Add the "Video Engine" and "Office Engine" submenus: which
     // engine each kind of document is asked of, where there is a
-    // choice to make. They are the first of the rows that name an
-    // engine, above the block that says how long each engine this app
-    // starts is kept — the applications they name are the ones those
-    // are about. Office is the only kind with two engines to choose
-    // between; video has four, of which `Best` is the machine's own
-    // answer.
+    // choice to make. They are the rows that name an engine, above the
+    // block that says how long each engine this app starts is kept —
+    // the applications they name are the ones those are about. Office is
+    // the only kind with two engines to choose between; video has four,
+    // of which `Best` is the machine's own answer.
     append_video_engine_menu(engine_menu, snap);
     append_office_engine_menu(engine_menu, snap);
 
-    // Choices above, keeping times below.
-    let _ = AppendMenuW(engine_menu, MF_SEPARATOR, 0, PCWSTR::null());
-
-    // How long Explorer has to be out of reach before an engine set to `Away` is let go. It is
-    // the second of the three blocks here, below the engine choices and above the TTLs, because
-    // it is what the `Away` item of the four TTL submenus below is answered against: a time
-    // those offer is what an engine given one is kept by, and this is what bounds the engines
-    // that are not (see `app::afk`).
-    append_afk_timer_menu(engine_menu, snap);
-
-    // `Away Timer` bounds the engines kept by `Away`; the TTLs below bound the ones given a time.
+    // Choices above, keeping times below. `Away Timer` bounds the engines kept by `Away`; the
+    // TTLs below bound the ones given a time.
     let _ = AppendMenuW(engine_menu, MF_SEPARATOR, 0, PCWSTR::null());
 
     let office_idle = snap.office_engine_idle;
