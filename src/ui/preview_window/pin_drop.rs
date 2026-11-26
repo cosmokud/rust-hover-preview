@@ -169,4 +169,32 @@ pub(super) unsafe fn take_files_dropped_on(hwnd: HWND) {
     }
 
     DragAcceptFiles(hwnd, true);
+
+    // And the half of that which an elevated run loses: see the call's own note.
+    take_files_dropped_even_when_elevated(hwnd);
+}
+
+/// **A program that is elevated accepts nothing dragged into it from a program that is not.**
+///
+/// A drag is a `WM_DROPFILES` the Shell posts to the window under the pointer, and a message posted
+/// to a window of a higher integrity level is filtered away by UIPI before the window sees it — so an
+/// elevated pin is a pin a file could be dropped on by nothing, and a user who drags a picture out of
+/// Explorer onto it gets the no-entry cursor instead of the file. `ChangeWindowMessageFilterEx` is
+/// the platform's own answer: the window opts that one message back in, and the Shell's drag is let
+/// through to a program that asked to take files.
+///
+/// **The flag is off for every other message.** A drop is a file and a name, and the Shell has
+/// already read it; nothing here widens what the window will take, which is the reason the call takes
+/// a message rather than a filter whole.
+///
+/// An unelevated run needs none of this, and asking is harmless: the call is there for a window of
+/// this app's that runs with a token that is not the desktop's, and that is exactly an elevated one.
+pub(super) unsafe fn take_files_dropped_even_when_elevated(hwnd: HWND) {
+    if hwnd.0.is_null() || !crate::app::elevation::is_elevated() {
+        return;
+    }
+
+    // Safety: the window is this thread's own, made and not yet taken apart, and the message is a
+    // constant of the platform's.
+    let _ = ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, MSGFLT_ALLOW, None);
 }

@@ -41,7 +41,7 @@ pub(crate) const BASE_VERSION: u32 = 1;
 /// Raising it is one commit that adds one step to [`STEPS`] and nothing else: a number with no
 /// step behind it reads a file as older than it is, and a step with no number is a step that never
 /// runs.
-pub(crate) const CURRENT_VERSION: u32 = 2;
+pub(crate) const CURRENT_VERSION: u32 = 3;
 
 /// The oldest file shape this build still carries steps for.
 ///
@@ -67,7 +67,7 @@ pub(crate) const MIN_SUPPORTED_VERSION: u32 = BASE_VERSION;
 /// that drops a key of a file it does not understand is not one to trust with the rest of it. What
 /// it buys is one number to keep and one line to write, with nothing to hold in step with every
 /// release — and the per-key question is [`Superseded`]'s, which is a different one.
-pub(crate) const SELF_MIN_READER: u32 = 2;
+pub(crate) const SELF_MIN_READER: u32 = 3;
 
 /// What a file's own numbers say, read out of the settings section before anything else is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,12 +268,38 @@ struct Step {
 /// `space` because the build they installed shipped `space` ends up with the middle button AND the
 /// `space`, without being told to open the file and without a reset row that would take every other
 /// setting with it.
-static STEPS: &[Step] = &[Step {
-    from: 1,
-    to: 2,
-    apply: bring_up_the_pin_key,
-    why: "a pin_key shipped by an older build gains the middle button beside it",
-}];
+static STEPS: &[Step] = &[
+    Step {
+        from: 1,
+        to: 2,
+        apply: bring_up_the_pin_key,
+        why: "a pin_key shipped by an older build gains the middle button beside it",
+    },
+    Step {
+        from: 2,
+        to: 3,
+        apply: leave_hand_offs_alone,
+        why: "the elevated start's two switches are added at the safe answer",
+    },
+];
+
+/// **A file from before the elevated start gets both of its switches at off.**
+///
+/// The two are `run_as_administrator`, which turns the startup entry into a scheduled task that
+/// raises a UAC prompt to register, and `elevate_hand_offs`, which is the warning's own switch:
+/// on, an elevated copy hands the programs it starts its own admin token, which is a program
+/// running as administrator that nobody was prompted for. A build that turned either on for a
+/// file that never asked would be a build making that decision for a user, and the safe answer is
+/// also the one every file written before the switches existed was, in effect, already running
+/// at — so this step moves nothing and says so.
+///
+/// It exists rather than not existing for the reason every step does: the number has to move, or a
+/// file of the shape before it would be given no value at all for the two keys and would be
+/// rewritten as a difference on the next start (see `differs`). What a step with nothing to change
+/// buys is the `stamped` flag, and what that buys is a file written once.
+fn leave_hand_offs_alone(_ini: &mut Ini) -> Vec<&'static str> {
+    Vec::new()
+}
 
 /// The `pin_key` of a file written by a build that had a single-key default, brought up to the
 /// pair this build ships.

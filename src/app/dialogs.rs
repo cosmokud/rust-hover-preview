@@ -239,15 +239,28 @@ pub(crate) fn report_startup_failure(outcome: crate::app::startup::Outcome) {
         crate::app::startup::Outcome::NotWritten { held: true } => {
             "The entry that is there still starts this app, so it reads as on."
         }
+        crate::app::startup::Outcome::NeedsElevation => {
+            "Starting this app as an administrator is a scheduled task, and the Task Scheduler will \
+             not take one from a process without administrator rights. Nothing was written, and \
+             the elevated copy this asked for was not started."
+        }
+        crate::app::startup::Outcome::TaskRefused => {
+            "The Task Scheduler refused the task that starts this app at a logon. Nothing was \
+             written, so the machine is exactly as it was."
+        }
         _ => "Something else is starting this app, so it still reads as on.",
     };
 
+    // The task is named as the second thing that can be what starts this app, because it is what
+    // the answer is about on a machine where the row asked for administrator rights: a box that
+    // named only the `Run` key would be pointing at a value nothing asked for.
     let text = format!(
         "The startup entry could not be written.\n\n\
-         Windows would not take the value this app uses under HKCU\\Software\\Microsoft\\Windows\\\
-         CurrentVersion\\Run, which is what starts it at a logon. {state}\n\n\
-         A security policy, an antivirus tool or another program holding that key is the usual \
-         reason. The rest of this app is unaffected."
+         Windows would not take either the value this app uses under HKCU\\Software\\Microsoft\\\
+         Windows\\CurrentVersion\\Run, which is what starts it at a logon, or the scheduled task \
+         `\\RustHoverPreview`, which is what starts it there as an administrator. {state}\n\n\
+         A security policy, an antivirus tool, or the answer No to the administrator prompt is the \
+         usual reason. The rest of this app is unaffected."
     );
 
     report(&text);

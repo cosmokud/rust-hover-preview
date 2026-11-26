@@ -117,6 +117,15 @@ fn main() {
     match app::detach::startup_mode() {
         app::detach::Startup::Tray => {}
         app::detach::Startup::Refused => return,
+        // The elevated copy of this app that makes the one write an unelevated run may not make:
+        // registering or removing the scheduled task that starts this app at a logon with
+        // administrator rights. It writes one thing and exits — no tray, no viewer, no instance —
+        // and it is here rather than in a helper executable because it is this same program with a
+        // token Windows raised, which is one path to ship, sign and test rather than two.
+        app::detach::Startup::Elevated(apply) => {
+            app::startup::apply_for_the_helper(apply);
+            return;
+        }
         app::detach::Startup::Viewer(tray) => {
             run_a_viewer(&mut trace, tray);
             return;
