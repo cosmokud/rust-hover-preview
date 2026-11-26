@@ -1586,11 +1586,8 @@ fn a_find_is_drawn_over_the_text_and_never_over_the_numbers() {
 fn a_line_of_chinese_and_latin_is_laid_out_as_wide_as_it_is_drawn() {
     let dir = scratch("mixed-script");
     let source = dir.join("mixed.txt");
-    fs::write(
-        &source,
-        "漢字Kanji\n漢字Sample file\n漢字Sample name\n",
-    )
-    .expect("a written page");
+    fs::write(&source, "漢字Kanji\n漢字資料Sample file\n漢字Sample name\n")
+        .expect("a written page");
 
     let page = render_scrolled(&source, 0, 600, 200, 96, options(), None, None).expect("a page");
 
@@ -1646,7 +1643,7 @@ fn a_line_of_chinese_and_latin_is_laid_out_as_wide_as_it_is_drawn() {
     let mixed = page.lines[1]
         .runs
         .iter()
-        .find(|run| run.text == "漢字Sample")
+        .find(|run| run.text == "漢字資料Sample")
         .expect("the second line's Chinese word");
     let measured = mixed.advances.as_deref().expect("a measured run");
     assert_eq!(
@@ -1665,7 +1662,7 @@ fn a_line_of_chinese_and_latin_is_laid_out_as_wide_as_it_is_drawn() {
         page.lines[1]
             .runs
             .iter()
-            .find(|run| run.text == "button")
+            .find(|run| run.text == "file")
             .expect("the Latin word")
             .advances
             .is_none(),
@@ -1786,7 +1783,7 @@ fn a_line_of_chinese_is_wrapped_at_the_character_the_box_runs_out_on() {
 /// they cut it into are painted at the columns the run was laid out with: a Chinese run drawn in
 /// pieces went to the glyph it belonged to only because `lpDx` carried those columns, since GDI lays
 /// a piece out from its own first character. What is asserted is that the wash over `Kanji` in
-/// `漢字Kanji` begins at the `N` and not a glyph short of it.
+/// `漢字Kanji` begins at the `K` and not a glyph short of it.
 #[test]
 fn a_wash_over_latin_after_chinese_begins_at_the_latin() {
     let dir = scratch("mixed-wash");
@@ -1870,10 +1867,7 @@ fn a_page_of_any_script_is_laid_out_as_wide_as_it_is_drawn() {
         ("emoji", "emoji 😀 😁 🎉 test\n"),
         ("math", "∑ ∫ √ ≠ ≤ ≥ ∞\n"),
         ("box-drawing", "┌────┬────┐\n│ a  │ b  │\n└────┴────┘\n"),
-        (
-            "mixed",
-            "漢字Kanji 漢字Sample file 漢字Sample ( , )\n",
-        ),
+        ("mixed", "漢字Kanji 漢字Sample file 漢字Sample ( , )\n"),
     ];
 
     for (label, text) in pages {
